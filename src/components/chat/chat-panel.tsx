@@ -7,13 +7,13 @@ import { useChatStore, chatMessagesToLLM } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
 import { executeIngestWrites } from "@/lib/ingest"
-import { listDirectory, readFile, writeFile, deleteFile } from "@/commands/fs"
+import { listDirectory, readFile, deleteFile } from "@/commands/fs"
 import { searchWiki } from "@/lib/search"
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
-import { useReviewStore } from "@/stores/review-store"
-import type { FileNode } from "@/types/wiki"
 import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
-import { detectLanguage } from "@/lib/detect-language"
+import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
+import { isGreeting } from "@/lib/greeting-detector"
+import { computeContextBudget } from "@/lib/context-budget"
 
 // Store the page mapping from the last query so SourceFilesBar can show which pages were cited
 export let lastQueryPages: { title: string; path: string }[] = []
@@ -168,15 +168,38 @@ export function ChatPanel() {
       // Build system prompt with wiki context using graph-enhanced retrieval
       const systemMessages: LLMMessage[] = []
       let queryRefs: { title: string; path: string }[] = []
-      if (project) {
+      let langReminder: string | undefined
+      // Pure greetings ("hi", "你好", "嗨") don't warrant running the whole
+      // retrieval pipeline — it's slow, costs context, and drags in random
+      // wiki pages the user clearly didn't ask about. Short-circuit with a
+      // minimal system prompt and let the model reply conversationally.
+      const greetingOnly = isGreeting(text)
+      if (project && greetingOnly) {
+        const outLang = getOutputLanguage(text)
+        systemMessages.push({
+          role: "system",
+          content: [
+            `You are a wiki assistant for the project "${project.name}".`,
+            "The user sent a casual greeting — reply briefly and naturally, in one or two sentences.",
+            "Do NOT invent wiki content or pretend to have retrieved pages. Invite the user to ask a concrete question if they want information from the wiki.",
+            "",
+            `Respond in ${outLang}.`,
+          ].join("\n"),
+        })
+        // Skip retrieval; queryRefs stays empty so no "Sources" chip is shown.
+      } else if (project) {
         const pp = normalizePath(project.path)
         const dataVersion = useWikiStore.getState().dataVersion
-        const maxCtx = llmConfig.maxContextSize || 204800
 
-        // ── Budget allocation ──────────────────────────────────
-        const INDEX_BUDGET = Math.floor(maxCtx * 0.05)
-        const PAGE_BUDGET = Math.floor(maxCtx * 0.6)
-        const MAX_PAGE_SIZE = Math.min(Math.floor(PAGE_BUDGET * 0.3), 30_000)
+        // ── Budget allocation (see context-budget.ts) ─────────
+        // Page budget scales with the LLM's context window; we now
+        // also reserve ~15% as headroom for the response so the
+        // model isn't truncated mid-sentence on a packed prompt.
+        const {
+          indexBudget: INDEX_BUDGET,
+          pageBudget: PAGE_BUDGET,
+          maxPageSize: MAX_PAGE_SIZE,
+        } = computeContextBudget(llmConfig.maxContextSize)
 
         const [rawIndex, purpose] = await Promise.all([
           readFile(`${pp}/wiki/index.md`).catch(() => ""),
@@ -283,13 +306,12 @@ export function ChatPanel() {
           `[${i + 1}] ${p.title} (${p.path})`
         ).join("\n")
 
+        const outLang = getOutputLanguage(text)
+
         systemMessages.push({
           role: "system",
           content: [
             "You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.",
-            "",
-            `## CRITICAL: Response Language`,
-            `The user is writing in **${detectLanguage(text)}**. You MUST respond in **${detectLanguage(text)}** regardless of what language the wiki content is written in. This is a mandatory requirement.`,
             "",
             "## Rules",
             "- Answer based ONLY on the numbered wiki pages provided below.",
@@ -305,8 +327,22 @@ export function ChatPanel() {
             index ? `## Wiki Index\n${index}` : "",
             relevantPages.length > 0 ? `## Page List\n${pageList}` : "",
             `## Wiki Pages\n\n${pagesContext}`,
+            "",
+            "---",
+            "",
+            `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${outLang}`,
+            "",
+            `You MUST write your entire response in **${outLang}**.`,
+            `The wiki content above may be in a different language, but this is IRRELEVANT to your output language.`,
+            `Ignore the language of the wiki content. Write in ${outLang} only.`,
+            `Even proper nouns should use standard ${outLang} transliteration when appropriate.`,
+            `DO NOT use any other language. This overrides all other instructions.`,
           ].filter(Boolean).join("\n"),
         })
+
+        // Reminder injected later, right before the user's current message
+        // (after history so it's the last system instruction the LLM sees).
+        langReminder = buildLanguageReminder(text)
 
         lastQueryPages = relevantPages.map((p) => ({ title: p.title, path: p.path }))
         queryRefs = [...lastQueryPages]
@@ -318,7 +354,26 @@ export function ChatPanel() {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .slice(-maxHistoryMessages)
 
-      const llmMessages = [...systemMessages, ...chatMessagesToLLM(activeConvMessages)]
+      // Prepend the language reminder onto the final user turn rather than
+      // inserting a second {role:"system"} between history and the final
+      // user message. vLLM / llama.cpp / Ollama drive their chat templates
+      // from HF Jinja, and Qwen3-family templates enforce "system only at
+      // index 0" — a mid-conversation system message gets rejected with
+      // "System message must be at the beginning." (HTTP 400). OpenAI and
+      // Anthropic are more lenient, but keeping a single system at the top
+      // is the safest shape across every OpenAI-compatible backend.
+      const historyMessages = chatMessagesToLLM(activeConvMessages)
+      let llmMessages: LLMMessage[] = [...systemMessages, ...historyMessages]
+      if (langReminder && historyMessages.length > 0) {
+        const lastIdx = llmMessages.length - 1
+        const last = llmMessages[lastIdx]
+        if (last && last.role === "user") {
+          llmMessages = [
+            ...llmMessages.slice(0, lastIdx),
+            { role: "user", content: `[${langReminder}]\n\n${last.content}` },
+          ]
+        }
+      }
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -467,68 +522,3 @@ export function ChatPanel() {
   )
 }
 
-/**
- * Check if the LLM marked its response as save-worthy.
- * If so, add a review item prompting the user to save it.
- */
-function checkSaveWorthy(response: string, question: string) {
-  const match = response.match(/<!--\s*save-worthy:\s*yes\s*\|\s*(.+?)\s*-->/)
-  if (!match) return
-
-  const reason = match[1]
-  const firstLine = response.split("\n").find((l) => l.trim() && !l.startsWith("<!--"))?.replace(/^#+\s*/, "").trim() ?? "Chat answer"
-  const title = firstLine.slice(0, 60)
-
-  const contentToSave = response
-  const questionText = question
-
-  useReviewStore.getState().addItem({
-    type: "suggestion",
-    title: `Save to Wiki: ${title}`,
-    description: `${reason}\n\nQuestion: "${questionText.slice(0, 100)}${questionText.length > 100 ? "..." : ""}"`,
-    options: [
-      { label: "Save to Wiki", action: `save:${encodeContent(contentToSave)}` },
-      { label: "Skip", action: "Skip" },
-    ],
-  })
-}
-
-function encodeContent(text: string): string {
-  return btoa(encodeURIComponent(text))
-}
-
-function flattenFileNames(nodes: FileNode[]): string[] {
-  const names: string[] = []
-  for (const node of nodes) {
-    if (node.is_dir && node.children) {
-      names.push(...flattenFileNames(node.children))
-    } else if (!node.is_dir) {
-      names.push(node.name)
-    }
-  }
-  return names
-}
-
-function flattenMdFiles(nodes: FileNode[]): FileNode[] {
-  const files: FileNode[] = []
-  for (const node of nodes) {
-    if (node.is_dir && node.children) {
-      files.push(...flattenMdFiles(node.children))
-    } else if (!node.is_dir && node.name.endsWith(".md")) {
-      files.push(node)
-    }
-  }
-  return files
-}
-
-function flattenAllFiles(nodes: FileNode[]): FileNode[] {
-  const files: FileNode[] = []
-  for (const node of nodes) {
-    if (node.is_dir && node.children) {
-      files.push(...flattenAllFiles(node.children))
-    } else if (!node.is_dir) {
-      files.push(node)
-    }
-  }
-  return files
-}

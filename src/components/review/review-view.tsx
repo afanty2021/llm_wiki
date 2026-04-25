@@ -156,12 +156,17 @@ export function ReviewView() {
       } else {
         resolveItem(id, action)
       }
-    } else if (action.startsWith("__create_page__:") && project) {
-      // Explicit create page fallback
-      const realAction = action.slice("__create_page__:".length)
-      await createPageFromReview(id, realAction, items, pp)
-    } else if (actionLooksLikeCreate(action) && project) {
-      // Create a wiki page from the review item's content
+    } else if (
+      (action.startsWith("__create_page__:") || actionLooksLikeCreate(action))
+      && project
+    ) {
+      // Create a wiki page from the review item's content. Accepts both
+      // the `__create_page__:` sentinel (forced via the "no search API"
+      // fallback branch above) and actions that heuristically look like
+      // a create instruction.
+      const realAction = action.startsWith("__create_page__:")
+        ? action.slice("__create_page__:".length)
+        : action
       const item = items.find((i) => i.id === id)
       if (item) {
         try {
@@ -170,7 +175,7 @@ export function ReviewView() {
           const date = new Date().toISOString().slice(0, 10)
 
           // Determine page type from review type or action text
-          const pageType = detectPageType(action, item.type)
+          const pageType = detectPageType(realAction, item.type)
           const dir = pageType === "query" ? "queries" : pageType === "entity" ? "entities" : pageType === "concept" ? "concepts" : "queries"
           const fileName = `${slug}-${date}.md`
           const filePath = `${pp}/wiki/${dir}/${fileName}`

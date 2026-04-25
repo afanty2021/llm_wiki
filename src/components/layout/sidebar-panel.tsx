@@ -1,10 +1,8 @@
 import { useState } from "react"
-import { useTranslation } from "react-i18next"
 import { KnowledgeTree } from "./knowledge-tree"
 import { FileTree } from "./file-tree"
 
 export function SidebarPanel() {
-  const { t } = useTranslation()
   const [mode, setMode] = useState<"knowledge" | "files">("knowledge")
 
   return (

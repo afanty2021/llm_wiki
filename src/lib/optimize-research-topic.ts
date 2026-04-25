@@ -1,5 +1,6 @@
 import { streamChat } from "./llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
+import { buildLanguageDirective } from "./output-language"
 
 export interface OptimizedTopic {
   topic: string
@@ -21,6 +22,8 @@ export async function optimizeResearchTopic(
   const prompt = [
     "You are a research assistant. Given a knowledge gap found in a personal wiki, generate a precise research topic and search queries.",
     "",
+    buildLanguageDirective(`${gapTitle} ${gapDescription} ${purpose} ${overview}`),
+    "",
     "## Wiki Context",
     purpose ? `### Purpose\n${purpose}` : "",
     overview ? `### Current Overview\n${overview}` : "",
@@ -37,8 +40,8 @@ export async function optimizeResearchTopic(
     "",
     "## Output Format (STRICT — follow exactly, no other text)",
     "Respond with EXACTLY 4 lines, no more:",
-    "TOPIC: <one sentence>",
-    "QUERY: <query 1>",
+    "TOPIC: <one sentence — MUST be in the mandatory output language declared above>",
+    "QUERY: <query 1 — may use English keywords if they better match search engines>",
     "QUERY: <query 2>",
     "QUERY: <query 3>",
   ].filter(Boolean).join("\n")

@@ -11,7 +11,9 @@
     "lint": "Lint",
     "review": "Review",
     "settings": "Settings",
-    "switchProject": "Switch Project"
+    "switchProject": "Switch Project",
+    "updateAvailable": "Update available",
+    "updateAvailableSuffix": " · update"
   },
   "welcome": {
     "newProject": "New Project",
@@ -89,10 +91,99 @@
     "customEndpointHint": "Any OpenAI-compatible API endpoint (e.g., LiteLLM, vLLM, LocalAI, Azure OpenAI)",
     "customApiKey": "Enter API key (if required)",
     "modelPlaceholder": "Enter model name",
-    "save": "Save Settings",
-    "saved": "Saved!",
+    "save": "Save",
+    "saved": "Saved",
+    "savedTick": "Saved ✓",
+    "changeHint": "Changes apply after saving.",
     "language": "Language",
-    "languageHint": "Interface language (wiki content follows source material language)"
+    "languageHint": "Interface language (wiki content follows source material language)",
+    "categories": {
+      "llm": "LLM Models",
+      "embedding": "Embeddings",
+      "webSearch": "Web Search",
+      "output": "Output",
+      "interface": "Interface",
+      "about": "About"
+    },
+    "sections": {
+      "llm": {
+        "title": "LLM Models",
+        "description": "One row per vendor. Toggling one on automatically turns off the others. Changes save instantly; each vendor's API key is stored independently so switching doesn't lose data.",
+        "expand": "Expand config",
+        "collapse": "Collapse",
+        "toggleOff": "Click to deactivate",
+        "toggleOn": "Click to activate (turns off other providers)",
+        "wireOpenAi": "OpenAI-compat",
+        "wireAnthropic": "Anthropic-compat",
+        "apiKeyPlaceholderCustom": "Leave empty if no key (local models)",
+        "apiKeyPlaceholder": "Enter your API key",
+        "savedBadge": "saved",
+        "configuredBadge": "configured",
+        "activeBadge": "● active"
+      },
+      "embedding": {
+        "title": "Vector Embeddings",
+        "description": "Enable semantic search against your wiki. Works with any OpenAI-compatible /v1/embeddings endpoint. Local models (LM Studio, Ollama embedding) don't need an API key.",
+        "enableLabel": "Enable vector search",
+        "enableHint": "When off, search uses token matching only.",
+        "endpoint": "Endpoint",
+        "apiKey": "API Key (optional)",
+        "apiKeyPlaceholder": "Leave empty for local models",
+        "model": "Model",
+        "chunking": "Chunking",
+        "maxChunkChars": "Max chunk size (characters)",
+        "maxChunkCharsHint": "Target size of each chunk. Lower this (e.g. 500) when your endpoint's context is small (llama.cpp n_ctx=512, mxbai-embed-large, etc.).",
+        "overlapChunkChars": "Overlap (characters)",
+        "overlapChunkCharsHint": "Characters of overlap between adjacent chunks so ideas aren't severed at boundaries.",
+        "statsHeading": "Index status",
+        "chunkCount": "{{count}} chunks indexed",
+        "lastErrorHeading": "Last embedding error",
+        "reindexAll": "Re-index all pages",
+        "reindexing": "Indexing {{done}}/{{total}}…",
+        "reindexDone": "Indexed {{count}} pages.",
+        "legacyPromptTitle": "Legacy per-page index detected",
+        "legacyPromptBody": "Your project has {{count}} entries in the old per-page vector store. The new per-chunk index gives better retrieval but needs a one-time re-embed. Run \"Re-index all pages\" to upgrade.",
+        "dropLegacy": "Drop legacy index",
+        "dropLegacyDone": "Legacy index removed."
+      },
+      "webSearch": {
+        "title": "Web Search",
+        "description": "Used by Deep Research to pull fresh external context."
+      },
+      "output": {
+        "title": "Output Preferences",
+        "description": "Controls for generated content — language, conversation history length.",
+        "aiLanguage": "AI Output Language",
+        "aiLanguageHint": "Force AI-generated content (chat replies, wiki pages, research output, lint reports) to use the selected language. Pick \"Auto\" to let the AI follow the user's input or source document language.",
+        "historyLength": "Conversation History Length",
+        "historyHint": "Number of prior messages sent to the AI on each request. More = richer context but more tokens.",
+        "historyCurrent": "Currently {{count}} messages (about {{turns}} turns)"
+      },
+      "interface": {
+        "title": "Interface",
+        "description": "UI language and appearance. Changes apply immediately and persist.",
+        "uiLanguage": "UI Language",
+        "uiLanguageHint": "Affects labels, buttons, and other UI strings only. The AI output language is set separately in Output Preferences."
+      },
+      "about": {
+        "title": "About",
+        "description": "Build info and runtime status.",
+        "version": "Version",
+        "clipServer": "Clip Server",
+        "updateCheck": "Update Check",
+        "lastChecked": "Last checked",
+        "lastCheckedNever": "Never",
+        "unreachable": "couldn't reach GitHub",
+        "checkNow": "Check now",
+        "checking": "Checking…",
+        "upToDate": "Up to date (v{{version}}).",
+        "updateAvailable": "Update available: v{{version}}",
+        "openDownload": "Open download page",
+        "later": "Later",
+        "autoCheck": "Check for updates automatically on startup (at most once every 6 hours)",
+        "appDescription": "An LLM-driven personal knowledge base. Source:"
+      }
+    }
   },
   "preview": {
     "selectFile": "Select a file to preview",
@@ -105,5 +196,11 @@
   },
   "fileTree": {
     "noProject": "No project open"
+  },
+  "time": {
+    "justNow": "just now",
+    "minutesAgo": "{{count}} min ago",
+    "hoursAgo": "{{count}} h ago",
+    "daysAgo": "{{count}} d ago"
   }
 }

@@ -4,6 +4,7 @@ node_modules/
 # Build outputs
 dist/
 dist-ssr/
+*.tsbuildinfo
 
 # Rust build artifacts
 src-tauri/target/
@@ -42,3 +43,4 @@ pnpm-debug.log*
 
 # Brainstorm assets (not tracked in source control)
 .superpowers/
+.claude/

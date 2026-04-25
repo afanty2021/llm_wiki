@@ -12,7 +12,7 @@ import { readFile } from "@/commands/fs"
 import { buildWikiGraph, type GraphNode, type GraphEdge, type CommunityInfo } from "@/lib/wiki-graph"
 import { findSurprisingConnections, detectKnowledgeGaps, type SurprisingConnection, type KnowledgeGap } from "@/lib/graph-insights"
 import { queueResearch } from "@/lib/deep-research"
-import { optimizeResearchTopic, type OptimizedTopic } from "@/lib/optimize-research-topic"
+import { optimizeResearchTopic } from "@/lib/optimize-research-topic"
 import { normalizePath } from "@/lib/path-utils"
 
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -760,11 +760,6 @@ export function GraphView() {
                       const isActive = highlightedNodes.size > 0 &&
                         [...ids].every((id) => highlightedNodes.has(id)) &&
                         [...highlightedNodes].every((id) => ids.has(id))
-                      const researchTopic = gap.type === "sparse-community"
-                        ? `Knowledge area: ${gap.title.replace("Sparse cluster: ", "")}`
-                        : gap.type === "bridge-node"
-                          ? `Key concept: ${gap.title.replace("Key bridge: ", "")}`
-                          : gap.title
                       return (
                         <div
                           key={i}

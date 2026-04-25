@@ -6,8 +6,8 @@ import {
 } from "lucide-react"
 import { useActivityStore, type ActivityItem } from "@/stores/activity-store"
 import { useWikiStore } from "@/stores/wiki-store"
-import { normalizePath, getFileName } from "@/lib/path-utils"
-import { getQueue, getQueueSummary, retryTask, cancelTask, type IngestTask } from "@/lib/ingest-queue"
+import { normalizePath, getFileName, isAbsolutePath } from "@/lib/path-utils"
+import { getQueue, getQueueSummary, retryTask, cancelTask, cancelAllTasks, type IngestTask } from "@/lib/ingest-queue"
 
 const FILE_TYPE_ICONS: Record<string, typeof FileText> = {
   sources: BookOpen,
@@ -51,16 +51,33 @@ export function ActivityPanel() {
   const queueSummary = getQueueSummary()
   const hasQueue = queueSummary.total > 0
 
-  // All hooks must be before any conditional return
+  // All hooks must be before any conditional return.
+  // retryTask / cancelTask / cancelAllTasks all operate on the currently
+  // active project implicitly (via module-scoped state in ingest-queue.ts)
+  // — they take NO projectPath argument. An earlier version passed one in
+  // and the extra arg silently became "taskId", making retry a no-op for
+  // every failed task. Keep this minimal.
   const handleRetry = useCallback((taskId: string) => {
     if (!project) return
-    retryTask(normalizePath(project.path), taskId)
+    retryTask(taskId)
   }, [project])
 
   const handleCancel = useCallback((taskId: string) => {
     if (!project) return
-    cancelTask(normalizePath(project.path), taskId)
+    cancelTask(taskId)
   }, [project])
+
+  const handleCancelAll = useCallback(() => {
+    if (!project) return
+    const activeCount = queueSummary.pending + queueSummary.processing
+    if (activeCount === 0) return
+    if (!window.confirm(
+      `Cancel all ${activeCount} queued/processing task${activeCount > 1 ? "s" : ""}? ` +
+      `Partial files from the in-progress task will be removed. ` +
+      `Failed tasks will be kept so you can retry them.`,
+    )) return
+    cancelAllTasks()
+  }, [project, queueSummary.pending, queueSummary.processing])
 
   // Auto-expand when a new task starts running
   useEffect(() => {
@@ -119,9 +136,20 @@ export function ActivityPanel() {
           {/* Queue progress bar */}
           {hasQueue && (queueSummary.processing > 0 || queueSummary.pending > 0) && (
             <div className="px-3 py-1.5 border-b border-border/50">
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
+              <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1 gap-2">
                 <span>Ingest Queue</span>
-                <span>{queueSummary.total - queueSummary.pending - queueSummary.processing}/{queueSummary.total} complete</span>
+                <span className="flex-1 text-right">
+                  {queueSummary.total - queueSummary.pending - queueSummary.processing}/{queueSummary.total} complete
+                </span>
+                {queueSummary.pending + queueSummary.processing >= 2 && (
+                  <button
+                    onClick={handleCancelAll}
+                    className="rounded px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10"
+                    title="Cancel all queued and in-progress tasks"
+                  >
+                    Cancel all
+                  </button>
+                )}
               </div>
               <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                 <div
@@ -223,7 +251,9 @@ function ActivityRow({ item, onCancel }: { item: ActivityItem; onCancel?: () => 
   function handleFileClick(filePath: string) {
     if (!project) return
     const pp = normalizePath(project.path)
-    const fullPath = filePath.startsWith("/") ? normalizePath(filePath) : `${pp}/${filePath}`
+    const fullPath = isAbsolutePath(filePath)
+      ? normalizePath(filePath)
+      : `${pp}/${filePath}`
     setSelectedFile(fullPath)
   }
 

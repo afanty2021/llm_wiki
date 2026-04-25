@@ -1,7 +1,9 @@
 import type { LlmConfig } from "@/stores/wiki-store"
-import { getProviderConfig } from "./llm-providers"
+import { getProviderConfig, type RequestOverrides } from "./llm-providers"
+import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
 
-export type { ChatMessage } from "./llm-providers"
+export type { ChatMessage, RequestOverrides } from "./llm-providers"
+export { isFetchNetworkError } from "./tauri-fetch"
 
 export interface StreamCallbacks {
   onToken: (token: string) => void
@@ -23,19 +25,36 @@ export async function streamChat(
   messages: import("./llm-providers").ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
+  /**
+   * Wire-agnostic sampling knobs. The provider's buildBody() translates
+   * these into its native schema — OpenAI-style wires accept them at
+   * the top level ({temperature: 0.1}), Gemini nests them under
+   * generationConfig with renamed keys ({generationConfig: {temperature: 0.1}}).
+   * Previously we spread them onto the body here, which broke Gemini
+   * with "Unknown name 'temperature': Cannot find field." HTTP 400.
+   */
+  requestOverrides?: RequestOverrides,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
   const providerConfig = getProviderConfig(config)
 
-  // Create a combined signal: user abort OR 15-minute timeout
-  const timeoutMs = 15 * 60 * 1000 // 15 minutes — some models with large context need a long time
+  // Combined abort: (a) user cancel, (b) our long-horizon timeout.
+  // The long timeout is a backstop for truly stuck requests; it's NOT
+  // what fires when a user sees "Timeout" after 2 seconds — that is
+  // almost always a fast network failure (DNS, TLS, 404, refused) that
+  // WebKit surfaces as a generic "Load failed". We track whether the
+  // backstop actually fired so we can tell the two apart in the error.
+  const timeoutMs = 30 * 60 * 1000 // 30 min — generous backstop for huge-context reasoning models
   let combinedSignal = signal
   let timeoutController: AbortController | undefined
+  let timeoutFired = false
 
   if (typeof AbortSignal.timeout === "function") {
-    // Combine user signal with timeout
     timeoutController = new AbortController()
-    const timeoutId = setTimeout(() => timeoutController?.abort(), timeoutMs)
+    const timeoutId = setTimeout(() => {
+      timeoutFired = true
+      timeoutController?.abort()
+    }, timeoutMs)
 
     if (signal) {
       signal.addEventListener("abort", () => {
@@ -48,23 +67,39 @@ export async function streamChat(
 
   let response: Response
   try {
-    response = await fetch(providerConfig.url, {
+    const body = providerConfig.buildBody(messages, requestOverrides)
+    const httpFetch = await getHttpFetch()
+    response = await httpFetch(providerConfig.url, {
       method: "POST",
       headers: providerConfig.headers,
-      body: JSON.stringify(providerConfig.buildBody(messages)),
+      body: JSON.stringify(body),
       signal: combinedSignal,
-      // @ts-ignore — keepalive hint for Tauri webview
-      keepalive: false,
     })
   } catch (err) {
-    if (err instanceof Error && (err.name === "AbortError" || err.message === "Load failed")) {
-      // Check if it was user-initiated abort
-      if (signal?.aborted) {
-        onDone()
+    if (signal?.aborted) {
+      onDone()
+      return
+    }
+    if (err instanceof Error && err.name === "AbortError") {
+      // Backstop timeout aborted the request (we tracked this via
+      // timeoutFired); treat it as a real timeout rather than a cancel.
+      if (timeoutFired) {
+        onError(new Error(`Request timed out after ${Math.round(timeoutMs / 60000)} min. Try a faster model or a smaller context.`))
         return
       }
-      // Otherwise it's a timeout or network error
-      onError(new Error("Request timed out or network error. The model may need more time — try again or use a faster model."))
+      onDone()
+      return
+    }
+    if (isFetchNetworkError(err)) {
+      if (timeoutFired) {
+        onError(new Error(`Request timed out after ${Math.round(timeoutMs / 60000)} min. Try a faster model or a smaller context.`))
+        return
+      }
+      // Fast fetch failure: DNS, TLS handshake, connection refused,
+      // wrong endpoint, CORS preflight rejection, etc. All webviews
+      // collapse this class of failure into an opaque error — point
+      // users at the likely cause (endpoint / key / connectivity).
+      onError(new Error(`Network error reaching ${providerConfig.url}. Check endpoint URL, API key, and connectivity.`))
       return
     }
     onError(err instanceof Error ? err : new Error(String(err)))
@@ -120,8 +155,10 @@ export async function streamChat(
       onDone()
       return
     }
-    if (err instanceof Error && err.message === "Load failed") {
-      // WebKit network error during streaming — connection dropped
+    if (isFetchNetworkError(err)) {
+      // Stream reader threw a network error mid-response (connection
+      // dropped, server closed early, network blip). Same message
+      // regardless of whether the webview is WebKit or Chromium.
       onError(new Error("Connection lost during streaming. Try again."))
       return
     }

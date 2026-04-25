@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useResearchStore } from "@/stores/research-store"
+import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
 import { useTranslation } from "react-i18next"
 import logoImg from "@/assets/logo.jpg"
 import type { WikiState } from "@/stores/wiki-store"
@@ -33,6 +34,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const researchPanelOpen = useResearchStore((s) => s.panelOpen)
   const researchActiveCount = useResearchStore((s) => s.tasks.filter((t) => t.status !== "done" && t.status !== "error").length)
   const toggleResearchPanel = useResearchStore((s) => s.setPanelOpen)
+  const updateBannerVisible = useUpdateStore((s) => shouldShowUpdateBanner(s))
 
   // Daemon health check
   const [daemonStatus, setDaemonStatus] = useState<string>("starting")
@@ -52,7 +54,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   }, [])
 
   return (
-    <TooltipProvider delayDuration={300}>
+    <TooltipProvider delay={300}>
       <div className="flex h-full w-12 flex-col items-center border-r bg-muted/50 py-2">
         {/* Logo */}
         <div className="mb-2 flex items-center justify-center">
@@ -131,15 +133,27 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           <Tooltip>
             <TooltipTrigger
               onClick={() => setActiveView("settings")}
-              className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
+              className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                 activeView === "settings"
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
               }`}
             >
               <Settings className="h-5 w-5" />
+              {updateBannerVisible && (
+                // Small dot at the top-right of the Settings icon when
+                // a new release is available; dismissed versions clear
+                // it automatically via shouldShowUpdateBanner.
+                <span
+                  className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary ring-2 ring-muted/50"
+                  title={t("nav.updateAvailable")}
+                />
+              )}
             </TooltipTrigger>
-            <TooltipContent side="right">{t("nav.settings")}</TooltipContent>
+            <TooltipContent side="right">
+              {t("nav.settings")}
+              {updateBannerVisible ? t("nav.updateAvailableSuffix") : ""}
+            </TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger

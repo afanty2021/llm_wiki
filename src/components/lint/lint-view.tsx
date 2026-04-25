@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { runStructuralLint, runSemanticLint, type LintResult } from "@/lib/lint"
-import { readFile, writeFile, deleteFile, listDirectory } from "@/commands/fs"
+import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 
 const typeConfig: Record<string, { icon: typeof AlertTriangle; label: string }> = {
@@ -180,7 +180,10 @@ export function LintView() {
     if (!confirmed) return
 
     try {
-      await deleteFile(pagePath)
+      // Cascade = deleteFile(...) + drop the orphan page's embedding
+      // chunks so it stops showing up as a phantom vector hit.
+      const { cascadeDeleteWikiPage } = await import("@/lib/wiki-page-delete")
+      await cascadeDeleteWikiPage(pp, pagePath)
       setResults((prev) => prev.filter((_, i) => i !== index))
       const tree = await listDirectory(pp)
       setFileTree(tree)

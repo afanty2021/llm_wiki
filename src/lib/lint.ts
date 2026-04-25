@@ -4,6 +4,7 @@ import type { LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useActivityStore } from "@/stores/activity-store"
 import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils"
+import { buildLanguageDirective } from "@/lib/output-language"
 
 export interface LintResult {
   type: "orphan" | "broken-link" | "no-outlinks" | "semantic"
@@ -42,7 +43,12 @@ function relativeToSlug(relativePath: string): string {
   return relativePath.replace(/\.md$/, "")
 }
 
-/** Build a slug → absolute path map from wiki files */
+/**
+ * Build a slug → absolute path map from wiki files. Keys are lowercased
+ * so [[Transformer]] matches transformer.md — wikilink matching should
+ * be case-insensitive (matching typical wiki conventions). Callers must
+ * also lowercase their lookup keys.
+ */
 function buildSlugMap(
   wikiFiles: FileNode[],
   wikiRoot: string,
@@ -51,9 +57,9 @@ function buildSlugMap(
   for (const f of wikiFiles) {
     // e.g. /path/to/project/wiki/entities/foo.md → entities/foo
     const rel = getRelativePath(f.path, wikiRoot).replace(/\.md$/, "")
-    map.set(rel, f.path)
+    map.set(rel.toLowerCase(), f.path)
     // also index by basename without extension
-    map.set(f.name.replace(/\.md$/, ""), f.path)
+    map.set(f.name.replace(/\.md$/, "").toLowerCase(), f.path)
   }
   return map
 }
@@ -92,13 +98,15 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
     }
   }
 
-  // Build inbound link count
+  // Build inbound link count. Lookups are case-insensitive — [[Transformer]]
+  // should match transformer.md (slug "transformer").
   const inboundCounts = new Map<string, number>()
   for (const p of pages) {
     for (const link of p.outlinks) {
-      const target = slugMap.has(link)
-        ? relativeToSlug(getRelativePath(slugMap.get(link)!, wikiRoot))
-        : link
+      const lookup = link.toLowerCase()
+      const target = slugMap.has(lookup)
+        ? relativeToSlug(getRelativePath(slugMap.get(lookup)!, wikiRoot)).toLowerCase()
+        : lookup
       inboundCounts.set(target, (inboundCounts.get(target) ?? 0) + 1)
     }
   }
@@ -108,8 +116,8 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
   for (const p of pages) {
     const shortName = getRelativePath(p.path, wikiRoot)
 
-    // Orphan: no inbound links
-    const inbound = inboundCounts.get(p.slug) ?? 0
+    // Orphan: no inbound links (lowercased slug for case-insensitive match)
+    const inbound = inboundCounts.get(p.slug.toLowerCase()) ?? 0
     if (inbound === 0) {
       results.push({
         type: "orphan",
@@ -129,9 +137,11 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
       })
     }
 
-    // Broken links
+    // Broken links — case-insensitive matching.
     for (const link of p.outlinks) {
-      const exists = slugMap.has(link) || slugMap.has(getFileName(link).replace(/\.md$/, ""))
+      const lookup = link.toLowerCase()
+      const basename = getFileName(link).replace(/\.md$/, "").toLowerCase()
+      const exists = slugMap.has(lookup) || slugMap.has(basename)
       if (!exists) {
         results.push({
           type: "broken-link",
@@ -198,11 +208,14 @@ export async function runSemanticLint(
 
   activity.updateItem(activityId, { detail: "Running LLM semantic analysis..." })
 
+  // For auto-mode language detection, sample the concatenated summaries
+  // so non-English wikis get a matching language directive.
+  const summarySample = summaries.join("\n").slice(0, 2000)
+
   const prompt = [
     "You are a wiki quality analyst. Review the following wiki page summaries and identify issues.",
     "",
-    "## Language Rule",
-    "- Match the language of the wiki content. If pages are in Chinese, write issues in Chinese. If in English, use English.",
+    buildLanguageDirective(summarySample),
     "",
     "For each issue, output exactly this format:",
     "",

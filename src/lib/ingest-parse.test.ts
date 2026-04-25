@@ -1,0 +1,308 @@
+/**
+ * Regression suite for the FILE-block parser in `ingest.ts`.
+ *
+ * This started life as a diagnostic harness that documented every
+ * silent-drop failure mode (H1/H2/H3/H5/H6) against the naive regex.
+ * The file now pins down the FIXED behavior of `parseFileBlocks`:
+ *
+ *   - H1 CRLF input is normalized to LF.
+ *   - H2 stream truncation surfaces as a warning (can't fabricate
+ *     content the LLM never sent; at least make the drop visible).
+ *   - H3 whitespace/case variants on both markers are accepted.
+ *   - H5 literal `---END FILE---` inside a fenced code block is
+ *     treated as body text (fence-aware scanner).
+ *   - H6 empty path surfaces as a warning instead of silently
+ *     continuing.
+ *
+ * A failing test here means the fix regressed — the parser is back
+ * to dropping pages without telling anyone.
+ */
+import { describe, it, expect } from "vitest"
+import { parseFileBlocks } from "./ingest"
+
+// ── Happy paths ─────────────────────────────────────────────────────
+
+describe("parseFileBlocks — canonical shapes", () => {
+  it("extracts a single well-formed block", () => {
+    const text = [
+      "---FILE: wiki/concepts/rope.md---",
+      "# RoPE",
+      "Rotary positional embedding.",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(warnings).toHaveLength(0)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].path).toBe("wiki/concepts/rope.md")
+    expect(blocks[0].content).toContain("# RoPE")
+  })
+
+  it("extracts multiple consecutive blocks", () => {
+    const text = [
+      "---FILE: wiki/entities/qwen.md---",
+      "# Qwen",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/concepts/moe.md---",
+      "# MoE",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/sources/paper.md---",
+      "# Source summary",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(warnings).toHaveLength(0)
+    expect(blocks.map((b) => b.path)).toEqual([
+      "wiki/entities/qwen.md",
+      "wiki/concepts/moe.md",
+      "wiki/sources/paper.md",
+    ])
+  })
+
+  it("accepts hyphenated paths", () => {
+    const text = [
+      "---FILE: wiki/concepts/multi-head-attention.md---",
+      "body",
+      "---END FILE---",
+    ].join("\n")
+    expect(parseFileBlocks(text).blocks).toHaveLength(1)
+  })
+
+  it("ignores preamble prose before the first block", () => {
+    const text = [
+      "Here are the wiki files:",
+      "",
+      "---FILE: wiki/concepts/foo.md---",
+      "body",
+      "---END FILE---",
+    ].join("\n")
+    expect(parseFileBlocks(text).blocks).toHaveLength(1)
+  })
+})
+
+// ── H1: CRLF normalization ─────────────────────────────────────────
+
+describe("parseFileBlocks — H1: CRLF line endings", () => {
+  it("extracts all blocks when input uses Windows CRLF", () => {
+    const text = [
+      "---FILE: wiki/entities/qwen.md---",
+      "# Qwen",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/concepts/moe.md---",
+      "# MoE",
+      "---END FILE---",
+    ].join("\r\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(warnings).toHaveLength(0)
+    expect(blocks).toHaveLength(2)
+    expect(blocks.map((b) => b.path)).toEqual([
+      "wiki/entities/qwen.md",
+      "wiki/concepts/moe.md",
+    ])
+    // Content should have LF only (normalized).
+    for (const b of blocks) {
+      expect(b.content).not.toMatch(/\r/)
+    }
+  })
+
+  it("handles mixed CRLF body with LF markers", () => {
+    const text =
+      "---FILE: wiki/concepts/foo.md---\nline1\r\nline2\r\n---END FILE---"
+    const { blocks } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].content).toBe("line1\nline2")
+  })
+})
+
+// ── H2: Stream truncation ──────────────────────────────────────────
+
+describe("parseFileBlocks — H2: truncated streams (surface, don't hide)", () => {
+  it("emits a warning when the final block has no closer", () => {
+    const text = [
+      "---FILE: wiki/entities/qwen.md---",
+      "# Qwen",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/concepts/moe.md---",
+      "# Mixture of Exp", // stream cut here
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    // Completed block makes it through.
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].path).toBe("wiki/entities/qwen.md")
+    // Unclosed block is surfaced as a warning rather than silently lost.
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/wiki\/concepts\/moe\.md/)
+    expect(warnings[0]).toMatch(/not closed/i)
+  })
+
+  it("warns when the only block is unclosed", () => {
+    const text = "---FILE: wiki/concepts/rope.md---\n# RoPE\nIt rotates"
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(0)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/rope\.md/)
+  })
+})
+
+// ── H3: Marker whitespace / case variants ──────────────────────────
+
+describe("parseFileBlocks — H3: tolerant marker matching", () => {
+  it("accepts `--- END FILE ---` (inner spaces)", () => {
+    const text = [
+      "---FILE: wiki/concepts/foo.md---",
+      "body",
+      "--- END FILE ---",
+    ].join("\n")
+    expect(parseFileBlocks(text).blocks).toHaveLength(1)
+  })
+
+  it("accepts `---end file---` (lowercase)", () => {
+    const text = [
+      "---FILE: wiki/concepts/foo.md---",
+      "body",
+      "---end file---",
+    ].join("\n")
+    expect(parseFileBlocks(text).blocks).toHaveLength(1)
+  })
+
+  it("accepts `--- FILE: path ---` (spaces after leading dashes)", () => {
+    const text = [
+      "--- FILE: wiki/concepts/foo.md ---",
+      "body",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].path).toBe("wiki/concepts/foo.md")
+  })
+
+  it("tolerates trailing whitespace on the opener line", () => {
+    const text = "---FILE: wiki/concepts/foo.md---   \nbody\n---END FILE---"
+    expect(parseFileBlocks(text).blocks).toHaveLength(1)
+  })
+
+  it("rejects marker variants embedded in prose / list items", () => {
+    // `---END FILE---` inside a list item is NOT on its own line, so
+    // must not end the block. The regex is anchored ^...$.
+    const text = [
+      "---FILE: wiki/concepts/foo.md---",
+      "Not to be written:",
+      "- `---END FILE---` in backticks (this is prose)",
+      "real content continues",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].content).toContain("real content continues")
+  })
+})
+
+// ── H5: Literal markers inside fenced code blocks ──────────────────
+
+describe("parseFileBlocks — H5: code-fence awareness", () => {
+  it("treats `---END FILE---` inside a fenced code block as body text", () => {
+    // This is the user-reported scenario: the LLM writes a concept
+    // page about the ingest format, which naturally quotes the literal
+    // marker in a code example. Naive parsers truncate the outer block
+    // at the first inner marker; the fence-aware parser keeps going.
+    const text = [
+      "---FILE: wiki/concepts/ingest-format.md---",
+      "# Ingest Format",
+      "",
+      "Example of a FILE block:",
+      "",
+      "```plaintext",
+      "---FILE: wiki/path/to/page.md---",
+      "body content",
+      "---END FILE---", // inside a fence — must be ignored
+      "```",
+      "",
+      "More explanation after the example.",
+      "---END FILE---", // the real closer
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(warnings).toHaveLength(0)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].path).toBe("wiki/concepts/ingest-format.md")
+    // Content must include BOTH the fenced example AND the post-fence
+    // prose — which the old parser silently dropped.
+    expect(blocks[0].content).toContain("```plaintext")
+    expect(blocks[0].content).toContain("More explanation after the example.")
+  })
+
+  it("handles multiple fenced blocks in one page", () => {
+    const text = [
+      "---FILE: wiki/concepts/foo.md---",
+      "```",
+      "---END FILE---",
+      "```",
+      "",
+      "prose",
+      "",
+      "~~~",
+      "---END FILE---",
+      "~~~",
+      "",
+      "more prose",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].content).toContain("more prose")
+  })
+
+  it("handles nested-length fences per CommonMark (outer 4-tick, inner 3-tick)", () => {
+    const text = [
+      "---FILE: wiki/concepts/foo.md---",
+      "````markdown",
+      "```",
+      "---END FILE---",
+      "```",
+      "````",
+      "",
+      "real content after the outer fence closes",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].content).toContain("real content after the outer fence closes")
+  })
+
+  it("a 3-tick fence does NOT close a 4-tick opener (CommonMark rule)", () => {
+    // Inside a ```` fence, a ``` line is just content, NOT a close.
+    // If we wrongly treated 3-tick as closing, `---END FILE---` after
+    // it would exit the block prematurely.
+    const text = [
+      "---FILE: wiki/concepts/foo.md---",
+      "````",
+      "```",
+      "---END FILE---", // still inside the 4-tick fence
+      "```",
+      "````",
+      "",
+      "real content",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].content).toContain("real content")
+  })
+})
+
+// ── H6: Empty path ──────────────────────────────────────────────────
+
+describe("parseFileBlocks — H6: empty-path blocks", () => {
+  it("surfaces a warning instead of silently dropping empty-path blocks", () => {
+    const text = "---FILE:   ---\nsome body\n---END FILE---"
+    const { blocks, warnings } = parseFileBlocks(text)
+    // The OPENER_LINE regex requires at least one non-whitespace char
+    // in the path capture group via `(.+?)`, so " " technically
+    // captures the space and trims to empty → empty-path warning.
+    // In either case, the block must NOT produce a silent write.
+    expect(blocks).toHaveLength(0)
+    expect(warnings.length).toBeGreaterThan(0)
+  })
+})

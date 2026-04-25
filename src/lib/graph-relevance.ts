@@ -234,8 +234,8 @@ export async function buildRetrievalGraph(
       type: raw.type,
       path: raw.path,
       sources: Object.freeze([...raw.sources]),
-      outLinks: Object.freeze(outLinksMap.get(raw.id) ?? new Set()),
-      inLinks: Object.freeze(inLinksMap.get(raw.id) ?? new Set()),
+      outLinks: Object.freeze(outLinksMap.get(raw.id) ?? new Set<string>()),
+      inLinks: Object.freeze(inLinksMap.get(raw.id) ?? new Set<string>()),
     })
   }
 

@@ -101,7 +101,13 @@ pub fn start_clip_server() {
                 }
                 (&Method::Get, "/project") => {
                     let path = CURRENT_PROJECT.lock().unwrap().clone();
-                    let body = format!(r#"{{"ok":true,"path":"{}"}}"#, path);
+                    // serde_json handles backslash escaping so a Windows
+                    // path that somehow still contains `\` won't break
+                    // the JSON parser on the client.
+                    let body = serde_json::json!({
+                        "ok": true,
+                        "path": path,
+                    }).to_string();
                     let mut response = Response::from_string(body);
                     for h in &cors_headers {
                         response.add_header(h.clone());
@@ -136,13 +142,21 @@ pub fn start_clip_server() {
                 (&Method::Get, "/projects") => {
                     let projects = ALL_PROJECTS.lock().unwrap().clone();
                     let current = CURRENT_PROJECT.lock().unwrap().clone();
-                    let items: Vec<String> = projects.iter()
-                        .map(|(name, path)| format!(r#"{{"name":"{}","path":"{}","current":{}}}"#,
-                            name.replace('"', r#"\""#),
-                            path.replace('"', r#"\""#),
-                            path == &current))
+                    // serde_json for proper escaping of `\`, `"`, and any
+                    // other characters that might appear in a project name
+                    // or path. Previously only `"` was escaped by hand,
+                    // which broke on Windows paths containing backslashes.
+                    let items: Vec<serde_json::Value> = projects.iter()
+                        .map(|(name, path)| serde_json::json!({
+                            "name": name,
+                            "path": path,
+                            "current": path == &current,
+                        }))
                         .collect();
-                    let body = format!(r#"{{"ok":true,"projects":[{}]}}"#, items.join(","));
+                    let body = serde_json::json!({
+                        "ok": true,
+                        "projects": items,
+                    }).to_string();
                     let mut response = Response::from_string(body);
                     for h in &cors_headers { response.add_header(h.clone()); }
                     let _ = request.respond(response);
@@ -170,11 +184,20 @@ pub fn start_clip_server() {
                 }
                 (&Method::Get, "/clips/pending") => {
                     let mut pending = PENDING_CLIPS.lock().unwrap();
-                    let items: Vec<String> = pending.iter()
-                        .map(|(proj, file)| format!(r#"{{"projectPath":"{}","filePath":"{}"}}"#,
-                            proj.replace('"', r#"\""#), file.replace('"', r#"\""#)))
+                    // Use serde_json for proper escaping of both quotes
+                    // and backslashes — hand-rolled escaping previously
+                    // produced invalid JSON on Windows paths containing
+                    // \r, \s, etc.
+                    let clips_json: Vec<serde_json::Value> = pending.iter()
+                        .map(|(proj, file)| serde_json::json!({
+                            "projectPath": proj,
+                            "filePath": file,
+                        }))
                         .collect();
-                    let body = format!(r#"{{"ok":true,"clips":[{}]}}"#, items.join(","));
+                    let body = serde_json::json!({
+                        "ok": true,
+                        "clips": clips_json,
+                    }).to_string();
                     pending.clear();
                     let mut response = Response::from_string(body);
                     for h in &cors_headers { response.add_header(h.clone()); }
@@ -244,7 +267,9 @@ fn handle_set_project(body: &str) -> String {
     };
 
     let path = match parsed["path"].as_str() {
-        Some(p) => p.to_string(),
+        // Normalize to forward slashes on ingress so downstream
+        // comparisons against frontend-normalized paths succeed.
+        Some(p) => p.replace('\\', "/"),
         None => return r#"{"ok":false,"error":"path field is required"}"#.to_string(),
     };
 
@@ -277,6 +302,9 @@ fn handle_clip(body: &str) -> String {
     } else {
         project_path_from_body
     };
+    // Normalize to forward slashes so string comparisons against the
+    // frontend-side project path (already normalized) succeed on Windows.
+    let project_path = project_path.replace('\\', "/");
 
     if project_path.is_empty() {
         return r#"{"ok":false,"error":"projectPath is required (set via POST /project or include in request body)"}"#
@@ -326,7 +354,12 @@ fn handle_clip(body: &str) -> String {
         file_path = dir_path.join(format!("{}-{}.md", base_name, counter));
         counter += 1;
     }
-    let file_path = file_path.to_string_lossy().to_string();
+    // Normalize to forward slashes so the string compares cleanly against
+    // frontend-side project paths (already normalized) and survives JSON
+    // serialization (the hand-rolled serializer below doesn't escape
+    // backslashes; a Windows path like `...\raw\sources\foo.md` would
+    // produce invalid JSON escape sequences for `\r` / `\s` / etc).
+    let file_path = file_path.to_string_lossy().replace('\\', "/");
 
     // Build markdown content with web-clip origin
     let markdown = format!(
@@ -360,5 +393,8 @@ fn handle_clip(body: &str) -> String {
         pending.push((project_path, file_path.clone()));
     }
 
-    format!(r#"{{"ok":true,"path":"{}"}}"#, relative_path)
+    serde_json::json!({
+        "ok": true,
+        "path": relative_path,
+    }).to_string()
 }

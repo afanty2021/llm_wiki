@@ -5,7 +5,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId } from "@/lib/project-store"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
@@ -29,6 +29,57 @@ function App() {
     startClipWatcher()
   }, [])
 
+  // Background update check — hydrate persisted user preferences, then
+  // hit GitHub at most once every UPDATE_CHECK_CACHE_MS. Runs 5 s after
+  // mount so it doesn't contend with startup work. Silent on failure;
+  // the UI in Settings → About surfaces the result.
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      if (cancelled) return
+      try {
+        const { loadUpdateCheckState, saveUpdateCheckState } = await import(
+          "@/lib/project-store"
+        )
+        const { useUpdateStore } = await import("@/stores/update-store")
+        const { checkForUpdates, UPDATE_CHECK_CACHE_MS } = await import(
+          "@/lib/update-check"
+        )
+
+        const persisted = await loadUpdateCheckState()
+        if (persisted) useUpdateStore.getState().hydrate(persisted)
+
+        const state = useUpdateStore.getState()
+        if (!state.enabled) return
+
+        const now = Date.now()
+        const fresh =
+          state.lastCheckedAt !== null &&
+          now - state.lastCheckedAt < UPDATE_CHECK_CACHE_MS
+        if (fresh) return
+
+        useUpdateStore.getState().setChecking(true)
+        const result = await checkForUpdates({
+          currentVersion: __APP_VERSION__,
+          repo: "nashsu/llm_wiki",
+        })
+        if (cancelled) return
+        useUpdateStore.getState().setResult(result, Date.now())
+        await saveUpdateCheckState({
+          enabled: useUpdateStore.getState().enabled,
+          lastCheckedAt: Date.now(),
+          dismissedVersion: useUpdateStore.getState().dismissedVersion,
+        })
+      } catch {
+        // Silent — Settings → About lets the user retry manually.
+      }
+    }, 5000)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [])
+
   // Auto-open last project on startup
   useEffect(() => {
     async function init() {
@@ -37,6 +88,32 @@ function App() {
         if (savedConfig) {
           useWikiStore.getState().setLlmConfig(savedConfig)
         }
+        const savedProviderConfigs = await loadProviderConfigs()
+        if (savedProviderConfigs) {
+          useWikiStore.getState().setProviderConfigs(savedProviderConfigs)
+        }
+        const savedActivePreset = await loadActivePresetId()
+        if (savedActivePreset) {
+          useWikiStore.getState().setActivePresetId(savedActivePreset)
+          // Re-resolve the active preset's LlmConfig from (preset defaults
+          // + saved overrides). Without this, preset default updates
+          // (e.g. a corrected Anthropic model ID shipped in a release)
+          // never reach users who are relying on defaults — their stored
+          // `llmConfig` snapshot from a previous launch would keep the
+          // old value. Overrides still win, so an explicit user choice
+          // is preserved.
+          const { LLM_PRESETS } = await import("@/components/settings/llm-presets")
+          const { resolveConfig } = await import("@/components/settings/preset-resolver")
+          const preset = LLM_PRESETS.find((p) => p.id === savedActivePreset)
+          if (preset) {
+            const currentFallback = useWikiStore.getState().llmConfig
+            const override = (savedProviderConfigs ?? {})[savedActivePreset]
+            const resolved = resolveConfig(preset, override, currentFallback)
+            useWikiStore.getState().setLlmConfig(resolved)
+            const { saveLlmConfig } = await import("@/lib/project-store")
+            await saveLlmConfig(resolved)
+          }
+        }
         const savedSearchConfig = await loadSearchApiConfig()
         if (savedSearchConfig) {
           useWikiStore.getState().setSearchApiConfig(savedSearchConfig)
@@ -44,6 +121,10 @@ function App() {
         const savedEmbeddingConfig = await loadEmbeddingConfig()
         if (savedEmbeddingConfig) {
           useWikiStore.getState().setEmbeddingConfig(savedEmbeddingConfig)
+        }
+        const savedOutputLang = await loadOutputLanguage()
+        if (savedOutputLang) {
+          useWikiStore.getState().setOutputLanguage(savedOutputLang)
         }
         const savedLang = await loadLanguage()
         if (savedLang) {
@@ -68,14 +149,25 @@ function App() {
   }, [])
 
   async function handleProjectOpened(proj: WikiProject) {
+    // Clear all per-project state BEFORE loading new project data
+    // to prevent cross-project contamination. MUST be awaited so the
+    // ingest queue / graph cache are actually cleared before the new
+    // project's state is populated.
+    const { resetProjectState } = await import("@/lib/reset-project-state")
+    await resetProjectState()
+
     setProject(proj)
     setSelectedFile(null)
     setActiveView("wiki")
+    // Bump data version so any cached graphs/views invalidate
+    useWikiStore.getState().bumpDataVersion()
     await saveLastProject(proj)
 
-    // Restore ingest queue (resume interrupted tasks)
+    // Restore ingest queue (resume interrupted tasks). Keyed by the
+    // project's stable UUID so the queue still finds the right project
+    // even if the filesystem path changed since the task was enqueued.
     import("@/lib/ingest-queue").then(({ restoreQueue }) => {
-      restoreQueue(proj.path).catch((err) =>
+      restoreQueue(proj.id, proj.path).catch((err) =>
         console.error("Failed to restore ingest queue:", err)
       )
     })
@@ -151,7 +243,11 @@ function App() {
     }
   }
 
-  function handleSwitchProject() {
+  async function handleSwitchProject() {
+    // Clear all per-project state BEFORE flipping back to the welcome screen
+    // so old data cannot leak in via any async render pass.
+    const { resetProjectState } = await import("@/lib/reset-project-state")
+    await resetProjectState()
     setProject(null)
     setFileTree([])
     setSelectedFile(null)

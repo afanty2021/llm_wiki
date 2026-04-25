@@ -13,10 +13,17 @@ export function PreviewPanel() {
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Snapshot of what was most recently loaded from disk. Milkdown re-emits
+  // `markdownUpdated` on initial parse (before the user types anything),
+  // which used to trigger an auto-save that could write back a placeholder
+  // marker if read_file had returned one for a missing/locked file. We
+  // skip save when the incoming markdown equals the last-loaded content.
+  const lastLoadedRef = useRef<string>("")
 
   useEffect(() => {
     if (!selectedFile) {
       setFileContent("")
+      lastLoadedRef.current = ""
       return
     }
 
@@ -24,22 +31,38 @@ export function PreviewPanel() {
 
     if (isBinary(category)) {
       setFileContent("")
+      lastLoadedRef.current = ""
       return
     }
 
     readFile(selectedFile)
-      .then(setFileContent)
-      .catch((err) => setFileContent(`Error loading file: ${err}`))
+      .then((content) => {
+        lastLoadedRef.current = content
+        setFileContent(content)
+      })
+      .catch((err) => {
+        lastLoadedRef.current = ""
+        setFileContent(`Error loading file: ${err}`)
+      })
   }, [selectedFile, setFileContent])
 
   const handleSave = useCallback(
     (markdown: string) => {
       if (!selectedFile) return
+      // Ignore no-op saves from the editor's initial re-emit. Only write
+      // when the user has actually changed the content relative to the
+      // last disk read.
+      if (markdown === lastLoadedRef.current) return
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
-        writeFile(selectedFile, markdown).catch((err) =>
-          console.error("Failed to save:", err)
-        )
+        writeFile(selectedFile, markdown)
+          .then(() => {
+            // Our own write becomes the new "last loaded" — subsequent
+            // re-emits from Milkdown that match this content must not
+            // trigger another save.
+            lastLoadedRef.current = markdown
+          })
+          .catch((err) => console.error("Failed to save:", err))
       }, 1000)
     },
     [selectedFile]

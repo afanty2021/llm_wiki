@@ -31,7 +31,7 @@ export interface KnowledgeGap {
 export function findSurprisingConnections(
   nodes: GraphNode[],
   edges: GraphEdge[],
-  communities: CommunityInfo[],
+  _communities: CommunityInfo[],
   limit: number = 5,
 ): SurprisingConnection[] {
   const nodeMap = new Map(nodes.map((n) => [n.id, n]))

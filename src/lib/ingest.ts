@@ -7,10 +7,159 @@ import { useActivityStore } from "@/stores/activity-store"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
+import { buildLanguageDirective } from "@/lib/output-language"
+import { detectLanguage } from "@/lib/detect-language"
 
-const FILE_BLOCK_REGEX = /---FILE:\s*([^\n-]+?)\s*---\n([\s\S]*?)---END FILE---/g
+// Legacy export kept for backward compatibility with existing diagnostic
+// tests. The live pipeline goes through parseFileBlocks() below, which
+// handles classes of LLM output this regex silently drops (see H1/H3/H5
+// in src/lib/ingest-parse.test.ts).
+export const FILE_BLOCK_REGEX = /---FILE:\s*([^\n]+?)\s*---\n([\s\S]*?)---END FILE---/g
 
-export const LANGUAGE_RULE = "## Language Rule\n- ALWAYS match the language of the source document. If the source is in Chinese, write in Chinese. If in English, write in English. Wiki page titles, content, and descriptions should all be in the same language as the source material."
+/** One FILE block extracted from an LLM's stage-2 output. */
+export interface ParsedFileBlock {
+  path: string
+  content: string
+}
+
+/** What the parser produced, with any non-fatal issues surfaced. */
+export interface ParseFileBlocksResult {
+  blocks: ParsedFileBlock[]
+  /** Human-readable notes for blocks we refused or couldn't close. Each
+   *  one is also console.warn'd. UI can surface these so users see that
+   *  something was skipped instead of silently getting fewer pages. */
+  warnings: string[]
+}
+
+// Line-level openers / closers. Both are case-insensitive, tolerant of
+// extra interior whitespace (`--- END FILE ---`), and anchored to the
+// whole trimmed line so a stray `---END FILE---` inside prose or a list
+// item (`- ---END FILE---`) won't register.
+const OPENER_LINE = /^---\s*FILE:\s*(.+?)\s*---\s*$/i
+const CLOSER_LINE = /^---\s*END\s+FILE\s*---\s*$/i
+// Fence delimiters per CommonMark (triple+ backticks or tildes). Leading
+// indentation ≤ 3 spaces is still a fence; 4+ spaces is an indented code
+// block and doesn't use fence markers.
+const FENCE_LINE = /^\s{0,3}(```+|~~~+)/
+
+/**
+ * Parse an LLM stage-2 generation into FILE blocks.
+ *
+ * Known hazards the naive `---FILE:...---END FILE---` regex walks into
+ * (all reproduced as fixtures in src/lib/ingest-parse.test.ts):
+ *
+ *   H1. Windows CRLF line endings — regex anchored on bare `\n` missed
+ *       every block.
+ *   H2. Stream truncation — the last block's closing `---END FILE---`
+ *       never arrived; the entire block was silently dropped with no
+ *       logging.
+ *   H3. Marker whitespace / case variants — `--- END FILE ---`,
+ *       `---end file---`, `--- FILE: path ---`, `---FILE: foo--- \n`
+ *       (trailing space) all made the regex fail.
+ *   H5. Literal `---END FILE---` inside a fenced code block (e.g. when
+ *       the LLM is writing a concept page about our own ingest format)
+ *       — lazy match stopped at the first occurrence, truncating the
+ *       page and dumping all subsequent real content into no-man's-land.
+ *   H6. Empty path — block matched but was silently dropped by a
+ *       downstream `!path` check.
+ *
+ * This parser fixes every one except H2 (which is fundamentally a
+ * stream-budget problem), and at least surfaces H2 as a warning so the
+ * user isn't left wondering why a page is missing.
+ */
+export function parseFileBlocks(text: string): ParseFileBlocksResult {
+  // H1 fix: normalize CRLF to LF before anything else. Cheap and
+  // covers the case where a proxy / server / LLM inserts Windows line
+  // endings into the stream.
+  const normalized = text.replace(/\r\n/g, "\n")
+  const lines = normalized.split("\n")
+
+  const blocks: ParsedFileBlock[] = []
+  const warnings: string[] = []
+
+  let i = 0
+  while (i < lines.length) {
+    const openerMatch = OPENER_LINE.exec(lines[i])
+    if (!openerMatch) {
+      i++
+      continue
+    }
+    const path = openerMatch[1].trim()
+    i++ // consume opener
+
+    const contentLines: string[] = []
+    let fenceMarker: string | null = null // tracks whether we're inside ``` or ~~~
+    let fenceLen = 0
+    let closed = false
+
+    while (i < lines.length) {
+      const line = lines[i]
+
+      // H5 fix: update fence state before checking closer. Only close
+      // the fence when we see the same character repeated at least as
+      // many times — CommonMark rule. This lets docs-about-our-format
+      // quote `---END FILE---` inside code fences without truncating
+      // the outer block.
+      const fenceMatch = FENCE_LINE.exec(line)
+      if (fenceMatch) {
+        const run = fenceMatch[1]
+        const char = run[0] // '`' or '~'
+        const len = run.length
+        if (fenceMarker === null) {
+          fenceMarker = char
+          fenceLen = len
+        } else if (char === fenceMarker && len >= fenceLen) {
+          fenceMarker = null
+          fenceLen = 0
+        }
+        contentLines.push(line)
+        i++
+        continue
+      }
+
+      // A line matching the closer ONLY counts when we're outside any
+      // code fence. Inside a fence, treat it as ordinary body text.
+      if (fenceMarker === null && CLOSER_LINE.test(line)) {
+        closed = true
+        i++
+        break
+      }
+
+      contentLines.push(line)
+      i++
+    }
+
+    if (!closed) {
+      // H2 fix (partial): we can't fabricate content the LLM never
+      // sent, but we surface the drop instead of silently hiding it.
+      const pathLabel = path || "(unnamed)"
+      const msg = `FILE block "${pathLabel}" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped.`
+      console.warn(`[ingest] ${msg}`)
+      warnings.push(msg)
+      continue
+    }
+
+    if (!path) {
+      // H6 fix: surface empty-path blocks.
+      const msg = `FILE block with empty path skipped (LLM omitted the path after \`---FILE:\`).`
+      console.warn(`[ingest] ${msg}`)
+      warnings.push(msg)
+      continue
+    }
+
+    blocks.push({ path, content: contentLines.join("\n") })
+  }
+
+  return { blocks, warnings }
+}
+
+/**
+ * Build the language rule for ingest prompts.
+ * Uses the user's configured output language, falling back to source content detection.
+ */
+export function languageRule(sourceContent: string = ""): string {
+  return buildLanguageDirective(sourceContent)
+}
 
 /**
  * Auto-ingest: reads source → LLM analyzes → LLM writes wiki pages, all in one go.
@@ -68,7 +217,7 @@ export async function autoIngest(
   await streamChat(
     llmConfig,
     [
-      { role: "system", content: buildAnalysisPrompt(purpose, index) },
+      { role: "system", content: buildAnalysisPrompt(purpose, index, truncatedContent) },
       { role: "user", content: `Analyze this source document:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}\n\n---\n\n${truncatedContent}` },
     ],
     {
@@ -79,10 +228,15 @@ export async function autoIngest(
       },
     },
     signal,
+    { temperature: 0.1 },
   )
 
-  if (useActivityStore.getState().items.find((i) => i.id === activityId)?.status === "error") {
-    return []
+  // A silent `return []` here would look like success to the queue
+  // runner and cause the task to be filter()'d out. Throw instead so
+  // processNext's catch-block path (retry / mark failed) engages.
+  const analysisActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+  if (analysisActivity?.status === "error") {
+    throw new Error(analysisActivity.detail || "Analysis stream failed")
   }
 
   // ── Step 2: Generation ────────────────────────────────────────
@@ -94,19 +248,29 @@ export async function autoIngest(
   await streamChat(
     llmConfig,
     [
-      { role: "system", content: buildGenerationPrompt(schema, purpose, index, fileName, overview) },
+      { role: "system", content: buildGenerationPrompt(schema, purpose, index, fileName, overview, truncatedContent) },
       {
         role: "user",
         content: [
-          `Based on the following analysis of **${fileName}**, generate the wiki files.`,
+          `Source document to process: **${fileName}**`,
           "",
-          "## Source Analysis",
+          "The Stage 1 analysis below is CONTEXT to inform your output. Do NOT echo",
+          "its tables, bullet points, or prose. Your output must be FILE/REVIEW",
+          "blocks as specified in the system prompt — nothing else.",
+          "",
+          "## Stage 1 Analysis (context only — do not repeat)",
           "",
           analysis,
           "",
           "## Original Source Content",
           "",
           truncatedContent,
+          "",
+          "---",
+          "",
+          `Now emit the FILE blocks for the wiki files derived from **${fileName}**.`,
+          "Your response MUST begin with `---FILE:` as the very first characters.",
+          "No preamble. No analysis prose. Start immediately.",
         ].join("\n"),
       },
     ],
@@ -118,15 +282,28 @@ export async function autoIngest(
       },
     },
     signal,
+    { temperature: 0.1 },
   )
 
-  if (useActivityStore.getState().items.find((i) => i.id === activityId)?.status === "error") {
-    return []
+  const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+  if (generationActivity?.status === "error") {
+    throw new Error(generationActivity.detail || "Generation stream failed")
   }
 
   // ── Step 3: Write files ───────────────────────────────────────
   activity.updateItem(activityId, { detail: "Writing files..." })
-  const writtenPaths = await writeFileBlocks(pp, generation)
+  const { writtenPaths, warnings: writeWarnings } = await writeFileBlocks(pp, generation)
+
+  // Surface parser / writer warnings to the activity panel so users
+  // don't have to open devtools to find out a block was dropped.
+  // Keeping the base "Writing files..." detail on top and appending the
+  // first few warnings; full list stays in the console.
+  if (writeWarnings.length > 0) {
+    const summary = writeWarnings.length === 1
+      ? writeWarnings[0]
+      : `${writeWarnings.length} ingest warnings: ${writeWarnings.slice(0, 2).join(" · ")}${writeWarnings.length > 2 ? ` … (+${writeWarnings.length - 2} more in console)` : ""}`
+    activity.updateItem(activityId, { detail: summary })
+  }
 
   // Ensure source summary page exists (LLM may not have generated it correctly)
   const sourceBaseName = fileName.replace(/\.[^.]+$/, "")
@@ -134,7 +311,13 @@ export async function autoIngest(
   const sourceSummaryFullPath = `${pp}/${sourceSummaryPath}`
   const hasSourceSummary = writtenPaths.some((p) => p.startsWith("wiki/sources/"))
 
-  if (!hasSourceSummary) {
+  // If the signal was aborted (e.g. user switched projects / cancelled),
+  // skip the fallback summary write — the LLM streams returned empty
+  // via the abort fast-path (onDone), and writing a stub file into the
+  // old project's wiki would both be noise and mask the error.
+  // Returning no files lets processNext's length-0 safety net mark the
+  // task for retry rather than "success".
+  if (!hasSourceSummary && !signal?.aborted) {
     const date = new Date().toISOString().slice(0, 10)
     const fallbackContent = [
       "---",
@@ -216,14 +399,75 @@ export async function autoIngest(
   return writtenPaths
 }
 
-async function writeFileBlocks(projectPath: string, text: string): Promise<string[]> {
-  const writtenPaths: string[] = []
-  const matches = text.matchAll(FILE_BLOCK_REGEX)
+/**
+ * Per-file language guard. Strips frontmatter + code/math blocks, runs
+ * detectLanguage on the remainder, and returns whether the content is in
+ * a language family compatible with the target. This catches cases where
+ * the LLM follows the format spec but writes a single page in a wrong
+ * language (observed ~once in 5 real-LLM runs on MiniMax-M2.7-highspeed).
+ */
+function contentMatchesTargetLanguage(content: string, target: string): boolean {
+  // Strip frontmatter
+  const fmEnd = content.indexOf("\n---\n", 3)
+  let body = fmEnd > 0 ? content.slice(fmEnd + 5) : content
+  // Strip code + math
+  body = body
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/\$\$[\s\S]*?\$\$/g, "")
+    .replace(/\$[^$\n]*\$/g, "")
+  const sample = body.slice(0, 1500)
+  if (sample.trim().length < 20) return true // too short to judge
 
-  for (const match of matches) {
-    const relativePath = match[1].trim()
-    const content = match[2]
-    if (!relativePath) continue
+  const detected = detectLanguage(sample)
+
+  // Compatible families: CJK targets accept CJK variants; Latin targets
+  // accept any Latin family (English may mis-detect as Italian/French for
+  // short idiomatic samples — that's fine). Cross-family is the real bug.
+  const cjk = new Set(["Chinese", "Traditional Chinese", "Japanese", "Korean"])
+  const targetIsCjk = cjk.has(target)
+  const detectedIsCjk = cjk.has(detected)
+  if (targetIsCjk) return detectedIsCjk
+  return !detectedIsCjk && !["Arabic", "Hindi", "Thai", "Hebrew"].includes(detected)
+}
+
+async function writeFileBlocks(
+  projectPath: string,
+  text: string,
+): Promise<{ writtenPaths: string[]; warnings: string[] }> {
+  const { blocks, warnings: parseWarnings } = parseFileBlocks(text)
+  const warnings = [...parseWarnings]
+  const writtenPaths: string[] = []
+
+  const targetLang = useWikiStore.getState().outputLanguage
+
+  for (const { path: relativePath, content } of blocks) {
+    // Language guard: reject individual FILE blocks whose body contradicts
+    // the user-set target language. Skip:
+    // - log.md (structural, short)
+    // - /sources/ and /entities/ pages: these legitimately cite cross-
+    //   language proper nouns (a German philosophy source summary naturally
+    //   quotes Russian philosophers) which confuses naive script-based
+    //   detection. Keep the check for /concepts/ pages, which should be
+    //   authoritative content in the target language.
+    const isLog =
+      relativePath.endsWith("/log.md") || relativePath === "wiki/log.md"
+    const isEntityOrSource =
+      relativePath.startsWith("wiki/entities/") ||
+      relativePath.includes("/entities/") ||
+      relativePath.startsWith("wiki/sources/") ||
+      relativePath.includes("/sources/")
+    if (
+      targetLang &&
+      targetLang !== "auto" &&
+      !isLog &&
+      !isEntityOrSource &&
+      !contentMatchesTargetLanguage(content, targetLang)
+    ) {
+      const msg = `Dropped "${relativePath}" — body language doesn't match target ${targetLang}.`
+      console.warn(`[ingest] ${msg}`)
+      warnings.push(msg)
+      continue
+    }
 
     const fullPath = `${projectPath}/${relativePath}`
     try {
@@ -231,16 +475,43 @@ async function writeFileBlocks(projectPath: string, text: string): Promise<strin
         const existing = await tryReadFile(fullPath)
         const appended = existing ? `${existing}\n\n${content.trim()}` : content.trim()
         await writeFile(fullPath, appended)
-      } else {
+      } else if (
+        relativePath === "wiki/index.md" ||
+        relativePath.endsWith("/index.md") ||
+        relativePath === "wiki/overview.md" ||
+        relativePath.endsWith("/overview.md")
+      ) {
+        // Listing pages (index / overview) are always overwritten
+        // wholesale — their sources field is incidental and merging
+        // wouldn't make semantic sense (they aren't source-derived
+        // content pages).
         await writeFile(fullPath, content)
+      } else {
+        // Content pages (entities / concepts / queries / synthesis /
+        // comparisons / sources summaries): MERGE the sources field
+        // with what's already on disk before overwriting, so pages
+        // that multiple source documents contribute to retain the
+        // full `sources: [...]` history. Without this, every
+        // re-ingest clobbers sources to a single entry and the
+        // source-delete flow would later treat the page as single-
+        // sourced and delete it outright — silent data loss.
+        //
+        // See src/lib/sources-merge.ts for the merge semantics
+        // (case-insensitive dedup, preserves existing order).
+        const { mergeSourcesIntoContent } = await import("./sources-merge")
+        const existing = await tryReadFile(fullPath)
+        const toWrite = mergeSourcesIntoContent(content, existing)
+        await writeFile(fullPath, toWrite)
       }
       writtenPaths.push(relativePath)
     } catch (err) {
-      console.error(`Failed to write ${fullPath}:`, err)
+      const msg = `Failed to write "${relativePath}": ${err instanceof Error ? err.message : String(err)}`
+      console.error(`[ingest] ${msg}`)
+      warnings.push(msg)
     }
   }
 
-  return writtenPaths
+  return { writtenPaths, warnings }
 }
 
 const REVIEW_BLOCK_REGEX = /---REVIEW:\s*(\w[\w-]*)\s*\|\s*(.+?)\s*---\n([\s\S]*?)---END REVIEW---/g
@@ -312,11 +583,11 @@ function parseReviewBlocks(
  * Step 1 prompt: AI reads the source and produces a structured analysis.
  * This is the "discussion" step — the AI reasons about the source before writing wiki pages.
  */
-function buildAnalysisPrompt(purpose: string, index: string): string {
+export function buildAnalysisPrompt(purpose: string, index: string, sourceContent: string = ""): string {
   return [
     "You are an expert research analyst. Read the source document and produce a structured analysis.",
     "",
-    LANGUAGE_RULE,
+    languageRule(sourceContent),
     "",
     "Your analysis should cover:",
     "",
@@ -362,28 +633,21 @@ function buildAnalysisPrompt(purpose: string, index: string): string {
 /**
  * Step 2 prompt: AI takes its own analysis and generates wiki files + review items.
  */
-function buildGenerationPrompt(schema: string, purpose: string, index: string, sourceFileName: string, overview?: string): string {
+export function buildGenerationPrompt(schema: string, purpose: string, index: string, sourceFileName: string, overview?: string, sourceContent: string = ""): string {
   // Use original filename (without extension) as the source summary page name
   const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, "")
 
   return [
     "You are a wiki maintainer. Based on the analysis provided, generate wiki files.",
     "",
-    LANGUAGE_RULE,
+    languageRule(sourceContent),
     "",
     `## IMPORTANT: Source File`,
     `The original source file is: **${sourceFileName}**`,
     `All wiki pages generated from this source MUST include this filename in their frontmatter \`sources\` field.`,
     "",
-    "## Output Format",
+    "## What to generate",
     "",
-    "Output each wiki file in this exact format:",
-    "",
-    "---FILE: wiki/sources/filename.md---",
-    "(complete file content with YAML frontmatter)",
-    "---END FILE---",
-    "",
-    "Generate:",
     `1. A source summary page at **wiki/sources/${sourceBaseName}.md** (MUST use this exact path)`,
     "2. Entity pages in wiki/entities/ for key entities identified in the analysis",
     "3. Concept pages in wiki/concepts/ for key concepts identified in the analysis",
@@ -414,26 +678,18 @@ function buildGenerationPrompt(schema: string, purpose: string, index: string, s
     "- Follow the analysis recommendations on what to emphasize",
     "- If the analysis found connections to existing pages, add cross-references",
     "",
-    "## Review Items",
+    "## Review block types",
     "",
-    "After the FILE blocks, output REVIEW blocks for anything that needs human judgment:",
+    "After all FILE blocks, optionally emit REVIEW blocks for anything that needs human judgment:",
     "",
-    "---REVIEW: type | Title---",
-    "Description of what needs the user's attention.",
-    "OPTIONS: (see allowed options below)",
-    "PAGES: wiki/page1.md, wiki/page2.md",
-    "SEARCH: search query 1 | search query 2 | search query 3",
-    "---END REVIEW---",
-    "",
-    "Review types and when to use:",
     "- contradiction: the analysis found conflicts with existing wiki content",
     "- duplicate: an entity/concept might already exist under a different name in the index",
     "- missing-page: an important concept is referenced but has no dedicated page",
     "- suggestion: ideas for further research, related sources to look for, or connections worth exploring",
     "",
-    "## OPTIONS Rules (CRITICAL — only use these predefined options):",
+    "Only create reviews for things that genuinely need human input. Don't create trivial reviews.",
     "",
-    "For each review type, use ONLY these allowed OPTIONS:",
+    "## OPTIONS allowed values (only these predefined labels):",
     "",
     "- contradiction: OPTIONS: Create Page | Skip",
     "- duplicate: OPTIONS: Create Page | Skip",
@@ -443,18 +699,55 @@ function buildGenerationPrompt(schema: string, purpose: string, index: string, s
     "The user also has a 'Deep Research' button (auto-added by the system) that triggers web search.",
     "Do NOT invent custom option labels. Only use 'Create Page' and 'Skip'.",
     "",
-    "IMPORTANT for suggestion and missing-page types:",
-    "- The SEARCH field must contain 2-3 web search queries optimized for finding relevant papers, articles, or documentation.",
-    "- These should be specific, keyword-rich queries suitable for a search engine — NOT titles or sentences.",
-    "- Example: for a suggestion about 'automated debt detection in AI-generated code', good SEARCH queries would be:",
+    "For suggestion and missing-page reviews, the SEARCH field must contain 2-3 web search queries",
+    "(keyword-rich, specific, suitable for a search engine — NOT titles or sentences). Example:",
     "  SEARCH: automated technical debt detection AI generated code | software quality metrics LLM code generation | static analysis tools agentic software development",
-    "",
-    "Only create reviews for things that genuinely need human input. Don't create trivial reviews.",
     "",
     purpose ? `## Wiki Purpose\n${purpose}` : "",
     schema ? `## Wiki Schema\n${schema}` : "",
     index ? `## Current Wiki Index (preserve all existing entries, add new ones)\n${index}` : "",
     overview ? `## Current Overview (update this to reflect the new source)\n${overview}` : "",
+    "",
+    // ── OUTPUT FORMAT MUST BE THE LAST SECTION — models weight recent instructions highest ──
+    "## Output Format (MUST FOLLOW EXACTLY — this is how the parser reads your response)",
+    "",
+    "Your ENTIRE response consists of FILE blocks followed by optional REVIEW blocks. Nothing else.",
+    "",
+    "FILE block template:",
+    "```",
+    "---FILE: wiki/path/to/page.md---",
+    "(complete file content with YAML frontmatter)",
+    "---END FILE---",
+    "```",
+    "",
+    "REVIEW block template (optional, after all FILE blocks):",
+    "```",
+    "---REVIEW: type | Title---",
+    "Description of what needs the user's attention.",
+    "OPTIONS: Create Page | Skip",
+    "PAGES: wiki/page1.md, wiki/page2.md",
+    "SEARCH: query 1 | query 2 | query 3",
+    "---END REVIEW---",
+    "```",
+    "",
+    "## Output Requirements (STRICT — deviations will cause parse failure)",
+    "",
+    "1. The FIRST character of your response MUST be `-` (the opening of `---FILE:`).",
+    "2. DO NOT output any preamble such as \"Here are the files:\", \"Based on the analysis...\", or any introductory prose.",
+    "3. DO NOT echo or restate the analysis — that was stage 1's job. Your job is to emit FILE blocks.",
+    "4. DO NOT output markdown tables, bullet lists, or headings outside of FILE/REVIEW blocks.",
+    "5. DO NOT output any trailing commentary after the last `---END FILE---` or `---END REVIEW---`.",
+    "6. Between blocks, use only blank lines — no prose.",
+    "7. EVERY FILE block's content (titles, body, descriptions) MUST be in the mandatory output language specified below. No exceptions — not even for page names or section headings.",
+    "",
+    "If you start with anything other than `---FILE:`, the entire response will be discarded.",
+    "",
+    // Repeat the language directive at the very end so it wins the "most
+    // recent instruction" tie-breaker. Small-to-medium models otherwise
+    // drift back to their training-data language for individual pages.
+    "---",
+    "",
+    languageRule(sourceContent),
   ].filter(Boolean).join("\n")
 }
 
@@ -496,7 +789,7 @@ export async function startIngest(
   const systemPrompt = [
     "You are a knowledgeable assistant helping to build a wiki from source documents.",
     "",
-    LANGUAGE_RULE,
+    languageRule(sourceContent),
     "",
     purpose ? `## Wiki Purpose\n${purpose}` : "",
     schema ? `## Wiki Schema\n${schema}` : "",
@@ -591,10 +884,18 @@ export async function executeIngestWrites(
 
   let accumulated = ""
 
+  // In auto mode, fall back to detecting language from the chat history
+  // (user's discussion messages) rather than the empty string, which would
+  // default to English regardless of the source content.
+  const historyText = conversationHistory
+    .map((m) => m.content)
+    .join("\n")
+    .slice(0, 2000)
+
   const systemPrompt = [
     "You are a wiki generation assistant. Your task is to produce structured wiki file contents.",
     "",
-    LANGUAGE_RULE,
+    languageRule(historyText),
     schema ? `## Wiki Schema\n${schema}` : "",
   ]
     .filter(Boolean)

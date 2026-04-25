@@ -1,4 +1,5 @@
 import type { SearchApiConfig } from "@/stores/wiki-store"
+import { getHttpFetch, isFetchNetworkError } from "@/lib/tauri-fetch"
 
 export interface WebSearchResult {
   title: string
@@ -29,17 +30,31 @@ async function tavilySearch(
   apiKey: string,
   maxResults: number,
 ): Promise<WebSearchResult[]> {
-  const response = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key: apiKey,
-      query,
-      max_results: maxResults,
-      search_depth: "advanced",
-      include_answer: false,
-    }),
-  })
+  // Route through the Tauri HTTP plugin so future non-Tavily search
+  // providers (Serper, Exa, Brave, Google CSE, ...) with less friendly
+  // CORS don't each need their own workaround. See tauri-fetch.ts.
+  const httpFetch = await getHttpFetch()
+  let response: Response
+  try {
+    response = await httpFetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query,
+        max_results: maxResults,
+        search_depth: "advanced",
+        include_answer: false,
+      }),
+    })
+  } catch (err) {
+    if (isFetchNetworkError(err)) {
+      throw new Error(
+        "Network error reaching api.tavily.com. Check your connectivity and whether the Tavily API key is still valid.",
+      )
+    }
+    throw err
+  }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "Unknown error")

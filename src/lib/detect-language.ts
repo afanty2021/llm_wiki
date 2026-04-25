@@ -16,6 +16,15 @@ export function detectLanguage(text: string): string {
     }
   }
 
+  // Special case: Japanese uses BOTH Hiragana/Katakana and Kanji. Pure
+  // Chinese uses ONLY Kanji. If we see any Japanese script characters at
+  // all alongside Kanji, the language is Japanese, regardless of which
+  // count dominates. (Kanji-heavy Japanese text would otherwise be
+  // misclassified as Chinese.)
+  if ((counts.Japanese ?? 0) > 0 && (counts.Chinese ?? 0) > 0) {
+    return "Japanese"
+  }
+
   // If non-Latin scripts detected, return the dominant one
   let maxScript = ""
   let maxCount = 0
@@ -149,13 +158,20 @@ function getScript(cp: number): string | null {
 function detectLatinLanguage(text: string): string | null {
   const lower = text.toLowerCase()
 
-  // Vietnamese — very distinctive diacritics
-  if (/[àáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]/.test(lower)) {
+  // Vietnamese — VN-EXCLUSIVE tone/hook marks only.
+  // Earlier versions included shared Latin diacritics (à á â ã è é ê ì í ò ó ô õ
+  // ù ú ă ý) which made any French / Portuguese / Spanish / Italian / Romanian
+  // text with common diacritics false-positive as Vietnamese. The chars below
+  // are Vietnamese-specific tone/hook/horn composites that don't appear in
+  // other major languages detected here.
+  if (/[ảạắằẳẵặấầẩẫậđẻẽẹếềểễệỉĩịỏọốồổỗộơớờởỡợủũụưứừửữựỷỹỵ]/.test(lower)) {
     return "Vietnamese"
   }
 
-  // Turkish — distinctive characters
-  if (/[ğışçöü]/.test(lower) && /\b(bir|ve|için|ile|bu|da|de)\b/.test(lower)) {
+  // Turkish — require Turkish-unique chars (ğ, ı dotless, ş). Earlier versions
+  // also matched ç/ö/ü, which are shared with French/German/Portuguese/Hungarian
+  // and caused false positives on PT text like "coração".
+  if (/[ğış]/.test(lower) && /\b(bir|ve|için|ile|bu|da|de|değil|ama)\b/.test(lower)) {
     return "Turkish"
   }
 
@@ -189,14 +205,17 @@ function detectLatinLanguage(text: string): string | null {
     if (/\b(le|la|les|est|une|des)\b/.test(lower)) return "French"
   }
 
-  // Spanish — common patterns
-  if (/[áéíóúñ¿¡]/.test(lower) || /\b(el|la|los|las|de|del|es|en|por|que|un|una)\b/.test(lower)) {
-    if (/\b(el|los|las|del|por|que)\b/.test(lower)) return "Spanish"
-  }
-
-  // Portuguese — common patterns
+  // Portuguese — must run BEFORE Spanish: PT has stricter char requirements
+  // ([ãõç]) than ES, and their common-word sets overlap heavily (`que`, `de`,
+  // `um`, etc.). Running ES first steals legitimate PT text.
   if (/[ãõç]/.test(lower) && /\b(o|a|os|as|de|do|da|é|em|um|uma|não|que)\b/.test(lower)) {
     return "Portuguese"
+  }
+
+  // Spanish — common patterns. The stage-2 word set is intentionally narrow
+  // (words NOT shared with Portuguese): del/por/las/ñ-bearing/inverted-punct.
+  if (/[áéíóúñ¿¡]/.test(lower) || /\b(el|la|los|las|de|del|es|en|por|que|un|una)\b/.test(lower)) {
+    if (/\b(el|los|las|del|por)\b/.test(lower) || /[ñ¿¡]/.test(lower)) return "Spanish"
   }
 
   // Italian — common patterns

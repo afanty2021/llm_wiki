@@ -223,7 +223,7 @@ export async function buildWikiGraph(
       if (targetId === null) continue
       if (targetId === sourceId) continue
 
-      rawEdges.push({ source: sourceId, target: targetId })
+      rawEdges.push({ source: sourceId, target: targetId, weight: 1 })
 
       linkCounts.set(sourceId, (linkCounts.get(sourceId) ?? 0) + 1)
       linkCounts.set(targetId, (linkCounts.get(targetId) ?? 0) + 1)

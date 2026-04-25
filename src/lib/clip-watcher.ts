@@ -1,5 +1,5 @@
 import { useWikiStore } from "@/stores/wiki-store"
-import { autoIngest } from "./ingest"
+import { enqueueIngest } from "./ingest-queue"
 import { listDirectory } from "@/commands/fs"
 
 const POLL_INTERVAL = 3000 // Check every 3 seconds
@@ -35,11 +35,19 @@ export function startClipWatcher() {
             // ignore
           }
 
-          // Auto-ingest the clipped file
+          // Enqueue (not auto-ingest directly) so the task lands in the
+          // persisted queue, shows up in the activity panel, and survives
+          // a UI refresh. Same path used by file imports from sources-view.
+          // Pass the project's stable UUID — the queue looks up the
+          // current filesystem path from the registry at run time.
           const llmConfig = store.llmConfig
-          if (llmConfig.apiKey || llmConfig.provider === "ollama") {
-            autoIngest(clipProjectPath, clipFilePath, llmConfig).catch((err) => {
-              console.error("Failed to auto-ingest web clip:", err)
+          const hasLlm =
+            !!llmConfig.apiKey ||
+            llmConfig.provider === "ollama" ||
+            llmConfig.provider === "custom"
+          if (hasLlm) {
+            enqueueIngest(project.id, clipFilePath).catch((err) => {
+              console.error("Failed to enqueue web clip:", err)
             })
           }
         }

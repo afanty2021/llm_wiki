@@ -11,6 +11,15 @@ import { startIngest } from "@/lib/ingest"
 import { enqueueIngest, enqueueBatch } from "@/lib/ingest-queue"
 import { useTranslation } from "react-i18next"
 import { normalizePath, getFileName } from "@/lib/path-utils"
+import {
+  buildDeletedKeys,
+  cleanIndexListing,
+  stripDeletedWikilinks,
+  extractFrontmatterTitle,
+  type DeletedPageInfo,
+} from "@/lib/wiki-cleanup"
+import { parseSources, writeSources } from "@/lib/sources-merge"
+import { decidePageFate } from "@/lib/source-delete-decision"
 
 export function SourcesView() {
   const { t } = useTranslation()
@@ -108,7 +117,7 @@ export function SourcesView() {
     // Enqueue for serial ingest (runs in background via ingest queue)
     if (llmConfig.apiKey || llmConfig.provider === "ollama" || llmConfig.provider === "custom") {
       for (const destPath of importedPaths) {
-        enqueueIngest(pp, destPath).catch((err) =>
+        enqueueIngest(project.id, destPath).catch((err) =>
           console.error(`Failed to enqueue ingest:`, err)
         )
       }
@@ -157,8 +166,13 @@ export function SourcesView() {
                     "csv", "json", "html", "htm", "rtf", "xml", "yaml", "yml"].includes(ext)
           })
           .map((filePath) => {
-            // Build folder context from relative path
-            const relPath = filePath.replace(destDir + "/", "")
+            // Build folder context from relative path. On Windows the
+            // Rust-returned filePath uses backslashes while destDir was
+            // composed with forward slashes — normalize both sides before
+            // the replace so this works on every platform.
+            const normFilePath = normalizePath(filePath)
+            const normDestDir = normalizePath(destDir)
+            const relPath = normFilePath.replace(normDestDir + "/", "")
             const parts = relPath.split("/")
             parts.pop() // remove filename
             const context = parts.length > 0
@@ -168,7 +182,7 @@ export function SourcesView() {
           })
 
         if (tasks.length > 0) {
-          await enqueueBatch(pp, tasks)
+          await enqueueBatch(project.id, tasks)
           console.log(`[Folder Import] Enqueued ${tasks.length} files for ingest`)
         }
       }
@@ -200,10 +214,6 @@ export function SourcesView() {
     try {
       // Step 1: Find related wiki pages before deleting
       const relatedPages = await findRelatedWikiPages(pp, fileName)
-      const deletedSlugs = relatedPages.map((p) => {
-        const name = getFileName(p).replace(".md", "")
-        return name
-      }).filter(Boolean)
 
       // Step 2: Delete the source file
       await deleteFile(node.path)
@@ -215,80 +225,95 @@ export function SourcesView() {
         // cache file may not exist
       }
 
-      // Step 4: Delete or update related wiki pages
-      // If a page has multiple sources, only remove this filename from sources[]; don't delete the page
+      // Step 4: For each page that findRelatedWikiPages surfaced,
+      // consult decidePageFate to pick one of three actions:
+      //
+      //   keep   — page has OTHER sources too; just drop this one from
+      //            its sources[] list and rewrite.
+      //   delete — this was the page's sole source; remove the page
+      //            and record { slug, title } so downstream cleanup
+      //            can wipe every stale reference to it.
+      //   skip   — the page's sources[] doesn't actually include the
+      //            file being deleted. Must have been surfaced by the
+      //            Rust findRelatedWikiPages loose-match path (fs.rs
+      //            Strategy 3 — substring of title / description /
+      //            elsewhere in the frontmatter). Leaving the page
+      //            alone prevents silent data loss when a filename
+      //            happens to appear in an unrelated page's metadata.
       const actuallyDeleted: string[] = []
+      const deletedInfos: DeletedPageInfo[] = []
       for (const pagePath of relatedPages) {
         try {
           const content = await readFile(pagePath)
-          // Parse sources from frontmatter
-          const sourcesMatch = content.match(/^sources:\s*\[([^\]]*)\]/m)
-          if (sourcesMatch) {
-            const sourcesList = sourcesMatch[1]
-              .split(",")
-              .map((s) => s.trim().replace(/["']/g, ""))
-              .filter((s) => s.length > 0)
+          const sourcesList = parseSources(content)
+          const decision = decidePageFate(sourcesList, fileName)
 
-            if (sourcesList.length > 1) {
-              // Multiple sources — just remove this file from the list, keep the page
-              const updatedSources = sourcesList.filter(
-                (s) => s.toLowerCase() !== fileName.toLowerCase()
-              )
-              const updatedContent = content.replace(
-                /^sources:\s*\[([^\]]*)\]/m,
-                `sources: [${updatedSources.map((s) => `"${s}"`).join(", ")}]`
-              )
-              await writeFile(pagePath, updatedContent)
-              continue // Don't delete this page
-            }
+          if (decision.action === "skip") {
+            // Nothing to do — page isn't really derived from this source.
+            continue
           }
 
-          // Single source or no sources field — delete the page
-          await deleteFile(pagePath)
+          if (decision.action === "keep") {
+            // Multi-source page — rewrite sources with the deleted one
+            // filtered out. writeSources preserves every other
+            // frontmatter field and position.
+            const updated = writeSources(content, decision.updatedSources)
+            await writeFile(pagePath, updated)
+            continue
+          }
+
+          // action === "delete": the page's sole source was this file.
+          // Capture slug + title before deletion so stale references
+          // can be cleaned from index / overview / sibling pages.
+          const slug = getFileName(pagePath).replace(/\.md$/, "")
+          const title = extractFrontmatterTitle(content)
+          deletedInfos.push({ slug, title })
+          // cascadeDeleteWikiPage = deleteFile(...) + drop the page's
+          // embedding chunks so future searches don't return phantom
+          // hits pointing at a file that no longer exists.
+          const { cascadeDeleteWikiPage } = await import("@/lib/wiki-page-delete")
+          await cascadeDeleteWikiPage(pp, pagePath)
           actuallyDeleted.push(pagePath)
         } catch (err) {
           console.error(`Failed to process wiki page ${pagePath}:`, err)
         }
       }
 
-      // Step 5: Clean index.md — remove entries for actually deleted pages only
-      const deletedPageSlugs = actuallyDeleted.map((p) => {
-        const name = getFileName(p).replace(".md", "")
-        return name
-      }).filter(Boolean)
-
-      if (deletedPageSlugs.length > 0) {
-        try {
-          const indexPath = `${pp}/wiki/index.md`
-          const indexContent = await readFile(indexPath)
-          const updatedIndex = indexContent
-            .split("\n")
-            .filter((line) => !deletedPageSlugs.some((slug) => line.toLowerCase().includes(slug.toLowerCase())))
-            .join("\n")
-          await writeFile(indexPath, updatedIndex)
-        } catch {
-          // non-critical
-        }
-      }
-
-      // Step 6: Clean [[wikilinks]] to deleted pages from remaining wiki files
-      if (deletedPageSlugs.length > 0) {
+      // Steps 5 & 6: clean stale references from every wiki file.
+      //
+      // index.md  → drop list-item lines whose primary `[[target]]` is
+      //             a deleted page (title OR slug form matches).
+      // overview.md + everything else → strip `[[deleted]]` occurrences
+      //             in prose, replacing them with plain text (or with
+      //             the pipe display when present).
+      //
+      // Using normalized-key matching rather than the old substring
+      // `includes` check avoids two classes of real bugs: stale
+      // title-form refs surviving (`[[KV Cache]]` vs slug `kv-cache`),
+      // and innocent siblings getting wiped collaterally (deleting
+      // `ai.md` must not take `[[OpenAI]]` / `[[AI Safety]]` down).
+      const deletedKeys = buildDeletedKeys(deletedInfos)
+      if (deletedKeys.size > 0) {
         try {
           const wikiTree = await listDirectory(`${pp}/wiki`)
           const allMdFiles = flattenMdFiles(wikiTree)
           for (const file of allMdFiles) {
             try {
               const content = await readFile(file.path)
-              let updated = content
-              for (const slug of deletedPageSlugs) {
-                const linkRegex = new RegExp(`\\[\\[${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\|([^\\]]+))?\\]\\]`, "gi")
-                updated = updated.replace(linkRegex, (_match, displayText) => displayText || slug)
-              }
+              const isIndex = file.path === `${pp}/wiki/index.md` ||
+                file.name === "index.md"
+              // For index: first drop whole entry lines for deleted
+              // pages, then still strip any secondary `[[...]]` refs
+              // to deleted pages that may appear in surviving rows.
+              const afterListing = isIndex
+                ? cleanIndexListing(content, deletedKeys)
+                : content
+              const updated = stripDeletedWikilinks(afterListing, deletedKeys)
               if (updated !== content) {
                 await writeFile(file.path, updated)
               }
             } catch {
-              // skip
+              // skip individual file failures — best-effort cleanup
             }
           }
         } catch {

@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core"
 import type { FileNode, WikiProject } from "@/types/wiki"
+import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
+
+/** Raw shape returned by the Rust commands — id is attached client-side. */
+interface RawProject {
+  name: string
+  path: string
+}
 
 export async function readFile(path: string): Promise<string> {
   return invoke<string>("read_file", { path })
@@ -39,15 +46,25 @@ export async function createDirectory(path: string): Promise<void> {
   return invoke<void>("create_directory", { path })
 }
 
+export async function fileExists(path: string): Promise<boolean> {
+  return invoke<boolean>("file_exists", { path })
+}
+
 export async function createProject(
   name: string,
   path: string,
 ): Promise<WikiProject> {
-  return invoke<WikiProject>("create_project", { name, path })
+  const raw = await invoke<RawProject>("create_project", { name, path })
+  const id = await ensureProjectId(raw.path)
+  await upsertProjectInfo(id, raw.path, raw.name)
+  return { id, name: raw.name, path: raw.path }
 }
 
 export async function openProject(path: string): Promise<WikiProject> {
-  return invoke<WikiProject>("open_project", { path })
+  const raw = await invoke<RawProject>("open_project", { path })
+  const id = await ensureProjectId(raw.path)
+  await upsertProjectInfo(id, raw.path, raw.name)
+  return { id, name: raw.name, path: raw.path }
 }
 
 export async function clipServerStatus(): Promise<string> {

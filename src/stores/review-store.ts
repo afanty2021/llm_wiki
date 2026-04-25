@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { normalizeReviewTitle } from "@/lib/review-utils"
 
 export interface ReviewOption {
   label: string
@@ -48,17 +49,52 @@ export const useReviewStore = create<ReviewState>((set) => ({
     })),
 
   addItems: (items) =>
-    set((state) => ({
-      items: [
-        ...state.items,
-        ...items.map((item) => ({
-          ...item,
-          id: `review-${++counter}`,
-          resolved: false,
-          createdAt: Date.now(),
-        })),
-      ],
-    })),
+    set((state) => {
+      // De-dupe against pending items with same type + normalized title (all
+      // 5 types — bulk ingest can re-surface the same contradiction/confirm
+      // from multiple files).
+      // Merge affectedPages / searchQueries / sourcePath instead of duplicating.
+      const result = [...state.items]
+      const keyFor = (t: string, title: string) => `${t}::${normalizeReviewTitle(title)}`
+
+      // Build index of existing pending items for fast lookup
+      const pendingIndex = new Map<string, number>()
+      result.forEach((it, idx) => {
+        if (!it.resolved) {
+          pendingIndex.set(keyFor(it.type, it.title), idx)
+        }
+      })
+
+      for (const incoming of items) {
+        const k = keyFor(incoming.type, incoming.title)
+        const existingIdx = pendingIndex.get(k)
+
+        if (existingIdx !== undefined) {
+          // Merge into existing
+          const old = result[existingIdx]
+          const mergedPages = Array.from(new Set([...(old.affectedPages ?? []), ...(incoming.affectedPages ?? [])]))
+          const mergedQueries = Array.from(new Set([...(old.searchQueries ?? []), ...(incoming.searchQueries ?? [])]))
+          result[existingIdx] = {
+            ...old,
+            description: incoming.description || old.description, // prefer newer description
+            sourcePath: incoming.sourcePath ?? old.sourcePath,
+            affectedPages: mergedPages.length > 0 ? mergedPages : undefined,
+            searchQueries: mergedQueries.length > 0 ? mergedQueries : undefined,
+          }
+        } else {
+          const newItem = {
+            ...incoming,
+            id: `review-${++counter}`,
+            resolved: false,
+            createdAt: Date.now(),
+          }
+          result.push(newItem)
+          pendingIndex.set(k, result.length - 1)
+        }
+      }
+
+      return { items: result }
+    }),
 
   setItems: (items) => set({ items }),
 

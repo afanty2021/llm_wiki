@@ -1,10 +1,16 @@
 mod clip_server;
 mod commands;
+mod panic_guard;
 mod types;
+
+use panic_guard::run_guarded;
 
 #[tauri::command]
 fn clip_server_status() -> String {
-    clip_server::get_daemon_status().to_string()
+    run_guarded("clip_server_status", || {
+        Ok(clip_server::get_daemon_status().to_string())
+    })
+    .unwrap_or_else(|e| format!("error: {e}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,6 +21,20 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        // Rust-backed fetch so third-party LLM APIs that reject
+        // browser-origin headers via CORS preflight (MiniMax, Volcengine
+        // Ark's api/coding/v3, etc.) still work. Requests leave the app
+        // from Rust, never the webview.
+        .plugin(tauri_plugin_http::init())
+        .setup(|app| {
+            // Let the PDF extractor find the bundled pdfium dynamic
+            // library via Tauri's platform-correct resource path.
+            use tauri::Manager;
+            if let Ok(dir) = app.path().resource_dir() {
+                commands::fs::set_resource_dir_hint(dir);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::fs::read_file,
             commands::fs::write_file,
@@ -25,6 +45,7 @@ pub fn run() {
             commands::fs::delete_file,
             commands::fs::find_related_wiki_pages,
             commands::fs::create_directory,
+            commands::fs::file_exists,
             commands::project::create_project,
             commands::project::open_project,
             clip_server_status,
@@ -32,6 +53,12 @@ pub fn run() {
             commands::vectorstore::vector_search,
             commands::vectorstore::vector_delete,
             commands::vectorstore::vector_count,
+            commands::vectorstore::vector_upsert_chunks,
+            commands::vectorstore::vector_search_chunks,
+            commands::vectorstore::vector_delete_page,
+            commands::vectorstore::vector_count_chunks,
+            commands::vectorstore::vector_legacy_row_count,
+            commands::vectorstore::vector_drop_legacy,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
