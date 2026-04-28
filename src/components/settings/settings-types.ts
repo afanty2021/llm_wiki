@@ -8,7 +8,7 @@ import type { CustomApiMode } from "./llm-presets"
  */
 export interface SettingsDraft {
   // LLM provider
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax"
+  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code"
   apiKey: string
   model: string
   ollamaUrl: string
@@ -25,6 +25,17 @@ export interface SettingsDraft {
   embeddingMaxChunkChars: number | undefined
   /** Overlap characters between adjacent chunks. Empty = default (200). */
   embeddingOverlapChunkChars: number | undefined
+
+  // Multimodal (image captioning at ingest time)
+  multimodalEnabled: boolean
+  multimodalUseMainLlm: boolean
+  multimodalProvider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code"
+  multimodalApiKey: string
+  multimodalModel: string
+  multimodalOllamaUrl: string
+  multimodalCustomEndpoint: string
+  multimodalApiMode: CustomApiMode | undefined
+  multimodalConcurrency: number
 
   // Web search
   searchProvider: "tavily" | "none"

@@ -4,6 +4,10 @@ node_modules/
 # Build outputs
 dist/
 dist-ssr/
+# RC artifacts pulled from CI for local Windows / Intel Mac verification.
+# These are pre-release binaries downloaded via `gh run download`, never
+# meant for the repo.
+dist-rc/
 *.tsbuildinfo
 
 # Rust build artifacts

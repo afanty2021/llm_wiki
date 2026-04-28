@@ -171,4 +171,39 @@ export const searchScenarios: SearchScenario[] = [
       topResultPaths: ["wiki/phrase-page.md"],
     },
   },
+
+  // 8. trailing-punct-phrase-bonus — same query with a Chinese full stop
+  //    appended must still apply the phrase-match bonus. Pre-fix,
+  //    "总资产。" produced an exact-substring miss on titles / content
+  //    (no trailing period there) and the phrase bonus silently went to
+  //    zero, demoting the truly relevant page below tangentially-
+  //    related ones in the chat-context priority order.
+  {
+    name: "trailing-punct-phrase-bonus",
+    description:
+      "Query '总资产。' (with trailing 。). Page with '总资产' in BOTH title " +
+      "and content should still rank first and titleMatch=true, the same " +
+      "as if the user had typed '总资产' without the period.",
+    initialWiki: {
+      "wiki/zong-zi-chan.md": page(
+        "总资产分析",
+        "公司 2023 年总资产合计 4.2 亿元；总资产同比增长 12%。",
+      ),
+      // Unrelated page must NOT contain "资" / "产" / "总" anywhere
+      // — the CJK tokenizer breaks "总资产" into bigrams + single
+      // chars, so a page mentioning even one of those characters
+      // would match via the partial token route, which is correct
+      // behavior we don't want to confuse this scenario with.
+      "wiki/unrelated.md": page(
+        "其他主题",
+        "本页讨论天气、足球与厨艺，跟当前查询完全无关。",
+      ),
+    },
+    query: "总资产。",
+    expected: {
+      topResultPaths: ["wiki/zong-zi-chan.md"],
+      titleMatchPaths: ["wiki/zong-zi-chan.md"],
+      excludedPaths: ["wiki/unrelated.md"],
+    },
+  },
 ]

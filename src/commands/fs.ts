@@ -50,6 +50,22 @@ export async function fileExists(path: string): Promise<boolean> {
   return invoke<boolean>("file_exists", { path })
 }
 
+/** Mirror of `commands::fs::FileBase64` (Rust side). */
+export interface FileBase64 {
+  base64: string
+  mimeType: string
+}
+
+/**
+ * Read any file off disk as base64 + a guessed mime type. The
+ * vision-caption pipeline uses this to pick up extracted images
+ * without having to read them as UTF-8 strings (PNG bytes aren't
+ * valid UTF-8 — `readFile` would corrupt them).
+ */
+export async function readFileAsBase64(path: string): Promise<FileBase64> {
+  return invoke<FileBase64>("read_file_as_base64", { path })
+}
+
 export async function createProject(
   name: string,
   path: string,

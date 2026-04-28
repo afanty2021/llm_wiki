@@ -7,6 +7,7 @@ import "katex/dist/katex.min.css"
 import {
   Bot, User, FileText, BookmarkPlus, ChevronDown, ChevronRight, RefreshCw, Copy, Check,
   Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, Layout, Globe,
+  Image as ImageIcon,
 } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
@@ -17,6 +18,8 @@ import type { FileNode } from "@/types/wiki"
 import { convertLatexToUnicode } from "@/lib/latex-to-unicode"
 import { normalizePath, getFileName } from "@/lib/path-utils"
 import { makeQueryFileName } from "@/lib/wiki-filename"
+import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
+import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 
 // Module-level cache of source file names
 let cachedSourceFiles: string[] = []
@@ -285,16 +288,141 @@ function getRefType(path: string): string {
   return "source"
 }
 
+/**
+ * Markdown image-reference regex used to count `![](url)` occurrences
+ * in cited pages AND extract the first URL (so the image-badge
+ * jump button knows where to send the user). Same shape as the
+ * search/pipeline regex elsewhere (kept duplicated to avoid
+ * coupling — this module never wants to pull caption-pipeline
+ * imports for a 3-character count).
+ *
+ * Group 1 captures the URL (everything inside `(...)` of the
+ * markdown image syntax, no whitespace).
+ */
+const CITED_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g
+
+interface CitedImageInfo {
+  count: number
+  /** First image URL on the page — used as the scroll target when
+   *  the badge button opens the raw source. Null when count===0. */
+  firstUrl: string | null
+}
+
 function CitedReferencesPanel({ content, savedReferences }: { content: string; savedReferences?: CitedPage[] }) {
   const project = useWikiStore((s) => s.project)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
+  const setFileContent = useWikiStore((s) => s.setFileContent)
+  const setPendingScrollImageSrc = useWikiStore((s) => s.setPendingScrollImageSrc)
   const [expanded, setExpanded] = useState(false)
+  /**
+   * Per-cited-page image info: count + first image URL. We can't
+   * hang this off `CitedPage` directly because `extractCitedPages`
+   * is sync and works on the AI's text response, never seeing the
+   * underlying page. So we fetch the page contents lazily here.
+   * Same path → same info, so a tiny in-component map keyed by
+   * path is plenty.
+   */
+  const [imageInfos, setImageInfos] = useState<Record<string, CitedImageInfo>>({})
 
   // Use saved references first (persisted with message), fall back to dynamic extraction
   const citedPages = useMemo(() => {
     if (savedReferences && savedReferences.length > 0) return savedReferences
     return extractCitedPages(content)
   }, [content, savedReferences])
+
+  // Async-fetch each cited page's content once and extract image
+  // info: count + first URL. Done in parallel; failures are
+  // silently treated as { count: 0, firstUrl: null } (page may
+  // not exist on disk yet, e.g. a citation the LLM hallucinated).
+  useEffect(() => {
+    if (!project || citedPages.length === 0) return
+    const pp = normalizePath(project.path)
+    let cancelled = false
+    Promise.all(
+      citedPages.map(async (page) => {
+        // Try the path verbatim first, then the same fallback set
+        // the click-handler uses below — keeps "is the file on
+        // disk" check consistent across the panel.
+        const id = getFileName(page.path.replace(/^wiki\//, "").replace(/\.md$/, ""))
+        const candidates = [
+          `${pp}/${page.path}`,
+          `${pp}/wiki/entities/${id}.md`,
+          `${pp}/wiki/concepts/${id}.md`,
+          `${pp}/wiki/sources/${id}.md`,
+          `${pp}/wiki/queries/${id}.md`,
+          `${pp}/wiki/synthesis/${id}.md`,
+          `${pp}/wiki/comparisons/${id}.md`,
+          `${pp}/wiki/${id}.md`,
+        ]
+        for (const candidate of candidates) {
+          try {
+            const text = await readFile(candidate)
+            // Reset stateful regex.lastIndex by `new RegExp(...)` —
+            // module-level `g` regexes carry state across calls
+            // and would skip matches on the second invocation.
+            const re = new RegExp(CITED_IMAGE_RE.source, CITED_IMAGE_RE.flags)
+            const matches = [...text.matchAll(re)]
+            const info: CitedImageInfo = {
+              count: matches.length,
+              firstUrl: matches.length > 0 ? matches[0][1] : null,
+            }
+            return [page.path, info] as const
+          } catch {
+            // try next candidate
+          }
+        }
+        return [page.path, { count: 0, firstUrl: null }] as const
+      }),
+    ).then((entries) => {
+      if (cancelled) return
+      const next: Record<string, CitedImageInfo> = {}
+      for (const [path, info] of entries) next[path] = info
+      setImageInfos(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [project, citedPages])
+
+  /**
+   * Open the raw source file for a page's first image and stage a
+   * scroll target so the markdown preview lands on that image.
+   * Mirrors the lightbox "Jump to source document" path in
+   * search-view — same `findRawSourceForImage` resolver, same
+   * `pendingScrollImageSrc` store handoff, same fallback to
+   * opening the wiki page when no raw source is found.
+   */
+  const handleJumpToImageSource = useCallback(
+    async (firstUrl: string, fallbackPath: string) => {
+      if (!project) return
+      const pp = normalizePath(project.path)
+      const rawPath = await findRawSourceForImage(firstUrl, pp)
+      if (rawPath) {
+        try {
+          const content = await readFile(rawPath)
+          setPendingScrollImageSrc(imageUrlToAbsolute(firstUrl, pp))
+          setSelectedFile(rawPath)
+          setFileContent(content)
+          console.log(`[refs:image-jump] ${firstUrl} → raw source ${rawPath}`)
+          return
+        } catch (err) {
+          console.warn(`[refs:image-jump] failed to read ${rawPath}:`, err)
+        }
+      }
+      // Fallback: open the wiki summary itself with same scroll
+      // target — at least the safety-net section will scroll into
+      // view there.
+      try {
+        const content = await readFile(`${pp}/${fallbackPath}`)
+        setPendingScrollImageSrc(firstUrl)
+        setSelectedFile(`${pp}/${fallbackPath}`)
+        setFileContent(content)
+      } catch (err) {
+        console.warn(`[refs:image-jump] fallback also failed:`, err)
+      }
+    },
+    [project, setPendingScrollImageSrc, setSelectedFile, setFileContent],
+  )
 
   if (citedPages.length === 0) return null
 
@@ -322,44 +450,78 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
           const refType = getRefType(page.path)
           const config = REF_TYPE_CONFIG[refType] ?? REF_TYPE_CONFIG.source
           const Icon = config.icon
+          const info = imageInfos[page.path]
+          const hasImages = (info?.count ?? 0) > 0
+          const openCitedPage = async () => {
+            if (!project) return
+            const pp = normalizePath(project.path)
+            const id = getFileName(page.path.replace(/^wiki\//, "").replace(/\.md$/, ""))
+            const candidates = [
+              `${pp}/${page.path}`,
+              `${pp}/wiki/entities/${id}.md`,
+              `${pp}/wiki/concepts/${id}.md`,
+              `${pp}/wiki/sources/${id}.md`,
+              `${pp}/wiki/queries/${id}.md`,
+              `${pp}/wiki/synthesis/${id}.md`,
+              `${pp}/wiki/comparisons/${id}.md`,
+              `${pp}/wiki/${id}.md`,
+            ]
+            for (const candidate of candidates) {
+              try {
+                await readFile(candidate)
+                setSelectedFile(candidate)
+                return
+              } catch {
+                // try next
+              }
+            }
+            setSelectedFile(`${pp}/${page.path}`)
+          }
           return (
-            <button
+            // Outer is a div, NOT a button — we have two click
+            // targets inside (image badge + main row) and nesting
+            // a button inside a button is invalid HTML and breaks
+            // event delegation. Hover effect shifts to the inner
+            // buttons individually so each gives feedback.
+            <div
               key={page.path}
-              type="button"
-              onClick={async () => {
-                if (!project) return
-                const pp = normalizePath(project.path)
-                // Try the given path first, then search all wiki subdirectories
-                const id = getFileName(page.path.replace(/^wiki\//, "").replace(/\.md$/, ""))
-                const candidates = [
-                  `${pp}/${page.path}`,
-                  `${pp}/wiki/entities/${id}.md`,
-                  `${pp}/wiki/concepts/${id}.md`,
-                  `${pp}/wiki/sources/${id}.md`,
-                  `${pp}/wiki/queries/${id}.md`,
-                  `${pp}/wiki/synthesis/${id}.md`,
-                  `${pp}/wiki/comparisons/${id}.md`,
-                  `${pp}/wiki/${id}.md`,
-                ]
-                for (const candidate of candidates) {
-                  try {
-                    await readFile(candidate)
-                    setSelectedFile(candidate)
-                    return
-                  } catch {
-                    // try next
-                  }
-                }
-                // Last resort: set the original path anyway
-                setSelectedFile(`${pp}/${page.path}`)
-              }}
-              className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-accent/50 transition-colors"
+              className="flex w-full items-center gap-1.5 rounded text-left"
               title={page.path}
             >
               <span className="text-[10px] text-muted-foreground/60 w-4 shrink-0 text-right">[{i + 1}]</span>
-              <Icon className={`h-3 w-3 shrink-0 ${config.color}`} />
-              <span className="truncate text-foreground/80">{page.title}</span>
-            </button>
+              {/*
+               * Image badge — clickable, separately from the page
+               * row. Click → resolve the FIRST image's raw source
+               * (`raw/sources/<slug>.<ext>`) and open the FULL
+               * combined-extraction preview, scrolled to that
+               * image. This mirrors the search-view lightbox
+               * "Jump to source document" behavior so the two
+               * surfaces feel consistent.
+               *
+               * Icon: lucide `Image` (picture-frame outline with
+               * mountain + sun) — direct visual cue for "image",
+               * NOT `Camera` which reads as "take a photo".
+               */}
+              {hasImages && info?.firstUrl && (
+                <button
+                  type="button"
+                  onClick={() => handleJumpToImageSource(info.firstUrl!, page.path)}
+                  className="flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100/40 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+                  title={`Open original document at first image (${info.count} image${info.count === 1 ? "" : "s"} on this page)`}
+                >
+                  <ImageIcon className="h-3 w-3" />
+                  {info.count}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={openCitedPage}
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-accent/50 transition-colors"
+              >
+                <Icon className={`h-3 w-3 shrink-0 ${config.color}`} />
+                <span className="truncate text-foreground/80">{page.title}</span>
+              </button>
+            </div>
           )
         })}
         {hasMore && !expanded && (
@@ -481,6 +643,12 @@ function MarkdownContent({ content }: { content: string }) {
   // Strip hidden comments
   const cleaned = content.replace(/<!--.*?-->/gs, "").trimEnd()
 
+  // Project path for resolving wiki-relative image src in chat
+  // replies (LLM may surface images that came in via retrieved
+  // chunks, e.g. when the chat answer cites a diagram from a wiki
+  // page). Same convention the file-preview uses.
+  const projectPath = useWikiStore((s) => s.project?.path ?? null)
+
   // Separate thinking blocks from main content
   const { thinking, answer } = useMemo(() => separateThinking(cleaned), [cleaned])
   const processed = useMemo(() => processContent(answer), [answer])
@@ -504,6 +672,15 @@ function MarkdownContent({ content }: { content: string }) {
                 </span>
               )
             },
+            img: ({ src, alt, ...props }) => (
+              <img
+                src={typeof src === "string" ? resolveMarkdownImageSrc(src, projectPath) : undefined}
+                alt={alt ?? ""}
+                className="my-2 max-w-full rounded border border-border/40"
+                loading="lazy"
+                {...props}
+              />
+            ),
             table: ({ children, ...props }) => (
               <div className="my-2 overflow-x-auto rounded border border-border">
                 <table className="w-full border-collapse text-xs" {...props}>{children}</table>

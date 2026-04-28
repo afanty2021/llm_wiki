@@ -6,6 +6,7 @@ import {
   Languages,
   Palette,
   Info,
+  Image as ImageIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import i18n from "@/i18n"
@@ -16,6 +17,7 @@ import { saveLanguage } from "@/lib/project-store"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { LlmProviderSection } from "./sections/llm-provider-section"
 import { EmbeddingSection } from "./sections/embedding-section"
+import { MultimodalSection } from "./sections/multimodal-section"
 import { WebSearchSection } from "./sections/web-search-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
@@ -24,6 +26,7 @@ import { AboutSection } from "./sections/about-section"
 type CategoryId =
   | "llm"
   | "embedding"
+  | "multimodal"
   | "web-search"
   | "output"
   | "interface"
@@ -41,6 +44,7 @@ interface Category {
 const CATEGORIES: Category[] = [
   { id: "llm", labelKey: "settings.categories.llm", icon: Bot },
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
+  { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
   { id: "web-search", labelKey: "settings.categories.webSearch", icon: Globe },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -51,6 +55,7 @@ function initialDraft(
   llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
   search: ReturnType<typeof useWikiStore.getState>["searchApiConfig"],
   embed: ReturnType<typeof useWikiStore.getState>["embeddingConfig"],
+  multimodal: ReturnType<typeof useWikiStore.getState>["multimodalConfig"],
   outputLanguage: ReturnType<typeof useWikiStore.getState>["outputLanguage"],
   maxHistoryMessages: number,
   uiLanguage: string,
@@ -69,6 +74,15 @@ function initialDraft(
     embeddingModel: embed.model,
     embeddingMaxChunkChars: embed.maxChunkChars,
     embeddingOverlapChunkChars: embed.overlapChunkChars,
+    multimodalEnabled: multimodal.enabled,
+    multimodalUseMainLlm: multimodal.useMainLlm,
+    multimodalProvider: multimodal.provider,
+    multimodalApiKey: multimodal.apiKey,
+    multimodalModel: multimodal.model,
+    multimodalOllamaUrl: multimodal.ollamaUrl,
+    multimodalCustomEndpoint: multimodal.customEndpoint,
+    multimodalApiMode: multimodal.apiMode,
+    multimodalConcurrency: multimodal.concurrency,
     searchProvider: search.provider,
     searchApiKey: search.apiKey,
     outputLanguage,
@@ -85,6 +99,8 @@ export function SettingsView() {
   const setSearchApiConfig = useWikiStore((s) => s.setSearchApiConfig)
   const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
   const setEmbeddingConfig = useWikiStore((s) => s.setEmbeddingConfig)
+  const multimodalConfig = useWikiStore((s) => s.multimodalConfig)
+  const setMultimodalConfig = useWikiStore((s) => s.setMultimodalConfig)
   const outputLanguage = useWikiStore((s) => s.outputLanguage)
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
   const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
@@ -97,6 +113,7 @@ export function SettingsView() {
       llmConfig,
       searchApiConfig,
       embeddingConfig,
+      multimodalConfig,
       outputLanguage,
       maxHistoryMessages,
       i18n.language,
@@ -110,6 +127,7 @@ export function SettingsView() {
         llmConfig,
         searchApiConfig,
         embeddingConfig,
+        multimodalConfig,
         outputLanguage,
         maxHistoryMessages,
         i18n.language,
@@ -119,6 +137,7 @@ export function SettingsView() {
     llmConfig,
     searchApiConfig,
     embeddingConfig,
+    multimodalConfig,
     outputLanguage,
     maxHistoryMessages,
   ])
@@ -132,6 +151,7 @@ export function SettingsView() {
       saveLlmConfig,
       saveSearchApiConfig,
       saveEmbeddingConfig,
+      saveMultimodalConfig,
       saveOutputLanguage,
     } = await import("@/lib/project-store")
 
@@ -153,6 +173,23 @@ export function SettingsView() {
       maxChunkChars: draft.embeddingMaxChunkChars,
       overlapChunkChars: draft.embeddingOverlapChunkChars,
     }
+    const newMultimodal = {
+      enabled: draft.multimodalEnabled,
+      useMainLlm: draft.multimodalUseMainLlm,
+      provider: draft.multimodalProvider,
+      apiKey: draft.multimodalApiKey,
+      model: draft.multimodalModel,
+      ollamaUrl: draft.multimodalOllamaUrl,
+      customEndpoint: draft.multimodalCustomEndpoint,
+      apiMode: draft.multimodalProvider === "custom" ? draft.multimodalApiMode : undefined,
+      // Clamp at save time so a hand-edited persisted store with a
+      // ridiculous concurrency value (e.g. someone setting 1000 in
+      // the JSON) doesn't blow up the captioning pipeline. Caption
+      // calls already share the LLM endpoint with everything else;
+      // going wider than ~16 just queues behind the server's batch
+      // slot.
+      concurrency: Math.max(1, Math.min(16, draft.multimodalConcurrency || 4)),
+    }
 
     setLlmConfig(newLlm)
     await saveLlmConfig(newLlm)
@@ -160,6 +197,8 @@ export function SettingsView() {
     await saveSearchApiConfig(newSearch)
     setEmbeddingConfig(newEmbed)
     await saveEmbeddingConfig(newEmbed)
+    setMultimodalConfig(newMultimodal)
+    await saveMultimodalConfig(newMultimodal)
     setOutputLanguage(draft.outputLanguage as typeof outputLanguage)
     await saveOutputLanguage(draft.outputLanguage as typeof outputLanguage)
     setMaxHistoryMessages(draft.maxHistoryMessages)
@@ -190,6 +229,8 @@ export function SettingsView() {
         return <LlmProviderSection />
       case "embedding":
         return <EmbeddingSection draft={draft} setDraft={setDraft} />
+      case "multimodal":
+        return <MultimodalSection draft={draft} setDraft={setDraft} />
       case "web-search":
         return <WebSearchSection draft={draft} setDraft={setDraft} />
       case "output":

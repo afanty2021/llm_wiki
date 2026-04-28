@@ -1,6 +1,6 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { LlmConfig, SearchApiConfig, EmbeddingConfig, OutputLanguage, ProviderConfigs } from "@/stores/wiki-store"
+import type { LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs } from "@/stores/wiki-store"
 
 const STORE_NAME = "app-state.json"
 const RECENT_PROJECTS_KEY = "recentProjects"
@@ -94,6 +94,18 @@ export async function saveEmbeddingConfig(config: EmbeddingConfig): Promise<void
 export async function loadEmbeddingConfig(): Promise<EmbeddingConfig | null> {
   const store = await getStore()
   return (await store.get<EmbeddingConfig>(EMBEDDING_KEY)) ?? null
+}
+
+const MULTIMODAL_KEY = "multimodalConfig"
+
+export async function saveMultimodalConfig(config: MultimodalConfig): Promise<void> {
+  const store = await getStore()
+  await store.set(MULTIMODAL_KEY, config)
+}
+
+export async function loadMultimodalConfig(): Promise<MultimodalConfig | null> {
+  const store = await getStore()
+  return (await store.get<MultimodalConfig>(MULTIMODAL_KEY)) ?? null
 }
 
 export async function removeFromRecentProjects(

@@ -10,7 +10,7 @@ import type { WikiProject, FileNode } from "@/types/wiki"
 export type CustomApiMode = "chat_completions" | "anthropic_messages"
 
 interface LlmConfig {
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax"
+  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code"
   apiKey: string
   model: string
   ollamaUrl: string
@@ -44,6 +44,49 @@ interface EmbeddingConfig {
    */
   maxChunkChars?: number
   overlapChunkChars?: number
+}
+
+/**
+ * Image-captioning settings (Phase 4 of the multimodal-images plan).
+ *
+ * Decoupled from `llmConfig` because vision-capable endpoints are
+ * usually NOT the same model the user picks for analysis/generation:
+ * - the analysis stage often goes to a strong text-only model (Claude
+ *   Sonnet, DeepSeek, etc.) that doesn't speak vision at all;
+ * - captioning is happy with a small local VL model (Qwen2.5-VL-7B,
+ *   LLaVA-1.6) that costs near-zero per call.
+ *
+ * `enabled` is the master gate. When false the caption pipeline is
+ * skipped entirely — `read_file`'s extracted images still appear
+ * inline (with empty alt text) and the safety-net `## Embedded
+ * Images` section still gets written, but we never touch the LLM.
+ *
+ * `useMainLlm`: when true (the default for first-time users we
+ * onboard), captioning calls go through the same `llmConfig`
+ * everything else uses. When false, the dedicated fields below are
+ * sent through the same provider machinery — same `streamChat`,
+ * same `getProviderConfig`, no duplicate code.
+ *
+ * `concurrency` bounds parallel caption requests during ingest.
+ * 30-image PDFs with sequential captioning at ~10s/image (a Qwen3
+ * thinking model on consumer GPU) take 5 minutes. At concurrency=4
+ * that drops to ~75s. Going wider than 8 typically just queues
+ * behind a single-GPU server's batch slot, so we cap the slider
+ * UI at a tasteful max in the settings view.
+ */
+interface MultimodalConfig {
+  enabled: boolean
+  /** Reuse `llmConfig` for caption calls. When true, the fields
+   *  below are ignored. */
+  useMainLlm: boolean
+  provider: LlmConfig["provider"]
+  apiKey: string
+  model: string
+  ollamaUrl: string
+  customEndpoint: string
+  apiMode?: CustomApiMode
+  /** Max parallel caption requests during ingest. >=1. */
+  concurrency: number
 }
 
 /**
@@ -94,6 +137,21 @@ interface WikiState {
   fileTree: FileNode[]
   selectedFile: string | null
   fileContent: string
+  /**
+   * One-shot scroll target for the markdown preview. When the user
+   * clicks an image in search results and chooses "jump to source",
+   * we set this to the image URL alongside `selectedFile`. The
+   * markdown preview consumes it on its next render — finds the
+   * `<img data-mdsrc="..."/>` whose attribute matches and scrolls
+   * it into view, then clears this back to null so a stale target
+   * doesn't fire on the NEXT page open.
+   *
+   * Match by raw URL (the literal `src` from the markdown) rather
+   * than the resolved `convertFileSrc` URL — same image referenced
+   * across two pages with different URL conventions (one absolute,
+   * one wiki-relative) still works.
+   */
+  pendingScrollImageSrc: string | null
   chatExpanded: boolean
   activeView: "wiki" | "sources" | "search" | "graph" | "lint" | "review" | "settings"
   llmConfig: LlmConfig
@@ -103,6 +161,7 @@ interface WikiState {
   activePresetId: string | null
   searchApiConfig: SearchApiConfig
   embeddingConfig: EmbeddingConfig
+  multimodalConfig: MultimodalConfig
   outputLanguage: OutputLanguage
   dataVersion: number
 
@@ -110,6 +169,7 @@ interface WikiState {
   setFileTree: (tree: FileNode[]) => void
   setSelectedFile: (path: string | null) => void
   setFileContent: (content: string) => void
+  setPendingScrollImageSrc: (src: string | null) => void
   setChatExpanded: (expanded: boolean) => void
   setActiveView: (view: WikiState["activeView"]) => void
   setLlmConfig: (config: LlmConfig) => void
@@ -117,6 +177,7 @@ interface WikiState {
   setActivePresetId: (id: string | null) => void
   setSearchApiConfig: (config: SearchApiConfig) => void
   setEmbeddingConfig: (config: EmbeddingConfig) => void
+  setMultimodalConfig: (config: MultimodalConfig) => void
   setOutputLanguage: (lang: OutputLanguage) => void
   bumpDataVersion: () => void
 }
@@ -126,6 +187,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   fileTree: [],
   selectedFile: null,
   fileContent: "",
+  pendingScrollImageSrc: null,
   chatExpanded: false,
   activeView: "wiki",
   llmConfig: {
@@ -145,6 +207,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setFileTree: (fileTree) => set({ fileTree }),
   setSelectedFile: (selectedFile) => set({ selectedFile }),
   setFileContent: (fileContent) => set({ fileContent }),
+  setPendingScrollImageSrc: (pendingScrollImageSrc) => set({ pendingScrollImageSrc }),
   setChatExpanded: (chatExpanded) => set({ chatExpanded }),
   setActiveView: (activeView) => set({ activeView }),
   searchApiConfig: {
@@ -159,6 +222,23 @@ export const useWikiStore = create<WikiState>((set) => ({
     model: "",
   },
 
+  multimodalConfig: {
+    // Off by default — captioning is a non-trivial token spend
+    // (one VLM call per extracted image), and silently turning it
+    // on for every user the first time they import a PDF would be
+    // a budget surprise. Users who want it flip the toggle in
+    // Settings → Image captioning.
+    enabled: false,
+    useMainLlm: true,
+    provider: "custom",
+    apiKey: "",
+    model: "",
+    ollamaUrl: "http://localhost:11434",
+    customEndpoint: "",
+    apiMode: "chat_completions",
+    concurrency: 4,
+  },
+
   outputLanguage: "auto",
 
   setLlmConfig: (llmConfig) => set({ llmConfig }),
@@ -166,8 +246,9 @@ export const useWikiStore = create<WikiState>((set) => ({
   setActivePresetId: (activePresetId) => set({ activePresetId }),
   setSearchApiConfig: (searchApiConfig) => set({ searchApiConfig }),
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
+  setMultimodalConfig: (multimodalConfig) => set({ multimodalConfig }),
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
 
-export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, OutputLanguage }
+export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage }

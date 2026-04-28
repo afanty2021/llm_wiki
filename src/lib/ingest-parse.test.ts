@@ -18,7 +18,7 @@
  * to dropping pages without telling anyone.
  */
 import { describe, it, expect } from "vitest"
-import { parseFileBlocks } from "./ingest"
+import { parseFileBlocks, isSafeIngestPath } from "./ingest"
 
 // ── Happy paths ─────────────────────────────────────────────────────
 
@@ -304,5 +304,144 @@ describe("parseFileBlocks — H6: empty-path blocks", () => {
     // In either case, the block must NOT produce a silent write.
     expect(blocks).toHaveLength(0)
     expect(warnings.length).toBeGreaterThan(0)
+  })
+})
+
+// ── Path traversal guard (security) ─────────────────────────────────
+//
+// A malicious source document can carry prompt injection that tries
+// to redirect generated FILE blocks outside the wiki/ tree. Without
+// the path guard, the LLM could be coerced into writing to
+// `../../../etc/passwd` or similar and our writer would happily do it
+// (fs.rs::write_file does no sandboxing — it's a generic command).
+// These tests pin every traversal vector we've thought of so a
+// regression that loosens the regex shows up immediately.
+
+describe("isSafeIngestPath — what the validator accepts and rejects", () => {
+  it("accepts canonical wiki paths", () => {
+    expect(isSafeIngestPath("wiki/concepts/foo.md")).toBe(true)
+    expect(isSafeIngestPath("wiki/index.md")).toBe(true)
+    expect(isSafeIngestPath("wiki/sources/some-paper.md")).toBe(true)
+    expect(isSafeIngestPath("wiki/entities/transformer.md")).toBe(true)
+  })
+
+  it("rejects empty / whitespace-only paths", () => {
+    expect(isSafeIngestPath("")).toBe(false)
+    expect(isSafeIngestPath("   ")).toBe(false)
+    expect(isSafeIngestPath("\t\n")).toBe(false)
+  })
+
+  it("rejects paths outside wiki/ (no leading wiki/ prefix)", () => {
+    // Even relative-looking paths that don't start with wiki/ get
+    // rejected — the ingest pipeline is supposed to write to wiki/
+    // ONLY, and any other tree (raw/, src-tauri/, …) is a red flag.
+    expect(isSafeIngestPath("notes/foo.md")).toBe(false)
+    expect(isSafeIngestPath("foo.md")).toBe(false)
+    expect(isSafeIngestPath("raw/sources/leaked.md")).toBe(false)
+  })
+
+  it("rejects absolute POSIX paths", () => {
+    expect(isSafeIngestPath("/etc/passwd")).toBe(false)
+    expect(isSafeIngestPath("/Users/nash_su/.ssh/authorized_keys")).toBe(false)
+    expect(isSafeIngestPath("/wiki/foo.md")).toBe(false) // even with wiki/ in the path
+  })
+
+  it("rejects Windows absolute paths and drive letters", () => {
+    expect(isSafeIngestPath("C:/Windows/System32/config")).toBe(false)
+    expect(isSafeIngestPath("c:\\Users\\victim\\evil.txt")).toBe(false)
+    expect(isSafeIngestPath("\\Users\\victim\\evil.txt")).toBe(false)
+    // UNC paths.
+    expect(isSafeIngestPath("\\\\server\\share\\file.md")).toBe(false)
+  })
+
+  it("rejects any segment exactly equal to .. (every position)", () => {
+    expect(isSafeIngestPath("wiki/../etc/passwd")).toBe(false)
+    expect(isSafeIngestPath("wiki/concepts/../../etc/passwd")).toBe(false)
+    expect(isSafeIngestPath("wiki/..")).toBe(false)
+    expect(isSafeIngestPath("..")).toBe(false)
+    // Backslash-separated traversal must also be caught (we normalize).
+    expect(isSafeIngestPath("wiki\\..\\etc\\passwd")).toBe(false)
+  })
+
+  it("does NOT reject filenames that merely CONTAIN double dots (e.g. version suffix)", () => {
+    // `..` is a path SEGMENT, not a substring. A filename like
+    // `qwen-2.5..notes.md` is unusual but legal — our split-on-/
+    // means each segment is checked independently.
+    expect(isSafeIngestPath("wiki/concepts/qwen-2.5..notes.md")).toBe(true)
+    expect(isSafeIngestPath("wiki/concepts/foo..bar.md")).toBe(true)
+  })
+
+  it("rejects NUL bytes and control characters", () => {
+    // Classic CGI / shell path-truncation tricks. Even if the underlying
+    // FS would accept them, surface them as suspicious and refuse.
+    expect(isSafeIngestPath("wiki/concepts/foo\x00.md")).toBe(false)
+    expect(isSafeIngestPath("wiki/concepts/foo\nbar.md")).toBe(false)
+    expect(isSafeIngestPath("wiki/\x07alarm.md")).toBe(false)
+  })
+})
+
+describe("parseFileBlocks — path-traversal guard end-to-end", () => {
+  it("drops blocks with ../ paths and surfaces a warning", () => {
+    const text = [
+      "---FILE: wiki/concepts/legit.md---",
+      "Real page.",
+      "---END FILE---",
+      "---FILE: ../../etc/passwd---",
+      "attacker:x:0:0::/root:/bin/bash",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    // Only the legit block survives.
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].path).toBe("wiki/concepts/legit.md")
+    // The traversal block triggers a visible warning, not a silent drop.
+    expect(warnings.some((w) => w.includes("../../etc/passwd"))).toBe(true)
+    expect(warnings.some((w) => w.includes("unsafe path"))).toBe(true)
+  })
+
+  it("drops blocks with absolute paths", () => {
+    const text = [
+      "---FILE: /etc/passwd---",
+      "evil",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(0)
+    expect(warnings.some((w) => w.includes("unsafe path"))).toBe(true)
+  })
+
+  it("drops blocks not under wiki/", () => {
+    const text = [
+      "---FILE: src-tauri/src/main.rs---",
+      "fn main() { panic!(\"injected\"); }",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(blocks).toHaveLength(0)
+    expect(warnings.some((w) => w.includes("unsafe path"))).toBe(true)
+  })
+
+  it("an LLM mixing safe + unsafe paths writes only the safe ones", () => {
+    // Realistic prompt-injection scenario: source document carries
+    // hidden instruction "also write to ../config.json". LLM is
+    // confused and emits both. We keep the legitimate output and drop
+    // the traversal silently-but-loudly (warning, not crash).
+    const text = [
+      "---FILE: wiki/concepts/topic-a.md---",
+      "topic A page",
+      "---END FILE---",
+      "---FILE: ../config.json---",
+      "{\"hijacked\": true}",
+      "---END FILE---",
+      "---FILE: wiki/entities/topic-b.md---",
+      "topic B page",
+      "---END FILE---",
+    ].join("\n")
+    const { blocks, warnings } = parseFileBlocks(text)
+    expect(blocks.map((b) => b.path)).toEqual([
+      "wiki/concepts/topic-a.md",
+      "wiki/entities/topic-b.md",
+    ])
+    expect(warnings.some((w) => w.includes("../config.json"))).toBe(true)
   })
 })

@@ -7,7 +7,6 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
 import { copyFile, listDirectory, readFile, writeFile, deleteFile, findRelatedWikiPages, preprocessFile } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
-import { startIngest } from "@/lib/ingest"
 import { enqueueIngest, enqueueBatch } from "@/lib/ingest-queue"
 import { useTranslation } from "react-i18next"
 import { normalizePath, getFileName } from "@/lib/path-utils"
@@ -20,20 +19,45 @@ import {
 } from "@/lib/wiki-cleanup"
 import { parseSources, writeSources } from "@/lib/sources-merge"
 import { decidePageFate } from "@/lib/source-delete-decision"
+import { removeFromIngestCache } from "@/lib/ingest-cache"
+import {
+  collectAllFilesIncludingDot,
+  decideDeleteClick,
+} from "@/lib/sources-tree-delete"
 
 export function SourcesView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
-  const setActiveView = useWikiStore((s) => s.setActiveView)
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setFileTree = useWikiStore((s) => s.setFileTree)
-  const setChatExpanded = useWikiStore((s) => s.setChatExpanded)
   const llmConfig = useWikiStore((s) => s.llmConfig)
   const [sources, setSources] = useState<FileNode[]>([])
   const [importing, setImporting] = useState(false)
   const [ingestingPath, setIngestingPath] = useState<string | null>(null)
+  /**
+   * Path of the source-tree node currently in "click again to
+   * confirm delete" state. Lifted up here (rather than living
+   * inside SourceTree) for two reasons:
+   *   1. Only one button can be armed at a time across the whole
+   *      tree — clicking another delete disarms the prior one.
+   *      Lifting state to the common ancestor makes that natural.
+   *   2. The auto-disarm timer (5s) needs to survive across re-
+   *      renders triggered by tree mutation; useEffect cleanup
+   *      anchored here is the right scope.
+   */
+  const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null)
+
+  // Auto-disarm: 5 seconds without a second click resets the
+  // pending state. Prevents a stale armed button from firing if
+  // the user walked away and came back. Cleared whenever the
+  // pending path changes (so a fresh arm restarts the clock).
+  useEffect(() => {
+    if (!pendingDeletePath) return
+    const t = setTimeout(() => setPendingDeletePath(null), 5000)
+    return () => clearTimeout(t)
+  }, [pendingDeletePath])
 
   const loadSources = useCallback(async () => {
     if (!project) return
@@ -205,25 +229,107 @@ export function SourcesView() {
   async function handleDelete(node: FileNode) {
     if (!project) return
     const pp = normalizePath(project.path)
-    const fileName = node.name
-    const confirmed = window.confirm(
-      t("sources.deleteConfirm", { name: fileName })
-    )
-    if (!confirmed) return
-
+    // Confirmation now lives in the SourceTree component as a
+    // two-stage button (click once = "Confirm", click again =
+    // delete). Reaching this handler means the user has already
+    // confirmed via the inline UI, so we proceed unconditionally.
     try {
-      // Step 1: Find related wiki pages before deleting
-      const relatedPages = await findRelatedWikiPages(pp, fileName)
-
-      // Step 2: Delete the source file
-      await deleteFile(node.path)
-
-      // Step 3: Delete preprocessed cache
-      try {
-        await deleteFile(`${pp}/raw/sources/.cache/${fileName}.txt`)
-      } catch {
-        // cache file may not exist
+      const result = await deleteSourceWithCascade(pp, node)
+      // Step 8: Refresh everything (UI side — must run with parent
+      // context, hence kept here rather than inside the helper).
+      await loadSources()
+      const tree = await listDirectory(pp)
+      setFileTree(tree)
+      useWikiStore.getState().bumpDataVersion()
+      if (
+        selectedFile === node.path ||
+        result.deletedWikiPaths.includes(selectedFile ?? "")
+      ) {
+        setSelectedFile(null)
       }
+    } catch (err) {
+      console.error("Failed to delete source:", err)
+      window.alert(`Failed to delete: ${err}`)
+    }
+  }
+
+  /**
+   * Recursive folder delete. Walks the folder tree, runs the
+   * wiki-cascade for every individual file inside (so any
+   * derived wiki pages, embeddings, log entries get cleaned up
+   * the same way as a single-file delete), then removes the
+   * folder itself with `deleteFile` — which dispatches to
+   * `remove_dir_all` Rust-side, taking the now-empty (or near-
+   * empty) directory tree with it including any leftover dotdir
+   * cache files we didn't explicitly target.
+   *
+   * Errors on individual files are logged and skipped; the batch
+   * keeps going so partial cleanup is preferred over an all-or-
+   * nothing failure that leaves the tree half-deleted.
+   */
+  async function handleDeleteFolder(folder: FileNode) {
+    if (!project) return
+    const pp = normalizePath(project.path)
+    try {
+      const allFiles = collectAllFilesIncludingDot(folder)
+      const allDeletedWikiPaths: string[] = []
+      for (const file of allFiles) {
+        try {
+          const r = await deleteSourceWithCascade(pp, file)
+          allDeletedWikiPaths.push(...r.deletedWikiPaths)
+        } catch (err) {
+          console.warn(`Failed to delete ${file.path} during folder delete:`, err)
+        }
+      }
+      // Now remove the folder (and any leftover empty subdirs / dot
+      // cache dirs) in one shot. Files we just deleted above are
+      // gone; this call mostly tears down empty directories.
+      try {
+        await deleteFile(folder.path)
+      } catch (err) {
+        console.warn(`Failed to remove folder ${folder.path}:`, err)
+      }
+      await loadSources()
+      const tree = await listDirectory(pp)
+      setFileTree(tree)
+      useWikiStore.getState().bumpDataVersion()
+      if (
+        selectedFile?.startsWith(folder.path + "/") ||
+        allDeletedWikiPaths.includes(selectedFile ?? "")
+      ) {
+        setSelectedFile(null)
+      }
+    } catch (err) {
+      console.error("Failed to delete folder:", err)
+      window.alert(`Failed to delete folder: ${err}`)
+    }
+  }
+
+  /**
+   * Per-file deletion: the wiki cascade portion (steps 1-7 of the
+   * old handleDelete), without the confirmation dialog or the
+   * UI-state refresh (callers do those once at the end of a batch).
+   *
+   * Returns the wiki page paths we actually removed so the caller
+   * can reset selectedFile if one of them was open.
+   */
+  async function deleteSourceWithCascade(
+    pp: string,
+    node: FileNode,
+  ): Promise<{ deletedWikiPaths: string[] }> {
+    const fileName = node.name
+    // Step 1: Find related wiki pages before deleting
+    const relatedPages = await findRelatedWikiPages(pp, fileName)
+
+    // Step 2: Delete the source file
+    await deleteFile(node.path)
+
+    // Step 3: Delete preprocessed cache
+    try {
+      await deleteFile(`${pp}/raw/sources/.cache/${fileName}.txt`)
+    } catch {
+      // cache file may not exist
+    }
 
       // Step 4: For each page that findRelatedWikiPages surfaced,
       // consult decidePageFate to pick one of three actions:
@@ -321,43 +427,49 @@ export function SourcesView() {
         }
       }
 
-      // Step 7: Append deletion record to log.md
-      try {
-        const logPath = `${pp}/wiki/log.md`
-        const logContent = await readFile(logPath).catch(() => "# Wiki Log\n")
-        const date = new Date().toISOString().slice(0, 10)
-        const keptCount = relatedPages.length - actuallyDeleted.length
-        const logEntry = `\n## [${date}] delete | ${fileName}\n\nDeleted source file and ${actuallyDeleted.length} wiki pages.${keptCount > 0 ? ` ${keptCount} shared pages kept (have other sources).` : ""}\n`
-        await writeFile(logPath, logContent.trimEnd() + logEntry)
-      } catch {
-        // non-critical
-      }
-
-      // Step 8: Refresh everything
-      await loadSources()
-      const tree = await listDirectory(pp)
-      setFileTree(tree)
-      useWikiStore.getState().bumpDataVersion()
-
-      // Clear selected file if it was the deleted one
-      if (selectedFile === node.path || actuallyDeleted.includes(selectedFile ?? "")) {
-        setSelectedFile(null)
-      }
-    } catch (err) {
-      console.error("Failed to delete source:", err)
-      window.alert(`Failed to delete: ${err}`)
+    // Step 7: Append deletion record to log.md
+    try {
+      const logPath = `${pp}/wiki/log.md`
+      const logContent = await readFile(logPath).catch(() => "# Wiki Log\n")
+      const date = new Date().toISOString().slice(0, 10)
+      const keptCount = relatedPages.length - actuallyDeleted.length
+      const logEntry = `\n## [${date}] delete | ${fileName}\n\nDeleted source file and ${actuallyDeleted.length} wiki pages.${keptCount > 0 ? ` ${keptCount} shared pages kept (have other sources).` : ""}\n`
+      await writeFile(logPath, logContent.trimEnd() + logEntry)
+    } catch {
+      // non-critical
     }
+
+    // Step 8: Drop the source's ingest-cache entry so a future
+    // re-import doesn't hit a stale "already ingested" record.
+    // The cache's existence-check fallback would have caught this
+    // anyway (it falls through to re-ingest when wiki/sources/<slug>.md
+    // is gone), but removing the entry up front keeps the cache
+    // file small and avoids confusing log lines like "cache miss
+    // for foo.pdf: wiki/sources/foo.md no longer on disk" on
+    // every search after a delete.
+    try {
+      await removeFromIngestCache(pp, fileName)
+    } catch {
+      // non-critical
+    }
+
+    return { deletedWikiPaths: actuallyDeleted }
   }
 
   async function handleIngest(node: FileNode) {
     if (!project || ingestingPath) return
+    // Re-ingest goes through the same automated queue path as a fresh
+    // import (`handleImport` above). Earlier this used `startIngest`,
+    // which opens an interactive chat → user clicks "Save to Wiki" →
+    // `executeIngestWrites`. That had two problems: (a) it duplicated
+    // the auto-pipeline so features like image cascade had to be
+    // wired in twice, and (b) the interactive flow surprised users
+    // who expected a fresh-import re-run. One button, one path now.
     setIngestingPath(node.path)
     try {
-      setChatExpanded(true)
-      setActiveView("wiki")
-      await startIngest(normalizePath(project.path), node.path, llmConfig)
+      await enqueueIngest(project.id, node.path)
     } catch (err) {
-      console.error("Failed to start ingest:", err)
+      console.error("Failed to enqueue ingest:", err)
     } finally {
       setIngestingPath(null)
     }
@@ -405,6 +517,9 @@ export function SourcesView() {
               onOpen={handleOpenSource}
               onIngest={handleIngest}
               onDelete={handleDelete}
+              onDeleteFolder={handleDeleteFolder}
+              pendingDeletePath={pendingDeletePath}
+              setPendingDeletePath={setPendingDeletePath}
               ingestingPath={ingestingPath}
               depth={0}
             />
@@ -486,11 +601,15 @@ function countFiles(nodes: FileNode[]): number {
   return count
 }
 
+
 function SourceTree({
   nodes,
   onOpen,
   onIngest,
   onDelete,
+  onDeleteFolder,
+  pendingDeletePath,
+  setPendingDeletePath,
   ingestingPath,
   depth,
 }: {
@@ -498,6 +617,13 @@ function SourceTree({
   onOpen: (node: FileNode) => void
   onIngest: (node: FileNode) => void
   onDelete: (node: FileNode) => void
+  onDeleteFolder: (node: FileNode) => void
+  /** Path of the node currently in "click again to confirm" state.
+   *  Lifted to the parent so only ONE button is armed at a time
+   *  across the whole tree — clicking another delete arms that one
+   *  and disarms the previous. */
+  pendingDeletePath: string | null
+  setPendingDeletePath: (path: string | null) => void
   ingestingPath: string | null
   depth: number
 }) {
@@ -505,6 +631,29 @@ function SourceTree({
 
   const toggle = (path: string) => {
     setCollapsed((prev) => ({ ...prev, [path]: !prev[path] }))
+  }
+
+  /**
+   * Two-stage delete handler. Decision logic lives in
+   * `decideDeleteClick` (pure, unit-tested in
+   * `sources-tree-delete.test.ts`); this wrapper just dispatches
+   * the resulting action onto the React state + handler props.
+   */
+  const handleDeleteClick = (node: FileNode) => {
+    const action = decideDeleteClick(pendingDeletePath, node)
+    switch (action.kind) {
+      case "arm":
+        setPendingDeletePath(action.path)
+        return
+      case "fire-file":
+        setPendingDeletePath(null)
+        onDelete(action.node)
+        return
+      case "fire-folder":
+        setPendingDeletePath(null)
+        onDeleteFolder(action.node)
+        return
+    }
   }
 
   // Sort: folders first, then files, alphabetical within each group
@@ -517,32 +666,49 @@ function SourceTree({
   return (
     <>
       {sorted.map((node) => {
+        const isPendingDelete = pendingDeletePath === node.path
         if (node.is_dir && node.children) {
           const isCollapsed = collapsed[node.path] ?? false
           return (
             <div key={node.path}>
-              <button
-                onClick={() => toggle(node.path)}
-                className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              <div
+                className="group flex w-full items-center gap-1 rounded-md text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                 style={{ paddingLeft: `${depth * 16 + 4}px` }}
               >
-                {isCollapsed ? (
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                ) : (
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <Folder className="h-4 w-4 shrink-0 text-amber-500" />
-                <span className="truncate font-medium">{node.name}</span>
-                <span className="ml-auto text-[10px] text-muted-foreground/60 shrink-0">
-                  {countFiles(node.children)}
-                </span>
-              </button>
+                <button
+                  onClick={() => toggle(node.path)}
+                  className="flex flex-1 items-center gap-1.5 px-1 py-1 text-left"
+                >
+                  {isCollapsed ? (
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <Folder className="h-4 w-4 shrink-0 text-amber-500" />
+                  <span className="truncate font-medium">{node.name}</span>
+                  <span className="ml-auto text-[10px] text-muted-foreground/60 shrink-0">
+                    {countFiles(node.children)}
+                  </span>
+                </button>
+                <DeleteButton
+                  isPending={isPendingDelete}
+                  onClick={() => handleDeleteClick(node)}
+                  hint={
+                    isPendingDelete
+                      ? `Click again to delete folder ${node.name} and ALL its contents`
+                      : `Delete folder ${node.name} (recursive)`
+                  }
+                />
+              </div>
               {!isCollapsed && (
                 <SourceTree
                   nodes={node.children}
                   onOpen={onOpen}
                   onIngest={onIngest}
                   onDelete={onDelete}
+                  onDeleteFolder={onDeleteFolder}
+                  pendingDeletePath={pendingDeletePath}
+                  setPendingDeletePath={setPendingDeletePath}
                   ingestingPath={ingestingPath}
                   depth={depth + 1}
                 />
@@ -574,19 +740,65 @@ function SourceTree({
             >
               <BookOpen className="h-4 w-4" />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-              title="Delete"
-              onClick={() => onDelete(node)}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
+            <DeleteButton
+              isPending={isPendingDelete}
+              onClick={() => handleDeleteClick(node)}
+              hint={
+                isPendingDelete
+                  ? `Click again to delete ${node.name}`
+                  : `Delete ${node.name}`
+              }
+            />
           </div>
         )
       })}
     </>
+  )
+}
+
+/**
+ * Two-stage delete button. Default = ghost trash icon (subtle).
+ * Armed = solid red "Confirm" pill with the icon — visually
+ * unmistakable, so the user can't miss the second-click warning.
+ *
+ * Same component is used for both files and folders; the parent
+ * decides which delete handler to call from the click. The pending
+ * state is owned by SourceTree (lifted to its parent SourcesView)
+ * so only one button is armed across the entire tree at a time.
+ */
+function DeleteButton({
+  isPending,
+  onClick,
+  hint,
+}: {
+  isPending: boolean
+  onClick: () => void
+  hint: string
+}) {
+  if (isPending) {
+    return (
+      <Button
+        variant="destructive"
+        size="sm"
+        className="h-7 shrink-0 px-2 text-[11px] font-semibold animate-pulse"
+        title={hint}
+        onClick={onClick}
+      >
+        <Trash2 className="mr-1 h-3.5 w-3.5" />
+        Confirm
+      </Button>
+    )
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+      title={hint}
+      onClick={onClick}
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+    </Button>
   )
 }
 

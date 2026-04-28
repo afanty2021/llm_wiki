@@ -2,12 +2,34 @@ import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath, getFileStem } from "@/lib/path-utils"
 
+/**
+ * One image reference extracted from a matched page's markdown.
+ *
+ * `url` is verbatim what was inside the `![](...)` parens — this is
+ * a forward-slash path that the markdown image resolver knows how
+ * to map to a renderable URL. We deliberately keep it pre-resolution
+ * so the search-result UI can filter by URL prefix (e.g. "only show
+ * images from this source's media dir") before paying the cost of
+ * `convertFileSrc`.
+ */
+export interface ImageRef {
+  url: string
+  alt: string
+}
+
 export interface SearchResult {
   path: string
   title: string
   snippet: string
   titleMatch: boolean
   score: number
+  /**
+   * Image references found inside this result's markdown. Populated
+   * even when the query doesn't match the alt text — the UI splits
+   * "alt-matches-query" from "image just lives on this matched
+   * page" itself, so both views need the full set. May be empty.
+   */
+  images: ImageRef[]
 }
 
 const MAX_RESULTS = 20
@@ -149,6 +171,36 @@ function extractTitle(content: string, fileName: string): string {
   return fileName.replace(/\.md$/, "").replace(/-/g, " ")
 }
 
+/**
+ * Markdown image-reference regex. Matches `![alt](url)` capturing
+ * groups 1=alt, 2=url. Identical to the regex in
+ * `image-caption-pipeline.ts` — kept duplicated rather than shared
+ * because the two modules have very different lifetimes (search
+ * runs every keystroke; the pipeline runs at ingest), and a shared
+ * symbol there would tie them together for no benefit.
+ *
+ * Excludes:
+ *   - HTML `<img src=...>` (we don't generate these)
+ *   - Reference-style `![alt][ref]` (we don't generate these either)
+ */
+const IMAGE_REF_RE = /!\[([^\]]*)\]\(([^)\s]+)\)/g
+
+function extractImageRefs(content: string): ImageRef[] {
+  const seen = new Set<string>()
+  const out: ImageRef[] = []
+  for (const m of content.matchAll(IMAGE_REF_RE)) {
+    const url = m[2]
+    // De-dupe within a single page: the same image may be
+    // referenced both inline (LLM-preserved) AND in the safety-net
+    // "## Embedded Images" section. Showing it twice in the
+    // results UI would just be visual noise.
+    if (seen.has(url)) continue
+    seen.add(url)
+    out.push({ url, alt: m[1] })
+  }
+  return out
+}
+
 function buildSnippet(content: string, query: string): string {
   const lower = content.toLowerCase()
   const lowerQuery = query.toLowerCase()
@@ -175,22 +227,39 @@ export async function searchWiki(
   const effectiveTokens = tokens.length > 0 ? tokens : [query.trim().toLowerCase()]
   const results: SearchResult[] = []
 
-  // Search wiki pages
+  // Search wiki pages.
+  //
+  // We deliberately do NOT also search `raw/sources/` here anymore.
+  // Previously this section walked every file under raw/sources/
+  // (including PDFs / DOCX / PPTX) and called `readFile` on each,
+  // which triggers the heavy pdfium / office text-extraction path
+  // — even on cache hits, that's an IPC round-trip per file plus
+  // a cache file read of the now-large combined-markdown output
+  // (text + per-page image refs after the unified extractor
+  // landed). On a project with ~50 PDFs this added 5-15s per
+  // search, which the user reported as "very, very slow."
+  //
+  // The content lost: nothing material. Each ingested raw source
+  // produces a `wiki/sources/<slug>.md` summary which is included
+  // in the wiki/ search below; the full extracted text lives in
+  // the embedding chunks and is reachable via vector search. The
+  // raw-files token pass added recall only for raw files that had
+  // never been ingested (and thus had no wiki summary), which is
+  // not a workflow we want to optimize at the cost of every other
+  // search call.
   try {
+    const t0 = performance.now()
     const wikiTree = await listDirectory(`${pp}/wiki`)
     const wikiFiles = flattenMdFiles(wikiTree)
+    const tList = Math.round(performance.now() - t0)
+    const t1 = performance.now()
     await searchFiles(wikiFiles, effectiveTokens, query, results)
+    const tRead = Math.round(performance.now() - t1)
+    console.log(
+      `[Search:token] wiki/ ${wikiFiles.length} files | list=${tList}ms read+match=${tRead}ms`,
+    )
   } catch {
     // no wiki directory
-  }
-
-  // Also search raw sources (extracted text)
-  try {
-    const rawTree = await listDirectory(`${pp}/raw/sources`)
-    const rawFiles = flattenAllFiles(rawTree)
-    await searchFiles(rawFiles, effectiveTokens, query, results)
-  } catch {
-    // no raw sources
   }
 
   // ── Build the token-side ranking (still based on the score field
@@ -248,6 +317,7 @@ export async function searchWiki(
               snippet: buildSnippet(content, query),
               titleMatch: false,
               score: 0, // overwritten by RRF below
+              images: extractImageRefs(content),
             })
             knownIds.add(vr.id)
             added++
@@ -297,86 +367,129 @@ export async function searchWiki(
   return results.slice(0, MAX_RESULTS)
 }
 
+/**
+ * Bound on concurrent `readFile` calls during search. Going wider
+ * than this saturates the Tauri IPC channel and starts QUEUING
+ * work behind the search request — the wider you go, the SLOWER
+ * a single search gets past about 16-32 in-flight reads (measured
+ * in dev against a 200-file project). 16 is a comfortable middle
+ * ground that gives near-linear speedup over sequential without
+ * choking the IPC layer.
+ */
+const SEARCH_READ_CONCURRENCY = 16
+
+/**
+ * Punctuation pattern shared between token splitting and the
+ * phrase-bonus normalization below. Matched at start AND end of
+ * the query — internal punctuation (`U.S.A.`, `2024-Q3`) stays
+ * because it might be load-bearing in legitimate phrase matches.
+ */
+const TRIM_PUNCT_RE =
+  /^[\s,，。！？、；：""''（）()\-_/\\·~～…]+|[\s,，。！？、；：""''（）()\-_/\\·~～…]+$/g
+
 async function searchFiles(
   files: FileNode[],
   tokens: readonly string[],
   query: string,
   results: SearchResult[],
 ): Promise<void> {
-  const queryPhrase = query.trim().toLowerCase()
+  // Strip leading / trailing punctuation from the query before using
+  // it as a phrase-bonus probe. Without this, `query="总资产。"`
+  // tries to substring-match `总资产。` inside titles / content that
+  // never have the period at that spot — the phrase-bonus signal
+  // (worth +50 in titles, +20 per occurrence in content) silently
+  // goes to zero and the page's RRF rank slides. Same surface that
+  // bit the search-view image filter, fixed there in token space;
+  // here we apply the analog in phrase space.
+  //
+  // Internal punctuation is preserved on purpose: queries like
+  // "2024-Q3" or domain names should still phrase-match exactly.
+  const queryPhrase = query.trim().toLowerCase().replace(TRIM_PUNCT_RE, "")
 
-  for (const file of files) {
-    let content = ""
-    try {
-      content = await readFile(file.path)
-    } catch {
-      continue
-    }
-
-    const title = extractTitle(content, file.name)
-    const titleText = `${title} ${file.name}`
-    const titleLower = titleText.toLowerCase()
-    const contentLower = content.toLowerCase()
-    const fileStem = file.name.replace(/\.md$/, "").toLowerCase()
-
-    // Exact-match signals (strongest)
-    const filenameExact = fileStem === queryPhrase
-    const titleHasPhrase =
-      queryPhrase.length > 0 && titleLower.includes(queryPhrase)
-    const contentPhraseOcc = Math.min(
-      countOccurrences(contentLower, queryPhrase),
-      MAX_PHRASE_OCC_COUNTED,
+  // Process files in fixed-size concurrent batches. Promise.all over
+  // the entire list would work but spawns N IPC calls simultaneously
+  // — tested at N=200, that's where we saw the slowdown above.
+  for (let i = 0; i < files.length; i += SEARCH_READ_CONCURRENCY) {
+    const batch = files.slice(i, i + SEARCH_READ_CONCURRENCY)
+    const batchResults = await Promise.all(
+      batch.map(async (file) => {
+        let content: string
+        try {
+          content = await readFile(file.path)
+        } catch {
+          return null
+        }
+        return scoreFile(file, content, tokens, queryPhrase, query)
+      }),
     )
-
-    // Token-level signals (fallback / density)
-    const titleTokenScore = tokenMatchScore(titleText, tokens)
-    const contentTokenScore = tokenMatchScore(content, tokens)
-
-    // Must have at least one signal to be included
-    if (
-      !filenameExact &&
-      !titleHasPhrase &&
-      contentPhraseOcc === 0 &&
-      titleTokenScore === 0 &&
-      contentTokenScore === 0
-    ) {
-      continue
+    for (const r of batchResults) {
+      if (r) results.push(r)
     }
-
-    const score =
-      (filenameExact ? FILENAME_EXACT_BONUS : 0) +
-      (titleHasPhrase ? PHRASE_IN_TITLE_BONUS : 0) +
-      contentPhraseOcc * PHRASE_IN_CONTENT_PER_OCC +
-      titleTokenScore * TITLE_TOKEN_WEIGHT +
-      contentTokenScore * CONTENT_TOKEN_WEIGHT
-
-    const isTitleMatch = titleTokenScore > 0 || titleHasPhrase
-
-    // Prefer snipping around the full phrase when it exists; otherwise
-    // pick the first matching token; otherwise the raw query.
-    const snippetAnchor =
-      contentPhraseOcc > 0
-        ? queryPhrase
-        : tokens.find((t) => contentLower.includes(t)) ?? query
-
-    results.push({
-      path: file.path,
-      title,
-      snippet: buildSnippet(content, snippetAnchor),
-      titleMatch: isTitleMatch,
-      score,
-    })
   }
 }
 
-function flattenAllFiles(nodes: FileNode[]): FileNode[] {
-  const files: FileNode[] = []
-  for (const node of nodes) {
-    if (node.is_dir && node.children) {
-      files.push(...flattenAllFiles(node.children))
-    } else if (!node.is_dir) {
-      files.push(node)
-    }
+/**
+ * Pure scoring pass — no IO. Extracted so `searchFiles` can run
+ * the IO and the matching independently and so this function can
+ * be unit-tested without mocking readFile.
+ */
+function scoreFile(
+  file: FileNode,
+  content: string,
+  tokens: readonly string[],
+  queryPhrase: string,
+  query: string,
+): SearchResult | null {
+  const title = extractTitle(content, file.name)
+  const titleText = `${title} ${file.name}`
+  const titleLower = titleText.toLowerCase()
+  const contentLower = content.toLowerCase()
+  const fileStem = file.name.replace(/\.md$/, "").toLowerCase()
+
+  // Exact-match signals (strongest)
+  const filenameExact = fileStem === queryPhrase
+  const titleHasPhrase =
+    queryPhrase.length > 0 && titleLower.includes(queryPhrase)
+  const contentPhraseOcc = Math.min(
+    countOccurrences(contentLower, queryPhrase),
+    MAX_PHRASE_OCC_COUNTED,
+  )
+
+  // Token-level signals (fallback / density)
+  const titleTokenScore = tokenMatchScore(titleText, tokens)
+  const contentTokenScore = tokenMatchScore(content, tokens)
+
+  if (
+    !filenameExact &&
+    !titleHasPhrase &&
+    contentPhraseOcc === 0 &&
+    titleTokenScore === 0 &&
+    contentTokenScore === 0
+  ) {
+    return null
   }
-  return files
+
+  const score =
+    (filenameExact ? FILENAME_EXACT_BONUS : 0) +
+    (titleHasPhrase ? PHRASE_IN_TITLE_BONUS : 0) +
+    contentPhraseOcc * PHRASE_IN_CONTENT_PER_OCC +
+    titleTokenScore * TITLE_TOKEN_WEIGHT +
+    contentTokenScore * CONTENT_TOKEN_WEIGHT
+
+  const isTitleMatch = titleTokenScore > 0 || titleHasPhrase
+
+  const snippetAnchor =
+    contentPhraseOcc > 0
+      ? queryPhrase
+      : tokens.find((t) => contentLower.includes(t)) ?? query
+
+  return {
+    path: file.path,
+    title,
+    snippet: buildSnippet(content, snippetAnchor),
+    titleMatch: isTitleMatch,
+    score,
+    images: extractImageRefs(content),
+  }
 }
+

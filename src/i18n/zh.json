@@ -100,6 +100,7 @@
     "categories": {
       "llm": "LLM 模型",
       "embedding": "向量嵌入",
+      "multimodal": "图片描述",
       "webSearch": "网页搜索",
       "output": "输出偏好",
       "interface": "界面",
@@ -119,7 +120,9 @@
         "apiKeyPlaceholder": "请输入 API Key",
         "savedBadge": "已保存",
         "configuredBadge": "已配置",
-        "activeBadge": "● 活跃"
+        "activeBadge": "● 活跃",
+        "endpointPreviewWillUse": "将使用",
+        "endpointPreviewAutoApply": "（离开输入框时自动套用）"
       },
       "embedding": {
         "title": "向量嵌入",
@@ -145,6 +148,32 @@
         "legacyPromptBody": "当前项目在旧版按页向量存储里有 {{count}} 条记录。新版按 chunk 索引检索质量更高,但需要一次性重新 embed。点击\"重新索引全部页面\"完成升级。",
         "dropLegacy": "删除旧版索引",
         "dropLegacyDone": "旧版索引已删除。"
+      },
+      "multimodal": {
+        "title": "图片描述",
+        "description": "导入时调用视觉模型为 PDF / DOCX / PPTX 中提取的图片生成事实性描述。描述会写入源 markdown 的 alt 属性，语义搜索按图片内容查询时就靠它命中。按图片字节 SHA-256 缓存，跨文档重复出现的 logo / 图表模板只调用一次。",
+        "enableLabel": "导入时生成图片描述",
+        "enableHint": "关：ingest 时把图片引用从内容里剥掉 —— wiki 页面里不会出现图片，搜索也不会返回。（图片仍会落到 wiki/media/，原始文档预览能看到。）开：每张新图调用视觉模型生成事实性 caption（按 hash 缓存），写入 wiki 页面 alt 属性。",
+        "stateOn": "已开启",
+        "stateOff": "已关闭",
+        "useMainLabel": "使用主 LLM 生成 caption",
+        "useMainHint": "复用「设置 → LLM Provider」里选的模型。仅当主模型支持图像输入时打开 —— 纯文本模型会返回 400。",
+        "dedicatedHeading": "独立视觉端点",
+        "provider": "Provider",
+        "ollamaUrl": "Ollama URL",
+        "customEndpoint": "端点 URL",
+        "customEndpointHint": "OpenAI 兼容的 /v1 根地址。LM Studio、llama.cpp server、vLLM、LocalAI 都可以。",
+        "apiKey": "API Key",
+        "apiKeyPlaceholder": "本地 / 无鉴权端点留空",
+        "model": "模型",
+        "modelHint": "必须是支持视觉输入的模型。文本-only 模型会在首次 ingest 时报 400 / image-not-supported。",
+        "concurrency": "并发 caption 请求数",
+        "concurrencyHint": "并行多少个 caption 请求。1 = 严格串行。多数场景 4 合适；只有在高性能 GPU 或托管端点上才考虑 8+。",
+        "costHeading": "费用提示",
+        "costPoint1": "每张新图触发一次视觉模型调用（约 500-2000 token，取决于模型和 thinking 模式）。",
+        "costPoint2": "Caption 按图片字节 SHA-256 缓存。跨文档重复的 logo / 通用图表模板只调用 ONE 次。",
+        "costPoint3": "Rust 端过滤掉小于 100×100 像素的图，并限制每文档最多 500 张 —— 病态 PDF 不会无限放大费用。",
+        "costPoint4": "批量 ingest 推荐用本地视觉模型（LM Studio / Ollama 跑 Qwen2.5-VL）；托管视觉 API 留给少量高价值文档。"
       },
       "webSearch": {
         "title": "网页搜索",

@@ -100,6 +100,7 @@
     "categories": {
       "llm": "LLM Models",
       "embedding": "Embeddings",
+      "multimodal": "Image Captioning",
       "webSearch": "Web Search",
       "output": "Output",
       "interface": "Interface",
@@ -119,7 +120,9 @@
         "apiKeyPlaceholder": "Enter your API key",
         "savedBadge": "saved",
         "configuredBadge": "configured",
-        "activeBadge": "● active"
+        "activeBadge": "● active",
+        "endpointPreviewWillUse": "Will resolve to",
+        "endpointPreviewAutoApply": "(applied automatically when you leave the input)"
       },
       "embedding": {
         "title": "Vector Embeddings",
@@ -145,6 +148,32 @@
         "legacyPromptBody": "Your project has {{count}} entries in the old per-page vector store. The new per-chunk index gives better retrieval but needs a one-time re-embed. Run \"Re-index all pages\" to upgrade.",
         "dropLegacy": "Drop legacy index",
         "dropLegacyDone": "Legacy index removed."
+      },
+      "multimodal": {
+        "title": "Image Captioning",
+        "description": "Generate factual captions for images extracted from PDFs / DOCX / PPTX during ingest. Captions are inserted as alt text inside the source markdown — they're what semantic search matches when you search for image content. Cached by image hash so duplicate logos / charts only call the LLM once.",
+        "enableLabel": "Enable captioning at ingest",
+        "enableHint": "Off: image references are stripped from ingested content — no images appear in wiki pages, search won't return them. (Files still extract to wiki/media/ for the raw-source preview.) On: each new image gets a factual caption from the vision LLM (cached by hash) and lands in the wiki page's alt text.",
+        "stateOn": "ON",
+        "stateOff": "OFF",
+        "useMainLabel": "Use main LLM for captions",
+        "useMainHint": "Reuse the model picked under Settings → LLM provider. Only enable this if that model accepts image input — text-only models will return a 400.",
+        "dedicatedHeading": "Dedicated vision endpoint",
+        "provider": "Provider",
+        "ollamaUrl": "Ollama URL",
+        "customEndpoint": "Endpoint URL",
+        "customEndpointHint": "OpenAI-compatible /v1 base. LM Studio, llama.cpp server, vLLM, LocalAI all work.",
+        "apiKey": "API key",
+        "apiKeyPlaceholder": "Leave blank for local / no-auth endpoints",
+        "model": "Model",
+        "modelHint": "Must be a vision-capable model. Text-only models will fail with a 400 / image-not-supported error at first ingest.",
+        "concurrency": "Concurrent caption requests",
+        "concurrencyHint": "How many caption requests run in parallel. 1 = strictly sequential. 4 is a good default for most setups; raise to 8+ only on a beefy GPU or hosted endpoint.",
+        "costHeading": "Cost guardrails",
+        "costPoint1": "Each new image triggers one vision-LLM call (~500-2000 tokens depending on model + thinking mode).",
+        "costPoint2": "Captions are cached by SHA-256 of image bytes. Duplicate logos / shared chart templates across documents only ever incur ONE call.",
+        "costPoint3": "Rust-side filter drops images smaller than 100×100 px and caps at 500 images per source — pathological PDFs can't blow up the bill.",
+        "costPoint4": "Prefer a local vision model (Qwen2.5-VL via LM Studio / Ollama) for bulk ingestion; reserve hosted vision APIs for one-off high-stakes documents."
       },
       "webSearch": {
         "title": "Web Search",
