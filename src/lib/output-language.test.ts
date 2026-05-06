@@ -24,6 +24,11 @@ describe("getOutputLanguage", () => {
     expect(getOutputLanguage("注意力机制是什么")).toBe("Chinese")
   })
 
+  it("auto mode detects Persian separately from Arabic", () => {
+    useWikiStore.getState().setOutputLanguage("auto")
+    expect(getOutputLanguage("پردازش زبان طبیعی در فارسی کاربردهای زیادی دارد")).toBe("Persian")
+  })
+
   it("auto mode with empty fallback defaults to English", () => {
     useWikiStore.getState().setOutputLanguage("auto")
     expect(getOutputLanguage("")).toBe("English")
@@ -63,6 +68,12 @@ describe("buildLanguageDirective", () => {
     expect(directive).toContain("Vietnamese")
   })
 
+  it("uses an explicit Persian/Farsi prompt name", () => {
+    useWikiStore.getState().setOutputLanguage("Persian")
+    const directive = buildLanguageDirective()
+    expect(directive).toContain("MANDATORY OUTPUT LANGUAGE: Persian (Farsi / فارسی)")
+  })
+
   it("explicitly overrides source content language", () => {
     useWikiStore.getState().setOutputLanguage("English")
     const directive = buildLanguageDirective()
@@ -87,5 +98,10 @@ describe("buildLanguageReminder", () => {
   it("uses detected language in auto mode", () => {
     useWikiStore.getState().setOutputLanguage("auto")
     expect(buildLanguageReminder("これは日本語です")).toContain("Japanese")
+  })
+
+  it("reminds Persian as Persian/Farsi", () => {
+    useWikiStore.getState().setOutputLanguage("Persian")
+    expect(buildLanguageReminder()).toContain("Persian (Farsi / فارسی)")
   })
 })

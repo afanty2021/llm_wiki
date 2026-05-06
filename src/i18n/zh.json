@@ -15,6 +15,11 @@
     "updateAvailable": "有可用更新",
     "updateAvailableSuffix": " · 有更新"
   },
+  "updateBanner": {
+    "message": "新版本 {{version}} 已发布",
+    "openDownload": "打开下载页",
+    "dismiss": "关闭"
+  },
   "welcome": {
     "newProject": "新建项目",
     "openProject": "打开项目",
@@ -102,8 +107,11 @@
       "embedding": "向量嵌入",
       "multimodal": "图片描述",
       "webSearch": "网页搜索",
+      "network": "网络",
       "output": "输出偏好",
       "interface": "界面",
+      "maintenance": "维护",
+      "changelog": "更新日志",
       "about": "关于"
     },
     "sections": {
@@ -179,6 +187,15 @@
         "title": "网页搜索",
         "description": "Deep Research 会用它拉取最新的外部上下文。"
       },
+      "network": {
+        "title": "网络",
+        "description": "让所有外部 HTTP 请求（LLM、向量、搜索、更新检查）走代理。点击保存即时生效，不需要重启应用。",
+        "enable": "启用代理",
+        "url": "代理地址",
+        "urlHelp": "完整 URL，必须带协议头。支持：http://、https://（当前版本不支持 SOCKS5）。",
+        "bypassLocal": "本地地址不走代理（推荐）",
+        "bypassLocalHelp": "对 localhost、127.0.0.0/8、10.0.0.0/8、172.16.0.0/12、192.168.0.0/16 以及 *.local 的请求会绕过代理。如果你用 Ollama / LM Studio 或局域网内的 LLM 服务，请保持开启。"
+      },
       "output": {
         "title": "输出偏好",
         "description": "影响生成内容的语言、对话历史长度等参数。",
@@ -193,6 +210,38 @@
         "description": "界面语言和外观样式。切换后立即生效并持久化。",
         "uiLanguage": "UI 语言",
         "uiLanguageHint": "只影响按钮、标签这些 UI 文案,不影响 AI 输出语言(那个在\"输出偏好\"里单独设置)。"
+      },
+      "maintenance": {
+        "title": "维护",
+        "description": "清理 wiki 的工具 —— 检测并合并 LLM 在多次再导入时用不同名字创建的重复实体 / 概念。",
+        "noProject": "请先打开一个项目。",
+        "noLlm": "请先配置 LLM 服务。",
+        "dedup": {
+          "title": "检测重复实体 / 概念",
+          "description": "让 LLM 扫描全部 entity / concept 页面，把可能指向同一主题但用了不同名字的页面分组（中英对照、单复数、缩写与全称等）。每一组都需要你确认后才会合并。合并任务会进入串行队列依次执行，避免交叉引用被并发改写覆盖。",
+          "scanButton": "扫描重复项",
+          "scanning": "扫描中…",
+          "noneFound": "未发现重复分组，wiki 很干净。",
+          "candidates": "{{n}} 个候选",
+          "canonicalLabel": "保留以下 slug 作为主条目：",
+          "mergeButton": "合并到 {{slug}}",
+          "merging": "合并中…",
+          "queued": "排队中",
+          "queuedAhead": "排队中（前面还有 {{n}} 个）",
+          "failed": "失败（{{retries}}/3）",
+          "cancel": "取消",
+          "retry": "重试",
+          "delete": "删除",
+          "queueTitle": "进行中的合并",
+          "queueDescription": "上次扫描后排进队列、还未跑完的合并任务。每次只跑一个。",
+          "notDuplicates": "不是重复",
+          "merged": "已合并",
+          "skipped": "已标记为不重复"
+        }
+      },
+      "changelog": {
+        "title": "更新日志",
+        "description": "每个版本对用户可见的功能改动，最新版本在最前面。"
       },
       "about": {
         "title": "关于",

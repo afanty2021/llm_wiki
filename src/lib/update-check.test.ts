@@ -4,7 +4,7 @@
  * fetch layer — we don't exercise it against real GitHub in CI.
  */
 import { describe, it, expect } from "vitest"
-import { isNewer } from "./update-check"
+import { isNewer, toLatestReleaseUrl } from "./update-check"
 
 describe("isNewer — semver comparison", () => {
   it("remote > local on patch", () => {
@@ -65,5 +65,58 @@ describe("isNewer — semver comparison", () => {
   it("empty string treated as 0.0.0", () => {
     expect(isNewer("", "0.3.9")).toBe(false)
     expect(isNewer("0.3.9", "")).toBe(true)
+  })
+})
+
+describe("toLatestReleaseUrl — canonical /releases/latest mapping", () => {
+  it("converts a tag-specific release URL to /releases/latest", () => {
+    expect(
+      toLatestReleaseUrl("https://github.com/nashsu/llm_wiki/releases/tag/v0.4.0"),
+    ).toBe("https://github.com/nashsu/llm_wiki/releases/latest")
+  })
+
+  it("normalizes a bare /releases listing URL to /releases/latest", () => {
+    expect(
+      toLatestReleaseUrl("https://github.com/nashsu/llm_wiki/releases"),
+    ).toBe("https://github.com/nashsu/llm_wiki/releases/latest")
+  })
+
+  it("is idempotent on an already-/latest URL", () => {
+    expect(
+      toLatestReleaseUrl("https://github.com/nashsu/llm_wiki/releases/latest"),
+    ).toBe("https://github.com/nashsu/llm_wiki/releases/latest")
+  })
+
+  it("works for any owner/repo combination", () => {
+    expect(
+      toLatestReleaseUrl("https://github.com/octocat/Hello-World/releases/tag/v3.2.1"),
+    ).toBe("https://github.com/octocat/Hello-World/releases/latest")
+  })
+
+  it("accepts http (not just https) and case-insensitive github.com", () => {
+    // The regex is case-insensitive on the host part — paranoia for
+    // capitalization mishaps in user-edited config. Body of the URL
+    // (owner/repo) is preserved verbatim.
+    expect(
+      toLatestReleaseUrl("http://GitHub.com/foo/bar/releases/tag/v1.0"),
+    ).toBe("http://GitHub.com/foo/bar/releases/latest")
+  })
+
+  it("falls through unchanged for non-GitHub URLs (don't break random links)", () => {
+    expect(toLatestReleaseUrl("https://example.com/releases/tag/v1.0")).toBe(
+      "https://example.com/releases/tag/v1.0",
+    )
+    expect(toLatestReleaseUrl("https://gitlab.com/foo/bar/-/releases")).toBe(
+      "https://gitlab.com/foo/bar/-/releases",
+    )
+  })
+
+  it("falls through unchanged for non-release github URLs", () => {
+    expect(toLatestReleaseUrl("https://github.com/nashsu/llm_wiki/issues/42")).toBe(
+      "https://github.com/nashsu/llm_wiki/issues/42",
+    )
+    expect(toLatestReleaseUrl("https://github.com/nashsu/llm_wiki")).toBe(
+      "https://github.com/nashsu/llm_wiki",
+    )
   })
 })

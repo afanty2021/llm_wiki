@@ -17,6 +17,7 @@
 //! capabilities JSON.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,19 +53,33 @@ pub struct ClaudeMessage {
     content: String,
 }
 
+fn find_claude_command() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        if let Ok(path) = which::which("claude.cmd") {
+            return Ok(path);
+        }
+        if let Ok(path) = which::which("claude.exe") {
+            return Ok(path);
+        }
+    }
+
+    which::which("claude").map_err(|_| "`claude` not found on PATH".to_string())
+}
+
 /// Locate `claude` on PATH and confirm it's runnable by calling
 /// `claude --version` with a short timeout. Cheap — safe to call on
 /// mount of the settings panel.
 #[tauri::command]
 pub async fn claude_cli_detect() -> Result<DetectResult, String> {
-    let path = match which::which("claude") {
+    let path = match find_claude_command() {
         Ok(p) => p,
-        Err(_) => {
+        Err(error) => {
             return Ok(DetectResult {
                 installed: false,
                 version: None,
                 path: None,
-                error: Some("`claude` not found on PATH".to_string()),
+                error: Some(error),
             });
         }
     };
@@ -172,7 +187,8 @@ pub async fn claude_cli_spawn(
         })
         .collect();
 
-    let mut cmd = Command::new("claude");
+    let claude = find_claude_command()?;
+    let mut cmd = Command::new(&claude);
     cmd.arg("-p")
         .arg("--output-format")
         .arg("stream-json")
@@ -235,11 +251,7 @@ pub async fn claude_cli_spawn(
     drop(stdin);
 
     // Register the child so `claude_cli_kill` can reach it.
-    state
-        .children
-        .lock()
-        .await
-        .insert(stream_id.clone(), child);
+    state.children.lock().await.insert(stream_id.clone(), child);
 
     let children = Arc::clone(&state.children);
     let app_for_task = app.clone();
@@ -327,4 +339,3 @@ pub async fn claude_cli_kill(
     }
     Ok(())
 }
-

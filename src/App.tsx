@@ -5,7 +5,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig } from "@/lib/project-store"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
@@ -29,10 +29,66 @@ function App() {
     startClipWatcher()
   }, [])
 
+  // Dev-only helper for visually testing the update-banner UX.
+  // Open dev tools and run:
+  //   __llmwiki_testUpdateBanner()
+  // to inject a fake "available" result into the update store —
+  // banner appears at the top + red dot lights up the gear icon.
+  // Run again with arg `false` (or call setDismissed via the store)
+  // to clear. Gated on `import.meta.env.DEV` so the helper never
+  // ships in production builds.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(async () => {
+      const storeMod = await import("@/stores/update-store")
+      const { useUpdateStore } = storeMod
+      // Expose the live store getter on window so you can inspect
+      // state from devtools when debugging banner behavior.
+      ;(window as unknown as { __llmwiki_updateStore?: typeof useUpdateStore }).__llmwiki_updateStore = useUpdateStore
+      ;(window as unknown as { __llmwiki_testUpdateBanner?: (clear?: boolean) => void }).__llmwiki_testUpdateBanner = (clear = false) => {
+        if (clear) {
+          useUpdateStore.getState().setResult(
+            { kind: "up-to-date", local: __APP_VERSION__, remote: __APP_VERSION__ },
+            Date.now(),
+          )
+          useUpdateStore.getState().setDismissed(null)
+          console.log("[test] update banner cleared")
+          return
+        }
+        useUpdateStore.getState().setResult(
+          {
+            kind: "available",
+            local: __APP_VERSION__,
+            remote: "v999.0.0",
+            release: {
+              name: "v999.0.0 (test)",
+              tag_name: "v999.0.0",
+              body:
+                "Test release for banner-UX verification.\n\n" +
+                "- Bigger red dot on the Settings icon\n" +
+                "- Top banner with one-click dismiss\n" +
+                "- Once dismissed, won't reappear for this version",
+              html_url: "https://github.com/nashsu/llm_wiki/releases",
+              published_at: new Date().toISOString(),
+            },
+          },
+          Date.now(),
+        )
+        useUpdateStore.getState().setDismissed(null)
+        console.log(
+          "[test] update banner injected. Run __llmwiki_testUpdateBanner(true) to clear.",
+        )
+      }
+    })()
+  }, [])
+
   // Background update check — hydrate persisted user preferences, then
-  // hit GitHub at most once every UPDATE_CHECK_CACHE_MS. Runs 5 s after
-  // mount so it doesn't contend with startup work. Silent on failure;
-  // the UI in Settings → About surfaces the result.
+  // hit GitHub at most once every UPDATE_CHECK_CACHE_MS. Runs 1.5 s
+  // after mount so it doesn't contend with the heaviest startup work
+  // (project load, file tree, vector store init) but still surfaces
+  // a new release in time for the user to notice it during their
+  // first interaction. Silent on failure; the UI in Settings → About
+  // lets the user retry manually.
   useEffect(() => {
     let cancelled = false
     const timer = setTimeout(async () => {
@@ -50,21 +106,57 @@ function App() {
         if (persisted) useUpdateStore.getState().hydrate(persisted)
 
         const state = useUpdateStore.getState()
-        if (!state.enabled) return
+        if (!state.enabled) {
+          console.log("[update-check] skipped: user disabled auto-check in settings")
+          return
+        }
 
         const now = Date.now()
+        // Cache hit requires BOTH the timestamp AND the in-memory
+        // result to be present. `lastCheckedAt` is persisted to
+        // disk but `lastResult` deliberately is not — keeping the
+        // GitHub payload out of the persisted store keeps disk
+        // size + privacy footprint small. The downside: a fresh
+        // cold start has `lastResult === null` even when
+        // `lastCheckedAt` is recent, in which case we MUST refetch
+        // — otherwise we'd skip the check AND have no result to
+        // display, leaving the banner permanently stuck off.
+        // (This was the user-reported bug: "kind=none, no banner".)
         const fresh =
           state.lastCheckedAt !== null &&
+          state.lastResult !== null &&
           now - state.lastCheckedAt < UPDATE_CHECK_CACHE_MS
-        if (fresh) return
+        if (fresh) {
+          const ageMin = Math.round((now - (state.lastCheckedAt ?? 0)) / 60_000)
+          console.log(
+            `[update-check] skipped: cache hit (last check ${ageMin} min ago, ` +
+              `cache window ${UPDATE_CHECK_CACHE_MS / 60_000} min). ` +
+              `Last result: kind=${state.lastResult?.kind ?? "none"}`,
+          )
+          return
+        }
 
         useUpdateStore.getState().setChecking(true)
+        console.log(
+          `[update-check] fetching GitHub releases (local=${__APP_VERSION__})`,
+        )
         const result = await checkForUpdates({
           currentVersion: __APP_VERSION__,
           repo: "nashsu/llm_wiki",
         })
         if (cancelled) return
         useUpdateStore.getState().setResult(result, Date.now())
+        if (result.kind === "available") {
+          console.log(
+            `[update-check] update available: local=${result.local} → remote=${result.remote}`,
+          )
+        } else if (result.kind === "up-to-date") {
+          console.log(
+            `[update-check] up to date: local=${result.local}, remote latest=${result.remote}`,
+          )
+        } else {
+          console.log(`[update-check] error: ${result.message}`)
+        }
         await saveUpdateCheckState({
           enabled: useUpdateStore.getState().enabled,
           lastCheckedAt: Date.now(),
@@ -73,7 +165,7 @@ function App() {
       } catch {
         // Silent — Settings → About lets the user retry manually.
       }
-    }, 5000)
+    }, 1500)
     return () => {
       cancelled = true
       clearTimeout(timer)
@@ -126,9 +218,9 @@ function App() {
         if (savedMultimodalConfig) {
           useWikiStore.getState().setMultimodalConfig(savedMultimodalConfig)
         }
-        const savedOutputLang = await loadOutputLanguage()
-        if (savedOutputLang) {
-          useWikiStore.getState().setOutputLanguage(savedOutputLang)
+        const savedProxy = await loadProxyConfig()
+        if (savedProxy) {
+          useWikiStore.getState().setProxyConfig(savedProxy)
         }
         const savedLang = await loadLanguage()
         if (savedLang) {
@@ -161,6 +253,8 @@ function App() {
     await resetProjectState()
 
     setProject(proj)
+    const projectOutputLang = await loadOutputLanguage(proj.id)
+    useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")
     setSelectedFile(null)
     setActiveView("wiki")
     // Bump data version so any cached graphs/views invalidate
@@ -173,6 +267,12 @@ function App() {
     import("@/lib/ingest-queue").then(({ restoreQueue }) => {
       restoreQueue(proj.id, proj.path).catch((err) =>
         console.error("Failed to restore ingest queue:", err)
+      )
+    })
+    // Same handshake for the dedup-merge queue.
+    import("@/lib/dedup-queue").then(({ restoreQueue }) => {
+      restoreQueue(proj.id, proj.path).catch((err) =>
+        console.error("Failed to restore dedup queue:", err)
       )
     })
     // Notify local clip server of the current project + all recent projects

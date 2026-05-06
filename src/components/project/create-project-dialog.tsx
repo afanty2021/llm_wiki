@@ -12,6 +12,9 @@ import { getTemplate } from "@/lib/templates"
 import { TemplatePicker } from "@/components/project/template-picker"
 import type { WikiProject } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
+import { OUTPUT_LANGUAGE_OPTIONS } from "@/lib/output-language-options"
+import { useWikiStore, type OutputLanguage } from "@/stores/wiki-store"
+import { saveOutputLanguage } from "@/lib/project-store"
 
 interface CreateProjectDialogProps {
   open: boolean
@@ -23,8 +26,15 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   const [name, setName] = useState("")
   const [path, setPath] = useState("")
   const [selectedTemplate, setSelectedTemplate] = useState("general")
+  // Empty string = "user hasn't picked yet"; we validate this on
+  // submit so a fresh project never starts in implicit auto-detect
+  // mode. Once chosen, the value is one of OUTPUT_LANGUAGE_OPTIONS
+  // (`auto` is a valid explicit choice — the user is then opting
+  // INTO auto-detect rather than getting it by accident).
+  const [language, setLanguage] = useState<string>("")
   const [error, setError] = useState("")
   const [creating, setCreating] = useState(false)
+  const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
 
   async function handleBrowse() {
     const selected = await open({
@@ -42,6 +52,10 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
       setError("Name and path are required")
       return
     }
+    if (!language) {
+      setError("Please pick an AI output language")
+      return
+    }
     setCreating(true)
     setError("")
     try {
@@ -55,11 +69,20 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
         await createDirectory(`${pp}/${dir}`)
       }
 
+      // Persist the user's language choice. The store / disk
+      // mirror is what the rest of the app reads via
+      // `getOutputLanguage()` — without this write the choice
+      // wouldn't survive past the dialog closing.
+      const lang = language as OutputLanguage
+      setOutputLanguage(lang)
+      await saveOutputLanguage(lang, project.id)
+
       onCreated(project)
       onOpenChange(false)
       setName("")
       setPath("")
       setSelectedTemplate("general")
+      setLanguage("")
     } catch (err) {
       setError(String(err))
     } finally {
@@ -81,6 +104,41 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
           <div className="flex flex-col gap-2">
             <Label>Template</Label>
             <TemplatePicker selected={selectedTemplate} onSelect={setSelectedTemplate} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="language">
+              AI Output Language <span className="text-destructive">*</span>
+            </Label>
+            <select
+              id="language"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="" disabled>
+                Pick a language…
+              </option>
+              {/*
+                * "auto" is intentionally filtered out at project
+                * creation time. Auto-detect is a fine post-hoc
+                * setting (Settings → Output) for users who later
+                * decide they want it, but at create time we force
+                * an explicit commitment so the project never starts
+                * in the implicit-detect mode that was the source
+                * of "wiki content showed up in a language I didn't
+                * expect" surprises.
+                */}
+              {OUTPUT_LANGUAGE_OPTIONS.filter((l) => l.value !== "auto").map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              All AI-generated content (wiki pages, chat replies, research
+              output) will use this language. You can change it later in
+              Settings → Output.
+            </p>
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="path">Parent Directory</Label>

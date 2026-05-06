@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from "react"
 import {
-  FileText, Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, ChevronRight, ChevronDown, Layout, Globe,
+  FileText, Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, ChevronRight, ChevronDown, Layout, Globe, Trash2,
 } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
+import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 
 interface WikiPageInfo {
   path: string
@@ -33,8 +35,14 @@ export function KnowledgeTree() {
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const fileTree = useWikiStore((s) => s.fileTree)
+  const setFileTree = useWikiStore((s) => s.setFileTree)
+  const bumpDataVersion = useWikiStore((s) => s.bumpDataVersion)
   const [pages, setPages] = useState<WikiPageInfo[]>([])
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set(["overview", "entity", "concept", "source"]))
+  // Two-stage delete: first click arms the row, second click executes.
+  // Only one row armed at a time (clicking another row replaces).
+  const [armedPath, setArmedPath] = useState<string | null>(null)
+  const [deletingPath, setDeletingPath] = useState<string | null>(null)
 
   const loadPages = useCallback(async () => {
     if (!project) return
@@ -71,6 +79,39 @@ export function KnowledgeTree() {
   useEffect(() => {
     loadPages()
   }, [loadPages, fileTree])
+
+  const handleDeleteClick = useCallback(
+    async (pagePath: string) => {
+      if (!project) return
+      // First click: arm. Second click on the same row: execute.
+      if (armedPath !== pagePath) {
+        setArmedPath(pagePath)
+        return
+      }
+      setArmedPath(null)
+      setDeletingPath(pagePath)
+      try {
+        const pp = normalizePath(project.path)
+        await cascadeDeleteWikiPagesWithRefs(pp, [pagePath])
+        // Refresh: page list, file tree, any data-version subscribers.
+        await loadPages()
+        try {
+          const tree = await listDirectory(pp)
+          setFileTree(tree)
+        } catch {
+          // non-critical
+        }
+        bumpDataVersion()
+        if (selectedFile === pagePath) setSelectedFile(null)
+      } catch (err) {
+        console.error("[KnowledgeTree] delete failed:", err)
+        window.alert(`Failed to delete: ${err}`)
+      } finally {
+        setDeletingPath(null)
+      }
+    },
+    [project, armedPath, loadPages, selectedFile, setSelectedFile, setFileTree, bumpDataVersion],
+  )
 
   if (!project) {
     return (
@@ -142,20 +183,42 @@ export function KnowledgeTree() {
                 <div className="ml-3">
                   {items.map((page) => {
                     const isSelected = selectedFile === page.path
+                    const isArmed = armedPath === page.path
+                    const isDeleting = deletingPath === page.path
                     return (
-                      <button
+                      <div
                         key={page.path}
-                        onClick={() => setSelectedFile(page.path)}
-                        className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm ${
-                          isSelected
-                            ? "bg-accent text-accent-foreground"
-                            : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
+                        className={`group flex items-center gap-1 rounded-md ${
+                          isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
                         }`}
-                        title={page.path}
                       >
-                        {page.origin === "web-clip" && <Globe className="h-3 w-3 shrink-0 text-blue-400" />}
-                        <span className="truncate">{page.title}</span>
-                      </button>
+                        <button
+                          onClick={() => setSelectedFile(page.path)}
+                          className={`flex flex-1 items-center gap-1.5 px-2 py-1 text-left text-sm min-w-0 ${
+                            isSelected
+                              ? "text-accent-foreground"
+                              : "text-muted-foreground group-hover:text-accent-foreground"
+                          }`}
+                          title={page.path}
+                        >
+                          {page.origin === "web-clip" && <Globe className="h-3 w-3 shrink-0 text-blue-400" />}
+                          <span className="truncate">{page.title}</span>
+                        </button>
+                        <DeleteButton
+                          armed={isArmed}
+                          deleting={isDeleting}
+                          // Visible on hover, when this row is armed,
+                          // or while deleting. Other rows fade out so
+                          // accidental clicks on a sibling don't pile up.
+                          className={`mr-1 transition-opacity ${
+                            isArmed || isDeleting
+                              ? "opacity-100"
+                              : "opacity-0 group-hover:opacity-100"
+                          }`}
+                          onClick={() => void handleDeleteClick(page.path)}
+                          name={page.title}
+                        />
+                      </div>
                     )
                   })}
                 </div>
@@ -270,6 +333,74 @@ function parsePageInfo(path: string, fileName: string, content: string): WikiPag
   }
 
   return { path, title, type, tags, origin }
+}
+
+/**
+ * Two-stage delete affordance for a single page row. Default state =
+ * subtle ghost trash icon. Armed state = solid red Confirm pill so a
+ * second click can't be accidental. Same visual contract as the
+ * sources-view DeleteButton — kept inline here rather than shared
+ * because the parent owns the armed/deleting/visibility state and
+ * extracting would mean lifting four props to a shared module for one
+ * extra caller.
+ */
+function DeleteButton({
+  armed,
+  deleting,
+  onClick,
+  name,
+  className = "",
+}: {
+  armed: boolean
+  deleting: boolean
+  onClick: () => void
+  name: string
+  className?: string
+}) {
+  if (deleting) {
+    return (
+      <Button
+        variant="ghost"
+        size="icon"
+        className={`h-6 w-6 shrink-0 cursor-default ${className}`}
+        disabled
+        title={`Deleting ${name}…`}
+      >
+        <Trash2 className="h-3 w-3 animate-pulse text-destructive" />
+      </Button>
+    )
+  }
+  if (armed) {
+    return (
+      <Button
+        variant="destructive"
+        size="sm"
+        className={`h-6 shrink-0 px-1.5 text-[10px] font-semibold animate-pulse ${className}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+        title={`Click again to delete ${name} and clean up references`}
+      >
+        <Trash2 className="mr-0.5 h-3 w-3" />
+        Confirm
+      </Button>
+    )
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className={`h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive ${className}`}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      title={`Delete ${name} (and clean up references)`}
+    >
+      <Trash2 className="h-3 w-3" />
+    </Button>
+  )
 }
 
 function flattenMdFiles(nodes: FileNode[]): FileNode[] {

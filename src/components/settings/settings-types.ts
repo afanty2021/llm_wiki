@@ -1,4 +1,5 @@
 import type { CustomApiMode } from "./llm-presets"
+import type { ReasoningConfig } from "@/stores/wiki-store"
 
 /**
  * Shape of the draft state each section reads from and writes into.
@@ -15,6 +16,7 @@ export interface SettingsDraft {
   customEndpoint: string
   maxContextSize: number
   apiMode: CustomApiMode | undefined
+  reasoning: ReasoningConfig | undefined
 
   // Embedding
   embeddingEnabled: boolean
@@ -37,13 +39,16 @@ export interface SettingsDraft {
   multimodalApiMode: CustomApiMode | undefined
   multimodalConcurrency: number
 
-  // Web search
-  searchProvider: "tavily" | "none"
-  searchApiKey: string
-
   // Output preferences
   outputLanguage: string
   maxHistoryMessages: number
+
+  // Network — global outbound HTTP proxy. Persisted to app-state.json
+  // and read by the Rust setup hook on app launch (changes apply
+  // after restart). See src/lib/proxy-config.ts.
+  proxyEnabled: boolean
+  proxyUrl: string
+  proxyBypassLocal: boolean
 
   // UI
   uiLanguage: string

@@ -161,3 +161,89 @@ describe("Ollama / custom (chat_completions) — vision content", () => {
     })
   })
 })
+
+describe("reasoning controls", () => {
+  it("maps DeepSeek-compatible custom endpoints to thinking disabled for structured tasks", () => {
+    const cfg = mkConfig({
+      provider: "custom",
+      model: "deepseek-chat",
+      customEndpoint: "https://api.deepseek.com/v1",
+      apiMode: "chat_completions",
+    })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "off" } },
+    ) as Record<string, unknown>
+
+    expect(body.thinking).toEqual({ type: "disabled" })
+    expect(body.reasoning).toBeUndefined()
+  })
+
+  it("maps DeepSeek high reasoning to thinking enabled plus reasoning_effort", () => {
+    const cfg = mkConfig({
+      provider: "custom",
+      model: "deepseek-reasoner",
+      customEndpoint: "https://api.deepseek.com/v1",
+      apiMode: "chat_completions",
+    })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "high" } },
+    ) as Record<string, unknown>
+
+    expect(body.thinking).toEqual({ type: "enabled" })
+    expect(body.reasoning_effort).toBe("high")
+  })
+
+  it("does not send an undocumented DeepSeek max_reasoning_tokens field", () => {
+    const cfg = mkConfig({
+      provider: "custom",
+      model: "deepseek-reasoner",
+      customEndpoint: "https://api.deepseek.com/v1",
+      apiMode: "chat_completions",
+    })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "custom", budgetTokens: 2048 } },
+    ) as Record<string, unknown>
+
+    expect(body.thinking).toEqual({ type: "enabled" })
+    expect(body.max_reasoning_tokens).toBeUndefined()
+  })
+
+  it("disables Qwen3 thinking on OpenAI-compatible local endpoints", () => {
+    const cfg = mkConfig({
+      provider: "custom",
+      model: "Qwen3.5-122B",
+      customEndpoint: "http://127.0.0.1:8000/v1",
+      apiMode: "chat_completions",
+    })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "off" } },
+    ) as Record<string, unknown>
+
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+  })
+
+  it("maps Anthropic reasoning budget to extended thinking and removes sampling knobs", () => {
+    const cfg = mkConfig({ provider: "anthropic", model: "claude-sonnet-4-5-20250929" })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "custom", budgetTokens: 2048 }, temperature: 0.1, max_tokens: 4096 },
+    ) as Record<string, unknown>
+
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 2048 })
+    expect(body.temperature).toBeUndefined()
+  })
+
+  it("maps Gemini reasoning off to thinkingBudget 0", () => {
+    const cfg = mkConfig({ provider: "google", model: "gemini-2.5-pro" })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "off" } },
+    ) as { generationConfig?: Record<string, unknown> }
+
+    expect(body.generationConfig?.thinkingConfig).toEqual({ thinkingBudget: 0 })
+  })
+})

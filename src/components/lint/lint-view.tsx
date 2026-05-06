@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { runStructuralLint, runSemanticLint, type LintResult } from "@/lib/lint"
+import { hasUsableLlm } from "@/lib/has-usable-llm"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 
@@ -49,7 +50,7 @@ export function LintView() {
       const structural = await runStructuralLint(pp)
       let all = structural
 
-      if (runSemantic && (llmConfig.apiKey || llmConfig.provider === "ollama")) {
+      if (runSemantic && hasUsableLlm(llmConfig)) {
         const semantic = await runSemanticLint(pp, llmConfig)
         all = [...structural, ...semantic]
       }
@@ -180,10 +181,16 @@ export function LintView() {
     if (!confirmed) return
 
     try {
-      // Cascade = deleteFile(...) + drop the orphan page's embedding
-      // chunks so it stops showing up as a phantom vector hit.
-      const { cascadeDeleteWikiPage } = await import("@/lib/wiki-page-delete")
-      await cascadeDeleteWikiPage(pp, pagePath)
+      // Full cascade: file + embedding chunks + every reference to
+      // the page across the wiki (body wikilinks, index.md listing,
+      // `related:` frontmatter arrays). Even though "orphan" by lint
+      // means no incoming wikilinks were detected, `related:` slugs
+      // and index.md entries can still point at it — the orphan
+      // detector only walks body refs.
+      const { cascadeDeleteWikiPagesWithRefs } = await import(
+        "@/lib/wiki-page-delete"
+      )
+      await cascadeDeleteWikiPagesWithRefs(pp, [pagePath])
       setResults((prev) => prev.filter((_, i) => i !== index))
       const tree = await listDirectory(pp)
       setFileTree(tree)

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useWikiStore, type ProviderOverride } from "@/stores/wiki-store"
+import { useWikiStore, type ProviderOverride, type ReasoningConfig, type ReasoningMode } from "@/stores/wiki-store"
 import { LLM_PRESETS, type LlmPreset } from "../llm-presets"
 import { ContextSizeSelector } from "../context-size-selector"
 import { resolveConfig } from "../preset-resolver"
@@ -118,6 +118,7 @@ function PresetRow({
   const apiMode = ov.apiMode ?? preset.apiMode ?? "chat_completions"
   const baseUrl = ov.baseUrl ?? preset.baseUrl ?? ""
   const context = ov.maxContextSize ?? preset.suggestedContextSize ?? 131072
+  const reasoning = ov.reasoning ?? { mode: "auto" as const }
   const hasConfig = !!apiKey || !!ov.baseUrl || !!ov.model
   // Claude Code CLI authenticates via the user's existing ~/.claude OAuth
   // (inherited from the spawned subprocess), so no API key field is
@@ -280,8 +281,79 @@ function PresetRow({
               onChange={(v) => onChange({ maxContextSize: v })}
             />
           </div>
+
+          <ReasoningControls
+            value={reasoning}
+            onChange={(reasoning) => onChange({ reasoning })}
+          />
         </div>
       )}
+    </div>
+  )
+}
+
+function ReasoningControls({
+  value,
+  onChange,
+}: {
+  value: ReasoningConfig
+  onChange: (value: ReasoningConfig) => void
+}) {
+  const modes: { value: ReasoningMode; label: string }[] = [
+    { value: "auto", label: "Auto" },
+    { value: "off", label: "Off" },
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+    { value: "max", label: "Max" },
+    { value: "custom", label: "Custom" },
+  ]
+
+  return (
+    <div className="space-y-2">
+      <Label>Reasoning / thinking</Label>
+      <div className="flex flex-wrap gap-1.5">
+        {modes.map((m) => {
+          const active = value.mode === m.value
+          return (
+            <button
+              key={m.value}
+              type="button"
+              onClick={() => onChange({ ...value, mode: m.value })}
+              className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                active
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border hover:bg-accent"
+              }`}
+            >
+              {m.label}
+            </button>
+          )
+        })}
+      </div>
+      {value.mode === "custom" && (
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            min={0}
+            className="w-28"
+            value={value.budgetTokens ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value.trim()
+              const n = Number(raw)
+              onChange({
+                ...value,
+                budgetTokens: raw === "" || !Number.isFinite(n) ? undefined : Math.max(0, n),
+              })
+            }}
+            placeholder="1024"
+          />
+          <span className="text-xs text-muted-foreground">thinking budget tokens</span>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Structured tasks such as ingest may override this to Off to avoid reasoning-only responses.
+      </p>
     </div>
   )
 }
@@ -496,6 +568,18 @@ function ClaudeCliStatusPill() {
                   {result.path}
                 </div>
               )}
+              {/* `claude --version` doesn't validate OAuth, so even a
+                  green pill can hide an expired login. Surface the
+                  remediation up front so users don't mis-diagnose
+                  the resulting "Unauthenticated" exit-1 as a LLM
+                  Wiki bug. */}
+              <div className="text-muted-foreground">
+                If chat fails with an authentication error, run{" "}
+                <code className="rounded bg-background/60 px-1 py-0.5 font-mono text-[10px]">
+                  claude
+                </code>{" "}
+                in a terminal to refresh the OAuth login.
+              </div>
             </>
           )}
           {state === "err" && (

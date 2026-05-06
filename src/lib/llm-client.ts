@@ -1,12 +1,14 @@
 import type { LlmConfig } from "@/stores/wiki-store"
 import { getProviderConfig, type RequestOverrides } from "./llm-providers"
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
+import { countReasoningCharsInLine, extractReasoningTextFromLine } from "./reasoning-detector"
 
 export type { ChatMessage, RequestOverrides } from "./llm-providers"
 export { isFetchNetworkError } from "./tauri-fetch"
 
 export interface StreamCallbacks {
   onToken: (token: string) => void
+  onReasoningToken?: (token: string) => void
   onDone: () => void
   onError: (error: Error) => void
 }
@@ -147,14 +149,41 @@ export async function streamChat(
   const reader = response.body.getReader()
   let lineBuffer = ""
 
+  // Diagnostic counters. Some OpenAI-compatible endpoints stream
+  // chain-of-thought through a `reasoning_content` (DeepSeek-R1,
+  // Kimi K2.x) or `reasoning` (Qwen-flavored deployments) field
+  // and only put the actual answer in `delta.content` after
+  // thinking ends. Misbehaving endpoints sometimes emit kilobytes
+  // of reasoning and end the stream with no content at all,
+  // leaving the user with a silent empty analysis. We track the
+  // two channels separately so the stream-end path can tell the
+  // difference between "model said nothing" and "model thought
+  // out loud but never produced an answer". See reasoning-
+  // detector.ts.
+  let contentCharsEmitted = 0
+  let reasoningCharsObserved = 0
+  const recordToken = (text: string) => {
+    contentCharsEmitted += text.length
+    onToken(text)
+  }
+  const recordReasoning = (line: string) => {
+    const reasoningParts = extractReasoningTextFromLine(line)
+    for (const part of reasoningParts) {
+      callbacks.onReasoningToken?.(part)
+    }
+  }
+
   try {
     while (true) {
       const { done, value } = await reader.read()
 
       if (done) {
         if (lineBuffer.trim()) {
-          const token = providerConfig.parseStream(lineBuffer.trim())
-          if (token !== null) onToken(token)
+          const trimmed = lineBuffer.trim()
+          reasoningCharsObserved += countReasoningCharsInLine(trimmed)
+          recordReasoning(trimmed)
+          const token = providerConfig.parseStream(trimmed)
+          if (token !== null) recordToken(token)
         }
         break
       }
@@ -165,9 +194,33 @@ export async function streamChat(
       for (const line of lines) {
         const trimmed = line.trim()
         if (!trimmed) continue
+        reasoningCharsObserved += countReasoningCharsInLine(trimmed)
+        recordReasoning(trimmed)
         const token = providerConfig.parseStream(trimmed)
-        if (token !== null) onToken(token)
+        if (token !== null) recordToken(token)
       }
+    }
+
+    // Stream ended cleanly. If the model produced thinking tokens
+    // but no actual answer, surface that as a clear diagnostic
+    // instead of letting the caller silently see "" (which usually
+    // surfaces several layers up as "analysis not available" with
+    // no clue why). Threshold guards against single-stray-byte
+    // false positives from spurious empty `reasoning:""` deltas.
+    const REASONING_DIAGNOSTIC_THRESHOLD = 200
+    if (
+      contentCharsEmitted === 0 &&
+      reasoningCharsObserved >= REASONING_DIAGNOSTIC_THRESHOLD
+    ) {
+      onError(
+        new Error(
+          `Model produced ${reasoningCharsObserved.toLocaleString()} characters of reasoning / chain-of-thought, but no actual response content. ` +
+          `This usually means the endpoint hit a thinking-token limit, the model didn't transition from thinking to answering, ` +
+          `or the endpoint is misbehaving (the official Anthropic / OpenAI APIs don't have this issue). ` +
+          `Try a shorter input, increase max_tokens, or switch to a different model in Settings.`,
+        ),
+      )
+      return
     }
 
     onDone()

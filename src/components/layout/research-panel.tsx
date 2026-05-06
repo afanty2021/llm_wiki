@@ -14,6 +14,10 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { readFile } from "@/commands/fs"
 import { queueResearch } from "@/lib/deep-research"
 import { normalizePath } from "@/lib/path-utils"
+import { isImeComposing } from "@/lib/keyboard-utils"
+import { detectLanguage } from "@/lib/detect-language"
+import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
+import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
 
 export function ResearchPanel() {
   const tasks = useResearchStore((s) => s.tasks)
@@ -32,7 +36,7 @@ export function ResearchPanel() {
     const topic = inputValue.trim()
     if (!topic || !project) return
     if (searchApiConfig.provider === "none" || !searchApiConfig.apiKey) {
-      window.alert("Web Search not configured. Go to Settings → Web Search to add a Tavily API key.")
+      window.alert("Web Search not configured. Go to Settings → Web Search to add a Tavily or SerpApi API key.")
       return
     }
     queueResearch(normalizePath(project.path), topic, llmConfig, searchApiConfig)
@@ -63,8 +67,12 @@ export function ResearchPanel() {
       <div className="flex shrink-0 items-center gap-1.5 border-b px-3 py-2">
         <input
           value={inputValue}
+          dir="auto"
           onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") handleStartResearch() }}
+          onKeyDown={(e) => {
+            if (isImeComposing(e)) return
+            if (e.key === "Enter") handleStartResearch()
+          }}
           placeholder="Enter a research topic..."
           className="flex-1 rounded border bg-background px-2 py-1 text-xs outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
         />
@@ -114,6 +122,9 @@ function separateThinking(text: string): { thinking: string; answer: string } {
 function SynthesisBlock({ synthesis, isStreaming }: { synthesis: string; isStreaming: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const { thinking, answer } = useMemo(() => separateThinking(synthesis), [synthesis])
+  const renderLanguage = useMemo(() => detectLanguage(answer || synthesis), [answer, synthesis])
+  const direction = getTextDirection(renderLanguage)
+  const htmlLang = getHtmlLang(renderLanguage)
   const [thinkingCollapsed, setThinkingCollapsed] = useState(false)
 
   // Auto-collapse thinking when answer starts appearing
@@ -136,7 +147,9 @@ function SynthesisBlock({ synthesis, isStreaming }: { synthesis: string; isStrea
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto rounded bg-muted/30 p-2 prose prose-xs prose-invert max-w-none"
-        style={{ maxHeight: "calc(100vh - 400px)", minHeight: "120px" }}
+        dir={direction}
+        lang={htmlLang}
+        style={{ maxHeight: "calc(100vh - 400px)", minHeight: "120px", textAlign: "start" }}
       >
         {thinking && (
           <div className="mb-2">
@@ -174,11 +187,22 @@ function SynthesisBlock({ synthesis, isStreaming }: { synthesis: string; isStrea
                 <thead className="bg-muted" {...props}>{children}</thead>
               ),
               th: ({ children, ...props }) => (
-                <th className="border border-border/80 px-3 py-1.5 text-left font-semibold bg-muted" {...props}>{children}</th>
+                <th className="border border-border/80 px-3 py-1.5 text-start font-semibold bg-muted" {...props}>{children}</th>
               ),
               td: ({ children, ...props }) => (
                 <td className="border border-border/60 px-3 py-1.5" {...props}>{children}</td>
               ),
+              pre: ({ children, ...props }) => {
+                const mermaid = unwrapMermaidPre(children)
+                if (mermaid) return <>{mermaid}</>
+                return <pre dir="ltr" style={{ textAlign: "left" }} {...props}>{children}</pre>
+              },
+              code: ({ className, children, ...props }) => {
+                const lang = className?.replace("language-", "")
+                const codeText = String(children).replace(/\n$/, "")
+                if (lang === "mermaid") return <MermaidDiagram code={codeText} />
+                return <code dir="ltr" className={className} {...props}>{children}</code>
+              },
             }}
           >
             {answer}

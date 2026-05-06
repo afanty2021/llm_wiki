@@ -31,6 +31,7 @@
 ## Features
 
 - **Two-Step Chain-of-Thought Ingest** — LLM analyzes first, then generates wiki pages with source traceability and incremental cache
+- **Multimodal Image Ingestion** — extract embedded images from PDFs, generate factual captions with a vision LLM, surface them in image-aware search results with lightbox preview and jump-to-source
 - **4-Signal Knowledge Graph** — relevance model with direct links, source overlap, Adamic-Adar, and type affinity
 - **Louvain Community Detection** — automatic knowledge cluster discovery with cohesion scoring
 - **Graph Insights** — surprising connections and knowledge gaps with one-click Deep Research

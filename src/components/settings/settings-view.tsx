@@ -7,12 +7,17 @@ import {
   Palette,
   Info,
   Image as ImageIcon,
+  Network,
+  History,
+  Wrench,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { invoke } from "@tauri-apps/api/core"
 import i18n from "@/i18n"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
+import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { saveLanguage } from "@/lib/project-store"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { LlmProviderSection } from "./sections/llm-provider-section"
@@ -21,6 +26,9 @@ import { MultimodalSection } from "./sections/multimodal-section"
 import { WebSearchSection } from "./sections/web-search-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
+import { NetworkSection } from "./sections/network-section"
+import { ChangelogSection } from "./sections/changelog-section"
+import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
 
 type CategoryId =
@@ -28,8 +36,11 @@ type CategoryId =
   | "embedding"
   | "multimodal"
   | "web-search"
+  | "network"
   | "output"
   | "interface"
+  | "maintenance"
+  | "changelog"
   | "about"
 
 interface Category {
@@ -46,17 +57,20 @@ const CATEGORIES: Category[] = [
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
   { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
   { id: "web-search", labelKey: "settings.categories.webSearch", icon: Globe },
+  { id: "network", labelKey: "settings.categories.network", icon: Network },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
+  { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
+  { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
 
 function initialDraft(
   llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
-  search: ReturnType<typeof useWikiStore.getState>["searchApiConfig"],
   embed: ReturnType<typeof useWikiStore.getState>["embeddingConfig"],
   multimodal: ReturnType<typeof useWikiStore.getState>["multimodalConfig"],
   outputLanguage: ReturnType<typeof useWikiStore.getState>["outputLanguage"],
+  proxy: ReturnType<typeof useWikiStore.getState>["proxyConfig"],
   maxHistoryMessages: number,
   uiLanguage: string,
 ): SettingsDraft {
@@ -68,6 +82,7 @@ function initialDraft(
     customEndpoint: llm.customEndpoint,
     maxContextSize: llm.maxContextSize ?? 204800,
     apiMode: llm.apiMode,
+    reasoning: llm.reasoning,
     embeddingEnabled: embed.enabled,
     embeddingEndpoint: embed.endpoint,
     embeddingApiKey: embed.apiKey,
@@ -83,10 +98,11 @@ function initialDraft(
     multimodalCustomEndpoint: multimodal.customEndpoint,
     multimodalApiMode: multimodal.apiMode,
     multimodalConcurrency: multimodal.concurrency,
-    searchProvider: search.provider,
-    searchApiKey: search.apiKey,
     outputLanguage,
     maxHistoryMessages,
+    proxyEnabled: proxy.enabled,
+    proxyUrl: proxy.url,
+    proxyBypassLocal: proxy.bypassLocal,
     uiLanguage,
   }
 }
@@ -95,50 +111,67 @@ export function SettingsView() {
   const { t } = useTranslation()
   const llmConfig = useWikiStore((s) => s.llmConfig)
   const setLlmConfig = useWikiStore((s) => s.setLlmConfig)
-  const searchApiConfig = useWikiStore((s) => s.searchApiConfig)
-  const setSearchApiConfig = useWikiStore((s) => s.setSearchApiConfig)
   const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
   const setEmbeddingConfig = useWikiStore((s) => s.setEmbeddingConfig)
   const multimodalConfig = useWikiStore((s) => s.multimodalConfig)
   const setMultimodalConfig = useWikiStore((s) => s.setMultimodalConfig)
   const outputLanguage = useWikiStore((s) => s.outputLanguage)
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
+  const project = useWikiStore((s) => s.project)
+  const proxyConfig = useWikiStore((s) => s.proxyConfig)
+  const setProxyConfig = useWikiStore((s) => s.setProxyConfig)
   const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
   const setMaxHistoryMessages = useChatStore((s) => s.setMaxHistoryMessages)
+  // Drives the red dot next to the "About" row in the settings
+  // sidebar. Uses `hasAvailableUpdate` (NOT `shouldShowUpdateBanner`)
+  // so the indicator remains even after the user dismisses the
+  // top banner — the user explicitly asked for the gear/About dots
+  // to keep showing as a signpost so they can find the update
+  // again later. The top banner stays gated by the dismiss
+  // preference so the more aggressive interruption only fires once
+  // per version.
+  const updateAvailable = useUpdateStore((s) => hasAvailableUpdate(s))
 
   const [active, setActive] = useState<CategoryId>("llm")
   const [saved, setSaved] = useState(false)
   const [draft, setDraftState] = useState<SettingsDraft>(() =>
     initialDraft(
       llmConfig,
-      searchApiConfig,
       embeddingConfig,
       multimodalConfig,
       outputLanguage,
+      proxyConfig,
       maxHistoryMessages,
       i18n.language,
     ),
   )
 
   // Resync draft from store if it changes out-of-band (e.g. project switch).
+  // IMPORTANT: keep the current draft.uiLanguage instead of re-reading
+  // `i18n.language`. handleSave calls multiple zustand setters before it
+  // calls `i18n.changeLanguage` at the end, and each setter triggers this
+  // effect mid-save — which used to clobber the user's pending language
+  // pick with the still-stale `i18n.language`. The next save would then
+  // see draft.uiLanguage out of sync with i18n.language and silently
+  // revert the UI to the previous language.
   useEffect(() => {
-    setDraftState(
+    setDraftState((prev) =>
       initialDraft(
         llmConfig,
-        searchApiConfig,
         embeddingConfig,
         multimodalConfig,
         outputLanguage,
+        proxyConfig,
         maxHistoryMessages,
-        i18n.language,
+        prev.uiLanguage,
       ),
     )
   }, [
     llmConfig,
-    searchApiConfig,
     embeddingConfig,
     multimodalConfig,
     outputLanguage,
+    proxyConfig,
     maxHistoryMessages,
   ])
 
@@ -149,10 +182,10 @@ export function SettingsView() {
   const handleSave = useCallback(async () => {
     const {
       saveLlmConfig,
-      saveSearchApiConfig,
       saveEmbeddingConfig,
       saveMultimodalConfig,
       saveOutputLanguage,
+      saveProxyConfig,
     } = await import("@/lib/project-store")
 
     const newLlm = {
@@ -163,8 +196,8 @@ export function SettingsView() {
       customEndpoint: draft.customEndpoint,
       maxContextSize: draft.maxContextSize,
       apiMode: draft.provider === "custom" ? draft.apiMode : undefined,
+      reasoning: draft.reasoning,
     }
-    const newSearch = { provider: draft.searchProvider, apiKey: draft.searchApiKey }
     const newEmbed = {
       enabled: draft.embeddingEnabled,
       endpoint: draft.embeddingEndpoint,
@@ -191,16 +224,31 @@ export function SettingsView() {
       concurrency: Math.max(1, Math.min(16, draft.multimodalConcurrency || 4)),
     }
 
+    const newProxy = {
+      enabled: draft.proxyEnabled,
+      url: draft.proxyUrl.trim(),
+      bypassLocal: draft.proxyBypassLocal,
+    }
+
     setLlmConfig(newLlm)
     await saveLlmConfig(newLlm)
-    setSearchApiConfig(newSearch)
-    await saveSearchApiConfig(newSearch)
     setEmbeddingConfig(newEmbed)
     await saveEmbeddingConfig(newEmbed)
     setMultimodalConfig(newMultimodal)
     await saveMultimodalConfig(newMultimodal)
     setOutputLanguage(draft.outputLanguage as typeof outputLanguage)
-    await saveOutputLanguage(draft.outputLanguage as typeof outputLanguage)
+    await saveOutputLanguage(draft.outputLanguage as typeof outputLanguage, project?.id)
+    setProxyConfig(newProxy)
+    await saveProxyConfig(newProxy)
+    // Apply the proxy env vars LIVE so the next outbound request
+    // picks them up — no app restart needed. tauri-plugin-http
+    // builds a fresh reqwest client per fetch and reqwest reads
+    // env vars at build time, so changing them here is enough.
+    try {
+      await invoke<string>("set_proxy_env", { config: newProxy })
+    } catch (err) {
+      console.warn("[proxy] live update failed; restart will still apply:", err)
+    }
     setMaxHistoryMessages(draft.maxHistoryMessages)
 
     if (draft.uiLanguage !== i18n.language) {
@@ -213,11 +261,12 @@ export function SettingsView() {
   }, [
     draft,
     setLlmConfig,
-    setSearchApiConfig,
     setEmbeddingConfig,
     setOutputLanguage,
+    setProxyConfig,
     setMaxHistoryMessages,
     outputLanguage,
+    project,
   ])
 
   const body = useMemo(() => {
@@ -232,11 +281,17 @@ export function SettingsView() {
       case "multimodal":
         return <MultimodalSection draft={draft} setDraft={setDraft} />
       case "web-search":
-        return <WebSearchSection draft={draft} setDraft={setDraft} />
+        return <WebSearchSection />
+      case "network":
+        return <NetworkSection draft={draft} setDraft={setDraft} />
       case "output":
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":
         return <InterfaceSection draft={draft} setDraft={setDraft} />
+      case "maintenance":
+        return <MaintenanceSection />
+      case "changelog":
+        return <ChangelogSection />
       case "about":
         return <AboutSection />
     }
@@ -254,6 +309,14 @@ export function SettingsView() {
           {CATEGORIES.map((c) => {
             const Icon = c.icon
             const isActive = c.id === active
+            // Mirror the gear-icon dot inside the settings sidebar
+            // so the user can find which sub-section the update
+            // notification is pointing at. Update info lives in
+            // the About panel, so the dot follows the About row.
+            // Same store, same gating — once dismissed, both
+            // disappear together.
+            const showUpdateDot =
+              c.id === "about" && updateAvailable
             return (
               <button
                 key={c.id}
@@ -272,6 +335,13 @@ export function SettingsView() {
                   }`}
                 />
                 <span className="truncate">{t(c.labelKey)}</span>
+                {showUpdateDot && (
+                  <span
+                    className="ml-auto h-2 w-2 shrink-0 rounded-full bg-red-500"
+                    aria-label={t("nav.updateAvailable")}
+                    title={t("nav.updateAvailable")}
+                  />
+                )}
               </button>
             )
           })}
@@ -286,8 +356,8 @@ export function SettingsView() {
 
         {/* Global Save bar hidden for sections that persist inline:
             - "llm" saves per-row on every edit (independent per-preset state)
-            - "about" has no editable fields */}
-        {active !== "about" && active !== "llm" && (
+            - "about" / "maintenance" have no draft-bound fields */}
+        {active !== "about" && active !== "llm" && active !== "maintenance" && (
           <div className="shrink-0 border-t bg-background/80 backdrop-blur px-8 py-3">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
               <p className="text-xs text-muted-foreground">

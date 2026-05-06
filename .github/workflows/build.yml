@@ -21,6 +21,11 @@ jobs:
           - platform: ubuntu-22.04
             args: ''
             rust_target: ''
+          # GitHub-hosted ARM Linux runner (free for public repos
+          # since 2024). Native build — no cross-compile of webkit2gtk.
+          - platform: ubuntu-22.04-arm
+            args: ''
+            rust_target: ''
           - platform: windows-latest
             args: ''
             rust_target: ''
@@ -41,10 +46,30 @@ jobs:
         run: brew install protobuf
 
       - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-22.04')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf protobuf-compiler
+          # xdg-utils provides /usr/bin/xdg-open, which Tauri's
+          # AppImage bundler embeds into the produced AppImage.
+          # Pre-installed on the x86_64 runner image but NOT on
+          # the ARM64 image — list it explicitly so both arches
+          # bundle cleanly regardless of future image drift.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf protobuf-compiler xdg-utils
+
+      # The repo ships pre-downloaded PDFium binaries under
+      # src-tauri/pdfium/ for every supported architecture
+      # (libpdfium.so = x86_64, libpdfium-arm64.so = aarch64,
+      # libpdfium.dylib = macOS, pdfium.dll = Windows). On the
+      # ARM Linux runner we swap libpdfium.so to the aarch64 build
+      # before tauri-action runs cargo. We do NOT pull from
+      # bblanchon/pdfium-binaries during CI — that download has
+      # historically failed often enough that committing the
+      # binaries is the maintenance-friendly path.
+      - name: Use ARM64 pdfium binary (Ubuntu ARM only)
+        if: matrix.platform == 'ubuntu-22.04-arm'
+        run: |
+          cp src-tauri/pdfium/libpdfium-arm64.so src-tauri/pdfium/libpdfium.so
+          file src-tauri/pdfium/libpdfium.so
 
       - name: Install protoc (Windows)
         if: matrix.platform == 'windows-latest'

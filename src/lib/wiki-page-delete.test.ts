@@ -8,15 +8,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 
 const mockDeleteFile = vi.fn<(path: string) => Promise<void>>()
 const mockRemovePageEmbedding = vi.fn<(projectPath: string, slug: string) => Promise<void>>()
+const mockReadFile = vi.fn<(path: string) => Promise<string>>()
+const mockWriteFile = vi.fn<(path: string, content: string) => Promise<void>>()
+const mockListDirectory = vi.fn<(path: string) => Promise<unknown>>()
 
 vi.mock("@/commands/fs", () => ({
   deleteFile: (path: string) => mockDeleteFile(path),
-  // The other fs functions aren't called by this helper, but the
-  // mock factory has to declare them so dynamic imports elsewhere
-  // in transitive deps don't break.
-  readFile: vi.fn(),
-  writeFile: vi.fn(),
-  listDirectory: vi.fn(),
+  readFile: (path: string) => mockReadFile(path),
+  writeFile: (path: string, content: string) => mockWriteFile(path, content),
+  listDirectory: (path: string) => mockListDirectory(path),
 }))
 
 vi.mock("@/lib/embedding", () => ({
@@ -24,14 +24,19 @@ vi.mock("@/lib/embedding", () => ({
     mockRemovePageEmbedding(projectPath, slug),
 }))
 
-import { cascadeDeleteWikiPage } from "./wiki-page-delete"
+import { cascadeDeleteWikiPage, cascadeDeleteWikiPagesWithRefs } from "./wiki-page-delete"
+import type { FileNode } from "@/types/wiki"
 
 beforeEach(() => {
   mockDeleteFile.mockReset()
   mockRemovePageEmbedding.mockReset()
+  mockReadFile.mockReset()
+  mockWriteFile.mockReset()
+  mockListDirectory.mockReset()
   // Default: both succeed silently.
   mockDeleteFile.mockResolvedValue(undefined)
   mockRemovePageEmbedding.mockResolvedValue(undefined)
+  mockWriteFile.mockResolvedValue(undefined)
 })
 
 describe("cascadeDeleteWikiPage", () => {
@@ -208,5 +213,234 @@ describe("cascadeDeleteWikiPage", () => {
     await cascadeDeleteWikiPage("/proj", "/proj/wiki/sources/.hidden.md")
     expect(mockDeleteFile).toHaveBeenCalledTimes(1)
     expect(mockDeleteFile).toHaveBeenCalledWith("/proj/wiki/sources/.hidden.md")
+  })
+})
+
+// ── cascadeDeleteWikiPagesWithRefs (new) ─────────────────────────────────
+//
+// User-driven "delete this entity" wants more than the file-level
+// helper above: it must also strip every reference to the deleted
+// page so we don't leave dangling links / phantom related entries
+// across the wiki. Pin every cleanup pathway here.
+
+const PROJECT = "/test/project"
+
+function fileNode(rel: string): FileNode {
+  const segs = rel.split("/")
+  return {
+    name: segs[segs.length - 1] ?? "",
+    path: `${PROJECT}/${rel}`,
+    is_dir: false,
+  }
+}
+
+function dirNode(rel: string, children: FileNode[]): FileNode {
+  const segs = rel.split("/")
+  return {
+    name: segs[segs.length - 1] ?? "",
+    path: `${PROJECT}/${rel}`,
+    is_dir: true,
+    children,
+  }
+}
+
+describe("cascadeDeleteWikiPagesWithRefs", () => {
+  it("deletes the file, drops embeddings, and reports the path", async () => {
+    const target = `${PROJECT}/wiki/entities/alice-chen.md`
+    mockReadFile.mockImplementationOnce(async () =>
+      `---\ntype: entity\ntitle: "Alice Chen"\n---\n\n# Alice`,
+    )
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        dirNode("wiki/entities", [fileNode("wiki/entities/alice-chen.md")]),
+      ]),
+    ])
+
+    const result = await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
+    expect(result.deletedPaths).toEqual([target])
+    expect(mockDeleteFile).toHaveBeenCalledWith(target)
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(PROJECT, "alice-chen")
+  })
+
+  it("strips [[deleted]] body wikilinks from sibling pages", async () => {
+    const target = `${PROJECT}/wiki/entities/alice-chen.md`
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === target) return `---\ntitle: "Alice Chen"\n---\n\n# Alice`
+      if (p === `${PROJECT}/wiki/entities/bob.md`) {
+        return `---\ntitle: Bob\n---\n\nBob worked with [[alice-chen]] on the migration.`
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        dirNode("wiki/entities", [
+          fileNode("wiki/entities/alice-chen.md"),
+          fileNode("wiki/entities/bob.md"),
+        ]),
+      ]),
+    ])
+
+    await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
+
+    const writeCall = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/entities/bob.md`,
+    )
+    expect(writeCall).toBeTruthy()
+    const written = writeCall![1]
+    expect(written).not.toContain("[[alice-chen]]")
+    expect(written).toContain("Bob worked with alice-chen on the migration.")
+  })
+
+  it("strips title-form [[Alice Chen]] wikilinks too", async () => {
+    const target = `${PROJECT}/wiki/entities/alice-chen.md`
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === target) return `---\ntitle: "Alice Chen"\n---\nbody`
+      if (p === `${PROJECT}/wiki/entities/bob.md`) {
+        return `---\ntitle: Bob\n---\n\nBob and [[Alice Chen]] led the project.`
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        dirNode("wiki/entities", [
+          fileNode("wiki/entities/alice-chen.md"),
+          fileNode("wiki/entities/bob.md"),
+        ]),
+      ]),
+    ])
+
+    await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
+    const written = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/entities/bob.md`,
+    )![1]
+    expect(written).not.toContain("[[Alice Chen]]")
+  })
+
+  it("removes the deleted page's listing line from index.md", async () => {
+    const target = `${PROJECT}/wiki/entities/alice-chen.md`
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === target) return `---\ntitle: "Alice Chen"\n---\nbody`
+      if (p === `${PROJECT}/wiki/index.md`) {
+        return [
+          "# Wiki Index",
+          "",
+          "## Entities",
+          "- [[alice-chen]] — engineering lead",
+          "- [[bob]] — designer",
+        ].join("\n")
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        fileNode("wiki/index.md"),
+        dirNode("wiki/entities", [fileNode("wiki/entities/alice-chen.md")]),
+      ]),
+    ])
+
+    await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
+
+    const indexWrite = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/index.md`,
+    )!
+    const written = indexWrite[1]
+    expect(written).not.toContain("[[alice-chen]]")
+    expect(written).toContain("[[bob]]")
+  })
+
+  it("drops the deleted slug from `related:` frontmatter arrays", async () => {
+    const target = `${PROJECT}/wiki/entities/alice-chen.md`
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === target) return `---\ntitle: "Alice Chen"\n---\nbody`
+      if (p === `${PROJECT}/wiki/projects/migration.md`) {
+        return [
+          "---",
+          "type: project",
+          "title: Migration",
+          "related: [alice-chen, bob, carol]",
+          "---",
+          "",
+          "Project body.",
+        ].join("\n")
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        dirNode("wiki/entities", [fileNode("wiki/entities/alice-chen.md")]),
+        dirNode("wiki/projects", [fileNode("wiki/projects/migration.md")]),
+      ]),
+    ])
+
+    await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
+
+    const projWrite = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/projects/migration.md`,
+    )!
+    const written = projWrite[1]
+    // alice-chen filtered out; bob & carol kept.
+    expect(written).not.toMatch(/\balice-chen\b/)
+    expect(written).toContain("bob")
+    expect(written).toContain("carol")
+  })
+
+  it("does NOT touch a sibling whose slug merely contains the deleted slug as a substring", async () => {
+    // Deleting "ai" must not corrupt [[OpenAI]] / [[AI Safety]] —
+    // the bug class wiki-cleanup was originally written to prevent.
+    const target = `${PROJECT}/wiki/concepts/ai.md`
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === target) return `---\ntitle: AI\n---\nbody`
+      if (p === `${PROJECT}/wiki/entities/openai.md`) {
+        return `---\ntitle: "OpenAI"\n---\n\nFounded as [[ai]] safety lab. Now also see [[OpenAI]] product line.`
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        dirNode("wiki/concepts", [fileNode("wiki/concepts/ai.md")]),
+        dirNode("wiki/entities", [fileNode("wiki/entities/openai.md")]),
+      ]),
+    ])
+
+    await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
+    const written = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/entities/openai.md`,
+    )?.[1]
+    if (written) {
+      expect(written).toContain("[[OpenAI]]")
+      expect(written).not.toContain("[[ai]]")
+    }
+  })
+
+  it("handles batch deletes (multiple targets) with one cleanup sweep", async () => {
+    const t1 = `${PROJECT}/wiki/entities/alice-chen.md`
+    const t2 = `${PROJECT}/wiki/entities/alice-chen-1.md`
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === t1) return `---\ntitle: "Alice Chen"\n---\nbody`
+      if (p === t2) return `---\ntitle: "Alice Chen"\n---\nbody`
+      if (p === `${PROJECT}/wiki/entities/bob.md`) {
+        return `---\ntitle: Bob\n---\n\nWorked with [[alice-chen]] and [[alice-chen-1]] both.`
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        dirNode("wiki/entities", [
+          fileNode("wiki/entities/alice-chen.md"),
+          fileNode("wiki/entities/alice-chen-1.md"),
+          fileNode("wiki/entities/bob.md"),
+        ]),
+      ]),
+    ])
+
+    const result = await cascadeDeleteWikiPagesWithRefs(PROJECT, [t1, t2])
+    expect(result.deletedPaths).toEqual([t1, t2])
+    expect(mockDeleteFile).toHaveBeenCalledWith(t1)
+    expect(mockDeleteFile).toHaveBeenCalledWith(t2)
+    const bobWrite = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/entities/bob.md`,
+    )!
+    expect(bobWrite[1]).not.toContain("[[alice-chen]]")
+    expect(bobWrite[1]).not.toContain("[[alice-chen-1]]")
   })
 })

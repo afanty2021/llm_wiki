@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next"
 import { normalizePath } from "@/lib/path-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
+import { isImeComposing } from "@/lib/keyboard-utils"
 
 /**
  * One image hit displayed in the Images section.
@@ -193,7 +194,10 @@ export function SearchView() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") doSearch(query) }}
+            onKeyDown={(e) => {
+              if (isImeComposing(e)) return
+              if (e.key === "Enter") doSearch(query)
+            }}
             placeholder={t("search.placeholder") + " (Enter to search)"}
             autoFocus
             className="w-full rounded-md border bg-background py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"

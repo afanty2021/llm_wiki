@@ -35,6 +35,10 @@ export function detectLanguage(text: string): string {
     }
   }
 
+  if (maxScript === "Arabic" && maxCount >= 2) {
+    return detectArabicScriptLanguage(text)
+  }
+
   if (maxScript && maxCount >= 2) {
     return maxScript
   }
@@ -44,6 +48,75 @@ export function detectLanguage(text: string): string {
   if (latinLang) return latinLang
 
   return "English"
+}
+
+function detectArabicScriptLanguage(text: string): "Arabic" | "Persian" {
+  let persianScore = 0
+  let arabicScore = 0
+
+  for (const ch of text) {
+    switch (ch) {
+      case "پ":
+      case "چ":
+      case "ژ":
+      case "گ":
+        persianScore += 3
+        break
+      case "ک":
+      case "ی":
+        persianScore += 1
+        break
+      case "ك":
+      case "ي":
+      case "ة":
+      case "ى":
+      case "إ":
+      case "أ":
+      case "ؤ":
+      case "ئ":
+        arabicScore += 1
+        break
+    }
+  }
+
+  const normalized = ` ${text.replace(/[^\p{L}\p{N}]+/gu, " ")} `
+  const persianWords = [
+    "این",
+    "است",
+    "که",
+    "برای",
+    "های",
+    "را",
+    "در",
+    "به",
+    "از",
+    "می",
+    "یک",
+  ]
+  const arabicWords = [
+    "ال",
+    "في",
+    "من",
+    "على",
+    "هذا",
+    "هذه",
+    "إلى",
+    "التي",
+    "الذي",
+    "كان",
+  ]
+
+  for (const word of persianWords) {
+    if (normalized.includes(` ${word} `)) persianScore += 2
+  }
+  for (const word of arabicWords) {
+    if (normalized.includes(` ${word} `)) arabicScore += 2
+  }
+
+  // Be conservative: Persian has reliable orthographic clues, but short
+  // Arabic-script snippets can be ambiguous. Fall back to Arabic unless the
+  // Persian signal is clearly stronger.
+  return persianScore >= 3 && persianScore > arabicScore ? "Persian" : "Arabic"
 }
 
 function getScript(cp: number): string | null {

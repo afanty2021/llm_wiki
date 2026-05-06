@@ -15,6 +15,11 @@
     "updateAvailable": "Update available",
     "updateAvailableSuffix": " · update"
   },
+  "updateBanner": {
+    "message": "Version {{version}} is available",
+    "openDownload": "Open download page",
+    "dismiss": "Dismiss"
+  },
   "welcome": {
     "newProject": "New Project",
     "openProject": "Open Project",
@@ -102,8 +107,11 @@
       "embedding": "Embeddings",
       "multimodal": "Image Captioning",
       "webSearch": "Web Search",
+      "network": "Network",
       "output": "Output",
       "interface": "Interface",
+      "maintenance": "Maintenance",
+      "changelog": "Changelog",
       "about": "About"
     },
     "sections": {
@@ -179,6 +187,15 @@
         "title": "Web Search",
         "description": "Used by Deep Research to pull fresh external context."
       },
+      "network": {
+        "title": "Network",
+        "description": "Route all outbound HTTP requests (LLM, embedding, search, update check) through a proxy. Changes apply on Save — no restart needed.",
+        "enable": "Enable proxy",
+        "url": "Proxy URL",
+        "urlHelp": "Full URL with scheme. Supported: http://, https://. (SOCKS5 not supported in this version.)",
+        "bypassLocal": "Bypass proxy for local addresses (recommended)",
+        "bypassLocalHelp": "Requests to localhost, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, and *.local don't go through the proxy. Keep this on if you use Ollama / LM Studio / other local or LAN-deployed LLMs."
+      },
       "output": {
         "title": "Output Preferences",
         "description": "Controls for generated content — language, conversation history length.",
@@ -193,6 +210,38 @@
         "description": "UI language and appearance. Changes apply immediately and persist.",
         "uiLanguage": "UI Language",
         "uiLanguageHint": "Affects labels, buttons, and other UI strings only. The AI output language is set separately in Output Preferences."
+      },
+      "maintenance": {
+        "title": "Maintenance",
+        "description": "Tools for cleaning up the wiki — detect and merge duplicate entities/concepts that the LLM created under different names across re-ingests.",
+        "noProject": "Open a project first.",
+        "noLlm": "Configure an LLM provider first.",
+        "dedup": {
+          "title": "Detect duplicate entities / concepts",
+          "description": "Asks the LLM to scan all entity / concept pages and group ones that likely refer to the same topic under different names (English vs Chinese, plural vs singular, abbreviation vs full form). You confirm each group before merging. Merges are queued and run one at a time so cross-references stay consistent.",
+          "scanButton": "Scan for duplicates",
+          "scanning": "Scanning…",
+          "noneFound": "No duplicate groups found. The wiki is clean.",
+          "candidates": "{{n}} candidates",
+          "canonicalLabel": "Keep this slug as canonical:",
+          "mergeButton": "Merge into {{slug}}",
+          "merging": "Merging…",
+          "queued": "Queued",
+          "queuedAhead": "Queued ({{n}} ahead)",
+          "failed": "Failed ({{retries}}/3)",
+          "cancel": "Cancel",
+          "retry": "Retry",
+          "delete": "Delete",
+          "queueTitle": "In-progress merges",
+          "queueDescription": "Tasks queued from a previous scan that haven't finished yet. Merges run one at a time.",
+          "notDuplicates": "Not duplicates",
+          "merged": "Merged",
+          "skipped": "Marked not duplicates"
+        }
+      },
+      "changelog": {
+        "title": "Changelog",
+        "description": "Notable user-visible changes in each released version, newest first."
       },
       "about": {
         "title": "About",

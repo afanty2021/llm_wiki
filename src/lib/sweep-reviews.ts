@@ -18,6 +18,7 @@ import { streamChat } from "@/lib/llm-client"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { normalizeReviewTitle } from "@/lib/review-utils"
+import { hasUsableLlm } from "@/lib/has-usable-llm"
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -195,9 +196,7 @@ async function judgeBatch(
   if (batch.length === 0 || signal?.aborted) return new Set()
 
   const llmConfig = useWikiStore.getState().llmConfig
-  const hasConfig =
-    !!llmConfig.apiKey || llmConfig.provider === "ollama" || llmConfig.provider === "custom"
-  if (!hasConfig) return new Set()
+  if (!hasUsableLlm(llmConfig)) return new Set()
 
   const pages = index.pages.slice(0, MAX_PAGES_IN_PROMPT)
 

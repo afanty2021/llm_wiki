@@ -29,6 +29,18 @@ describe("detectLanguage", () => {
       expect(detectLanguage("مرحبا بالعالم")).toBe("Arabic")
     })
 
+    it("detects Persian via Persian-specific letters and words", () => {
+      expect(detectLanguage("سلام دنیا، این یک متن فارسی برای آزمایش است")).toBe("Persian")
+    })
+
+    it("keeps Arabic distinct from Persian", () => {
+      expect(detectLanguage("اللغة العربية مهمة في العالم")).toBe("Arabic")
+    })
+
+    it("keeps ambiguous short Arabic-script snippets conservative", () => {
+      expect(detectLanguage("سلام")).toBe("Arabic")
+    })
+
     it("detects Thai", () => {
       expect(detectLanguage("สวัสดีครับ")).toBe("Thai")
     })

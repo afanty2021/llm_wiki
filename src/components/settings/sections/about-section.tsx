@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from "react"
 import { Download, RefreshCw, CheckCircle2, Sparkles } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import { clipServerStatus } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
-import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
-import { checkForUpdates } from "@/lib/update-check"
+import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
+import { checkForUpdates, toLatestReleaseUrl } from "@/lib/update-check"
 import { saveUpdateCheckState } from "@/lib/project-store"
 
 export function AboutSection() {
@@ -71,7 +72,13 @@ export function AboutSection() {
     { label: t("settings.sections.about.clipServer"), value: `${clipStatus}  @  127.0.0.1:19827`, mono: true },
   ]
 
-  const showBanner = shouldShowUpdateBanner(updateStore)
+  // About panel = user-initiated navigation. They came here on
+  // purpose (often guided by the gear / About red dot) and expect
+  // to see WHY the dot is there. So this surface ignores the
+  // user's "dismiss" preference — that preference only suppresses
+  // the unrequested TOP banner. Within Settings, an available
+  // update is always shown in detail.
+  const showAvailable = hasAvailableUpdate(updateStore)
   const lastCheckFailed = updateStore.lastResult?.kind === "error"
   const lastCheckedLabel = updateStore.lastCheckedAt
     ? lastCheckFailed
@@ -126,7 +133,7 @@ export function AboutSection() {
           </Button>
         </div>
 
-        {showBanner && updateStore.lastResult?.kind === "available" && (
+        {showAvailable && updateStore.lastResult?.kind === "available" && (
           <UpdateAvailableBanner
             remote={updateStore.lastResult.remote}
             releaseUrl={updateStore.lastResult.release.html_url}
@@ -136,7 +143,7 @@ export function AboutSection() {
           />
         )}
 
-        {!showBanner && updateStore.lastResult?.kind === "up-to-date" && (
+        {!showAvailable && updateStore.lastResult?.kind === "up-to-date" && (
           <div className="flex items-center gap-2 rounded border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             {t("settings.sections.about.upToDate", { version: updateStore.lastResult.local })}
@@ -165,11 +172,23 @@ export function AboutSection() {
         <p className="mt-1 text-xs text-muted-foreground">
           {t("settings.sections.about.appDescription")}
           {" "}
+          {/*
+           * Tauri 2's webview doesn't honor `target="_blank"` for
+           * external URLs by default — clicking would either do
+           * nothing or replace the in-app webview with the github
+           * page (terrible UX). Route through the opener plugin
+           * via onClick + preventDefault so it always lands in the
+           * system browser.
+           */}
           <a
-            className="underline underline-offset-2 hover:text-primary"
+            className="cursor-pointer underline underline-offset-2 hover:text-primary"
             href="https://github.com/nashsu/llm_wiki"
-            target="_blank"
-            rel="noreferrer"
+            onClick={(e) => {
+              e.preventDefault()
+              void openUrl("https://github.com/nashsu/llm_wiki").catch((err) => {
+                console.error("[about] openUrl failed:", err)
+              })
+            }}
           >
             github.com/nashsu/llm_wiki
           </a>
@@ -195,11 +214,35 @@ function UpdateAvailableBanner({
   onDismiss,
 }: UpdateAvailableBannerProps) {
   const { t } = useTranslation()
-  const handleOpen = () => {
-    // window.open with target=_blank delegates to the system browser
-    // in Tauri via the opener plugin registered in src-tauri/src/lib.rs.
-    // Works identically in a regular browser during dev mode.
-    window.open(releaseUrl, "_blank", "noopener,noreferrer")
+  // Use `/releases/latest` (canonical GitHub redirect to the newest
+  // release) rather than the tag-specific URL from the release
+  // payload. Same rationale as in the top banner — see
+  // `toLatestReleaseUrl` for details.
+  const targetUrl = toLatestReleaseUrl(releaseUrl)
+  const handleOpen = async () => {
+    // Tauri 2's webview does NOT auto-delegate `window.open()` to the
+    // system browser — `tauri-plugin-opener` is the official way to
+    // launch the user's default browser. The Rust plugin is
+    // registered in `src-tauri/src/lib.rs` and `opener:default`
+    // permission is granted in capabilities/default.json.
+    //
+    // Fail-soft: if the plugin call rejects (e.g. URL blocked by a
+    // future capability tightening), fall back to copying the URL
+    // to the clipboard so the user can paste it into a browser
+    // manually instead of seeing a silently broken button.
+    try {
+      await openUrl(targetUrl)
+    } catch (err) {
+      console.error("[update-banner] openUrl failed:", err)
+      try {
+        await navigator.clipboard.writeText(targetUrl)
+        // eslint-disable-next-line no-alert
+        alert(`Could not open browser. URL copied to clipboard:\n${targetUrl}`)
+      } catch {
+        // eslint-disable-next-line no-alert
+        alert(`Could not open browser. Visit:\n${targetUrl}`)
+      }
+    }
   }
 
   const preview = releaseBody.slice(0, 400)

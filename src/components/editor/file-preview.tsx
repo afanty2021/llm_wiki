@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { convertFileSrc } from "@tauri-apps/api/core"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -17,7 +17,12 @@ import { getFileCategory, getCodeLanguage } from "@/lib/file-types"
 import type { FileCategory } from "@/lib/file-types"
 import { getFileName } from "@/lib/path-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
+import { detectLanguage } from "@/lib/detect-language"
+import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
+import { parseFrontmatter } from "@/lib/frontmatter"
+import { FrontmatterPanel } from "@/components/editor/frontmatter-panel"
 import { useWikiStore } from "@/stores/wiki-store"
+import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
 
 interface FilePreviewProps {
   filePath: string
@@ -119,6 +124,11 @@ function TextPreview({ filePath, content, label }: { filePath: string; content: 
   const setPendingScrollImageSrc = useWikiStore((s) => s.setPendingScrollImageSrc)
   const scrollRootRef = useRef<HTMLDivElement | null>(null)
 
+  const { frontmatter, body } = useMemo(() => parseFrontmatter(content), [content])
+  const renderLanguage = useMemo(() => detectLanguage(body), [body])
+  const direction = getTextDirection(renderLanguage)
+  const htmlLang = getHtmlLang(renderLanguage)
+
   // Consume `pendingScrollImageSrc` once the file has rendered.
   // We re-scan the DOM whenever:
   //   - file content changes (different page just loaded), OR
@@ -179,7 +189,13 @@ function TextPreview({ filePath, content, label }: { filePath: string; content: 
         <span>{filePath}</span>
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">{label}</span>
       </div>
-      <div className="prose prose-sm max-w-none dark:prose-invert">
+      {frontmatter && <FrontmatterPanel data={frontmatter} />}
+      <div
+        className="prose prose-sm max-w-none dark:prose-invert"
+        dir={direction}
+        lang={htmlLang}
+        style={{ textAlign: "start" }}
+      >
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeKatex]}
@@ -213,14 +229,25 @@ function TextPreview({ filePath, content, label }: { filePath: string; content: 
               <thead className="bg-muted" {...props}>{children}</thead>
             ),
             th: ({ children, ...props }) => (
-              <th className="border border-border/80 px-3 py-1.5 text-left font-semibold bg-muted" {...props}>{children}</th>
+              <th className="border border-border/80 px-3 py-1.5 text-start font-semibold bg-muted" {...props}>{children}</th>
             ),
             td: ({ children, ...props }) => (
               <td className="border border-border/60 px-3 py-1.5" {...props}>{children}</td>
             ),
+            pre: ({ children, ...props }) => {
+              const mermaid = unwrapMermaidPre(children)
+              if (mermaid) return <>{mermaid}</>
+              return <pre dir="ltr" style={{ textAlign: "left" }} {...props}>{children}</pre>
+            },
+            code: ({ className, children, ...props }) => {
+              const lang = className?.replace("language-", "")
+              const codeText = String(children).replace(/\n$/, "")
+              if (lang === "mermaid") return <MermaidDiagram code={codeText} />
+              return <code dir="ltr" className={className} {...props}>{children}</code>
+            },
           }}
         >
-          {content}
+          {body}
         </ReactMarkdown>
       </div>
     </div>

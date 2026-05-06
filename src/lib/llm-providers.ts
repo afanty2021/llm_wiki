@@ -1,4 +1,4 @@
-import type { LlmConfig } from "@/stores/wiki-store"
+import type { LlmConfig, ReasoningConfig } from "@/stores/wiki-store"
 
 /**
  * One piece of a multimodal message body. Text + image is the only
@@ -49,6 +49,7 @@ export interface RequestOverrides {
   top_k?: number
   max_tokens?: number
   stop?: string | string[]
+  reasoning?: ReasoningConfig
 }
 
 interface ProviderConfig {
@@ -64,38 +65,52 @@ const JSON_CONTENT_TYPE = "application/json"
  * Origin header for local-LLM endpoints (Ollama, LM Studio, llama.cpp
  * server, LocalAI, vLLM, …).
  *
- * Why we set this explicitly:
- *   `@tauri-apps/plugin-http` v2.5.x auto-injects the webview's
- *   own Origin (`tauri://localhost` on macOS/Linux,
- *   `http://tauri.localhost` on Windows). Ollama's default
- *   `OLLAMA_ORIGINS` allowlist accepts `tauri://*` since ~0.1.30
- *   but NOT `http://tauri.localhost` — so Windows users hit 403
- *   even when everything is configured correctly. A user packet
- *   capture (v0.3.11) confirmed the request carrying
- *   `origin: http://tauri.localhost`.
+ * Always sets `Origin: http://localhost` regardless of where the
+ * actual server is. Two interlocking reasons:
  *
- * Setting Origin to the request's own host = same-origin, which
- * Ollama always trusts regardless of `OLLAMA_ORIGINS` value or
- * Ollama version.
+ *   1. We MUST override the platform default. `@tauri-apps/plugin-
+ *      http` v2.5.x auto-injects the webview's own origin
+ *      (`tauri://localhost` on macOS/Linux,
+ *      `http://tauri.localhost` on Windows). Ollama's default
+ *      `OLLAMA_ORIGINS` allowlist accepts `tauri://*` since ~0.1.30
+ *      but NOT `http://tauri.localhost` — without our override,
+ *      Windows users hit 403. (User packet capture v0.3.11.)
  *
- * Why this works at all:
- *   plugin-http's JS shim respects user-set headers (see
- *   `node_modules/@tauri-apps/plugin-http/dist-js/index.js`,
- *   the loop after `new Request(input, init)` only fills
- *   browser-default headers when the user did NOT already set
- *   them). On the Rust side, the `unsafe-headers` feature flag
- *   in `src-tauri/Cargo.toml` lets reqwest forward Origin
- *   without stripping it. End-to-end this means our value wins.
+ *   2. We can't override with the request's REAL origin because
+ *      that breaks cross-machine LAN setups. A user pointing at
+ *      `http://192.168.0.20:11434/v1` would get `Origin:
+ *      http://192.168.0.20:11434`, which is NOT in Ollama's
+ *      default OLLAMA_ORIGINS — Ollama then 403s or RST-closes
+ *      the connection, surfacing as a generic "error sending
+ *      request" reqwest error. The earlier code claimed Ollama
+ *      did same-origin bypass; it does not. Reported by user
+ *      v0.4.2.
  *
- * If `url` can't be parsed (mis-typed config), we return {} —
- * better to send no override than to crash building the request.
+ * `http://localhost` is unconditionally in Ollama's default
+ * OLLAMA_ORIGINS list (`http://localhost`, `http://localhost:*`,
+ * `http://127.0.0.1*`, etc.). LM Studio / llama.cpp / vLLM /
+ * LocalAI don't check Origin at all, so the value is ignored
+ * there. The header is purely a CORS-allowlist signal — semantic
+ * "where this request came from" is meaningless here because the
+ * server uses API keys (or no auth), not origin, for actual
+ * permission checks.
+ *
+ * Users who actively tightened OLLAMA_ORIGINS to remove localhost
+ * (rare) need to re-add `http://localhost` to their server config;
+ * no client-side fix can satisfy a hand-locked allowlist that
+ * specifically excludes the one origin every other LLM client
+ * also relies on.
+ *
+ * Why this overrides at all: plugin-http's JS shim respects user-
+ * set headers (see `node_modules/@tauri-apps/plugin-http/dist-js/
+ * index.js` — the loop after `new Request(input, init)` only fills
+ * browser-default headers when the user did NOT already set them).
+ * Rust-side, the `unsafe-headers` feature flag in
+ * `src-tauri/Cargo.toml` lets reqwest forward Origin without
+ * stripping it. End-to-end our value wins.
  */
-function sameOriginHeader(url: string): Record<string, string> {
-  try {
-    return { Origin: new URL(url).origin }
-  } catch {
-    return {}
-  }
+function localLlmOriginHeader(): Record<string, string> {
+  return { Origin: "http://localhost" }
 }
 
 function parseOpenAiLine(line: string): string | null {
@@ -204,7 +219,61 @@ function buildOpenAiBody(
     role: m.role,
     content: toOpenAiContent(m.content),
   }))
-  return { messages: translated, stream: true, ...(overrides ?? {}) }
+  return { messages: translated, stream: true, ...stripWireAgnosticOverrides(overrides) }
+}
+
+function stripWireAgnosticOverrides(overrides?: RequestOverrides): Omit<RequestOverrides, "reasoning"> {
+  const { reasoning: _reasoning, ...rest } = overrides ?? {}
+  return rest
+}
+
+function effectiveReasoning(config: LlmConfig, overrides?: RequestOverrides): ReasoningConfig {
+  return overrides?.reasoning ?? config.reasoning ?? { mode: "auto" }
+}
+
+function isDeepSeekEndpoint(config: LlmConfig): boolean {
+  return /deepseek/i.test(config.model) || /deepseek/i.test(config.customEndpoint)
+}
+
+function isQwenThinkingModel(model: string): boolean {
+  return /qwen[-_]?3/i.test(model)
+}
+
+function buildOpenAiCompatibleBody(
+  config: LlmConfig,
+  messages: ChatMessage[],
+  overrides?: RequestOverrides,
+): Record<string, unknown> {
+  const reasoning = effectiveReasoning(config, overrides)
+  const body: Record<string, unknown> = buildOpenAiBody(messages, stripWireAgnosticOverrides(overrides))
+
+  if (isDeepSeekEndpoint(config)) {
+    // DeepSeek V4 thinking mode. `thinking.type=disabled` is the most
+    // important path for ingestion/rewrite tasks: it prevents the model
+    // from spending the whole response on `reasoning_content` with no
+    // final `content`.
+    if (reasoning.mode === "off") {
+      body.thinking = { type: "disabled" }
+    } else if (reasoning.mode !== "auto") {
+      body.thinking = { type: "enabled" }
+      if (reasoning.mode === "high" || reasoning.mode === "max") {
+        body.reasoning_effort = reasoning.mode
+      }
+    }
+    return body
+  }
+
+  if (reasoning.mode === "off" && isQwenThinkingModel(config.model)) {
+    body.chat_template_kwargs = { enable_thinking: false }
+  }
+
+  if (config.provider === "openai" && reasoning.mode !== "auto" && reasoning.mode !== "off") {
+    if (reasoning.mode === "low" || reasoning.mode === "medium" || reasoning.mode === "high") {
+      body.reasoning_effort = reasoning.mode
+    }
+  }
+
+  return body
 }
 
 /**
@@ -278,6 +347,34 @@ function buildAnthropicBody(
       ? { stop_sequences: Array.isArray(overrides.stop) ? overrides.stop : [overrides.stop] }
       : {}),
   }
+}
+
+function buildAnthropicBodyWithReasoning(
+  config: LlmConfig,
+  messages: ChatMessage[],
+  overrides?: RequestOverrides,
+): Record<string, unknown> {
+  const body = buildAnthropicBody(messages, overrides)
+  const reasoning = effectiveReasoning(config, overrides)
+  if (reasoning.mode === "auto" || reasoning.mode === "off") return body
+
+  const budget =
+    reasoning.mode === "custom" && reasoning.budgetTokens !== undefined
+      ? reasoning.budgetTokens
+      : reasoning.mode === "low"
+        ? 1024
+        : reasoning.mode === "medium"
+          ? 4096
+        : 8192
+  const budgetTokens = Math.max(1024, budget)
+  if ((body.max_tokens as number) <= budgetTokens) {
+    body.max_tokens = budgetTokens + 1
+  }
+  body.thinking = { type: "enabled", budget_tokens: budgetTokens }
+  delete body.temperature
+  delete body.top_p
+  delete body.top_k
+  return body
 }
 
 /**
@@ -403,6 +500,19 @@ function buildGoogleBody(
   if (overrides?.stop !== undefined) {
     generationConfig.stopSequences = Array.isArray(overrides.stop) ? overrides.stop : [overrides.stop]
   }
+  if (overrides?.reasoning?.mode === "off") {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 }
+  } else if (overrides?.reasoning && overrides.reasoning.mode !== "auto") {
+    const budget =
+      overrides.reasoning.mode === "custom" && overrides.reasoning.budgetTokens !== undefined
+        ? overrides.reasoning.budgetTokens
+        : overrides.reasoning.mode === "low"
+          ? 1024
+          : overrides.reasoning.mode === "medium"
+            ? 4096
+            : 8192
+    generationConfig.thinkingConfig = { thinkingBudget: budget }
+  }
 
   return {
     contents,
@@ -423,7 +533,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
           Authorization: `Bearer ${apiKey}`,
         },
         buildBody: (messages, overrides) => ({
-          ...buildOpenAiBody(messages, overrides),
+          ...buildOpenAiCompatibleBody(config, messages, overrides),
           model,
         }),
         parseStream: parseOpenAiLine,
@@ -435,7 +545,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         url,
         headers: buildAnthropicHeaders(apiKey, url),
         buildBody: (messages, overrides) => ({
-          ...buildAnthropicBody(messages, overrides),
+          ...buildAnthropicBodyWithReasoning(config, messages, overrides),
           model,
         }),
         parseStream: parseAnthropicLine,
@@ -454,7 +564,10 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
           "Content-Type": JSON_CONTENT_TYPE,
           "x-goog-api-key": apiKey,
         },
-        buildBody: buildGoogleBody,
+        buildBody: (messages, overrides) => buildGoogleBody(messages, {
+          ...(overrides ?? {}),
+          reasoning: effectiveReasoning(config, overrides),
+        }),
         parseStream: parseGoogleLine,
       }
     }
@@ -474,23 +587,12 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         url: `${ollamaBase}/v1/chat/completions`,
         headers: {
           "Content-Type": JSON_CONTENT_TYPE,
-          ...sameOriginHeader(ollamaBase),
+          ...localLlmOriginHeader(),
         },
-        buildBody: (messages, overrides) => {
-          const body: Record<string, unknown> = {
-            ...buildOpenAiBody(messages, overrides),
-            model,
-          }
-          // Qwen3 thinking mode disable. Recognized by llama.cpp server
-          // launched with `--jinja` (reads chat_template_kwargs from the
-          // OpenAI body and forwards to the Jinja chat template). Real
-          // Ollama silently ignores unknown fields, so this is safe.
-          // Requires llama-server --jinja; without it, thinking stays on.
-          if (/qwen[-_]?3/i.test(model)) {
-            body.chat_template_kwargs = { enable_thinking: false }
-          }
-          return body
-        },
+        buildBody: (messages, overrides) => ({
+          ...buildOpenAiCompatibleBody(config, messages, overrides),
+          model,
+        }),
         parseStream: parseOpenAiLine,
       }
     }
@@ -506,7 +608,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         url,
         headers: buildAnthropicHeaders(apiKey, url),
         buildBody: (messages, overrides) => ({
-          ...buildAnthropicBody(messages, overrides),
+          ...buildAnthropicBodyWithReasoning(config, messages, overrides),
           model,
         }),
         parseStream: parseAnthropicLine,
@@ -534,7 +636,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
           url,
           headers: buildAnthropicHeaders(apiKey, url),
           buildBody: (messages, overrides) => ({
-            ...buildAnthropicBody(messages, overrides),
+            ...buildAnthropicBodyWithReasoning(config, messages, overrides),
             model,
           }),
           parseStream: parseAnthropicLine,
@@ -556,10 +658,10 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
           // Local OpenAI-compatible servers (LM Studio, llama.cpp,
           // vLLM, LocalAI) often share Ollama's CORS sensitivity.
           // Same rationale as the `ollama` branch above.
-          ...sameOriginHeader(base),
+          ...localLlmOriginHeader(),
         },
         buildBody: (messages, overrides) => ({
-          ...buildOpenAiBody(messages, overrides),
+          ...buildOpenAiCompatibleBody(config, messages, overrides),
           model,
         }),
         parseStream: parseOpenAiLine,

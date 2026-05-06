@@ -1,46 +1,61 @@
 /**
- * Merge a page's YAML frontmatter `sources:` array with what the LLM
- * just emitted, so re-ingesting a page that already has a history from
- * another source doesn't silently clobber that history.
+ * Frontmatter array-field merging during ingest.
  *
- * Why this exists: the stage-2 prompt instructs the LLM to emit
- * `sources: ["${sourceFileName}"]` — with JUST the current source — on
- * every FILE block. The stage-2 prompt also doesn't feed existing page
- * bodies into the context, so the LLM can't see the old sources. If
- * the ingest write were naive, each re-ingest would overwrite the
- * sources array with a single-element list, and the downstream
- * source-delete logic would later treat the page as single-sourced and
- * delete it — losing content contributed by the earlier source.
+ * Originally written for the `sources:` field alone — re-ingesting a
+ * page from a second source would clobber `sources: [...]` to a
+ * single entry, and the source-delete flow would later treat the page
+ * as single-sourced and delete it (silent data loss). The fix unions
+ * old and new sources before writing.
  *
- * The fix: before writing, read the existing file (if any), parse its
- * sources, union with the freshly emitted sources, rewrite the frontmatter.
+ * Generalized to handle any frontmatter array field (`sources`,
+ * `tags`, `related`, …): the same loss-on-clobber pattern applied to
+ * `tags` and `related` too — old contributing tags / wikilinks
+ * disappeared every time a different source brought new ones. The
+ * generic API merges any subset of fields the caller names.
+ *
+ * Two callers today:
+ *   - sources-view.tsx — uses `parseSources` / `writeSources` for
+ *     the source-delete flow (operates on the single sources field)
+ *   - ingest.ts — uses `mergeArrayFieldsIntoContent` to union
+ *     sources + tags + related when writing a content page that
+ *     already exists on disk
  */
+
+// ─── Generic helpers (the implementation core) ────────────────────
 
 /**
- * Extract `sources: [...]` from the YAML frontmatter of a wiki page.
- * Returns `[]` when no sources line is found or parsing fails.
+ * Extract a frontmatter array field by name. Handles both:
+ *   inline form:    `name: ["a", "b"]` or `name: [a, b]`
+ *   block form:     `name:\n  - a\n  - b`
+ * Strips quotes (single or double) from items. Returns `[]` for
+ * missing field, malformed parse, or content with no frontmatter.
  *
- * Handles both single-line form (`sources: ["a.md", "b.md"]`) and the
- * multi-line YAML list form (`sources:\n  - a.md\n  - b.md`). Single
- * and double quotes on items are stripped; bare items are accepted.
+ * The field name is matched as a whole word at line start, so
+ * `parseFrontmatterArray(c, "rel")` won't match `related: [...]`.
  */
-export function parseSources(content: string): string[] {
+export function parseFrontmatterArray(content: string, fieldName: string): string[] {
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
-  const fm = fmMatch ? fmMatch[1] : content
-
-  // Multi-line YAML list form: `sources:\n  - "a.md"\n  - "b.md"`
-  const multi = fm.match(/^sources:\s*\n((?:[ \t]+-\s+.+\n?)+)/m)
-  if (multi) {
+  if (!fmMatch) return []
+  const fm = fmMatch[1]
+  // Anchor to start of line + exact field name + colon. The negative
+  // lookahead-style check is done by requiring `:` immediately after.
+  const escapedName = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const blockRe = new RegExp(
+    `^${escapedName}:\\s*\\n((?:[ \\t]+-\\s+.+\\n?)+)`,
+    "m",
+  )
+  const block = fm.match(blockRe)
+  if (block) {
     const out: string[] = []
-    for (const line of multi[1].split("\n")) {
+    for (const line of block[1].split("\n")) {
       const m = line.match(/^\s+-\s+["']?(.+?)["']?\s*$/)
       if (m && m[1]) out.push(m[1].trim())
     }
     return out
   }
 
-  // Inline form: `sources: ["a.md", "b.md"]` or `sources: []`.
-  const inline = fm.match(/^sources:\s*\[([^\]]*)\]/m)
+  const inlineRe = new RegExp(`^${escapedName}:\\s*\\[([^\\]]*)\\]`, "m")
+  const inline = fm.match(inlineRe)
   if (!inline) return []
   const body = inline[1].trim()
   if (body === "") return []
@@ -51,56 +66,57 @@ export function parseSources(content: string): string[] {
 }
 
 /**
- * Rewrite the `sources:` field of a markdown page's frontmatter to the
- * provided array. Preserves every other frontmatter line. If no
- * `sources:` line exists (LLM forgot it), one is inserted just before
- * the closing `---`. If no frontmatter exists at all, returns the
- * content unchanged — we don't manufacture frontmatter for pages the
- * LLM didn't frontmatter-prefix, since that almost certainly means
- * the emission was already malformed and the caller should surface it.
+ * Rewrite (or insert) a frontmatter array field. Preserves all other
+ * frontmatter lines and order. Returns content unchanged if the
+ * input has no frontmatter at all (don't manufacture frontmatter for
+ * unconventional pages — almost certainly malformed emission worth
+ * surfacing rather than silently fixing).
+ *
+ * Always emits the inline form `name: ["a", "b"]` so downstream
+ * parsers see a consistent shape regardless of the original input
+ * shape.
  */
-export function writeSources(content: string, sources: string[]): string {
+export function writeFrontmatterArray(
+  content: string,
+  fieldName: string,
+  values: string[],
+): string {
   const fmMatch = content.match(/^(---\n)([\s\S]*?)(\n---)/)
   if (!fmMatch) return content
 
   const [, openDelim, fmBody, closeDelim] = fmMatch
-  const serialized = sources.map((s) => `"${s}"`).join(", ")
-  const newLine = `sources: [${serialized}]`
+  const escapedName = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const serialized = values.map((s) => `"${s}"`).join(", ")
+  const newLine = `${fieldName}: [${serialized}]`
 
-  // Prefer replacing an existing inline `sources:` line in-place so
-  // field ordering within the frontmatter stays the same as the LLM
-  // emitted it — users don't see fields shuffle around on every
-  // re-ingest.
-  if (/^sources:\s*\[[^\]]*\]/m.test(fmBody)) {
-    const rewritten = fmBody.replace(/^sources:\s*\[[^\]]*\]/m, newLine)
+  // Replace inline form in place — preserves field ordering.
+  const inlineRe = new RegExp(`^${escapedName}:\\s*\\[[^\\]]*\\]`, "m")
+  if (inlineRe.test(fmBody)) {
+    const rewritten = fmBody.replace(inlineRe, newLine)
     return `${openDelim}${rewritten}${closeDelim}${content.slice(fmMatch[0].length)}`
   }
 
-  // Replace a multi-line YAML list form with an inline form too —
-  // consistent shape across pages makes downstream parsing simpler.
-  if (/^sources:\s*\n((?:[ \t]+-\s+.+\n?)+)/m.test(fmBody)) {
-    const rewritten = fmBody.replace(
-      /^sources:\s*\n((?:[ \t]+-\s+.+\n?)+)/m,
-      newLine,
-    )
+  // Replace block form in place, normalized to inline form.
+  const blockRe = new RegExp(
+    `^${escapedName}:\\s*\\n((?:[ \\t]+-\\s+.+\\n?)+)`,
+    "m",
+  )
+  if (blockRe.test(fmBody)) {
+    const rewritten = fmBody.replace(blockRe, newLine)
     return `${openDelim}${rewritten}${closeDelim}${content.slice(fmMatch[0].length)}`
   }
 
-  // No sources field at all — append one at the end of the frontmatter.
+  // Field absent — append at end of frontmatter.
   const rewritten = `${fmBody}\n${newLine}`
   return `${openDelim}${rewritten}${closeDelim}${content.slice(fmMatch[0].length)}`
 }
 
 /**
- * Merge two source lists, case-insensitively deduped. Order of existing
- * entries is preserved; new entries not already present are appended
- * in the order they appear in `incoming`.
- *
- * Case handling: if both lists contain the same name but with different
- * casing (e.g. "Test.md" and "test.md"), the first-seen form wins.
- * This keeps the user's original filename casing stable on disk.
+ * Union-merge two array values. Case-insensitive dedup. First-seen
+ * casing wins (matches sources-merge's historical contract — keeps
+ * users' original filename casing stable across re-ingests).
  */
-export function mergeSourcesLists(
+function mergeLists(
   existing: readonly string[],
   incoming: readonly string[],
 ): string[] {
@@ -116,33 +132,87 @@ export function mergeSourcesLists(
 }
 
 /**
- * The main entry point used from ingest: given the content the LLM
- * just emitted for a page (`newContent`), and whatever is currently on
- * disk at that path (`existingContent`, or null if the page is new),
- * return content whose `sources:` field is the union of both.
+ * Multi-field merge entry point. For each requested field, union the
+ * existing-on-disk value with the LLM-emitted new value, and rewrite
+ * the new content's frontmatter with the merged values.
  *
- * For new pages: returns newContent unchanged.
- * For existing pages with no frontmatter: returns newContent unchanged
- *   (don't corrupt unconventional files).
- * For existing pages with frontmatter: merges sources, rewrites.
+ * Fast-paths:
+ *   - existingContent null/empty → return newContent verbatim
+ *   - existing has no frontmatter at all → return newContent verbatim
+ *   - no field actually changes → return newContent verbatim (stable
+ *     reference, callers can rely on this for cache-key invariance)
+ */
+export function mergeArrayFieldsIntoContent(
+  newContent: string,
+  existingContent: string | null,
+  fields: readonly string[],
+): string {
+  if (!existingContent) return newContent
+  if (!/^---\n/.test(existingContent)) return newContent
+
+  let result = newContent
+  let changed = false
+  for (const field of fields) {
+    const oldValues = parseFrontmatterArray(existingContent, field)
+    if (oldValues.length === 0) continue // field absent in existing → nothing to preserve
+    const newValues = parseFrontmatterArray(result, field)
+    const merged = mergeLists(oldValues, newValues)
+    if (
+      merged.length === newValues.length &&
+      merged.every((s, i) => s === newValues[i])
+    ) {
+      continue // no-op for this field
+    }
+    result = writeFrontmatterArray(result, field, merged)
+    changed = true
+  }
+  return changed ? result : newContent
+}
+
+// ─── Backward-compatible single-field exports ─────────────────────
+
+/**
+ * Extract `sources: [...]` from a wiki page's frontmatter.
+ * Handles inline and block forms; strips quotes; returns [] when
+ * absent. Thin wrapper around the generic parser, kept stable for
+ * sources-view.tsx (source-delete flow).
+ */
+export function parseSources(content: string): string[] {
+  return parseFrontmatterArray(content, "sources")
+}
+
+/**
+ * Rewrite the `sources:` field. Thin wrapper around the generic
+ * writer, kept stable for sources-view.tsx (writes the post-delete
+ * sources list back).
+ */
+export function writeSources(content: string, sources: string[]): string {
+  return writeFrontmatterArray(content, "sources", sources)
+}
+
+/**
+ * Merge two source lists into one (case-insensitive dedup, first-
+ * seen casing wins). Exported for tests and sources-view consumers
+ * that prefer to call the merge directly without going through the
+ * content-rewrite path.
+ */
+export function mergeSourcesLists(
+  existing: readonly string[],
+  incoming: readonly string[],
+): string[] {
+  return mergeLists(existing, incoming)
+}
+
+/**
+ * Sources-only convenience wrapper — equivalent to
+ * `mergeArrayFieldsIntoContent(newContent, existingContent, ["sources"])`.
+ * Kept for ingest-flow callers that pre-date the multi-field
+ * generalization; new code should prefer the generic version which
+ * also unions tags / related.
  */
 export function mergeSourcesIntoContent(
   newContent: string,
   existingContent: string | null,
 ): string {
-  if (!existingContent) return newContent
-  const oldSources = parseSources(existingContent)
-  if (oldSources.length === 0) return newContent
-  const newSources = parseSources(newContent)
-  const merged = mergeSourcesLists(oldSources, newSources)
-  // Avoid writing a no-op change: if nothing actually needs merging,
-  // hand back the original newContent verbatim so hashes / caches stay
-  // stable.
-  if (
-    merged.length === newSources.length &&
-    merged.every((s, i) => s === newSources[i])
-  ) {
-    return newContent
-  }
-  return writeSources(newContent, merged)
+  return mergeArrayFieldsIntoContent(newContent, existingContent, ["sources"])
 }

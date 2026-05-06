@@ -3,6 +3,7 @@ import { autoIngest } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
 import { getProjectPathById } from "@/lib/project-identity"
+import { hasUsableLlm } from "@/lib/has-usable-llm"
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -473,7 +474,7 @@ async function processNext(projectId: string): Promise<void> {
   const llmConfig = useWikiStore.getState().llmConfig
 
   // Check if LLM is configured
-  if (!llmConfig.apiKey && llmConfig.provider !== "ollama" && llmConfig.provider !== "custom") {
+  if (!hasUsableLlm(llmConfig)) {
     next.status = "failed"
     next.error = "LLM not configured — set API key in Settings"
     processing = false

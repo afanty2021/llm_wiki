@@ -144,6 +144,25 @@ export async function streamClaudeCodeCli(
   let unlistenDone: UnlistenFn | undefined
   let finished = false
 
+  // Diagnostic capture for failure paths. The Rust side emits every
+  // stdout line; lines the parser doesn't recognize (non-JSON,
+  // unknown event types, the stream-json `{"type":"error",...}`
+  // shape claude can emit on auth failure) used to be silently
+  // dropped — leaving users staring at a bare "exit code 1" with
+  // nothing to act on. We collect them up to a hard cap so that if
+  // the child exits non-zero AND stderr is empty, we have something
+  // concrete to show in the error message.
+  const UNPARSED_BUFFER_CAP = 4096
+  const unparsedLines: string[] = []
+  let unparsedSize = 0
+  function captureUnparsed(line: string) {
+    if (unparsedSize >= UNPARSED_BUFFER_CAP) return
+    const trimmed = line.trim()
+    if (trimmed.length === 0) return
+    unparsedLines.push(line)
+    unparsedSize += line.length + 1
+  }
+
   const cleanup = () => {
     unlistenData?.()
     unlistenDone?.()
@@ -169,7 +188,15 @@ export async function streamClaudeCodeCli(
     // Listen FIRST so we don't miss the very first event on fast CLIs.
     unlistenData = await listen<string>(`claude-cli:${streamId}`, (event) => {
       const token = parse(event.payload)
-      if (token !== null) onToken(token)
+      if (token !== null) {
+        onToken(token)
+      } else {
+        // Parser didn't recognize this line. Stash it in case the
+        // child later exits non-zero with empty stderr — at that
+        // point this captured stdout is the only diagnostic the
+        // user has.
+        captureUnparsed(event.payload)
+      }
     })
 
     unlistenDone = await listen<{ code: number | null; stderr: string }>(
@@ -178,12 +205,10 @@ export async function streamClaudeCodeCli(
         const code = event.payload?.code
         const stderr = event.payload?.stderr?.trim() ?? ""
         if (code !== null && code !== undefined && code !== 0) {
-          // Include stderr in the message so the user sees the actual
-          // failure reason (missing flag, bad model id, auth issue, etc.)
-          // rather than a bare exit code.
-          const detail = stderr ? `: ${stderr}` : ""
           finishWith(() =>
-            onError(new Error(`claude CLI exited with code ${code}${detail}`)),
+            onError(
+              new Error(buildExitError(code, stderr, unparsedLines.join("\n"))),
+            ),
           )
         } else {
           finishWith(onDone)
@@ -214,4 +239,60 @@ export async function streamClaudeCodeCli(
   } finally {
     signal?.removeEventListener("abort", abortListener)
   }
+}
+
+/**
+ * Translate `claude` CLI exit-with-stderr into an actionable error
+ * message for the user. The bare "exited with code N: <stderr>"
+ * we used to throw was correct but unactionable — users had to
+ * read JSON-shaped stderr text to figure out what to do.
+ *
+ * Three diagnostic sources, used in priority order:
+ *   1. stderr — the canonical place. The most common content is
+ *      `Unauthenticated:` from Claude Code itself, meaning the
+ *      user's ~/.claude OAuth token expired / was revoked / they
+ *      logged out. We surface that case explicitly because users
+ *      otherwise mis-diagnose it as an LLM Wiki bug.
+ *   2. unparsedStdout — stdout lines the parser didn't recognize
+ *      (non-JSON, unknown event types, the stream-json `error`
+ *      event shape). Used as a fallback when stderr is empty —
+ *      claude sometimes writes its real diagnostic to stdout via
+ *      the stream-json channel, and our parser silently drops
+ *      anything it doesn't classify, leaving users with no info
+ *      at all.
+ *   3. Neither — silent exit. We can't help much here other than
+ *      telling the user to reproduce in a terminal where they can
+ *      see whatever output the CLI does produce.
+ */
+export function buildExitError(
+  code: number,
+  stderr: string,
+  unparsedStdout: string = "",
+): string {
+  if (/unauthenticated|please.*log\s*in|authentication.*failed/i.test(stderr)) {
+    return [
+      "Claude Code CLI is not authenticated.",
+      "Please open a terminal and run `claude` to complete the OAuth login,",
+      "then retry. (LLM Wiki only spawns the binary — it can't run the",
+      "login flow on your behalf.)",
+      stderr ? `\n\n— stderr —\n${stderr}` : "",
+    ].join(" ").trim()
+  }
+  if (stderr) {
+    return `claude CLI exited with code ${code}: ${stderr}`
+  }
+  if (unparsedStdout.trim()) {
+    return [
+      `claude CLI exited with code ${code} (no stderr).`,
+      "Captured stdout output that LLM Wiki couldn't parse — pasting it",
+      "here so you can see what the CLI actually emitted:\n",
+      unparsedStdout.trim(),
+    ].join(" ")
+  }
+  return [
+    `claude CLI exited silently with code ${code}.`,
+    "No stdout or stderr was captured — try running `claude -p` in a",
+    "terminal with the same prompt to see what's wrong, or switch to",
+    "the official Anthropic API in Settings.",
+  ].join(" ")
 }

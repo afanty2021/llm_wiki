@@ -1,35 +1,12 @@
 import { useTranslation } from "react-i18next"
 import { Label } from "@/components/ui/label"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
+import { OUTPUT_LANGUAGE_OPTIONS as LANGUAGE_OPTIONS } from "@/lib/output-language-options"
 
 interface Props {
   draft: SettingsDraft
   setDraft: DraftSetter
 }
-
-const LANGUAGE_OPTIONS = [
-  { value: "auto", label: "Auto (detect from input/source)" },
-  { value: "English", label: "English" },
-  { value: "Chinese", label: "简体中文 (Simplified Chinese)" },
-  { value: "Traditional Chinese", label: "繁體中文 (Traditional Chinese)" },
-  { value: "Japanese", label: "日本語 (Japanese)" },
-  { value: "Korean", label: "한국어 (Korean)" },
-  { value: "Vietnamese", label: "Tiếng Việt (Vietnamese)" },
-  { value: "French", label: "Français (French)" },
-  { value: "German", label: "Deutsch (German)" },
-  { value: "Spanish", label: "Español (Spanish)" },
-  { value: "Portuguese", label: "Português (Portuguese)" },
-  { value: "Italian", label: "Italiano (Italian)" },
-  { value: "Russian", label: "Русский (Russian)" },
-  { value: "Arabic", label: "العربية (Arabic)" },
-  { value: "Hindi", label: "हिन्दी (Hindi)" },
-  { value: "Turkish", label: "Türkçe (Turkish)" },
-  { value: "Dutch", label: "Nederlands (Dutch)" },
-  { value: "Polish", label: "Polski (Polish)" },
-  { value: "Swedish", label: "Svenska (Swedish)" },
-  { value: "Indonesian", label: "Bahasa Indonesia (Indonesian)" },
-  { value: "Thai", label: "ไทย (Thai)" },
-]
 
 const HISTORY_OPTIONS = [2, 4, 6, 8, 10, 20]
 

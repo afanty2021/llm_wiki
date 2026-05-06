@@ -8,6 +8,12 @@ import type { WikiProject, FileNode } from "@/types/wiki"
  * `chat_completions` for backward compatibility with pre-0.3.7 configs.
  */
 export type CustomApiMode = "chat_completions" | "anthropic_messages"
+export type ReasoningMode = "auto" | "off" | "low" | "medium" | "high" | "max" | "custom"
+
+export interface ReasoningConfig {
+  mode: ReasoningMode
+  budgetTokens?: number
+}
 
 interface LlmConfig {
   provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code"
@@ -17,11 +23,34 @@ interface LlmConfig {
   customEndpoint: string
   maxContextSize: number // max context window in characters
   apiMode?: CustomApiMode
+  reasoning?: ReasoningConfig
 }
 
+export type SearchProvider = "tavily" | "serpapi" | "none"
+export type SerpApiEngine =
+  | "google"
+  | "google_news"
+  | "google_scholar"
+  | "google_patents"
+  | "bing"
+  | "duckduckgo"
+  | "google_images"
+  | "google_videos"
+  | "youtube"
+  | string
+
+export interface SearchProviderOverride {
+  apiKey?: string
+  serpApiEngine?: SerpApiEngine
+}
+
+export type SearchProviderConfigs = Partial<Record<Exclude<SearchProvider, "none">, SearchProviderOverride>>
+
 interface SearchApiConfig {
-  provider: "tavily" | "none"
+  provider: SearchProvider
   apiKey: string
+  serpApiEngine?: SerpApiEngine
+  providerConfigs?: SearchProviderConfigs
 }
 
 interface EmbeddingConfig {
@@ -74,6 +103,19 @@ interface EmbeddingConfig {
  * behind a single-GPU server's batch slot, so we cap the slider
  * UI at a tasteful max in the settings view.
  */
+/**
+ * Global outbound HTTP proxy. When `enabled` and `url` is a valid
+ * http(s) URL, the Rust setup hook reads this on app launch and
+ * sets HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars before the
+ * reqwest client used by tauri-plugin-http is constructed. Changes
+ * apply on app restart only.
+ */
+interface ProxyConfig {
+  enabled: boolean
+  url: string
+  bypassLocal: boolean
+}
+
 interface MultimodalConfig {
   enabled: boolean
   /** Reuse `llmConfig` for caption calls. When true, the fields
@@ -109,6 +151,7 @@ type OutputLanguage =
   | "Italian"
   | "Russian"
   | "Arabic"
+  | "Persian"
   | "Hindi"
   | "Turkish"
   | "Dutch"
@@ -116,6 +159,7 @@ type OutputLanguage =
   | "Swedish"
   | "Indonesian"
   | "Thai"
+  | "Ukrainian"
 
 /**
  * Per-preset saved fields. Each entry survives turning the preset off
@@ -128,6 +172,7 @@ export interface ProviderOverride {
   baseUrl?: string           // customEndpoint for custom presets, ollamaUrl for ollama
   apiMode?: CustomApiMode
   maxContextSize?: number
+  reasoning?: ReasoningConfig
 }
 
 export type ProviderConfigs = Record<string, ProviderOverride>
@@ -163,6 +208,7 @@ interface WikiState {
   embeddingConfig: EmbeddingConfig
   multimodalConfig: MultimodalConfig
   outputLanguage: OutputLanguage
+  proxyConfig: ProxyConfig
   dataVersion: number
 
   setProject: (project: WikiProject | null) => void
@@ -179,6 +225,7 @@ interface WikiState {
   setEmbeddingConfig: (config: EmbeddingConfig) => void
   setMultimodalConfig: (config: MultimodalConfig) => void
   setOutputLanguage: (lang: OutputLanguage) => void
+  setProxyConfig: (config: ProxyConfig) => void
   bumpDataVersion: () => void
 }
 
@@ -197,6 +244,7 @@ export const useWikiStore = create<WikiState>((set) => ({
     model: "",
     ollamaUrl: "http://localhost:11434",
     customEndpoint: "",
+    reasoning: { mode: "auto" },
   },
   providerConfigs: {},
   activePresetId: null,
@@ -213,6 +261,8 @@ export const useWikiStore = create<WikiState>((set) => ({
   searchApiConfig: {
     provider: "none",
     apiKey: "",
+    serpApiEngine: "google",
+    providerConfigs: {},
   },
 
   embeddingConfig: {
@@ -241,6 +291,12 @@ export const useWikiStore = create<WikiState>((set) => ({
 
   outputLanguage: "auto",
 
+  proxyConfig: {
+    enabled: false,
+    url: "",
+    bypassLocal: true,
+  },
+
   setLlmConfig: (llmConfig) => set({ llmConfig }),
   setProviderConfigs: (providerConfigs) => set({ providerConfigs }),
   setActivePresetId: (activePresetId) => set({ activePresetId }),
@@ -248,7 +304,8 @@ export const useWikiStore = create<WikiState>((set) => ({
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
   setMultimodalConfig: (multimodalConfig) => set({ multimodalConfig }),
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),
+  setProxyConfig: (proxyConfig) => set({ proxyConfig }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
 
-export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage }
+export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProxyConfig }

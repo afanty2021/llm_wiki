@@ -17,6 +17,7 @@ export function resolveConfig(
   const model = ov.model ?? preset.defaultModel ?? ""
   const maxContextSize =
     ov.maxContextSize ?? preset.suggestedContextSize ?? fallback.maxContextSize
+  const reasoning = ov.reasoning ?? { mode: "auto" as const }
 
   if (preset.provider === "custom") {
     return {
@@ -27,6 +28,7 @@ export function resolveConfig(
       customEndpoint: ov.baseUrl ?? preset.baseUrl ?? "",
       maxContextSize,
       apiMode: ov.apiMode ?? preset.apiMode ?? "chat_completions",
+      reasoning,
     }
   }
 
@@ -38,6 +40,7 @@ export function resolveConfig(
       ollamaUrl: ov.baseUrl ?? preset.baseUrl ?? "http://localhost:11434",
       customEndpoint: fallback.customEndpoint,
       maxContextSize,
+      reasoning,
     }
   }
 
@@ -51,6 +54,7 @@ export function resolveConfig(
       ollamaUrl: fallback.ollamaUrl,
       customEndpoint: fallback.customEndpoint,
       maxContextSize,
+      reasoning,
     }
   }
 
@@ -64,5 +68,6 @@ export function resolveConfig(
     ollamaUrl: fallback.ollamaUrl,
     customEndpoint: fallback.customEndpoint,
     maxContextSize,
+    reasoning,
   }
 }

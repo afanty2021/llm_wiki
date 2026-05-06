@@ -17,6 +17,8 @@ import {
   writeSources,
   mergeSourcesLists,
   mergeSourcesIntoContent,
+  mergeArrayFieldsIntoContent,
+  parseFrontmatterArray,
 } from "./sources-merge"
 
 const WRAP = (fm: string, body = "body\n") => `---\n${fm}\n---\n${body}`
@@ -308,5 +310,122 @@ describe("Regression: the data-loss path in the user's diagnosis", () => {
     expect(page).toContain("body v3")
     expect(page).not.toContain("body v1")
     expect(page).not.toContain("body v2")
+  })
+})
+
+// ── parseFrontmatterArray (generalized parser) ────────────────────
+
+describe("parseFrontmatterArray", () => {
+  it("parses an inline-form array for any field name", () => {
+    expect(parseFrontmatterArray(WRAP("tags: [a, b, c]"), "tags")).toEqual([
+      "a", "b", "c",
+    ])
+  })
+
+  it("parses block-form array (key: + - item lines) for any field", () => {
+    const fm = `related:\n  - foo\n  - bar`
+    expect(parseFrontmatterArray(WRAP(fm), "related")).toEqual(["foo", "bar"])
+  })
+
+  it("strips quotes around items", () => {
+    expect(
+      parseFrontmatterArray(WRAP('tags: ["a", "b"]'), "tags"),
+    ).toEqual(["a", "b"])
+  })
+
+  it("returns [] when the field doesn't exist", () => {
+    expect(parseFrontmatterArray(WRAP("title: X"), "tags")).toEqual([])
+  })
+
+  it("returns [] when content has no frontmatter", () => {
+    expect(parseFrontmatterArray("# plain markdown", "tags")).toEqual([])
+  })
+
+  it("doesn't mistake one field for another with similar prefix", () => {
+    // `related:` shouldn't accidentally match when we ask for `relate`.
+    const c = WRAP("related: [a, b]")
+    expect(parseFrontmatterArray(c, "relate")).toEqual([])
+    expect(parseFrontmatterArray(c, "related")).toEqual(["a", "b"])
+  })
+})
+
+// ── mergeArrayFieldsIntoContent (multi-field union merge) ─────────
+
+describe("mergeArrayFieldsIntoContent", () => {
+  it("merges sources / tags / related as a union of old and new", () => {
+    const existing = WRAP(
+      'sources: ["a.md"]\ntags: [old-tag]\nrelated: [old-rel]',
+    )
+    const incoming = WRAP(
+      'sources: ["b.md"]\ntags: [new-tag]\nrelated: [new-rel]',
+      "new body",
+    )
+    const merged = mergeArrayFieldsIntoContent(incoming, existing, [
+      "sources",
+      "tags",
+      "related",
+    ])
+    expect(parseFrontmatterArray(merged, "sources")).toEqual(["a.md", "b.md"])
+    expect(parseFrontmatterArray(merged, "tags")).toEqual(["old-tag", "new-tag"])
+    expect(parseFrontmatterArray(merged, "related")).toEqual([
+      "old-rel",
+      "new-rel",
+    ])
+    // Body always comes from incoming (no body merge here — that's
+    // page-merge.ts's job).
+    expect(merged).toContain("new body")
+  })
+
+  it("dedupes case-insensitively across all fields", () => {
+    const existing = WRAP("tags: [Foo, BAR]")
+    const incoming = WRAP("tags: [foo, bar, baz]")
+    const merged = mergeArrayFieldsIntoContent(incoming, existing, ["tags"])
+    // First-seen casing wins ("Foo" / "BAR"), but new entry "baz" is added.
+    expect(parseFrontmatterArray(merged, "tags")).toEqual(["Foo", "BAR", "baz"])
+  })
+
+  it("preserves a field that exists in old but is missing from new", () => {
+    // LLM forgot to emit `tags` in this ingest; existing tags must
+    // survive — analogous to the existing sources-protection guarantee.
+    const existing = WRAP("tags: [persistent]")
+    const incoming = WRAP("title: X")
+    const merged = mergeArrayFieldsIntoContent(incoming, existing, ["tags"])
+    expect(parseFrontmatterArray(merged, "tags")).toEqual(["persistent"])
+  })
+
+  it("is a no-op when neither old nor new have any of the requested fields", () => {
+    const existing = WRAP("title: X")
+    const incoming = WRAP("title: Y")
+    expect(
+      mergeArrayFieldsIntoContent(incoming, existing, ["sources", "tags"]),
+    ).toBe(incoming)
+  })
+
+  it("returns newContent unchanged when existingContent is null (new page)", () => {
+    const incoming = WRAP("tags: [a]\nrelated: [b]")
+    expect(mergeArrayFieldsIntoContent(incoming, null, ["tags", "related"])).toBe(
+      incoming,
+    )
+  })
+
+  it("merges only the fields the caller asked for", () => {
+    const existing = WRAP("sources: [a.md]\ntags: [old]")
+    const incoming = WRAP("sources: [b.md]\ntags: [new]")
+    // Asking only for sources — tags is left as the new content's value.
+    const merged = mergeArrayFieldsIntoContent(incoming, existing, ["sources"])
+    expect(parseFrontmatterArray(merged, "sources")).toEqual(["a.md", "b.md"])
+    expect(parseFrontmatterArray(merged, "tags")).toEqual(["new"])
+  })
+
+  it("preserves source-merge backward compatibility when called for `sources` only", () => {
+    // Verifies the new function reproduces mergeSourcesIntoContent's
+    // exact behavior for a sources-only call. If this drifts, the
+    // older callers (sources-view etc.) would silently be affected.
+    const existing = WRAP('sources: ["a.md"]')
+    const incoming = WRAP('sources: ["b.md"]', "new body")
+    const a = mergeSourcesIntoContent(incoming, existing)
+    const b = mergeArrayFieldsIntoContent(incoming, existing, ["sources"])
+    expect(parseSources(b)).toEqual(parseSources(a))
+    expect(b).toContain("new body")
   })
 })

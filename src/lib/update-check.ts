@@ -17,6 +17,34 @@
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
 
 /** The subset of the GitHub release API response we care about. */
+/**
+ * Map any GitHub release-related URL to that repo's
+ * `/releases/latest` form. Two reasons we prefer the canonical
+ * `/latest` URL over the API-returned `html_url`:
+ *
+ *   - `html_url` for a release object is `/releases/tag/<tag>`
+ *     (tag-specific). If a newer release ships between when we
+ *     notified the user and when they click, sending them to the
+ *     tag page gives them a stale view; `/releases/latest` always
+ *     follows GitHub's redirect to whatever is genuinely latest.
+ *
+ *   - The bare `/releases` listing URL (sometimes used as a stub)
+ *     shows a paginated list whose default sort isn't strictly
+ *     "newest first" once a repo has many releases — the user
+ *     might land on the page and not see the new version above
+ *     the fold.
+ *
+ * Idempotent: passing an already-`/latest` URL returns it
+ * unchanged. Falls through with the original URL when the input
+ * doesn't look like a github.com release link (don't break random
+ * external URLs).
+ */
+export function toLatestReleaseUrl(htmlUrl: string): string {
+  const m = htmlUrl.match(/^(https?:\/\/github\.com\/[^/]+\/[^/]+)\/releases(?:\/.*)?$/i)
+  if (!m) return htmlUrl
+  return `${m[1]}/releases/latest`
+}
+
 export interface GithubRelease {
   tag_name: string          // e.g. "v0.3.10"
   name: string              // display title
@@ -139,4 +167,10 @@ export async function checkForUpdates(opts: {
 }
 
 /** Cache duration: don't re-hit the API if we checked more recently than this. */
-export const UPDATE_CHECK_CACHE_MS = 6 * 60 * 60 * 1000 // 6 hours
+// 1 hour cache between background checks. Originally 6h, shortened
+// because users were going long stretches without learning about
+// new releases. GitHub's anonymous /releases/latest endpoint allows
+// 60 req/hour from the same IP, so even a user opening / closing
+// the app dozens of times in an hour stays well under the limit
+// (the cache itself prevents back-to-back hits within the window).
+export const UPDATE_CHECK_CACHE_MS = 60 * 60 * 1000 // 1 hour

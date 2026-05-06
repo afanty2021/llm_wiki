@@ -1,5 +1,6 @@
 import { useWikiStore } from "@/stores/wiki-store"
 import { detectLanguage } from "./detect-language"
+import { getLanguagePromptName } from "./language-metadata"
 
 /**
  * Get the effective output language for LLM content generation.
@@ -20,13 +21,14 @@ export function getOutputLanguage(fallbackText: string = ""): string {
  */
 export function buildLanguageDirective(fallbackText: string = ""): string {
   const lang = getOutputLanguage(fallbackText)
+  const promptLang = getLanguagePromptName(lang)
   return [
-    `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${lang}`,
+    `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${promptLang}`,
     "",
-    `You MUST write your entire response (including wiki page titles, content, descriptions, summaries, and any generated text) in **${lang}**.`,
+    `You MUST write your entire response (including wiki page titles, content, descriptions, summaries, and any generated text) in **${promptLang}**.`,
     `The source material or wiki content may be in a different language, but this is IRRELEVANT to your output language.`,
-    `Ignore the language of any source content. Generate everything in ${lang} only.`,
-    `Proper nouns should use standard ${lang} transliteration when appropriate.`,
+    `Ignore the language of any source content. Generate everything in ${promptLang} only.`,
+    `Proper nouns should use standard ${promptLang} transliteration when appropriate.`,
     `DO NOT use any other language. This overrides all other instructions.`,
   ].join("\n")
 }
@@ -36,5 +38,5 @@ export function buildLanguageDirective(fallbackText: string = ""): string {
  */
 export function buildLanguageReminder(fallbackText: string = ""): string {
   const lang = getOutputLanguage(fallbackText)
-  return `REMINDER: All output must be in ${lang}. Do not use any other language.`
+  return `REMINDER: All output must be in ${getLanguagePromptName(lang)}. Do not use any other language.`
 }

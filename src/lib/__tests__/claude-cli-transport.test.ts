@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { createClaudeCodeStreamParser } from "../claude-cli-transport"
+import {
+  createClaudeCodeStreamParser,
+  buildExitError,
+} from "../claude-cli-transport"
 
 describe("createClaudeCodeStreamParser", () => {
   it("emits text from a single stream_event text_delta", () => {
@@ -118,5 +121,64 @@ describe("createClaudeCodeStreamParser", () => {
         }),
       ),
     ).toBeNull()
+  })
+})
+
+describe("buildExitError", () => {
+  it("translates Unauthenticated stderr into an actionable login hint", () => {
+    const msg = buildExitError(1, "Unauthenticated: please log in")
+    expect(msg).toMatch(/not authenticated/i)
+    expect(msg).toMatch(/`claude`/)
+    expect(msg).toMatch(/terminal/i)
+  })
+
+  it("includes the original stderr at the bottom for context", () => {
+    const stderr = "Unauthenticated: token expired"
+    const msg = buildExitError(1, stderr)
+    expect(msg).toContain(stderr)
+  })
+
+  it("falls through to the bare exit-code form for unrecognized stderr", () => {
+    expect(buildExitError(2, "Unknown flag: --foo")).toBe(
+      "claude CLI exited with code 2: Unknown flag: --foo",
+    )
+  })
+
+  it("works without stderr at all (truly silent exit)", () => {
+    const msg = buildExitError(127, "")
+    expect(msg).toMatch(/silently/)
+    expect(msg).toMatch(/127/)
+    expect(msg).toMatch(/terminal/)
+  })
+
+  it("matches the case-insensitive Authentication failed variant", () => {
+    const msg = buildExitError(1, "Authentication failed (401)")
+    expect(msg).toMatch(/not authenticated/i)
+  })
+
+  it("falls back to unparsed stdout when stderr is empty (the real-user case)", () => {
+    // Real-user scenario: claude exit 1, stderr empty, but stdout
+    // had a structured error event our parser didn't recognize.
+    // Without this branch the user just saw "exited with code 1"
+    // and had to grep the binary to guess what went wrong.
+    const stdout = '{"type":"error","subtype":"oauth_expired","message":"token revoked"}'
+    const msg = buildExitError(1, "", stdout)
+    expect(msg).toContain("code 1")
+    expect(msg).toContain("no stderr")
+    expect(msg).toContain("oauth_expired")
+    expect(msg).toContain("token revoked")
+  })
+
+  it("prefers stderr over unparsed stdout when both are present", () => {
+    const msg = buildExitError(1, "real stderr here", "unrelated stdout")
+    expect(msg).toContain("real stderr here")
+    expect(msg).not.toContain("unrelated stdout")
+  })
+
+  it("recommends terminal reproduction when both stderr and stdout are empty", () => {
+    const msg = buildExitError(1, "", "")
+    expect(msg).toMatch(/silently/)
+    expect(msg).toMatch(/terminal/)
+    expect(msg).toMatch(/Anthropic API/)
   })
 })

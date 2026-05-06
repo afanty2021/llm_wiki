@@ -1,9 +1,10 @@
-import { useEffect, useCallback, useState, useRef, type ChangeEvent } from "react"
+import { useEffect, useCallback, useMemo, useState, useRef, type ChangeEvent } from "react"
 import Graph from "graphology"
 import { SigmaContainer, useLoadGraph, useRegisterEvents, useSigma } from "@react-sigma/core"
 import "@react-sigma/core/lib/style.css"
+import type { SigmaNodeEventPayload } from "sigma/types"
 import forceAtlas2 from "graphology-layout-forceatlas2"
-import { Network, RefreshCw, ZoomIn, ZoomOut, Maximize, Layers, Tag, Lightbulb, AlertTriangle, Link2, X, Search, Loader2 } from "lucide-react"
+import { Network, RefreshCw, ZoomIn, ZoomOut, Maximize, Layers, Tag, Lightbulb, AlertTriangle, Link2, X, Search, Loader2, Filter, RotateCcw, EyeOff } from "lucide-react"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { useResearchStore } from "@/stores/research-store"
 import { Button } from "@/components/ui/button"
@@ -14,6 +15,7 @@ import { findSurprisingConnections, detectKnowledgeGaps, type SurprisingConnecti
 import { queueResearch } from "@/lib/deep-research"
 import { optimizeResearchTopic } from "@/lib/optimize-research-topic"
 import { normalizePath } from "@/lib/path-utils"
+import { applyGraphFilters, DEFAULT_GRAPH_FILTERS, hasActiveGraphFilters, type GraphFilterState } from "@/lib/graph-filters"
 
 const NODE_TYPE_COLORS: Record<string, string> = {
   entity: "#60a5fa",    // blue-400
@@ -205,13 +207,26 @@ function HighlightManager({ highlightedNodes }: { highlightedNodes: Set<string> 
   return null
 }
 
-function EventHandler({ onNodeClick }: { onNodeClick: (nodeId: string) => void }) {
+function EventHandler({
+  onNodeClick,
+  onNodeContextMenu,
+}: {
+  onNodeClick: (nodeId: string) => void
+  onNodeContextMenu: (nodeId: string, x: number, y: number) => void
+}) {
   const registerEvents = useRegisterEvents()
   const sigma = useSigma()
 
   useEffect(() => {
     registerEvents({
       clickNode: ({ node }) => onNodeClick(node),
+      rightClickNode: (payload: SigmaNodeEventPayload) => {
+        payload.preventSigmaDefault()
+        payload.event.original.preventDefault()
+        const point = clientPointFromEvent(payload.event.original)
+        onNodeContextMenu(nodeIdFromPayload(payload), point.x, point.y)
+      },
+      rightClickStage: () => onNodeContextMenu("", 0, 0),
       enterNode: ({ node }) => {
         const container = sigma.getContainer()
         container.style.cursor = "pointer"
@@ -246,9 +261,19 @@ function EventHandler({ onNodeClick }: { onNodeClick: (nodeId: string) => void }
         sigma.refresh()
       },
     })
-  }, [registerEvents, sigma, onNodeClick])
+  }, [registerEvents, sigma, onNodeClick, onNodeContextMenu])
 
   return null
+}
+
+function nodeIdFromPayload(payload: SigmaNodeEventPayload): string {
+  return payload.node
+}
+
+function clientPointFromEvent(event: MouseEvent | TouchEvent): { x: number; y: number } {
+  if ("clientX" in event) return { x: event.clientX, y: event.clientY }
+  const touch = event.touches[0] ?? event.changedTouches[0]
+  return { x: touch?.clientX ?? 0, y: touch?.clientY ?? 0 }
 }
 
 function ZoomControls() {
@@ -315,6 +340,14 @@ export function GraphView() {
   const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(new Set())
   const [sigmaKey, setSigmaKey] = useState(0)
   const [isResizing, setIsResizing] = useState(false)
+  const [legendCollapsed, setLegendCollapsed] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
+  const [filters, setFilters] = useState<GraphFilterState>(() => ({
+    ...DEFAULT_GRAPH_FILTERS,
+    hiddenTypes: new Set(),
+    hiddenNodeIds: new Set(),
+  }))
+  const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
   const graphContainerRef = useRef<HTMLDivElement>(null)
   // Research confirmation dialog
   const [researchDialog, setResearchDialog] = useState<{
@@ -364,6 +397,28 @@ export function GraphView() {
     },
     [nodes, setSelectedFile, setFileContent],
   )
+
+  const handleNodeContextMenu = useCallback((nodeId: string, x: number, y: number) => {
+    if (!nodeId) {
+      setNodeMenu(null)
+      return
+    }
+    const rect = graphContainerRef.current?.getBoundingClientRect()
+    setNodeMenu({
+      nodeId,
+      x: rect ? x - rect.left : x,
+      y: rect ? y - rect.top : y,
+    })
+  }, [])
+
+  const resetFilters = useCallback(() => {
+    setFilters({
+      ...DEFAULT_GRAPH_FILTERS,
+      hiddenTypes: new Set(),
+      hiddenNodeIds: new Set(),
+    })
+    setNodeMenu(null)
+  }, [])
 
   const handleResearchClick = useCallback(async (gapTitle: string, gapDescription: string, gapType: string) => {
     const store = useWikiStore.getState()
@@ -456,6 +511,14 @@ export function GraphView() {
     return acc
   }, {})
 
+  const filteredGraph = useMemo(
+    () => applyGraphFilters(nodes, edges, filters),
+    [nodes, edges, filters],
+  )
+  const hiddenCount = nodes.length - filteredGraph.nodes.length
+  const filtersActive = hasActiveGraphFilters(filters)
+  const contextNode = nodeMenu ? nodes.find((node) => node.id === nodeMenu.nodeId) : null
+
   if (!project) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -504,11 +567,37 @@ export function GraphView() {
             <span className="text-sm font-medium">Knowledge Graph</span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="rounded bg-muted px-1.5 py-0.5">{nodes.length} pages</span>
-            <span className="rounded bg-muted px-1.5 py-0.5">{edges.length} links</span>
+            <span className="rounded bg-muted px-1.5 py-0.5">{filteredGraph.nodes.length}/{nodes.length} pages</span>
+            <span className="rounded bg-muted px-1.5 py-0.5">{filteredGraph.edges.length}/{edges.length} links</span>
+            {hiddenCount > 0 && (
+              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+                {hiddenCount} hidden
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant={showFilters ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setShowFilters((v) => !v)}
+            className="text-xs gap-1 h-7"
+          >
+            <Filter className="h-3 w-3" />
+            Filter
+          </Button>
+          {filtersActive && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={resetFilters}
+              className="text-xs gap-1 h-7"
+              title="Reset graph filters"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Reset
+            </Button>
+          )}
           <Button
             variant={colorMode === "type" ? "secondary" : "ghost"}
             size="sm"
@@ -555,7 +644,12 @@ export function GraphView() {
       {/* Graph canvas + Insights side panel */}
       <div className="flex flex-1 min-h-0">
         {/* Graph canvas */}
-        <div ref={graphContainerRef} className="relative flex-1 min-w-0 overflow-hidden bg-slate-50 dark:bg-slate-950">
+        <div
+          ref={graphContainerRef}
+          className="relative flex-1 min-w-0 overflow-hidden bg-slate-50 dark:bg-slate-950"
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={() => setNodeMenu(null)}
+        >
           {isResizing ? (
             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
               Resizing...
@@ -611,49 +705,238 @@ export function GraphView() {
               },
             }}
           >
-            <GraphLoader nodes={nodes} edges={edges} colorMode={colorMode} />
-            <EventHandler onNodeClick={handleNodeClick} />
+            <GraphLoader nodes={filteredGraph.nodes} edges={filteredGraph.edges} colorMode={colorMode} />
+            <EventHandler onNodeClick={handleNodeClick} onNodeContextMenu={handleNodeContextMenu} />
             <HighlightManager highlightedNodes={highlightedNodes} />
             <ZoomControls />
           </SigmaContainer>
           </ErrorBoundary>
           )}
 
+          {showFilters && (
+            <div className="absolute top-3 left-3 w-72 rounded-lg border bg-background/95 p-3 text-xs shadow-lg backdrop-blur-sm">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-foreground">
+                  <Filter className="h-3.5 w-3.5" />
+                  Graph Filters
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[10px]"
+                  onClick={resetFilters}
+                >
+                  Reset
+                </Button>
+              </div>
+
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <div className="font-medium text-muted-foreground">Quick filters</div>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={filters.hideStructural}
+                      onChange={(e) => setFilters((prev) => ({ ...prev, hideStructural: e.target.checked }))}
+                    />
+                    <span>Hide index / overview / log</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={filters.hideIsolated}
+                      onChange={(e) => setFilters((prev) => ({ ...prev, hideIsolated: e.target.checked }))}
+                    />
+                    <span>Hide isolated nodes</span>
+                  </label>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="font-medium text-muted-foreground">Max links</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      className="h-7 w-20 rounded border bg-background px-2 text-xs"
+                      value={filters.maxLinks ?? ""}
+                      onChange={(e) => {
+                        const raw = e.target.value.trim()
+                        const value = Number(raw)
+                        setFilters((prev) => ({
+                          ...prev,
+                          maxLinks: raw === "" || !Number.isFinite(value) ? undefined : Math.max(0, value),
+                        }))
+                      }}
+                      placeholder="Any"
+                    />
+                    <span className="text-muted-foreground">Hide nodes above this link count</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="font-medium text-muted-foreground">Node types</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {Object.entries(NODE_TYPE_LABELS)
+                      .filter(([type]) => (typeCounts[type] ?? 0) > 0)
+                      .map(([type, label]) => (
+                        <label key={type} className="flex min-w-0 items-center gap-1.5">
+                          <input
+                            type="checkbox"
+                            checked={!filters.hiddenTypes.has(type)}
+                            onChange={(e) => {
+                              setFilters((prev) => {
+                                const next = new Set(prev.hiddenTypes)
+                                if (e.target.checked) next.delete(type)
+                                else next.add(type)
+                                return { ...prev, hiddenTypes: next }
+                              })
+                            }}
+                          />
+                          <span className="truncate">{label}</span>
+                          <span className="text-muted-foreground/60">{typeCounts[type]}</span>
+                        </label>
+                      ))}
+                  </div>
+                </div>
+
+                {filters.hiddenNodeIds.size > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="font-medium text-muted-foreground">Hidden nodes</div>
+                    <div className="max-h-24 space-y-1 overflow-y-auto">
+                      {[...filters.hiddenNodeIds].map((nodeId) => {
+                        const node = nodes.find((n) => n.id === nodeId)
+                        return (
+                          <div key={nodeId} className="flex items-center justify-between gap-2 rounded bg-muted/50 px-2 py-1">
+                            <span className="truncate">{node?.label ?? nodeId}</span>
+                            <button
+                              type="button"
+                              className="text-muted-foreground hover:text-foreground"
+                              onClick={() => setFilters((prev) => {
+                                const next = new Set(prev.hiddenNodeIds)
+                                next.delete(nodeId)
+                                return { ...prev, hiddenNodeIds: next }
+                              })}
+                            >
+                              Show
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded bg-muted/50 px-2 py-1.5 text-muted-foreground">
+                  Showing {filteredGraph.nodes.length} of {nodes.length} pages and {filteredGraph.edges.length} of {edges.length} links.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {nodeMenu && contextNode && (
+            <div
+              className="absolute z-20 w-48 rounded-md border bg-background py-1 text-xs shadow-lg"
+              style={{ left: nodeMenu.x, top: nodeMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="border-b px-3 py-2">
+                <div className="truncate font-medium text-foreground">{contextNode.label}</div>
+                <div className="text-muted-foreground">{contextNode.linkCount} links</div>
+              </div>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent"
+                onClick={() => {
+                  setFilters((prev) => ({
+                    ...prev,
+                    hiddenNodeIds: new Set([...prev.hiddenNodeIds, contextNode.id]),
+                  }))
+                  setNodeMenu(null)
+                }}
+              >
+                <EyeOff className="h-3.5 w-3.5" />
+                Hide this node
+              </button>
+            </div>
+          )}
+
           {/* Legend */}
           <div className="absolute bottom-3 left-3 rounded-lg border bg-background/90 backdrop-blur-sm px-3 py-2 text-xs shadow-sm max-w-[260px]">
-            {colorMode === "type" ? (
-              <>
-                <div className="mb-1.5 font-semibold text-foreground">Node Types</div>
-                <div className="flex flex-col gap-0.5">
-                  {Object.entries(NODE_TYPE_LABELS)
-                    .filter(([type]) => (typeCounts[type] ?? 0) > 0)
-                    .map(([type, label]) => (
-                      <div
-                        key={type}
-                        className="flex items-center gap-2 rounded px-1 py-0.5 transition-colors hover:bg-accent/50"
-                        onMouseEnter={() => setHoveredType(type)}
-                        onMouseLeave={() => setHoveredType(null)}
-                      >
-                        <span
-                          className="inline-block h-3 w-3 rounded-full shrink-0 shadow-sm"
-                          style={{
-                            backgroundColor: NODE_TYPE_COLORS[type],
-                            boxShadow: `0 0 4px ${hexToRgba(NODE_TYPE_COLORS[type] ?? "#94a3b8", 0.4)}`,
-                          }}
-                        />
-                        <span className={hoveredType === type ? "text-foreground font-medium" : "text-muted-foreground"}>
-                          {label}
-                        </span>
-                        <span className="text-muted-foreground/60 ml-auto">{typeCounts[type]}</span>
-                      </div>
-                    ))}
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="font-semibold text-foreground">
+                {colorMode === "type" ? "Node Types" : "Communities"}
+              </span>
+              <div className="flex items-center gap-1">
+                {colorMode === "type" && filters.hiddenTypes.size > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-[10px] px-1"
+                    onClick={() => setFilters((prev) => ({ ...prev, hiddenTypes: new Set() }))}
+                    title="Show all types"
+                  >
+                    Show all
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0"
+                  onClick={() => setLegendCollapsed(!legendCollapsed)}
+                  title={legendCollapsed ? "Expand legend" : "Collapse legend"}
+                >
+                  {legendCollapsed ? "▶" : "▼"}
+                </Button>
+              </div>
+            </div>
+            {!legendCollapsed && (
+              colorMode === "type" ? (
+                <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto legend-scroll" style={{ direction: "rtl" }}>
+                  <div className="flex flex-col gap-0.5" style={{ direction: "ltr" }}>
+                    {Object.entries(NODE_TYPE_LABELS)
+                      .filter(([type]) => (typeCounts[type] ?? 0) > 0)
+                      .map(([type, label]) => {
+                        const isHidden = filters.hiddenTypes.has(type)
+                        return (
+                          <div
+                            key={type}
+                            className={`flex items-center gap-2 rounded px-1 py-0.5 transition-colors hover:bg-accent/50 ${isHidden ? "opacity-40" : ""}`}
+                            onMouseEnter={() => setHoveredType(type)}
+                            onMouseLeave={() => setHoveredType(null)}
+                            onDoubleClick={() => {
+                              setFilters((prev) => {
+                                const next = new Set(prev.hiddenTypes)
+                                if (next.has(type)) {
+                                  next.delete(type)
+                                } else {
+                                  next.add(type)
+                                }
+                                return { ...prev, hiddenTypes: next }
+                              })
+                            }}
+                            title="Double-click to toggle visibility"
+                          >
+                            <span
+                              className="inline-block h-3 w-3 rounded-full shrink-0 shadow-sm"
+                              style={{
+                                backgroundColor: isHidden ? "#94a3b8" : NODE_TYPE_COLORS[type],
+                                boxShadow: `0 0 4px ${hexToRgba(isHidden ? "#94a3b8" : NODE_TYPE_COLORS[type] ?? "#94a3b8", 0.4)}`,
+                              }}
+                            />
+                            <span className={hoveredType === type ? "text-foreground font-medium" : "text-muted-foreground"}>
+                              {label}
+                            </span>
+                            <span className="text-muted-foreground/60 ml-auto">{typeCounts[type]}</span>
+                            {isHidden && <span className="text-muted-foreground/60 text-[10px]">hidden</span>}
+                          </div>
+                        )
+                      })}
+                  </div>
                 </div>
-              </>
-            ) : (
-              <>
-                <div className="mb-1.5 font-semibold text-foreground">Communities</div>
-                <div className="flex flex-col gap-0.5">
-                  {communities.map((c) => (
+              ) : (
+                <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto legend-scroll" style={{ direction: "rtl" }}>
+                  <div className="flex flex-col gap-0.5" style={{ direction: "ltr" }}>
+                    {communities.map((c) => (
                     <div
                       key={c.id}
                       className="flex items-center gap-2 rounded px-1 py-0.5 transition-colors hover:bg-accent/50"
@@ -674,8 +957,9 @@ export function GraphView() {
                       )}
                     </div>
                   ))}
+                  </div>
                 </div>
-              </>
+              )
             )}
           </div>
         </div>

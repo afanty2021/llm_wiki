@@ -7,6 +7,8 @@ import { useActivityStore } from "@/stores/activity-store"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
+import { sanitizeIngestedFileContent } from "@/lib/ingest-sanitize"
+import { mergePageContent, type MergeFn } from "@/lib/page-merge"
 import { withProjectLock } from "@/lib/project-mutex"
 import {
   extractAndSaveSourceImages,
@@ -45,6 +47,7 @@ function resolveCaptionConfig(
 }
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
+import { sameScriptFamily } from "@/lib/language-metadata"
 
 // Legacy export kept for backward compatibility with existing diagnostic
 // tests. The live pipeline goes through parseFileBlocks() below, which
@@ -528,7 +531,7 @@ async function autoIngestImpl(
       },
     },
     signal,
-    { temperature: 0.1 },
+    { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: 4096 },
   )
 
   // A silent `return []` here would look like success to the queue
@@ -582,7 +585,7 @@ async function autoIngestImpl(
       },
     },
     signal,
-    { temperature: 0.1 },
+    { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: 8192 },
   )
 
   const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
@@ -592,7 +595,13 @@ async function autoIngestImpl(
 
   // ── Step 3: Write files ───────────────────────────────────────
   activity.updateItem(activityId, { detail: "Writing files..." })
-  const { writtenPaths, warnings: writeWarnings, hardFailures } = await writeFileBlocks(pp, generation)
+  const { writtenPaths, warnings: writeWarnings, hardFailures } = await writeFileBlocks(
+    pp,
+    generation,
+    llmConfig,
+    fileName,
+    signal,
+  )
 
   // Surface parser / writer warnings to the activity panel so users
   // don't have to open devtools to find out a block was dropped.
@@ -745,15 +754,21 @@ function contentMatchesTargetLanguage(content: string, target: string): boolean 
   // accept any Latin family (English may mis-detect as Italian/French for
   // short idiomatic samples — that's fine). Cross-family is the real bug.
   const cjk = new Set(["Chinese", "Traditional Chinese", "Japanese", "Korean"])
+  const distinctNonLatin = new Set(["Arabic", "Persian", "Hindi", "Thai", "Hebrew"])
   const targetIsCjk = cjk.has(target)
   const detectedIsCjk = cjk.has(detected)
   if (targetIsCjk) return detectedIsCjk
-  return !detectedIsCjk && !["Arabic", "Hindi", "Thai", "Hebrew"].includes(detected)
+  if (distinctNonLatin.has(target)) return detected === target
+  if (distinctNonLatin.has(detected)) return sameScriptFamily(target, detected)
+  return !detectedIsCjk
 }
 
 async function writeFileBlocks(
   projectPath: string,
   text: string,
+  llmConfig: LlmConfig,
+  sourceFileName: string,
+  signal?: AbortSignal,
 ): Promise<{ writtenPaths: string[]; warnings: string[]; hardFailures: string[] }> {
   const { blocks, warnings: parseWarnings } = parseFileBlocks(text)
   const warnings = [...parseWarnings]
@@ -770,7 +785,17 @@ async function writeFileBlocks(
 
   const targetLang = useWikiStore.getState().outputLanguage
 
-  for (const { path: relativePath, content } of blocks) {
+  for (const { path: relativePath, content: rawContent } of blocks) {
+    // Sanitize at the boundary — strip stray code-fence wrappers,
+    // `frontmatter:` prefixes, and repair invalid wikilink-list
+    // YAML lines so the file we write is canonical regardless of
+    // what shape the model emitted. See `ingest-sanitize.ts` for
+    // the recurring corruption shapes this fixes; without this
+    // step ~45% of generated entity pages went to disk with
+    // unparseable frontmatter and the read-time fallback had to
+    // paper over it forever.
+    const content = sanitizeIngestedFileContent(rawContent)
+
     // Language guard: reject individual FILE blocks whose body contradicts
     // the user-set target language. Skip:
     // - log.md (structural, short)
@@ -818,19 +843,32 @@ async function writeFileBlocks(
         await writeFile(fullPath, content)
       } else {
         // Content pages (entities / concepts / queries / synthesis /
-        // comparisons / sources summaries): MERGE the sources field
-        // with what's already on disk before overwriting, so pages
-        // that multiple source documents contribute to retain the
-        // full `sources: [...]` history. Without this, every
-        // re-ingest clobbers sources to a single entry and the
-        // source-delete flow would later treat the page as single-
-        // sourced and delete it outright — silent data loss.
-        //
-        // See src/lib/sources-merge.ts for the merge semantics
-        // (case-insensitive dedup, preserves existing order).
-        const { mergeSourcesIntoContent } = await import("./sources-merge")
+        // comparisons / sources summaries): if a page with this
+        // path already exists on disk, merge old + new instead of
+        // clobbering. The merge has three layers:
+        //   1. Frontmatter array fields (sources, tags, related)
+        //      are union-merged at the application layer.
+        //   2. If body content differs, an LLM call produces a
+        //      coherent merged body — preserves contributions from
+        //      every source document.
+        //   3. Locked frontmatter fields (type, title, created)
+        //      are forced back to the existing values; updated is
+        //      stamped today.
+        // LLM failure / sanity rejection falls back to "incoming
+        // body + array-field union" with a best-effort backup.
+        // See page-merge.ts.
         const existing = await tryReadFile(fullPath)
-        const toWrite = mergeSourcesIntoContent(content, existing)
+        const toWrite = await mergePageContent(
+          content,
+          existing || null,
+          buildPageMerger(llmConfig),
+          {
+            sourceFileName,
+            pagePath: relativePath,
+            signal,
+            backup: (oldContent) => backupExistingPage(projectPath, relativePath, oldContent),
+          },
+        )
         await writeFile(fullPath, toWrite)
       }
       writtenPaths.push(relativePath)
@@ -917,6 +955,7 @@ function parseReviewBlocks(
 export function buildAnalysisPrompt(purpose: string, index: string, sourceContent: string = ""): string {
   return [
     "You are an expert research analyst. Read the source document and produce a structured analysis.",
+    "Do not output chain-of-thought, hidden reasoning, or a thinking transcript. Reason internally and write only the concise final analysis.",
     "",
     languageRule(sourceContent),
     "",
@@ -970,6 +1009,7 @@ export function buildGenerationPrompt(schema: string, purpose: string, index: st
 
   return [
     "You are a wiki maintainer. Based on the analysis provided, generate wiki files.",
+    "Do not output chain-of-thought, hidden reasoning, or explanatory preamble. Reason internally and output only the requested FILE/REVIEW blocks.",
     "",
     languageRule(sourceContent),
     "",
@@ -986,25 +1026,49 @@ export function buildGenerationPrompt(schema: string, purpose: string, index: st
     "5. A log entry for wiki/log.md (just the new entry to append, format: ## [YYYY-MM-DD] ingest | Title)",
     "6. An updated wiki/overview.md — a high-level summary of what the entire wiki covers, updated to reflect the newly ingested source. This should be a comprehensive 2-5 paragraph overview of ALL topics in the wiki, not just the new source.",
     "",
-    "## Frontmatter Rules (CRITICAL)",
+    "## Frontmatter Rules (CRITICAL — parser is strict)",
     "",
-    "Every page MUST have YAML frontmatter with these fields:",
-    "```yaml",
-    "---",
-    "type: source | entity | concept | comparison | query | synthesis",
-    "title: Human-readable title",
-    "created: YYYY-MM-DD",
-    "updated: YYYY-MM-DD",
-    "tags: []",
-    "related: []",
-    `sources: [\"${sourceFileName}\"]  # MUST contain the original source filename`,
-    "---",
-    "```",
+    "Every page begins with a YAML frontmatter block. Format rules, in order of importance:",
     "",
-    `The \`sources\` field MUST always contain "${sourceFileName}" — this links the wiki page back to the original uploaded document.`,
+    "1. The VERY FIRST line of the file MUST be exactly `---` (three hyphens, nothing else).",
+    "   Do NOT wrap the file in a ```yaml ... ``` code fence.",
+    "   Do NOT prefix it with a `frontmatter:` key or any other line.",
+    "2. Each frontmatter line is a `key: value` pair on its own line.",
+    "3. The frontmatter ends with another `---` line on its own.",
+    "4. The next line after the closing `---` is the start of the page body.",
+    "5. Arrays use the standard YAML inline form `[a, b, c]` (no outer brackets around each item).",
+    "   Wikilinks belong in the BODY only — never write `related: [[a]], [[b]]` (invalid YAML);",
+    "   write `related: [a, b]` with bare slugs.",
+    "",
+    "Required fields and types:",
+    "  • type     — one of: source | entity | concept | comparison | query | synthesis",
+    "  • title    — string (quote it if it contains a colon, e.g. `title: \"Foo: Bar\"`)",
+    "  • created  — date in YYYY-MM-DD form (no quotes)",
+    "  • updated  — same as created",
+    "  • tags     — array of bare strings: `tags: [microbiology, ai]`",
+    "  • related  — array of bare wiki page slugs: `related: [foo, bar-baz]`. Do NOT include",
+    "               `wiki/`, `.md`, or `[[…]]` here — slugs only.",
+    `  • sources  — array of source filenames; MUST include "${sourceFileName}".`,
+    "",
+    "Concrete example of a complete, parseable page (everything between the two `---` lines",
+    "is the frontmatter; the heading and prose below are the body):",
+    "",
+    "    ---",
+    "    type: entity",
+    "    title: Example Entity",
+    "    created: 2026-04-29",
+    "    updated: 2026-04-29",
+    "    tags: [example, demo]",
+    "    related: [related-slug-1, related-slug-2]",
+    `    sources: ["${sourceFileName}"]`,
+    "    ---",
+    "",
+    "    # Example Entity",
+    "",
+    "    Body content goes here. Use [[wikilink]] syntax in the body for cross-references.",
     "",
     "Other rules:",
-    "- Use [[wikilink]] syntax for cross-references between pages",
+    "- Use [[wikilink]] syntax in the BODY for cross-references between pages",
     "- Use kebab-case filenames",
     "- Follow the analysis recommendations on what to emphasize",
     "- If the analysis found connections to existing pages, add cross-references",
@@ -1092,6 +1156,101 @@ async function tryReadFile(path: string): Promise<string> {
   } catch {
     return ""
   }
+}
+
+/**
+ * Build a MergeFn for a given LLM config. The returned function asks
+ * the model to merge two versions of the same wiki page into one.
+ * Page-merge.ts handles all the sanity-checking and fallback paths;
+ * this is just the "stream the LLM" wrapper.
+ */
+function buildPageMerger(llmConfig: LlmConfig): MergeFn {
+  return async (existingContent, incomingContent, sourceFileName, signal) => {
+    const systemPrompt = [
+      "You are merging two versions of the same wiki page into one coherent document.",
+      "Both versions describe the same entity / concept; one is already on disk,",
+      "the other was just generated from a different source document.",
+      "",
+      "Output ONE merged version that:",
+      "- Preserves every factual claim from both versions (do not drop content)",
+      "- Eliminates redundancy when both versions state the same fact",
+      "- Reorganizes sections so the structure is logical for the merged topic,",
+      "  not just a concatenation of the two inputs",
+      "- Uses consistent markdown structure (headings, tables, lists, callouts)",
+      "- Keeps `[[wikilink]]` references intact",
+      "",
+      "Output requirements:",
+      "- The FIRST character of your response MUST be `-` (the opening of `---`)",
+      "- Output the COMPLETE file: YAML frontmatter + body",
+      "- No preamble (no \"Here is the merged version:\"), no analysis prose",
+      "- The caller will overwrite `sources`/`tags`/`related`/`updated` with",
+      "  deterministic values — your job is the body and any other fields",
+    ].join("\n")
+
+    const userMessage = [
+      `## Existing version on disk`,
+      "",
+      existingContent,
+      "",
+      "---",
+      "",
+      `## Newly generated version (from ${sourceFileName})`,
+      "",
+      incomingContent,
+      "",
+      "---",
+      "",
+      "Now output the merged file. Start with `---` on the first line.",
+    ].join("\n")
+
+    let result = ""
+    let streamError: Error | null = null
+    await new Promise<void>((resolve) => {
+      streamChat(
+        llmConfig,
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        {
+          onToken: (token) => {
+            result += token
+          },
+          onDone: () => resolve(),
+          onError: (err) => {
+            streamError = err
+            resolve()
+          },
+        },
+        signal,
+        { temperature: 0.1 },
+      ).catch((err) => {
+        // Defensive: streamChat returns a Promise<void>; if it rejects
+        // (instead of going through onError), surface that too.
+        streamError = err instanceof Error ? err : new Error(String(err))
+        resolve()
+      })
+    })
+    if (streamError) throw streamError
+    return result
+  }
+}
+
+/**
+ * Best-effort snapshot of a page before a fallback merge overwrites
+ * it. Saved to `.llm-wiki/page-history/<sanitized-path>-<timestamp>.md`
+ * so a user who later notices content lost in a merge can recover it.
+ * Errors are swallowed by the caller (page-merge's tryBackup).
+ */
+async function backupExistingPage(
+  projectPath: string,
+  relativePath: string,
+  existingContent: string,
+): Promise<void> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+  const sanitized = relativePath.replace(/[/\\]/g, "_")
+  const backupPath = `${projectPath}/.llm-wiki/page-history/${sanitized}-${stamp}`
+  await writeFile(backupPath, existingContent)
 }
 
 /**

@@ -379,16 +379,38 @@ export function ChatPanel() {
       abortRef.current = controller
 
       let accumulated = ""
+      let thinkingOpen = false
+
+      const appendReasoning = (token: string) => {
+        if (!token) return
+        if (!thinkingOpen) {
+          thinkingOpen = true
+          accumulated += "<think>"
+          appendStreamToken("<think>")
+        }
+        accumulated += token
+        appendStreamToken(token)
+      }
+
+      const closeReasoning = () => {
+        if (!thinkingOpen) return
+        thinkingOpen = false
+        accumulated += "</think>"
+        appendStreamToken("</think>")
+      }
 
       await streamChat(
         llmConfig,
         llmMessages,
         {
           onToken: (token) => {
+            closeReasoning()
             accumulated += token
             appendStreamToken(token)
           },
+          onReasoningToken: appendReasoning,
           onDone: () => {
+            closeReasoning()
             finalizeStream(accumulated, queryRefs)
             abortRef.current = null
             // save-worthy detection removed — user has direct "Save to Wiki" button on each message
@@ -521,4 +543,3 @@ export function ChatPanel() {
     </div>
   )
 }
-

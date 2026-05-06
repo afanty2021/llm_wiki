@@ -40,8 +40,9 @@ export async function resetProjectState(): Promise<void> {
 
   // Module-level caches — load in parallel and clear each, surfacing any
   // failure instead of swallowing it.
-  const [queueMod, graphMod] = await Promise.allSettled([
+  const [queueMod, dedupQueueMod, graphMod] = await Promise.allSettled([
     import("@/lib/ingest-queue"),
+    import("@/lib/dedup-queue"),
     import("@/lib/graph-relevance"),
   ])
 
@@ -57,6 +58,16 @@ export async function resetProjectState(): Promise<void> {
     }
   } else {
     console.warn("[Reset Project State] Failed to load ingest-queue:", queueMod.reason)
+  }
+
+  if (dedupQueueMod.status === "fulfilled") {
+    try {
+      await dedupQueueMod.value.pauseQueue()
+    } catch (err) {
+      console.warn("[Reset Project State] dedup pauseQueue failed:", err)
+    }
+  } else {
+    console.warn("[Reset Project State] Failed to load dedup-queue:", dedupQueueMod.reason)
   }
 
   if (graphMod.status === "fulfilled") {
