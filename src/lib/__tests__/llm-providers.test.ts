@@ -212,6 +212,21 @@ describe("Claude Code CLI provider — not reachable via getProviderConfig", () 
   })
 })
 
+describe("Codex CLI provider — not reachable via getProviderConfig", () => {
+  it("throws, because the subprocess transport dispatches one layer up in streamChat", () => {
+    expect(() =>
+      getProviderConfig({
+        provider: "codex-cli",
+        apiKey: "",
+        model: "gpt-5.4-mini",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 200000,
+      } as RealLlmConfig),
+    ).toThrow(/subprocess transport/)
+  })
+})
+
 describe("Google provider URL — model path encoding", () => {
   const makeGoogleConfig = (model: string): RealLlmConfig => ({
     provider: "google",

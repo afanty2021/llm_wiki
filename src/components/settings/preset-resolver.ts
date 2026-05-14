@@ -44,11 +44,11 @@ export function resolveConfig(
     }
   }
 
-  if (preset.provider === "claude-code") {
+  if (preset.provider === "claude-code" || preset.provider === "codex-cli") {
     // Subprocess transport — no apiKey, no endpoint URL. Model id is
-    // passed straight to `claude --model`.
+    // passed straight to the local CLI's model flag.
     return {
-      provider: "claude-code",
+      provider: preset.provider,
       apiKey: "",
       model,
       ollamaUrl: fallback.ollamaUrl,
