@@ -370,6 +370,22 @@ describe("Sampling override translation across wires", () => {
     expect(body.max_completion_tokens).toBeUndefined()
   })
 
+  it("custom Kimi routes strip unsupported temperature overrides", () => {
+    const cfg = getProviderConfig({
+      provider: "custom",
+      apiKey: "k",
+      model: "kimi-k2.6",
+      ollamaUrl: "",
+      customEndpoint: "https://api.moonshot.ai/v1",
+      apiMode: "chat_completions",
+      maxContextSize: 256000,
+    })
+    const body = cfg.buildBody(baseMessages, { temperature: 0.1, max_tokens: 4096 }) as Record<string, unknown>
+
+    expect(body.temperature).toBeUndefined()
+    expect(body.max_tokens).toBe(4096)
+  })
+
   it("Anthropic maps stop → stop_sequences and respects max_tokens override", () => {
     const cfg = getProviderConfig({
       provider: "anthropic",

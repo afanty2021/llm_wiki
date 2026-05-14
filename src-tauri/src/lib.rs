@@ -80,6 +80,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::fs::read_file,
             commands::fs::write_file,
+            commands::fs::write_file_atomic,
             commands::fs::list_directory,
             commands::fs::copy_file,
             commands::fs::copy_directory,
@@ -89,6 +90,7 @@ pub fn run() {
             commands::fs::create_directory,
             commands::fs::file_exists,
             commands::fs::get_file_modified_time,
+            commands::fs::get_file_size,
             commands::fs::get_file_md5,
             commands::fs::read_file_as_base64,
             commands::project::create_project,

@@ -239,6 +239,12 @@ function isQwenThinkingModel(model: string): boolean {
   return /qwen[-_]?3/i.test(model)
 }
 
+function isKimiEndpoint(config: LlmConfig): boolean {
+  return /(^|[/:.-])kimi([/:.-]|$)/i.test(config.model)
+    || /moonshot/i.test(config.model)
+    || /api\.moonshot\.(ai|cn)/i.test(config.customEndpoint)
+}
+
 function isOpenAiStrictCompletionModel(config: LlmConfig): boolean {
   if (config.provider !== "openai") return false
   const model = config.model.trim().toLowerCase()
@@ -262,6 +268,16 @@ function adaptOpenAiStrictCompletionBody(config: LlmConfig, body: Record<string,
   delete body.top_k
 }
 
+function adaptKimiBody(config: LlmConfig, body: Record<string, unknown>): void {
+  if (!isKimiEndpoint(config)) return
+
+  // Moonshot/Kimi OpenAI-compatible endpoints reject non-default
+  // temperature values for several current models ("only 1 is allowed").
+  // Structured ingest/dedup pass temperature=0.1 for determinism, so
+  // omit it and let the endpoint use its required default.
+  delete body.temperature
+}
+
 function buildOpenAiCompatibleBody(
   config: LlmConfig,
   messages: ChatMessage[],
@@ -270,6 +286,7 @@ function buildOpenAiCompatibleBody(
   const reasoning = effectiveReasoning(config, overrides)
   const body: Record<string, unknown> = buildOpenAiBody(messages, stripWireAgnosticOverrides(overrides))
   adaptOpenAiStrictCompletionBody(config, body)
+  adaptKimiBody(config, body)
 
   if (isDeepSeekEndpoint(config)) {
     // DeepSeek V4 thinking mode. `thinking.type=disabled` is the most

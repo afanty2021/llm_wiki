@@ -26,6 +26,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.10",
+    date: "2026-05-14",
+    highlights: {
+      en: [
+        "Added configurable source folder monitoring, manual source-folder refresh, and Gemini native embeddings support.",
+        "Fixed source sync, embedding provider compatibility, and settings localization issues.",
+      ],
+      zh: [
+        "新增可配置的资料文件夹监控、手动刷新资料文件夹，以及 Gemini 原生向量嵌入支持。",
+        "修复资料同步、向量 provider 兼容性和设置页本地化相关问题。",
+      ],
+    },
+  },
+  {
     version: "0.4.9",
     date: "2026-05-11",
     highlights: {

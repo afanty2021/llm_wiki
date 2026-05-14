@@ -226,6 +226,22 @@ describe("reasoning controls", () => {
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
   })
 
+  it("strips temperature for Kimi/Moonshot OpenAI-compatible endpoints", () => {
+    const cfg = mkConfig({
+      provider: "custom",
+      model: "kimi-k2.6",
+      customEndpoint: "https://api.moonshot.ai/v1",
+      apiMode: "chat_completions",
+    })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { temperature: 0.1, max_tokens: 4096 },
+    ) as Record<string, unknown>
+
+    expect(body.temperature).toBeUndefined()
+    expect(body.max_tokens).toBe(4096)
+  })
+
   it("maps Anthropic reasoning budget to extended thinking and removes sampling knobs", () => {
     const cfg = mkConfig({ provider: "anthropic", model: "claude-sonnet-4-5-20250929" })
     const body = getProviderConfig(cfg).buildBody(

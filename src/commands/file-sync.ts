@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core"
+import type { SourceWatchConfig } from "@/stores/wiki-store"
+import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 
 export type FileChangeKind = "created" | "modified" | "deleted"
 export type FileChangeStatus = "pending" | "processing" | "done" | "failed" | "superseded"
@@ -25,6 +27,11 @@ export interface FileChangeQueue {
   tasks: FileChangeTask[]
 }
 
+export interface FileChangeRescanResult {
+  queue: FileChangeQueue
+  changedTasks: FileChangeTask[]
+}
+
 export interface FileSyncPayload {
   projectId: string
   tasks: FileChangeTask[]
@@ -33,8 +40,13 @@ export interface FileSyncPayload {
 export function startProjectFileWatcher(
   projectId: string,
   projectPath: string,
+  sourceWatchConfig?: SourceWatchConfig,
 ): Promise<FileChangeQueue> {
-  return invoke<FileChangeQueue>("start_project_file_watcher", { projectId, projectPath })
+  return invoke<FileChangeQueue>("start_project_file_watcher", {
+    projectId,
+    projectPath,
+    sourceWatchConfig: normalizeSourceWatchConfig(sourceWatchConfig),
+  })
 }
 
 export function stopProjectFileWatcher(): Promise<void> {
@@ -44,8 +56,13 @@ export function stopProjectFileWatcher(): Promise<void> {
 export function rescanProjectFiles(
   projectId: string,
   projectPath: string,
-): Promise<FileChangeQueue> {
-  return invoke<FileChangeQueue>("rescan_project_files", { projectId, projectPath })
+  sourceWatchConfig?: SourceWatchConfig,
+): Promise<FileChangeRescanResult> {
+  return invoke<FileChangeRescanResult>("rescan_project_files", {
+    projectId,
+    projectPath,
+    sourceWatchConfig: normalizeSourceWatchConfig(sourceWatchConfig),
+  })
 }
 
 export function getFileChangeQueue(projectPath: string): Promise<FileChangeQueue> {

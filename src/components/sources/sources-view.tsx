@@ -3,12 +3,14 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
 import { listDirectory, readFile } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
 import { normalizePath } from "@/lib/path-utils"
 import { decideDeleteClick } from "@/lib/sources-tree-delete"
+import { rescanProjectFileSync } from "@/lib/project-file-sync"
 import {
   deleteSourceFile,
   deleteSourceFolder,
@@ -28,9 +30,12 @@ export function SourcesView() {
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const llmConfig = useWikiStore((s) => s.llmConfig)
+  const dataVersion = useWikiStore((s) => s.dataVersion)
   const [sources, setSources] = useState<FileNode[]>([])
   const [importing, setImporting] = useState(false)
   const [ingestingPath, setIngestingPath] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
   /**
    * Path of the source-tree node currently in "click again to
    * confirm delete" state. Lifted up here (rather than living
@@ -62,14 +67,31 @@ export function SourcesView() {
       // Filter out hidden files/dirs and cache
       const filtered = filterTree(tree)
       setSources(filtered)
-    } catch {
+      setRefreshError(null)
+    } catch (err) {
+      setRefreshError(String(err))
       setSources([])
     }
   }, [project])
 
   useEffect(() => {
     loadSources()
-  }, [loadSources])
+  }, [loadSources, dataVersion])
+
+  async function handleRefreshSources() {
+    if (!project || refreshing) return
+    setRefreshing(true)
+    try {
+      await rescanProjectFileSync(project, useWikiStore.getState().sourceWatchConfig)
+      setRefreshError(null)
+    } catch (err) {
+      console.warn("[sources] failed to rescan project files:", err)
+      setRefreshError(String(err))
+    } finally {
+      await loadSources()
+      setRefreshing(false)
+    }
+  }
 
   async function handleImport() {
     if (!project) return
@@ -235,13 +257,29 @@ export function SourcesView() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <TooltipProvider delay={300}>
+      <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">{t("sources.title")}</h2>
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" onClick={loadSources} title={t("sources.refresh")}>
-            <RefreshCw className="h-4 w-4" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleRefreshSources}
+                  disabled={refreshing}
+                  aria-label={t("sources.refreshFolder")}
+                />
+              }
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="end" className="max-w-80 whitespace-normal leading-relaxed">
+              {t("sources.refreshFolderTooltip")}
+            </TooltipContent>
+          </Tooltip>
           <Button size="sm" onClick={handleImport} disabled={importing}>
             <Plus className="mr-1 h-4 w-4" />
             {importing ? t("sources.importing") : t("sources.import")}
@@ -254,6 +292,14 @@ export function SourcesView() {
       </div>
 
       <ScrollArea className="flex-1">
+        {refreshError && (
+          <div className="mx-4 mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {t("sources.refreshFailed", {
+              defaultValue: "Failed to refresh sources: {{error}}",
+              error: refreshError,
+            })}
+          </div>
+        )}
         {sources.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 p-8 text-center text-sm text-muted-foreground">
             <p>{t("sources.noSources")}</p>
@@ -285,10 +331,30 @@ export function SourcesView() {
         )}
       </ScrollArea>
 
-      <div className="border-t px-4 py-2 text-xs text-muted-foreground">
-        {t("sources.sourceCount", { count: countFiles(sources) })}
+      <div className="flex items-center justify-between gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
+        <span>{t("sources.sourceCount", { count: countFiles(sources) })}</span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRefreshSources}
+                disabled={!project || refreshing}
+                className="h-7 px-2 text-xs"
+              />
+            }
+          >
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? t("sources.refreshingFolder") : t("sources.refreshFolder")}
+          </TooltipTrigger>
+          <TooltipContent side="top" align="end" className="max-w-80 whitespace-normal leading-relaxed">
+            {t("sources.refreshFolderTooltip")}
+          </TooltipContent>
+        </Tooltip>
       </div>
-    </div>
+      </div>
+    </TooltipProvider>
   )
 }
 

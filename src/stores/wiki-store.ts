@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import type { WikiProject, FileNode } from "@/types/wiki"
+import { DEFAULT_SOURCE_WATCH_CONFIG } from "@/lib/source-watch-config"
 
 /**
  * Wire protocol used when `provider === "custom"`. Other providers have a
@@ -74,6 +75,8 @@ interface EmbeddingConfig {
   endpoint: string // e.g. "http://127.0.0.1:1234/v1/embeddings"
   apiKey: string
   model: string // e.g. "text-embedding-qwen3-embedding-0.6b"
+  /** Optional Gemini native `output_dimensionality` value. Ignored by OpenAI-compatible endpoints. */
+  outputDimensionality?: number
   /**
    * Chunking knobs (Phase 1 RAG). Undefined values fall back to the
    * chunker's built-in defaults in `src/lib/text-chunker.ts`:
@@ -137,6 +140,16 @@ interface ScheduledImportConfig {
   path: string // 监控目录的相对路径（相对于项目根目录），空字符串表示使用默认的 "raw"
   interval: number // 扫描间隔（分钟）
   lastScan: number | null // 上次扫描时间戳
+}
+
+interface SourceWatchConfig {
+  enabled: boolean
+  autoIngest: boolean
+  includeExtensions: string[]
+  excludeExtensions: string[]
+  excludeDirs: string[]
+  excludeGlobs: string[]
+  maxFileSizeMb: number
 }
 
 interface MultimodalConfig {
@@ -233,6 +246,7 @@ interface WikiState {
   outputLanguage: OutputLanguage
   proxyConfig: ProxyConfig
   scheduledImportConfig: ScheduledImportConfig
+  sourceWatchConfig: SourceWatchConfig
   dataVersion: number
 
   setProject: (project: WikiProject | null) => void
@@ -251,6 +265,7 @@ interface WikiState {
   setOutputLanguage: (lang: OutputLanguage) => void
   setProxyConfig: (config: ProxyConfig) => void
   setScheduledImportConfig: (config: ScheduledImportConfig) => void
+  setSourceWatchConfig: (config: SourceWatchConfig) => void
   bumpDataVersion: () => void
 }
 
@@ -331,6 +346,8 @@ export const useWikiStore = create<WikiState>((set) => ({
     lastScan: null,
   },
 
+  sourceWatchConfig: DEFAULT_SOURCE_WATCH_CONFIG,
+
   setLlmConfig: (llmConfig) => set({ llmConfig }),
   setProviderConfigs: (providerConfigs) => set({ providerConfigs }),
   setActivePresetId: (activePresetId) => set({ activePresetId }),
@@ -340,7 +357,8 @@ export const useWikiStore = create<WikiState>((set) => ({
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),
   setProxyConfig: (proxyConfig) => set({ proxyConfig }),
   setScheduledImportConfig: (scheduledImportConfig) => set({ scheduledImportConfig }),
+  setSourceWatchConfig: (sourceWatchConfig) => set({ sourceWatchConfig }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
 
-export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProxyConfig, ScheduledImportConfig }
+export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProxyConfig, ScheduledImportConfig, SourceWatchConfig }

@@ -47,6 +47,28 @@
     "aiOutputLanguageHint": "所有 AI 生成的内容（Wiki 页面、聊天回复、Research 结果）都将使用此语言。您可以在设置 → 输出 中稍后更改。",
     "pickLanguage": "选择语言..."
   },
+  "templates": {
+    "research": {
+      "name": "研究",
+      "description": "用于深度研究，包含假设跟踪和方法论记录"
+    },
+    "reading": {
+      "name": "阅读",
+      "description": "跟踪书籍的人物、主题、情节线和章节笔记"
+    },
+    "personal": {
+      "name": "个人成长",
+      "description": "记录目标、习惯、反思和成长日志"
+    },
+    "business": {
+      "name": "商务",
+      "description": "管理团队会议、决策、项目和干系人背景"
+    },
+    "general": {
+      "name": "通用",
+      "description": "最小化初始结构，适合从空白开始"
+    }
+  },
   "sources": {
     "title": "原始资料",
     "import": "导入",
@@ -58,6 +80,11 @@
     "importSourceFiles": "导入源文件",
     "importSourceFolder": "导入源文件夹",
     "refresh": "刷新",
+    "refreshFolder": "刷新文件夹",
+    "refreshingFolder": "刷新中...",
+    "refreshFolderHint": "重新扫描资料文件夹，并处理新增、修改或删除的文件。",
+    "refreshFolderTooltip": "按自动监控相同规则重新扫描当前项目的资料文件夹。允许的新增或修改文件会加入提取队列；已删除的资料会走正常的 Wiki 与索引清理流程；随后重建文件树。",
+    "refreshFailed": "刷新原始资料失败：{{error}}",
     "ingest": "提取到 Wiki",
     "delete": "删除资料及相关 Wiki 页面",
     "deleteConfirm": "删除「{{name}}」及其相关 Wiki 页面？\n\n此操作将：\n- 删除原始资料文件\n- 删除由该资料生成的 Wiki 页面\n- 更新 index.md",
@@ -92,20 +119,6 @@
     "placeholder": "搜索 Wiki 页面...",
     "noResults": "未找到相关结果",
     "startSearching": "输入关键词搜索 Wiki 页面"
-  },
-  "lint": {
-    "title": "检查",
-    "runLint": "开始检查",
-    "running": "检查中...",
-    "semantic": "语义检查（LLM）",
-    "allClear": "一切正常，未发现问题",
-    "orphan": "孤立页面",
-    "brokenLink": "失效链接",
-    "noOutlinks": "无出链",
-    "contradiction": "内容矛盾",
-    "stale": "内容过时",
-    "missingPage": "缺失页面",
-    "suggestion": "建议"
   },
   "lint": {
     "title": "Wiki 检查",
@@ -169,6 +182,7 @@
       "multimodal": "图片描述",
       "webSearch": "网页搜索",
       "network": "网络",
+      "sourceWatch": "资料文件夹监控",
       "scheduledImport": "定时导入",
       "output": "输出偏好",
       "interface": "界面",
@@ -184,6 +198,11 @@
         "collapse": "收起",
         "toggleOff": "点击关闭",
         "toggleOn": "点击启用（会关闭其他 provider）",
+        "deactivate": "停用",
+        "activate": "启用",
+        "apiMode": "API 模式",
+        "endpoint": "Endpoint",
+        "contextWindow": "上下文窗口",
         "wireOpenAi": "OpenAI 兼容",
         "wireAnthropic": "Anthropic 兼容",
         "apiKeyPlaceholderCustom": "无 Key 可留空（本地模型）",
@@ -191,18 +210,37 @@
         "savedBadge": "已保存",
         "configuredBadge": "已配置",
         "activeBadge": "● 活跃",
+        "useModel": "使用 {{model}}",
+        "typeCustomModel": "输入自定义模型 ID",
+        "customModel": "自定义…",
+        "customModelBadge": "自定义：{{model}}",
         "endpointPreviewWillUse": "将使用",
-        "endpointPreviewAutoApply": "（离开输入框时自动套用）"
+        "endpointPreviewAutoApply": "（离开输入框时自动套用）",
+        "reasoning": {
+          "title": "Reasoning / thinking",
+          "auto": "自动",
+          "off": "关闭",
+          "low": "低",
+          "medium": "中",
+          "high": "高",
+          "max": "最大",
+          "custom": "自定义",
+          "budgetTokens": "thinking token 预算",
+          "hint": "结构化任务（如 ingest）可能会自动关闭 reasoning，避免模型只输出思考过程而没有正文。"
+        }
       },
       "embedding": {
         "title": "向量嵌入",
-        "description": "启用语义搜索。对任何 OpenAI 兼容的 /v1/embeddings endpoint 工作。本地模型（如 LM Studio、Ollama embedding）不需要 API Key。",
+        "description": "启用语义搜索。支持 OpenAI 兼容的 /v1/embeddings endpoint，也支持 Google Gemini 原生 embedContent endpoint。本地模型（如 LM Studio、Ollama embedding）不需要 API Key。",
         "enableLabel": "启用向量搜索",
         "enableHint": "关掉后搜索只走 token 匹配。",
         "endpoint": "Endpoint",
+        "endpointHint": "OpenAI 兼容示例：http://127.0.0.1:1234/v1/embeddings。Gemini 示例：https://generativelanguage.googleapis.com/v1beta，模型填 gemini-embedding-001。",
         "apiKey": "API Key（可选）",
         "apiKeyPlaceholder": "本地模型留空即可",
         "model": "Model",
+        "outputDimensionality": "输出维度（仅 Gemini）",
+        "outputDimensionalityHint": "可选。仅对 Gemini 原生 embedContent endpoint 作为 `output_dimensionality` 发送；OpenAI 兼容 endpoint 会忽略此项。留空则使用模型默认值。修改模型或维度后需要重建嵌入。",
         "chunking": "切分参数",
         "maxChunkChars": "每块最大字符数",
         "maxChunkCharsHint": "单个 chunk 的目标长度。endpoint 上下文较小时（llama.cpp n_ctx=512、mxbai-embed-large 等）调低（如 500）。",
@@ -247,7 +285,21 @@
       },
       "webSearch": {
         "title": "网页搜索",
-        "description": "Deep Research 会用它拉取最新的外部上下文。"
+        "description": "Deep Research 会用它拉取最新的外部上下文。",
+        "expand": "展开",
+        "collapse": "收起",
+        "activate": "启用",
+        "deactivate": "停用",
+        "configuredBadge": "已配置",
+        "activeBadge": "活跃",
+        "savedBadge": "已保存",
+        "instanceUrl": "实例 URL",
+        "searxngJsonHint": "实例必须允许 JSON 搜索响应（`format=json`）。",
+        "searchCategories": "搜索分类",
+        "searxngCategoriesHint": "分类会作为 SearXNG 的 `categories` 参数发送。",
+        "searchEngine": "搜索引擎 / 分类",
+        "customSerpApiPlaceholder": "自定义 SerpApi engine，例如 google_finance",
+        "customSerpApiHint": "自定义 engine 会作为 SerpApi 的 `engine` 参数发送。"
       },
       "network": {
         "title": "网络",
@@ -258,12 +310,44 @@
         "bypassLocal": "本地地址不走代理（推荐）",
         "bypassLocalHelp": "对 localhost、127.0.0.0/8、10.0.0.0/8、172.16.0.0/12、192.168.0.0/16 以及 *.local 的请求会绕过代理。如果你用 Ollama / LM Studio 或局域网内的 LLM 服务，请保持开启。"
       },
+      "sourceWatch": {
+        "title": "资料文件夹自动监控",
+        "description": "监控 raw/sources 的外部变化，并选择哪些文件允许自动进入提取队列。",
+        "enable": "监控项目资料文件夹",
+        "enableDescription": "刷新原始资料列表，并为 raw/sources 下允许的新文件或修改文件建立提取任务。",
+        "autoIngest": "自动提取允许的原始资料文件",
+        "autoIngestDescription": "关闭后，外部变化仍会刷新文件树，但不会创建提取任务。",
+        "noProject": "打开项目后才能修改这个项目级设置。",
+        "fileTypes": "允许的文件类型",
+        "fileTypesDescription": "常见文档类型默认开启。媒体、二进制、源码和配置类格式默认关闭，需要时再手动选择。",
+        "exclusions": "排除规则和限制",
+        "maxSize": "自动提取的最大文件大小（MB）",
+        "excludeDirs": "排除的文件夹",
+        "excludeDirsPlaceholder": ".git, node_modules, drafts, subdir/drafts",
+        "excludeDirsHint": "文件夹名称会匹配任意路径段。subdir/drafts 这类路径会匹配对应的嵌套文件夹。",
+        "excludeExtensions": "排除的文件扩展名",
+        "excludeExtensionsPlaceholder": "tmp, bak, exe, dll, iso, dmg",
+        "excludeExtensionsHint": "不需要写点号。这些扩展名会覆盖上面的允许文件类型勾选。",
+        "excludeGlobs": "排除的文件名模式",
+        "excludeGlobsHint": "用逗号分隔模式，例如 *.draft.*、~$*、.~lock.*#。",
+        "groups": {
+          "documents": "文档",
+          "presentations": "演示文稿",
+          "spreadsheets": "表格",
+          "web": "网页文档",
+          "data": "数据 / 配置",
+          "images": "图片",
+          "media": "音频 / 视频",
+          "code": "源码"
+        }
+      },
       "scheduledImport": {
         "title": "定时导入",
         "description": "自动监控指定目录，按固定间隔导入新增或修改的文件。",
         "enable": "启用定时导入",
         "directory": "监控目录",
         "directoryHelp": "相对于项目根目录的路径（如 'raw'、'docs/input'）。该目录中的文件将被自动导入。默认为 'raw'。",
+        "privacyNotice": "所选目录中的文件可能会被复制到当前项目，并在提取时发送给你配置的 LLM。源目录中删除文件不会自动删除项目内已导入内容。",
         "browse": "浏览",
         "selectDirectory": "选择监控目录",
         "interval": "扫描间隔（分钟）",

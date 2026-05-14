@@ -1,5 +1,5 @@
 import type { CustomApiMode } from "./llm-presets"
-import type { ReasoningConfig } from "@/stores/wiki-store"
+import type { ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
 
 /**
  * Shape of the draft state each section reads from and writes into.
@@ -23,6 +23,8 @@ export interface SettingsDraft {
   embeddingEndpoint: string
   embeddingApiKey: string
   embeddingModel: string
+  /** Optional Gemini native output_dimensionality. Empty = provider default. */
+  embeddingOutputDimensionality: number | undefined
   /** Target characters per chunk. Empty = use chunker default (1000). */
   embeddingMaxChunkChars: number | undefined
   /** Overlap characters between adjacent chunks. Empty = default (200). */
@@ -58,8 +60,8 @@ export interface SettingsDraft {
   // UI
   uiLanguage: string
 
-  // Project sync
-  projectFileSyncEnabled: boolean
+  // Source folder auto watch
+  sourceWatchConfig: SourceWatchConfig
 }
 
 export type DraftSetter = <K extends keyof SettingsDraft>(

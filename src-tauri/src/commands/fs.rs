@@ -915,6 +915,49 @@ pub async fn write_file(path: String, contents: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn write_file_atomic(path: String, contents: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_guarded("write_file_atomic", || {
+            let p = Path::new(&path);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path, e))?;
+            }
+
+            let file_name = p
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "llm-wiki-file".to_string());
+            let tmp_path = p.with_file_name(format!(
+                ".{file_name}.{}.tmp",
+                chrono::Utc::now()
+                    .timestamp_nanos_opt()
+                    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
+            ));
+
+            file_sync::mark_app_write_path(&tmp_path);
+            file_sync::mark_app_write_path(p);
+            fs::write(&tmp_path, contents)
+                .map_err(|e| format!("Failed to write temp file '{}': {}", tmp_path.display(), e))?;
+
+            fs::rename(&tmp_path, p).map_err(|e| {
+                let _ = fs::remove_file(&tmp_path);
+                format!(
+                    "Failed to move temp file '{}' to '{}': {}",
+                    tmp_path.display(),
+                    path,
+                    e
+                )
+            })?;
+            file_sync::mark_app_write_path(p);
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("write_file_atomic blocking task join error: {e}"))?
+}
+
+#[tauri::command]
 pub async fn list_directory(path: String) -> Result<Vec<FileNode>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("list_directory", || {
@@ -1369,16 +1412,38 @@ pub async fn get_file_modified_time(path: String) -> Result<u64, String> {
     .map_err(|e| format!("get_file_modified_time blocking task join error: {e}"))?
 }
 
+#[tauri::command]
+pub async fn get_file_size(path: String) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_guarded("get_file_size", || {
+            let metadata = fs::metadata(&path)
+                .map_err(|e| format!("Failed to get metadata for '{}': {}", path, e))?;
+            Ok(metadata.len())
+        })
+    })
+    .await
+    .map_err(|e| format!("get_file_size blocking task join error: {e}"))?
+}
+
 /// Compute MD5 hash of a file. Returns the hex-encoded hash string.
 #[tauri::command]
 pub async fn get_file_md5(path: String) -> Result<String, String> {
     use md5::{Digest, Md5};
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_md5", || {
-            let bytes = fs::read(&path)
-                .map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
+            let mut file = fs::File::open(&path)
+                .map_err(|e| format!("Failed to open file '{}': {}", path, e))?;
             let mut hasher = Md5::new();
-            hasher.update(&bytes);
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let read = file
+                    .read(&mut buffer)
+                    .map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
             let result = hasher.finalize();
             Ok(format!("{:x}", result))
         })

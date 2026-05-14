@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { open } from "@tauri-apps/plugin-dialog"
 import { Input } from "@/components/ui/input"
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Folder, Play, RefreshCw } from "lucide-react"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
 import { useWikiStore } from "@/stores/wiki-store"
-import { startScheduledImport, stopScheduledImport, scanAndImport } from "@/lib/scheduled-import"
+import { scanAndImport } from "@/lib/scheduled-import"
 
 interface Props {
   draft: SettingsDraft
@@ -38,33 +38,13 @@ export function ScheduledImportSection({ draft, setDraft }: Props) {
 
     setIsScanning(true)
     try {
-      await scanAndImport(project.path, draft.scheduledImportPath)
+      await scanAndImport(project, draft.scheduledImportPath)
     } catch (err) {
       console.error("[Scheduled Import] Manual scan failed:", err)
     } finally {
       setIsScanning(false)
     }
   }, [project, draft.scheduledImportPath, isScanning])
-
-  // Start/stop scheduled import when config changes
-  useEffect(() => {
-    if (!project) return
-
-    if (draft.scheduledImportEnabled && draft.scheduledImportPath && draft.scheduledImportInterval > 0) {
-      startScheduledImport(project.path, {
-        enabled: true,
-        path: draft.scheduledImportPath,
-        interval: draft.scheduledImportInterval,
-        lastScan: scheduledImportConfig.lastScan,
-      })
-    } else {
-      stopScheduledImport()
-    }
-
-    return () => {
-      stopScheduledImport()
-    }
-  }, [project, draft.scheduledImportEnabled, draft.scheduledImportPath, draft.scheduledImportInterval])
 
   const lastScanDate = scheduledImportConfig.lastScan
     ? new Date(scheduledImportConfig.lastScan).toLocaleString()
@@ -99,6 +79,15 @@ export function ScheduledImportSection({ draft, setDraft }: Props) {
           })}
         </span>
       </label>
+
+      {draft.scheduledImportEnabled && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+          {t("settings.sections.scheduledImport.privacyNotice", {
+            defaultValue:
+              "Files from the selected directory may be copied into this project and sent to your configured LLM during ingest. Removed files are not automatically deleted from the project.",
+          })}
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label>

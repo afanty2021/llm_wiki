@@ -11,6 +11,9 @@
  * anyone notices in the UI.
  */
 import { describe, it, expect } from "vitest"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { readFileSync } from "node:fs"
 import en from "./en.json"
 import zh from "./zh.json"
 
@@ -30,8 +33,26 @@ function flattenKeys(obj: unknown, prefix = ""): string[] {
 }
 
 describe("i18n bundle parity (en.json ↔ zh.json)", () => {
+  const i18nDir = dirname(fileURLToPath(import.meta.url))
   const enKeys = new Set(flattenKeys(en))
   const zhKeys = new Set(flattenKeys(zh))
+
+  it("does not contain duplicate top-level JSON keys", () => {
+    const findDuplicates = (fileName: string) => {
+      const text = readFileSync(join(i18nDir, fileName), "utf8")
+      const seen = new Set<string>()
+      const duplicates = new Set<string>()
+      for (const match of text.matchAll(/^  "([^"]+)":/gm)) {
+        const key = match[1]
+        if (seen.has(key)) duplicates.add(key)
+        seen.add(key)
+      }
+      return [...duplicates].sort()
+    }
+
+    expect(findDuplicates("en.json"), "duplicate top-level keys in en.json").toEqual([])
+    expect(findDuplicates("zh.json"), "duplicate top-level keys in zh.json").toEqual([])
+  })
 
   it("every en.json key is also in zh.json", () => {
     const missing = [...enKeys].filter((k) => !zhKeys.has(k)).sort()

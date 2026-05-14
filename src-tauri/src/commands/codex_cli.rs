@@ -7,7 +7,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -28,6 +31,9 @@ pub struct DetectResult {
     path: Option<String>,
     error: Option<String>,
 }
+
+const CODEX_SPAWN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const STDERR_LIMIT_BYTES: usize = 1024 * 1024;
 
 fn find_codex_command() -> Result<PathBuf, String> {
     #[cfg(windows)]
@@ -163,10 +169,22 @@ pub async fn codex_cli_spawn(
     state.children.lock().await.insert(stream_id.clone(), child);
 
     let children = Arc::clone(&state.children);
+    let timeout_children = Arc::clone(&state.children);
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let timeout_flag = Arc::clone(&timed_out);
+    let timeout_stream_id = stream_id.clone();
     let app_for_task = app.clone();
     let stream_id_task = stream_id.clone();
     let topic = format!("codex-cli:{stream_id}");
     let done_topic = format!("codex-cli:{stream_id}:done");
+
+    tokio::spawn(async move {
+        tokio::time::sleep(CODEX_SPAWN_TIMEOUT).await;
+        if let Some(mut child) = timeout_children.lock().await.remove(&timeout_stream_id) {
+            timeout_flag.store(true, Ordering::SeqCst);
+            let _ = child.start_kill();
+        }
+    });
 
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
@@ -177,8 +195,17 @@ pub async fn codex_cli_spawn(
             let mut collected = String::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
                 eprintln!("[codex-cli stderr] {line}");
-                collected.push_str(&line);
-                collected.push('\n');
+                if collected.len() < STDERR_LIMIT_BYTES {
+                    for ch in line.chars() {
+                        if collected.len() + ch.len_utf8() > STDERR_LIMIT_BYTES {
+                            break;
+                        }
+                        collected.push(ch);
+                    }
+                    if collected.len() < STDERR_LIMIT_BYTES {
+                        collected.push('\n');
+                    }
+                }
             }
             collected
         });
@@ -208,12 +235,26 @@ pub async fn codex_cli_spawn(
             None
         };
 
-        let stderr_text = stderr_task.await.unwrap_or_default();
+        let mut stderr_text = stderr_task.await.unwrap_or_default();
+        if timed_out.load(Ordering::SeqCst) {
+            if !stderr_text.is_empty() {
+                stderr_text.push('\n');
+            }
+            stderr_text.push_str("Codex CLI timed out after 10 minutes.");
+        } else if stderr_text.len() >= STDERR_LIMIT_BYTES {
+            stderr_text.push_str("\n[stderr truncated]");
+        }
+
+        let code = if timed_out.load(Ordering::SeqCst) {
+            Some(-1)
+        } else {
+            exit_code
+        };
 
         let _ = app.emit(
             &done_topic,
             serde_json::json!({
-                "code": exit_code,
+                "code": code,
                 "stderr": stderr_text,
             }),
         );

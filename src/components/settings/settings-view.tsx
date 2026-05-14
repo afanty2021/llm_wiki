@@ -11,6 +11,7 @@ import {
   History,
   Wrench,
   Clock,
+  FolderSync,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -19,8 +20,9 @@ import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
-import { loadProjectFileSyncEnabled, saveLanguage } from "@/lib/project-store"
+import { loadSourceWatchConfig, saveLanguage } from "@/lib/project-store"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
+import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { LlmProviderSection } from "./sections/llm-provider-section"
 import { EmbeddingSection } from "./sections/embedding-section"
 import { MultimodalSection } from "./sections/multimodal-section"
@@ -29,6 +31,7 @@ import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
 import { NetworkSection } from "./sections/network-section"
 import { ScheduledImportSection } from "./sections/scheduled-import-section"
+import { SourceWatchSection } from "./sections/source-watch-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
@@ -39,6 +42,7 @@ type CategoryId =
   | "multimodal"
   | "web-search"
   | "network"
+  | "source-watch"
   | "scheduled-import"
   | "output"
   | "interface"
@@ -61,6 +65,7 @@ const CATEGORIES: Category[] = [
   { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
   { id: "web-search", labelKey: "settings.categories.webSearch", icon: Globe },
   { id: "network", labelKey: "settings.categories.network", icon: Network },
+  { id: "source-watch", labelKey: "settings.categories.sourceWatch", icon: FolderSync },
   { id: "scheduled-import", labelKey: "settings.categories.scheduledImport", icon: Clock },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -76,10 +81,10 @@ function initialDraft(
   outputLanguage: ReturnType<typeof useWikiStore.getState>["outputLanguage"],
   proxy: ReturnType<typeof useWikiStore.getState>["proxyConfig"],
   scheduledImport: ReturnType<typeof useWikiStore.getState>["scheduledImportConfig"],
+  sourceWatch: ReturnType<typeof useWikiStore.getState>["sourceWatchConfig"],
   maxHistoryMessages: number,
   uiLanguage: string,
   projectPath?: string,
-  projectFileSyncEnabled: boolean = true,
 ): SettingsDraft {
   // Show absolute path: if stored path is empty, show default using project path
   // If stored path is relative (legacy), prepend project path
@@ -105,6 +110,7 @@ function initialDraft(
     embeddingEndpoint: embed.endpoint,
     embeddingApiKey: embed.apiKey,
     embeddingModel: embed.model,
+    embeddingOutputDimensionality: embed.outputDimensionality,
     embeddingMaxChunkChars: embed.maxChunkChars,
     embeddingOverlapChunkChars: embed.overlapChunkChars,
     multimodalEnabled: multimodal.enabled,
@@ -124,8 +130,8 @@ function initialDraft(
     scheduledImportEnabled: scheduledImport.enabled,
     scheduledImportPath: displayPath,
     scheduledImportInterval: scheduledImport.interval,
+    sourceWatchConfig: normalizeSourceWatchConfig(sourceWatch),
     uiLanguage,
-    projectFileSyncEnabled,
   }
 }
 
@@ -144,6 +150,8 @@ export function SettingsView() {
   const setProxyConfig = useWikiStore((s) => s.setProxyConfig)
   const scheduledImportConfig = useWikiStore((s) => s.scheduledImportConfig)
   const setScheduledImportConfig = useWikiStore((s) => s.setScheduledImportConfig)
+  const sourceWatchConfig = useWikiStore((s) => s.sourceWatchConfig)
+  const setSourceWatchConfig = useWikiStore((s) => s.setSourceWatchConfig)
   const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
   const setMaxHistoryMessages = useChatStore((s) => s.setMaxHistoryMessages)
   // Drives the red dot next to the "About" row in the settings
@@ -158,7 +166,6 @@ export function SettingsView() {
 
   const [active, setActive] = useState<CategoryId>("llm")
   const [saved, setSaved] = useState(false)
-  const [projectFileSyncEnabled, setProjectFileSyncEnabled] = useState(true)
   const [draft, setDraftState] = useState<SettingsDraft>(() =>
     initialDraft(
       llmConfig,
@@ -167,28 +174,30 @@ export function SettingsView() {
       outputLanguage,
       proxyConfig,
       scheduledImportConfig,
+      sourceWatchConfig,
       maxHistoryMessages,
       i18n.language,
       project?.path,
-      projectFileSyncEnabled,
     ),
   )
 
   useEffect(() => {
     let cancelled = false
-    loadProjectFileSyncEnabled(project?.id).then((enabled) => {
+    loadSourceWatchConfig(project?.id).then((config) => {
       if (cancelled) return
-      setProjectFileSyncEnabled(enabled)
-      setDraftState((prev) => ({ ...prev, projectFileSyncEnabled: enabled }))
+      const normalized = normalizeSourceWatchConfig(config)
+      setSourceWatchConfig(normalized)
+      setDraftState((prev) => ({ ...prev, sourceWatchConfig: normalized }))
     }).catch(() => {
       if (cancelled) return
-      setProjectFileSyncEnabled(true)
-      setDraftState((prev) => ({ ...prev, projectFileSyncEnabled: true }))
+      const fallback = normalizeSourceWatchConfig()
+      setSourceWatchConfig(fallback)
+      setDraftState((prev) => ({ ...prev, sourceWatchConfig: fallback }))
     })
     return () => {
       cancelled = true
     }
-  }, [project?.id])
+  }, [project?.id, setSourceWatchConfig])
 
   // Resync draft from store if it changes out-of-band (e.g. project switch).
   // IMPORTANT: keep the current draft.uiLanguage instead of re-reading
@@ -207,10 +216,10 @@ export function SettingsView() {
         outputLanguage,
         proxyConfig,
         scheduledImportConfig,
+        sourceWatchConfig,
         maxHistoryMessages,
         prev.uiLanguage,
         project?.path,
-        projectFileSyncEnabled,
       ),
     )
   }, [
@@ -220,9 +229,9 @@ export function SettingsView() {
     outputLanguage,
     proxyConfig,
     scheduledImportConfig,
+    sourceWatchConfig,
     maxHistoryMessages,
     project,
-    projectFileSyncEnabled,
   ])
 
   const setDraft: DraftSetter = useCallback((key, value) => {
@@ -237,7 +246,7 @@ export function SettingsView() {
       saveOutputLanguage,
       saveProxyConfig,
       saveScheduledImportConfig,
-      saveProjectFileSyncEnabled,
+      saveSourceWatchConfig,
     } = await import("@/lib/project-store")
 
     const newLlm = {
@@ -255,6 +264,7 @@ export function SettingsView() {
       endpoint: draft.embeddingEndpoint,
       apiKey: draft.embeddingApiKey,
       model: draft.embeddingModel,
+      outputDimensionality: draft.embeddingOutputDimensionality,
       maxChunkChars: draft.embeddingMaxChunkChars,
       overlapChunkChars: draft.embeddingOverlapChunkChars,
     }
@@ -292,12 +302,13 @@ export function SettingsView() {
     await saveOutputLanguage(draft.outputLanguage as typeof outputLanguage, project?.id)
     setProxyConfig(newProxy)
     await saveProxyConfig(newProxy)
-    await saveProjectFileSyncEnabled(draft.projectFileSyncEnabled, project?.id)
-    setProjectFileSyncEnabled(draft.projectFileSyncEnabled)
+    const newSourceWatch = normalizeSourceWatchConfig(draft.sourceWatchConfig)
+    setSourceWatchConfig(newSourceWatch)
+    await saveSourceWatchConfig(newSourceWatch, project?.id)
     if (project) {
       const { startProjectFileSync, stopProjectFileSync } = await import("@/lib/project-file-sync")
-      if (draft.projectFileSyncEnabled) {
-        await startProjectFileSync(project).catch((err) =>
+      if (newSourceWatch.enabled) {
+        await startProjectFileSync(project, newSourceWatch).catch((err) =>
           console.error("Failed to start project file sync:", err)
         )
       } else {
@@ -317,12 +328,22 @@ export function SettingsView() {
     const newScheduledImport = {
       enabled: draft.scheduledImportEnabled,
       path: draft.scheduledImportPath,
-      interval: draft.scheduledImportInterval,
+      interval: Math.max(1, Math.min(1440, draft.scheduledImportInterval || 60)),
       lastScan: scheduledImportConfig.lastScan,
     }
     setScheduledImportConfig(newScheduledImport)
     if (project) {
       await saveScheduledImportConfig(project.path, newScheduledImport)
+      const { startScheduledImport, stopScheduledImport } = await import("@/lib/scheduled-import")
+      if (
+        newScheduledImport.enabled &&
+        newScheduledImport.path &&
+        newScheduledImport.interval > 0
+      ) {
+        startScheduledImport(project, newScheduledImport)
+      } else {
+        stopScheduledImport()
+      }
     }
 
     setMaxHistoryMessages(draft.maxHistoryMessages)
@@ -342,10 +363,10 @@ export function SettingsView() {
     setOutputLanguage,
     setProxyConfig,
     setScheduledImportConfig,
+    setSourceWatchConfig,
     scheduledImportConfig,
     setMaxHistoryMessages,
     outputLanguage,
-    project,
   ])
 
   const body = useMemo(() => {
@@ -363,6 +384,8 @@ export function SettingsView() {
         return <WebSearchSection />
       case "network":
         return <NetworkSection draft={draft} setDraft={setDraft} />
+      case "source-watch":
+        return <SourceWatchSection draft={draft} setDraft={setDraft} projectReady={!!project} />
       case "scheduled-import":
         return <ScheduledImportSection draft={draft} setDraft={setDraft} />
       case "output":
@@ -370,7 +393,7 @@ export function SettingsView() {
       case "interface":
         return <InterfaceSection draft={draft} setDraft={setDraft} />
       case "maintenance":
-        return <MaintenanceSection draft={draft} setDraft={setDraft} />
+        return <MaintenanceSection />
       case "changelog":
         return <ChangelogSection />
       case "about":

@@ -1,6 +1,7 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig } from "@/stores/wiki-store"
+import type { LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 
 const STORE_NAME = "app-state.json"
@@ -197,6 +198,7 @@ export async function loadLanguage(): Promise<string | null> {
 const OUTPUT_LANGUAGE_KEY = "outputLanguage"
 const PROJECT_OUTPUT_LANGUAGE_KEY = "projectOutputLanguages"
 const PROJECT_FILE_SYNC_KEY = "projectFileSyncEnabled"
+const SOURCE_WATCH_CONFIG_KEY = "sourceWatchConfig"
 
 export async function saveOutputLanguage(lang: OutputLanguage, projectId?: string): Promise<void> {
   const store = await getStore()
@@ -237,6 +239,28 @@ export async function loadProjectFileSyncEnabled(projectId?: string): Promise<bo
     return settings.default
   }
   return true
+}
+
+export async function saveSourceWatchConfig(config: SourceWatchConfig, projectId?: string): Promise<void> {
+  const store = await getStore()
+  const normalized = normalizeSourceWatchConfig(config)
+  const existing = (await store.get<Record<string, SourceWatchConfig>>(SOURCE_WATCH_CONFIG_KEY)) ?? {}
+  await store.set(SOURCE_WATCH_CONFIG_KEY, {
+    ...existing,
+    [projectId ?? "default"]: normalized,
+  })
+  await store.save()
+}
+
+export async function loadSourceWatchConfig(projectId?: string): Promise<SourceWatchConfig> {
+  const store = await getStore()
+  const settings = await store.get<Record<string, SourceWatchConfig>>(SOURCE_WATCH_CONFIG_KEY)
+  const config = projectId ? settings?.[projectId] : undefined
+  if (config) return normalizeSourceWatchConfig(config)
+  if (settings?.default) return normalizeSourceWatchConfig(settings.default)
+
+  const legacyEnabled = await loadProjectFileSyncEnabled(projectId)
+  return normalizeSourceWatchConfig({ enabled: legacyEnabled })
 }
 
 // ── Update-check persistence ──────────────────────────────────────────────

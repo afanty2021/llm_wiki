@@ -16,6 +16,10 @@ export async function writeFile(path: string, contents: string): Promise<void> {
   return invoke<void>("write_file", { path, contents })
 }
 
+export async function writeFileAtomic(path: string, contents: string): Promise<void> {
+  return invoke<void>("write_file_atomic", { path, contents })
+}
+
 export async function listDirectory(path: string): Promise<FileNode[]> {
   return invoke<FileNode[]>("list_directory", { path })
 }
@@ -59,6 +63,10 @@ export async function fileExists(path: string): Promise<boolean> {
 
 export async function getFileModifiedTime(path: string): Promise<number> {
   return invoke<number>("get_file_modified_time", { path })
+}
+
+export async function getFileSize(path: string): Promise<number> {
+  return invoke<number>("get_file_size", { path })
 }
 
 export async function getFileMd5(path: string): Promise<string> {

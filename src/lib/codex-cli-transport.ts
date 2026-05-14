@@ -42,11 +42,17 @@ function contentToText(content: string | ContentBlock[]): string {
     .join("\n")
 }
 
-function buildPrompt(messages: ChatMessage[]): string {
+function escapePromptContent(text: string): string {
+  return text.replace(/<\/?[A-Z_][A-Z0-9_]*>/gi, (tag) =>
+    tag.replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+  )
+}
+
+export function buildPrompt(messages: ChatMessage[]): string {
   return messages
     .map((message) => {
       const role = message.role.toUpperCase()
-      return `<${role}>\n${contentToText(message.content)}\n</${role}>`
+      return `<${role}>\n${escapePromptContent(contentToText(message.content))}\n</${role}>`
     })
     .join("\n\n")
 }
