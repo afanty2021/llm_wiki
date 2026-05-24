@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => {
-  const resolvers: Array<(value: { version: number; tasks: Array<{ id: string; projectId: string; path: string; kind: "modified"; status: "pending"; createdAt: number; updatedAt: number; retryCount: number; needsRerun: boolean }> }) => void> = []
+  const resolvers: Array<(value: { queue: { version: number; tasks: Array<{ id: string; projectId: string; path: string; kind: "modified"; status: "pending"; createdAt: number; updatedAt: number; retryCount: number; needsRerun: boolean }> }; changedTasks: Array<{ id: string; projectId: string; path: string; kind: "modified"; status: "pending"; createdAt: number; updatedAt: number; retryCount: number; needsRerun: boolean }> }) => void> = []
   const listeners: Record<string, (event: { payload: unknown }) => void> = {}
   return {
     listen: vi.fn(async (event: string, cb: (event: { payload: unknown }) => void) => {
@@ -52,18 +52,21 @@ const mocks = vi.hoisted(() => {
       resolvers.push(resolve)
     })),
     resolveStart: (index: number, projectId: string) => resolvers[index]?.({
-      version: 1,
-      tasks: [{
-        id: "t1",
-        projectId,
-        path: "raw/sources/a.md",
-        kind: "modified",
-        status: "pending",
-        createdAt: 1,
-        updatedAt: 1,
-        retryCount: 0,
-        needsRerun: false,
-      }],
+      queue: {
+        version: 1,
+        tasks: [{
+          id: "t1",
+          projectId,
+          path: "raw/sources/a.md",
+          kind: "modified",
+          status: "pending",
+          createdAt: 1,
+          updatedAt: 1,
+          retryCount: 0,
+          needsRerun: false,
+        }],
+      },
+      changedTasks: [],
     }),
     clearResolvers: () => {
       resolvers.length = 0
@@ -316,6 +319,54 @@ describe("project file sync", () => {
     )
     expect(mocks.enqueueBatch).toHaveBeenCalledWith("A", [
       { sourcePath: "raw/sources/manual.pdf", folderContext: "" },
+    ])
+  })
+
+  it("enqueues existing XML when source watch restarts with xml newly allowed", async () => {
+    const { startProjectFileSync } = await import("@/lib/project-file-sync")
+    const { useWikiStore } = await import("@/stores/wiki-store")
+
+    const project = { id: "A", name: "A", path: "/tmp/a" }
+    useWikiStore.getState().setProject(project)
+    mocks.startProjectFileWatcher.mockImplementationOnce(async () => ({
+      queue: {
+        version: 1,
+        tasks: [],
+      },
+      changedTasks: [
+        {
+          id: "t1",
+          projectId: "A",
+          path: "raw/sources/existing.xml",
+          kind: "created",
+          status: "done",
+          createdAt: 1,
+          updatedAt: 1,
+          retryCount: 0,
+          needsRerun: false,
+        },
+      ],
+    }) as never)
+
+    await startProjectFileSync(project, {
+      enabled: true,
+      autoIngest: true,
+      includeExtensions: ["md", "xml"],
+      excludeExtensions: [],
+      excludeDirs: [],
+      excludeGlobs: [],
+      maxFileSizeMb: 100,
+    })
+
+    expect(mocks.startProjectFileWatcher).toHaveBeenCalledWith(
+      "A",
+      "/tmp/a",
+      expect.objectContaining({
+        includeExtensions: expect.arrayContaining(["xml"]),
+      }),
+    )
+    expect(mocks.enqueueBatch).toHaveBeenCalledWith("A", [
+      { sourcePath: "raw/sources/existing.xml", folderContext: "" },
     ])
   })
 
