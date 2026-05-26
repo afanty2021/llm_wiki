@@ -150,7 +150,15 @@
       "semantic": "语义问题"
     },
     "issues": "{{count}} 个问题",
-    "issues_plural": "{{count}} 个问题"
+    "issues_plural": "{{count}} 个问题",
+    "fixAll": "批量修复",
+    "fixAllOrphans": "将所有孤立页面添加到索引",
+    "fixAllBrokenLinks": "移除所有失效链接",
+    "fixAllNoOutlinks": "全部发送到审阅队列",
+    "fixAllSemantic": "全部发送到审阅队列",
+    "fixingMultiple": "正在修复 {{count}} 个问题...",
+    "fixedMultiple": "已修复 {{count}} 个问题",
+    "fixFailed": "修复失败：{{error}}"
   },
   "review": {
     "title": "待审阅",

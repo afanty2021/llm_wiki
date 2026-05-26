@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react"
+import { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import {
   Link2Off,
   Unlink,
@@ -10,6 +10,7 @@ import {
   BrainCircuit,
   Wrench,
   Trash2,
+  ChevronDown,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -67,6 +68,20 @@ export function LintView() {
   const [hasRun, setHasRun] = useState(false)
   const [runSemantic, setRunSemantic] = useState(false)
   const [fixingId, setFixingId] = useState<string | null>(null)
+  const [batchFixing, setBatchFixing] = useState(false)
+  const [showBatchMenu, setShowBatchMenu] = useState(false)
+  const batchMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (batchMenuRef.current && !batchMenuRef.current.contains(event.target as Node)) {
+        setShowBatchMenu(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [])
 
   const handleRunLint = useCallback(async () => {
     if (!project || running) return
@@ -90,6 +105,140 @@ export function LintView() {
       setRunning(false)
     }
   }, [project, llmConfig, running, runSemantic])
+
+  // ── Batch fix functions ──────────────────────────────────────────────────────
+
+  async function handleBatchFixOrphans() {
+    if (!project || batchFixing) return
+    const pp = normalizePath(project.path)
+    const orphans = results.filter((r) => r.type === "orphan")
+    if (orphans.length === 0) return
+
+    setBatchFixing(true)
+    setShowBatchMenu(false)
+
+    try {
+      const indexPath = `${pp}/wiki/index.md`
+      let indexContent = ""
+      try { indexContent = await readFile(indexPath) } catch { indexContent = "# Wiki Index\n" }
+
+      let added = 0
+      for (const orphan of orphans) {
+        const pageName = orphan.page.replace(".md", "").replace(/^.*\//, "")
+        const entry = `- [[${pageName}]]`
+        if (!indexContent.includes(entry)) {
+          indexContent = indexContent.trimEnd() + "\n" + entry + "\n"
+          added++
+        }
+      }
+
+      if (added > 0) {
+        await writeFile(indexPath, indexContent)
+      }
+
+      // Remove fixed orphans from results
+      setResults((prev) => prev.filter((r) => r.type !== "orphan"))
+
+      // Refresh tree
+      const tree = await listDirectory(pp)
+      setFileTree(tree)
+      bumpDataVersion()
+    } catch (err) {
+      console.error("Batch fix orphans failed:", err)
+    } finally {
+      setBatchFixing(false)
+    }
+  }
+
+  async function handleBatchFixBrokenLinks() {
+    if (!project || batchFixing) return
+    const brokenLinks = results.filter((r) => r.type === "broken-link")
+    if (brokenLinks.length === 0) return
+
+    setBatchFixing(true)
+    setShowBatchMenu(false)
+
+    try {
+      const pp = normalizePath(project.path)
+
+      for (const result of brokenLinks) {
+        // Extract the broken link name from detail
+        const match = result.detail.match(/\[\[([^\]]+)\]\]/)
+        if (!match) continue
+
+        const brokenLink = match[1]
+        const pagePath = `${pp}/wiki/${result.page}`
+
+        try {
+          let content = await readFile(pagePath)
+          // Remove the broken link using regex
+          const linkPattern = new RegExp(`\\[\\[${brokenLink.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\|[^\\]]+)?\\]\\]`, 'g')
+          content = content.replace(linkPattern, '')
+          await writeFile(pagePath, content)
+        } catch (err) {
+          console.error(`Failed to remove broken link from ${result.page}:`, err)
+        }
+      }
+
+      // Remove fixed broken links from results
+      setResults((prev) => prev.filter((r) => r.type !== "broken-link"))
+
+      // Refresh tree
+      const tree = await listDirectory(pp)
+      setFileTree(tree)
+      bumpDataVersion()
+    } catch (err) {
+      console.error("Batch fix broken links failed:", err)
+    } finally {
+      setBatchFixing(false)
+    }
+  }
+
+  async function handleBatchSendToReview() {
+    if (!project || batchFixing) return
+    const sendable = results.filter((r) =>
+      r.type === "no-outlinks" || r.type === "semantic"
+    )
+    if (sendable.length === 0) return
+
+    setBatchFixing(true)
+    setShowBatchMenu(false)
+
+    try {
+      const pp = normalizePath(project.path)
+
+      for (const result of sendable) {
+        useReviewStore.getState().addItem({
+          type: result.type === "semantic" ? "confirm" : "suggestion",
+          title: result.detail.slice(0, 80),
+          description: result.detail,
+          affectedPages: result.affectedPages ?? [result.page],
+          options: [
+            { label: t("lint.openEdit"), action: `open:${result.page}` },
+            { label: t("lint.skip"), action: "Skip" },
+          ],
+        })
+      }
+
+      // Remove sent items from results
+      setResults((prev) => prev.filter((r) => r.type !== "no-outlinks" && r.type !== "semantic"))
+
+      // Refresh tree
+      const tree = await listDirectory(pp)
+      setFileTree(tree)
+      bumpDataVersion()
+    } catch (err) {
+      console.error("Batch send to review failed:", err)
+    } finally {
+      setBatchFixing(false)
+    }
+  }
+
+  // Get counts for each type
+  const orphanCount = results.filter((r) => r.type === "orphan").length
+  const brokenLinkCount = results.filter((r) => r.type === "broken-link").length
+  const noOutlinksCount = results.filter((r) => r.type === "no-outlinks").length
+  const semanticCount = results.filter((r) => r.type === "semantic").length
 
   async function handleOpenPage(page: string) {
     if (!project) return
@@ -253,6 +402,53 @@ export function LintView() {
             />
             {t("lint.semantic")}
           </label>
+          {hasRun && results.length > 0 && (
+            <div className="relative" ref={batchMenuRef}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={batchFixing}
+                onClick={() => setShowBatchMenu(!showBatchMenu)}
+              >
+                {batchFixing ? t("lint.fixingMultiple", { count: results.length }) : t("lint.fixAll")}
+                <ChevronDown className="ml-1 h-3 w-3" />
+              </Button>
+              {showBatchMenu && (
+                <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-md border bg-popover p-1 shadow-md">
+                  {orphanCount > 0 && (
+                    <button
+                      type="button"
+                      className="w-full text-left px-2 py-1.5 text-sm hover:bg-accent rounded"
+                      onClick={handleBatchFixOrphans}
+                      disabled={batchFixing}
+                    >
+                      {t("lint.fixAllOrphans")} ({orphanCount})
+                    </button>
+                  )}
+                  {brokenLinkCount > 0 && (
+                    <button
+                      type="button"
+                      className="w-full text-left px-2 py-1.5 text-sm hover:bg-accent rounded"
+                      onClick={handleBatchFixBrokenLinks}
+                      disabled={batchFixing}
+                    >
+                      {t("lint.fixAllBrokenLinks")} ({brokenLinkCount})
+                    </button>
+                  )}
+                  {(noOutlinksCount > 0 || semanticCount > 0) && (
+                    <button
+                      type="button"
+                      className="w-full text-left px-2 py-1.5 text-sm hover:bg-accent rounded"
+                      onClick={handleBatchSendToReview}
+                      disabled={batchFixing}
+                    >
+                      {t("lint.fixAllNoOutlinks")} ({noOutlinksCount + semanticCount})
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <Button
             size="sm"
             onClick={handleRunLint}

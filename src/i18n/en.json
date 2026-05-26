@@ -150,7 +150,15 @@
       "semantic": "Semantic Issue"
     },
     "issues": "{{count}} issue",
-    "issues_plural": "{{count}} issues"
+    "issues_plural": "{{count}} issues",
+    "fixAll": "Fix All",
+    "fixAllOrphans": "Add all orphans to index",
+    "fixAllBrokenLinks": "Remove all broken links",
+    "fixAllNoOutlinks": "Send all to review",
+    "fixAllSemantic": "Send all to review",
+    "fixingMultiple": "Fixing {{count}} issues...",
+    "fixedMultiple": "Fixed {{count}} issues",
+    "fixFailed": "Fix failed: {{error}}"
   },
   "review": {
     "title": "Review",
