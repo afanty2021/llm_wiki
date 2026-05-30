@@ -147,11 +147,34 @@ export function WebSearchSection() {
               {t("settings.sections.webSearch.anyTxtDescription")}
             </p>
           </div>
-          {savedId === "anytxt" && (
-            <span className="shrink-0 text-[10px] text-emerald-600">
-              {t("settings.sections.webSearch.savedBadge")}
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {savedId === "anytxt" && (
+              <span className="text-[10px] text-emerald-600">
+                {t("settings.sections.webSearch.savedBadge")}
+              </span>
+            )}
+            {anyTxtConfig.enabled && (
+              <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                {t("settings.sections.webSearch.activeBadge")}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => updateAnyTxt({ enabled: !anyTxtConfig.enabled })}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full border transition-colors ${
+                anyTxtConfig.enabled
+                  ? "border-primary bg-primary"
+                  : "border-muted-foreground/30 bg-muted-foreground/20 hover:bg-muted-foreground/30"
+              }`}
+              aria-label={anyTxtConfig.enabled ? t("settings.sections.webSearch.deactivate") : t("settings.sections.webSearch.activate")}
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm ring-1 ring-black/10 transition-transform ${
+                  anyTxtConfig.enabled ? "translate-x-4" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <div className="space-y-2">

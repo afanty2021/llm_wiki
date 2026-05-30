@@ -217,8 +217,15 @@ describe("webSearch", () => {
       provider: "none",
       apiKey: "",
       deepResearchSource: "anytxt",
-      anyTxt: { endpoint: "http://127.0.0.1:9920" },
+      anyTxt: { enabled: true, endpoint: "http://127.0.0.1:9920" },
     })).toBe(true)
+
+    expect(hasConfiguredDeepResearchSources({
+      provider: "none",
+      apiKey: "",
+      deepResearchSource: "anytxt",
+      anyTxt: { enabled: false, endpoint: "http://127.0.0.1:9920" },
+    })).toBe(false)
 
     expect(hasConfiguredDeepResearchSources({
       provider: "none",

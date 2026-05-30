@@ -18,7 +18,9 @@ import { withProjectLock } from "@/lib/project-mutex"
 import type { FileNode } from "@/types/wiki"
 import {
   extractAndSaveSourceImages,
+  extractAndSaveMarkdownImages,
   buildImageMarkdownSection,
+  type SavedImage,
 } from "@/lib/extract-source-images"
 import { captionMarkdownImages, loadCaptionCache } from "@/lib/image-caption-pipeline"
 import type { MultimodalConfig } from "@/stores/wiki-store"
@@ -37,6 +39,31 @@ const INGEST_GENERATION_TOKENS_256K = 24_576
 const INGEST_GENERATION_TOKENS_512K = 32_768
 const REVIEW_STAGE_MIN_SIGNAL_CHARS = 10_000
 const REVIEW_STAGE_MIN_FILE_BLOCKS = 4
+
+function appendSavedImageRefsForCaption(content: string, images: SavedImage[]): string {
+  if (images.length === 0) return content
+  const refs = images
+    .map((img) => img.relPath)
+    .filter(Boolean)
+    .map((relPath) => `![](${relPath})`)
+  if (refs.length === 0) return content
+  return `${content}\n\n## Referenced Local Images\n\n${refs.join("\n")}\n`
+}
+
+function isSavedImagePromptUrl(projectPath: string, sourceSummarySlug: string, url: string): boolean {
+  return (
+    url.startsWith(`${projectPath}/wiki/media/${sourceSummarySlug}/`) ||
+    url.startsWith(`media/${sourceSummarySlug}/`)
+  )
+}
+
+function promptImageUrlToAbs(projectPath: string, url: string): string {
+  return url.startsWith("media/") ? `${projectPath}/wiki/${url}` : url
+}
+
+function stripWikiMediaAbsPaths(projectPath: string, content: string): string {
+  return content.split(`${projectPath}/wiki/media/`).join("media/")
+}
 
 interface SourceChunk {
   id: string
@@ -396,7 +423,9 @@ async function autoIngestImpl(
   if (cachedFiles !== null) {
     try {
       console.log(`[ingest:diag] cache-hit branch: starting image extraction for ${sp}`)
-      const savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+      let savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+      const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
+      savedImages = [...savedImages, ...markdownImages]
       console.log(`[ingest:diag] cache-hit branch: got ${savedImages.length} image(s)`)
       if (savedImages.length > 0) {
         // Caption first (populates the cache), THEN inject — the
@@ -424,11 +453,11 @@ async function autoIngestImpl(
           const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
           if (captionLlm) {
             try {
-              await captionMarkdownImages(pp, sourceContent, captionLlm, {
+              await captionMarkdownImages(pp, appendSavedImageRefsForCaption(sourceContent, savedImages), captionLlm, {
                 signal,
                 shouldCaption: (url) =>
-                  url.startsWith(`${pp}/wiki/media/${sourceSummarySlug}/`),
-                urlToAbsPath: (url) => url,
+                  isSavedImagePromptUrl(pp, sourceSummarySlug, url),
+                urlToAbsPath: (url) => promptImageUrlToAbs(pp, url),
                 concurrency: mmCfg.concurrency,
                 onProgress: (done, total) =>
                   activity.updateItem(activityId, {
@@ -487,7 +516,9 @@ async function autoIngestImpl(
   // and returns [] on any error.
   activity.updateItem(activityId, { detail: "Extracting embedded images..." })
   console.log(`[ingest:diag] full-pipeline branch: starting image extraction for ${sp}`)
-  const savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+  let savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+  const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
+  savedImages = [...savedImages, ...markdownImages]
   console.log(`[ingest:diag] full-pipeline branch: got ${savedImages.length} image(s)`)
   if (savedImages.length > 0) {
     console.log(
@@ -534,7 +565,10 @@ async function autoIngestImpl(
   // (which renders read_file output directly) still shows them —
   // that surface is "the source document as-is", separate from
   // "the curated wiki knowledge".
-  let enrichedSourceContent = sourceContent
+  let enrichedSourceContent = stripWikiMediaAbsPaths(
+    pp,
+    appendSavedImageRefsForCaption(sourceContent, markdownImages),
+  )
   const mmCfg = useWikiStore.getState().multimodalConfig
   const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
   if (!mmCfg.enabled && savedImages.length > 0) {
@@ -551,27 +585,27 @@ async function autoIngestImpl(
   } else if (
     captionLlm &&
     savedImages.length > 0 &&
-    /!\[\]\(/.test(sourceContent)
+    /!\[\]\(/.test(enrichedSourceContent)
   ) {
     activity.updateItem(activityId, { detail: "Captioning images..." })
     const ourMediaPrefix = `${pp}/wiki/media/${sourceSummarySlug}/`
     try {
-      const result = await captionMarkdownImages(pp, sourceContent, captionLlm, {
+      const result = await captionMarkdownImages(pp, enrichedSourceContent, captionLlm, {
         signal,
         // Strict filter: only caption images we know we just
         // extracted into this source's media directory. Skips any
         // pre-existing markdown image refs the user may have typed
         // into the source content (e.g. for hand-authored .md
         // sources).
-        shouldCaption: (url) => url.startsWith(ourMediaPrefix),
-        urlToAbsPath: (url) => url, // already absolute in our extraction output
+        shouldCaption: (url) => url.startsWith(ourMediaPrefix) || isSavedImagePromptUrl(pp, sourceSummarySlug, url),
+        urlToAbsPath: (url) => promptImageUrlToAbs(pp, url),
         concurrency: mmCfg.concurrency,
         onProgress: (done, total) =>
           activity.updateItem(activityId, {
             detail: `Captioning images... ${done}/${total}`,
           }),
       })
-      enrichedSourceContent = result.enrichedMarkdown
+      enrichedSourceContent = stripWikiMediaAbsPaths(pp, result.enrichedMarkdown)
       console.log(
         `[ingest:caption] images=${savedImages.length} fresh=${result.freshCaptions} cached=${result.cachedCaptions} failed=${result.failed}`,
       )
@@ -1343,11 +1377,22 @@ export function buildGenerationPrompt(
     `The original source file is: **${sourceFileName}**`,
     `All wiki pages generated from this source MUST include this filename in their frontmatter \`sources\` field.`,
     "",
+    schema
+      ? [
+          "## Project Schema and Routing (AUTHORITATIVE)",
+          schema,
+          "",
+          "Use this schema as the primary routing rule for page types and directories.",
+          "If it defines custom folders or distinctions (for example people, technologies, organizations, methods, or cases), write pages into those schema-defined folders instead of forcing them into wiki/entities/ or wiki/concepts/.",
+          "Use wiki/entities/ and wiki/concepts/ only when the schema does not provide a more specific destination.",
+        ].join("\n")
+      : "",
+    "",
     "## What to generate",
     "",
     `1. A source summary page at **${summaryPath}** (MUST use this exact path)`,
-    "2. Entity pages in wiki/entities/ for key entities identified in the analysis",
-    "3. Concept pages in wiki/concepts/ for key concepts identified in the analysis",
+    "2. Entity or schema-defined typed pages for key named things identified in the analysis. Prefer schema-defined directories when present; otherwise use wiki/entities/.",
+    "3. Concept or schema-defined typed pages for key ideas, methods, techniques, and abstractions. Prefer schema-defined directories when present; otherwise use wiki/concepts/.",
     "4. An updated wiki/index.md — add new entries to existing categories, preserve all existing entries",
     "5. A log entry for wiki/log.md (just the new entry to append, format: ## [YYYY-MM-DD] ingest | Title)",
     "6. An updated wiki/overview.md — a high-level summary of what the entire wiki covers, updated to reflect the newly ingested source. This should be a comprehensive 2-5 paragraph overview of ALL topics in the wiki, not just the new source.",
@@ -1367,7 +1412,7 @@ export function buildGenerationPrompt(
     "   write `related: [a, b]` with bare slugs.",
     "",
     "Required fields and types:",
-    `  • type     — one of: ${GENERATION_WIKI_TYPES.join(" | ")}`,
+    `  • type     — one of the known types (${GENERATION_WIKI_TYPES.join(" | ")}), or a custom type explicitly defined by the project schema`,
     "  • title    — string (quote it if it contains a colon, e.g. `title: \"Foo: Bar\"`)",
     "  • created  — date in YYYY-MM-DD form (no quotes)",
     "  • updated  — same as created",
@@ -1395,6 +1440,7 @@ export function buildGenerationPrompt(
     "",
     "Other rules:",
     "- Use [[wikilink]] syntax in the BODY for cross-references between pages",
+    "- If you include images, use wiki-root-relative paths such as `media/source-slug/image.png`; never output absolute filesystem paths.",
     "- Use kebab-case filenames",
     "- Follow the analysis recommendations on what to emphasize",
     "- If the analysis found connections to existing pages, add cross-references",
@@ -1425,7 +1471,6 @@ export function buildGenerationPrompt(
     "  SEARCH: automated technical debt detection AI generated code | software quality metrics LLM code generation | static analysis tools agentic software development",
     "",
     purpose ? `## Wiki Purpose\n${purpose}` : "",
-    schema ? `## Wiki Schema\n${schema}` : "",
     index ? `## Current Wiki Index (preserve all existing entries, add new ones)\n${index}` : "",
     overview ? `## Current Overview (update this to reflect the new source)\n${overview}` : "",
     "",
