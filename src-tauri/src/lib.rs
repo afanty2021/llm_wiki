@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 struct CloseBehaviorState(Mutex<String>);
+struct TrayAvailabilityState(Mutex<bool>);
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -119,7 +120,16 @@ fn close_behavior<R: tauri::Runtime>(window: &tauri::Window<R>) -> String {
         .0
         .lock()
         .map(|value| value.clone())
-        .unwrap_or_else(|_| "ask".to_string())
+        .unwrap_or_else(|_| "minimize".to_string())
+}
+
+fn tray_available<R: tauri::Runtime>(window: &tauri::Window<R>) -> bool {
+    window
+        .state::<TrayAvailabilityState>()
+        .0
+        .lock()
+        .map(|value| *value)
+        .unwrap_or(false)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -170,10 +180,15 @@ pub fn run() {
             app.manage(commands::claude_cli::ClaudeCliState::default());
             app.manage(commands::codex_cli::CodexCliState::default());
             app.manage(commands::file_sync::FileSyncState::default());
-            app.manage(CloseBehaviorState(Mutex::new("ask".to_string())));
-            if let Err(err) = tray::create_tray(app.handle()) {
-                eprintln!("[tray] system tray unavailable, continuing without it: {err}");
-            }
+            app.manage(CloseBehaviorState(Mutex::new("minimize".to_string())));
+            let tray_available = match tray::create_tray(app.handle()) {
+                Ok(()) => true,
+                Err(err) => {
+                    eprintln!("[tray] system tray unavailable, continuing without it: {err}");
+                    false
+                }
+            };
+            app.manage(TrayAvailabilityState(Mutex::new(tray_available)));
             api_server::start_api_server(app.handle().clone());
             Ok(())
         })
@@ -244,17 +259,25 @@ pub fn run() {
                         });
                     }
                     "minimize" => {
-                        let _ = window.hide();
+                        if tray_available(window) {
+                            let _ = window.hide();
+                        } else {
+                            let _ = window.minimize();
+                        }
                     }
                     _ => {
                         tauri::async_runtime::spawn(async move {
-                            use tauri_plugin_dialog::DialogExt;
+                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
                             let confirmed = app
                                 .dialog()
                                 .message(
-                                    "Quit LLM Wiki? Choose OK to exit. Choose Cancel to hide the window and keep background features running.",
+                                    "Quit LLM Wiki? Choose Quit to exit. Choose Hide Window to keep background features running.",
                                 )
                                 .title("LLM Wiki")
+                                .buttons(MessageDialogButtons::OkCancelCustom(
+                                    "Quit".to_string(),
+                                    "Hide Window".to_string(),
+                                ))
                                 .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
                                 .blocking_show();
 

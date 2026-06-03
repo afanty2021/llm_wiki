@@ -230,8 +230,8 @@
         "closeBehaviorHint": "点击标题栏关闭按钮时使用这个设置。托盘菜单仍可直接退出应用。",
         "closeAsk": "每次询问",
         "closeAskHint": "显示确认框。取消会隐藏窗口，并保持后台功能继续运行。",
-        "closeMinimize": "隐藏到托盘",
-        "closeMinimizeHint": "关闭窗口时让 LLM Wiki 留在后台运行。依赖系统托盘支持；部分 Linux 桌面可能不显示托盘图标。",
+        "closeMinimize": "隐藏窗口",
+        "closeMinimizeHint": "关闭窗口时让 LLM Wiki 留在后台运行。在 macOS 上这符合红色关闭按钮的常规行为；如果 Linux 托盘不可用，会最小化窗口而不是隐藏。",
         "closeExit": "退出应用",
         "closeExitHint": "关闭窗口时立即退出 LLM Wiki。"
       },

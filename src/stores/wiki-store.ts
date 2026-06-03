@@ -447,7 +447,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 
   generalConfig: {
     autostart: false,
-    closeBehavior: "ask",
+    closeBehavior: "minimize",
   },
 
   setLlmConfig: (llmConfig) => set({ llmConfig }),

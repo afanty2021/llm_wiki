@@ -26,6 +26,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.18",
+    date: "2026-06-03",
+    highlights: {
+      en: [
+        "Fixed close-window behavior on macOS and restored a clear Quit / Hide Window confirmation when asking before close.",
+        "Improved Linux compatibility so the window minimizes instead of hiding when system tray support is unavailable.",
+      ],
+      zh: [
+        "修复 macOS 关闭窗口行为，并在询问模式下恢复清晰的「退出 / 隐藏窗口」确认。",
+        "改进 Linux 兼容性：系统托盘不可用时改为最小化，避免窗口隐藏后无法恢复。",
+      ],
+    },
+  },
+  {
     version: "0.4.17",
     date: "2026-06-03",
     highlights: {
