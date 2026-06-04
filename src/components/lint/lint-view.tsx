@@ -113,7 +113,7 @@ export function LintView() {
   async function handleBatchFixOrphans() {
     if (!project || batchFixing) return
     const pp = normalizePath(project.path)
-    const orphans = results.filter((r) => r.type === "orphan")
+    const orphans = items.filter((r) => r.type === "orphan")
     if (orphans.length === 0) return
 
     setBatchFixing(true)
@@ -138,8 +138,10 @@ export function LintView() {
         await writeFile(indexPath, indexContent)
       }
 
-      // Remove fixed orphans from results
-      setResults((prev) => prev.filter((r) => r.type !== "orphan"))
+      // Remove fixed orphans from store
+      for (const orphan of orphans) {
+        useLintStore.getState().removeItem(orphan.id)
+      }
 
       // Refresh tree
       const tree = await listDirectory(pp)
@@ -154,7 +156,7 @@ export function LintView() {
 
   async function handleBatchFixBrokenLinks() {
     if (!project || batchFixing) return
-    const brokenLinks = results.filter((r) => r.type === "broken-link")
+    const brokenLinks = items.filter((r) => r.type === "broken-link")
     if (brokenLinks.length === 0) return
 
     setBatchFixing(true)
@@ -182,8 +184,10 @@ export function LintView() {
         }
       }
 
-      // Remove fixed broken links from results
-      setResults((prev) => prev.filter((r) => r.type !== "broken-link"))
+      // Remove fixed broken links from store
+      for (const item of brokenLinks) {
+        useLintStore.getState().removeItem(item.id)
+      }
 
       // Refresh tree
       const tree = await listDirectory(pp)
@@ -198,7 +202,7 @@ export function LintView() {
 
   async function handleBatchSendToReview() {
     if (!project || batchFixing) return
-    const sendable = results.filter((r) =>
+    const sendable = items.filter((r) =>
       r.type === "no-outlinks" || r.type === "semantic"
     )
     if (sendable.length === 0) return
@@ -222,8 +226,10 @@ export function LintView() {
         })
       }
 
-      // Remove sent items from results
-      setResults((prev) => prev.filter((r) => r.type !== "no-outlinks" && r.type !== "semantic"))
+      // Remove sent items from store
+      for (const item of sendable) {
+        useLintStore.getState().removeItem(item.id)
+      }
 
       // Refresh tree
       const tree = await listDirectory(pp)
@@ -237,10 +243,10 @@ export function LintView() {
   }
 
   // Get counts for each type
-  const orphanCount = results.filter((r) => r.type === "orphan").length
-  const brokenLinkCount = results.filter((r) => r.type === "broken-link").length
-  const noOutlinksCount = results.filter((r) => r.type === "no-outlinks").length
-  const semanticCount = results.filter((r) => r.type === "semantic").length
+  const orphanCount = items.filter((r) => r.type === "orphan").length
+  const brokenLinkCount = items.filter((r) => r.type === "broken-link").length
+  const noOutlinksCount = items.filter((r) => r.type === "no-outlinks").length
+  const semanticCount = items.filter((r) => r.type === "semantic").length
 
   async function handleOpenPage(page: string) {
     if (!project) return
@@ -404,7 +410,7 @@ export function LintView() {
             />
             {t("lint.semantic")}
           </label>
-          {hasRun && results.length > 0 && (
+          {hasRun && items.length > 0 && (
             <div className="relative" ref={batchMenuRef}>
               <Button
                 size="sm"
@@ -412,7 +418,7 @@ export function LintView() {
                 disabled={batchFixing}
                 onClick={() => setShowBatchMenu(!showBatchMenu)}
               >
-                {batchFixing ? t("lint.fixingMultiple", { count: results.length }) : t("lint.fixAll")}
+                {batchFixing ? t("lint.fixingMultiple", { count: items.length }) : t("lint.fixAll")}
                 <ChevronDown className="ml-1 h-3 w-3" />
               </Button>
               {showBatchMenu && (
