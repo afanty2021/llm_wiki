@@ -11,12 +11,14 @@ import {
 import { streamChat } from "@/lib/llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
+import { parseWithMineru } from "@/lib/mineru"
 import { useChatStore } from "@/stores/chat-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 import {
   sourceIdentityForPath,
+  sourceSummarySlugCandidatesFromIdentity,
   sourceSummarySlugFromIdentity,
 } from "@/lib/source-identity"
 import { parseSources, writeSources } from "@/lib/sources-merge"
@@ -201,6 +203,10 @@ function resolveCaptionConfig(
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
 import { sameScriptFamily } from "@/lib/language-metadata"
+import {
+  loadProjectWikiSchemaRouting,
+  validateWikiPageRouting,
+} from "@/lib/wiki-schema"
 
 // Legacy export kept for backward compatibility with existing diagnostic
 // tests. The live pipeline goes through parseFileBlocks() below, which
@@ -471,6 +477,37 @@ async function autoIngestImpl(
     detail: "Reading source...",
     filesWritten: [],
   })
+
+  // ── MinerU preprocessing for PDF files ──
+  const lowerExt = fileName.includes(".") ? fileName.split(".").pop()?.toLowerCase() : ""
+  const isPdf = lowerExt === "pdf"
+  const mineruCfg = useWikiStore.getState().mineruConfig
+  if (isPdf && mineruCfg.enabled && mineruCfg.token) {
+    let mineruSucceeded = false
+    try {
+      const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
+      const cachePath = `${cacheDir}/.cache/${fileName}.txt`
+      activity.updateItem(activityId, { detail: "MinerU: parsing PDF..." })
+      console.log(`[ingest:mineru] submitting "${fileName}" to MinerU API`)
+      const markdown = await parseWithMineru(mineruCfg, sp, undefined, (msg) => {
+        activity.updateItem(activityId, { detail: `MinerU: ${msg}` })
+      }, signal)
+      await createDirectory(`${cacheDir}/.cache`)
+      await writeFile(cachePath, markdown)
+      mineruSucceeded = true
+      console.log(`[ingest:mineru] cached MinerU output for "${fileName}" (${markdown.length} chars)`)
+    } catch (err) {
+      if (signal?.aborted) throw err
+      const msg = trimInlineStatus(err instanceof Error ? err.message : String(err))
+      console.warn(`[ingest:mineru] MinerU parsing failed, falling back to pdfium: ${msg}`)
+      activity.updateItem(activityId, {
+        detail: `MinerU failed, falling back to built-in PDF extraction: ${msg}`,
+      })
+    }
+    if (mineruSucceeded && !signal?.aborted) {
+      activity.updateItem(activityId, { detail: "Reading source..." })
+    }
+  }
 
   const [sourceContent, schema, purpose, index, overview] = await Promise.all([
     tryReadSourceTextFile(sp),
@@ -1084,6 +1121,10 @@ async function migrateLegacySourceSummaryIfSafe(
   const normalizedIdentity = normalizePath(sourceIdentity)
   if (!normalizedIdentity.includes("/")) return
 
+  if (await migrateExactLegacySourceSummaryIfSafe(projectPath, normalizedIdentity, sourceSummaryPath)) {
+    return
+  }
+
   const basename = getFileName(normalizedIdentity)
   const legacySlug = basename.replace(/\.[^.]+$/, "")
   const legacyPath = `wiki/sources/${legacySlug}.md`
@@ -1134,6 +1175,58 @@ async function migrateLegacySourceSummaryIfSafe(
   }
 }
 
+async function migrateExactLegacySourceSummaryIfSafe(
+  projectPath: string,
+  sourceIdentity: string,
+  sourceSummaryPath: string,
+): Promise<boolean> {
+  const pp = normalizePath(projectPath)
+  const canonicalFullPath = `${pp}/${sourceSummaryPath}`
+  let canonicalExists = false
+  try {
+    canonicalExists = await fileExists(canonicalFullPath)
+  } catch {
+    return false
+  }
+  if (canonicalExists) return false
+
+  const sourceKey = normalizePath(sourceIdentity).toLowerCase()
+  const legacyPaths = sourceSummarySlugCandidatesFromIdentity(sourceIdentity)
+    .map((slug) => `wiki/sources/${slug}.md`)
+    .filter((path) => path !== sourceSummaryPath)
+
+  for (const legacyPath of legacyPaths) {
+    const legacyFullPath = `${pp}/${legacyPath}`
+    let legacyContent = ""
+    try {
+      if (!(await fileExists(legacyFullPath))) continue
+      legacyContent = await readFile(legacyFullPath)
+    } catch {
+      continue
+    }
+
+    const sources = parseSources(legacyContent)
+    const referencesSameSource = sources.some(
+      (source) => normalizePath(source).toLowerCase() === sourceKey,
+    )
+    if (!referencesSameSource) continue
+
+    try {
+      await writeFile(canonicalFullPath, canonicalizeSourcesField(legacyContent, sourceIdentity))
+      await deleteFile(legacyFullPath)
+      return true
+    } catch (err) {
+      console.warn(
+        `[ingest] failed to migrate legacy source summary ${legacyPath} -> ${sourceSummaryPath}:`,
+        err instanceof Error ? err.message : err,
+      )
+      return false
+    }
+  }
+
+  return false
+}
+
 async function matchingRawSourceIdentitiesForBasename(
   projectPath: string,
   basename: string,
@@ -1171,6 +1264,43 @@ async function matchingRawSourceIdentitiesForBasename(
   return matches
 }
 
+export function currentWikiDate(now: Date = new Date()): string {
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+export function stampGeneratedFrontmatterDates(content: string, date: string): string {
+  const fmRe = /^(---\s*\r?\n)([\s\S]*?)(\r?\n---\s*(?:\r?\n|$))/
+  const match = content.match(fmRe)
+  if (!match) return content
+
+  let payload = match[2]
+  payload = setOrAppendFrontmatterDate(payload, "created", date)
+  payload = setOrAppendFrontmatterDate(payload, "updated", date)
+  return `${match[1]}${payload}${match[3]}${content.slice(match[0].length)}`
+}
+
+export function stampGeneratedLogDate(content: string, date: string): string {
+  const normalized = content.replace(/\bYYYY-MM-DD\b/g, date)
+  if (/^\s*##\s*\[?\d{4}-\d{2}-\d{2}\]?/m.test(normalized)) {
+    return normalized.replace(
+      /^(\s*##\s*\[?)\d{4}-\d{2}-\d{2}(\]?)/m,
+      `$1${date}$2`,
+    )
+  }
+  return normalized
+}
+
+function setOrAppendFrontmatterDate(payload: string, key: "created" | "updated", date: string): string {
+  const lineRe = new RegExp(`(^|\\n)(${key}\\s*:\\s*)[^\\n\\r]*`, "i")
+  if (lineRe.test(payload)) {
+    return payload.replace(lineRe, (_match, prefix: string, label: string) => `${prefix}${label}${date}`)
+  }
+  return `${payload.trimEnd()}\n${key}: ${date}`
+}
+
 async function writeFileBlocks(
   projectPath: string,
   text: string,
@@ -1191,8 +1321,10 @@ async function writeFileBlocks(
   // be written, so the next re-ingest goes through the full pipeline
   // instead of replaying the partial result forever.
   const hardFailures: string[] = []
+  const projectSchemaRouting = await loadProjectWikiSchemaRouting(projectPath)
 
   const targetLang = useWikiStore.getState().outputLanguage
+  const today = currentWikiDate()
 
   for (const { path: rawRelativePath, content: rawContent } of blocks) {
     let relativePath = rawRelativePath
@@ -1209,8 +1341,31 @@ async function writeFileBlocks(
     // unparseable frontmatter and the read-time fallback had to
     // paper over it forever.
     let content = sanitizeIngestedFileContent(rawContent)
+    if (isLogPath(relativePath)) {
+      content = stampGeneratedLogDate(content, today)
+    } else if (!isListingPath(relativePath)) {
+      content = stampGeneratedFrontmatterDates(content, today)
+    }
     if (!isLogPath(relativePath) && !isListingPath(relativePath)) {
       content = canonicalizeSourcesField(content, sourceFileName)
+    }
+
+    if (
+      projectSchemaRouting &&
+      !isLogPath(relativePath) &&
+      !isListingPath(relativePath)
+    ) {
+      const routingIssue = validateWikiPageRouting(
+        relativePath,
+        content,
+        projectSchemaRouting,
+      )
+      if (routingIssue) {
+        const msg = `Dropped "${relativePath}" — ${routingIssue.message}`
+        console.warn(`[ingest] ${msg}`)
+        warnings.push(msg)
+        continue
+      }
     }
 
     // Language guard: reject individual FILE blocks whose body contradicts
@@ -1438,6 +1593,7 @@ export function buildGenerationPrompt(
   // Use original filename (without extension) as the source summary page name
   const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, "")
   const summaryPath = sourceSummaryPath ?? `wiki/sources/${sourceBaseName}.md`
+  const today = currentWikiDate()
 
   return [
     "You are a wiki maintainer. Based on the analysis provided, generate wiki files.",
@@ -1448,6 +1604,7 @@ export function buildGenerationPrompt(
     `## IMPORTANT: Source File`,
     `The original source file is: **${sourceFileName}**`,
     `All wiki pages generated from this source MUST include this filename in their frontmatter \`sources\` field.`,
+    `Today's date is **${today}**. Use this exact date for all new \`created\`, \`updated\`, and wiki/log.md ingest dates.`,
     "",
     schema
       ? [
@@ -1457,6 +1614,7 @@ export function buildGenerationPrompt(
           "Use this schema as the primary routing rule for page types and directories.",
           "If it defines custom folders or distinctions (for example people, technologies, organizations, methods, or cases), write pages into those schema-defined folders instead of forcing them into wiki/entities/ or wiki/concepts/.",
           "Use wiki/entities/ and wiki/concepts/ only when the schema does not provide a more specific destination.",
+          "Every generated page's frontmatter type must match the schema directory used in its FILE path.",
         ].join("\n")
       : "",
     "",
@@ -1486,8 +1644,8 @@ export function buildGenerationPrompt(
     "Required fields and types:",
     `  • type     — one of the known types (${GENERATION_WIKI_TYPES.join(" | ")}), or a custom type explicitly defined by the project schema`,
     "  • title    — string (quote it if it contains a colon, e.g. `title: \"Foo: Bar\"`)",
-    "  • created  — date in YYYY-MM-DD form (no quotes)",
-    "  • updated  — same as created",
+    `  • created  — ${today} for new pages (YYYY-MM-DD, no quotes)`,
+    `  • updated  — ${today} for new pages (same as created)`,
     "  • tags     — array of bare strings: `tags: [microbiology, ai]`",
     "  • related  — array of bare wiki page slugs: `related: [foo, bar-baz]`. Do NOT include",
     "               `wiki/`, `.md`, or `[[…]]` here — slugs only.",
@@ -1499,8 +1657,8 @@ export function buildGenerationPrompt(
     "    ---",
     "    type: entity",
     "    title: Example Entity",
-    "    created: 2026-04-29",
-    "    updated: 2026-04-29",
+    `    created: ${today}`,
+    `    updated: ${today}`,
     "    tags: [example, demo]",
     "    related: [related-slug-1, related-slug-2]",
     `    sources: ["${sourceFileName}"]`,
@@ -1514,6 +1672,7 @@ export function buildGenerationPrompt(
     "- Use [[wikilink]] syntax in the BODY for cross-references between pages",
     "- If you include images, use wiki-root-relative paths such as `media/source-slug/image.png`; never output absolute filesystem paths.",
     "- Use kebab-case filenames",
+    "- Derive filenames from the page title in the mandatory output language. For Chinese/Japanese/Korean titles, keep readable CJK characters in the filename instead of translating the slug to English.",
     "- Follow the analysis recommendations on what to emphasize",
     "- If the analysis found connections to existing pages, add cross-references",
     "",
@@ -1823,6 +1982,10 @@ export function splitSourceIntoSemanticChunks(
 function trimLongText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
   return `${text.slice(0, maxChars).trimEnd()}\n\n[...trimmed for prompt budget...]`
+}
+
+function trimInlineStatus(text: string, maxChars = 240): string {
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars).trimEnd()}...`
 }
 
 function hashTextHex(text: string): string {

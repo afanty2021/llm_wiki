@@ -139,7 +139,15 @@
     "useAnyTxtSearch": "AnyTXT 搜索",
     "enableAnyTxtInSettings": "请在设置 → 外部信息源中启用 AnyTXT",
     "sendMessage": "发送消息",
-    "stopGeneration": "停止生成"
+    "stopGeneration": "停止生成",
+    "attachImage": "添加图片",
+    "removeImage": "移除图片",
+    "imageMessage": "图片",
+    "imageVisionHint": "图片会发送给当前 LLM。图片提问需要使用支持视觉的模型。",
+    "imageInputUnavailable": "当前 Provider 不支持图片输入。请在设置中切换到支持视觉的 Provider。",
+    "imageTooLarge": "图片过大（最大 {{max}}MB）：{{name}}",
+    "tooManyImages": "图片数量过多（最多 {{max}} 张）",
+    "unsupportedImageType": "不支持的图片类型：{{type}}"
   },
   "search": {
     "title": "搜索",
@@ -210,6 +218,7 @@
     "saved": "已保存",
     "savedTick": "已保存 ✓",
     "changeHint": "改动会在保存后应用。",
+    "saveFailed": "保存失败，部分设置可能没有保存。详细信息见控制台。",
     "language": "语言",
     "languageHint": "界面语言（Wiki 内容语言以原始资料为准）",
     "categories": {
@@ -221,6 +230,7 @@
       "network": "网络",
       "sourceWatch": "资料文件夹监控",
       "scheduledImport": "定时导入",
+      "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
       "output": "输出偏好",
       "interface": "界面",
@@ -270,6 +280,10 @@
         "endpointPreviewAutoApply": "（离开输入框时自动套用）",
         "providerTests": "Provider 测试",
         "providerTestsHint": "连接测试用于确认 endpoint 能正常响应；功能测试会让模型执行一个极小指令。",
+        "localCliIsolation": "隔离本地 CLI 配置",
+        "localCliIsolationHint": "仅用于 Claude Code 和 Codex CLI。开启后，LLM Wiki 会让 CLI 尽量忽略用户级 rules / config / MCP / tools。这是配置隔离，不是进程沙箱：CLI 仍会使用你的本机登录凭据和网络能力。若你有意依赖本机 CLI 配置，请保持关闭。",
+        "localCliIsolationOn": "隔离已开启：在 CLI 支持的范围内禁用用户规则、MCP/tools 和持久会话。本机凭据和网络访问仍由 CLI 自身控制。",
+        "localCliIsolationOff": "隔离已关闭：该 Provider 可以使用你平时的本地 CLI 配置。",
         "testConnection": "测试连接",
         "testFunction": "测试功能",
         "testingConnection": "正在测试连接…",
@@ -304,6 +318,7 @@
         "apiKey": "API Key（可选）",
         "apiKeyPlaceholder": "本地模型留空即可",
         "model": "Model",
+        "modelHint": "输入框会提示常见模型；OpenAI 兼容 endpoint 的自定义模型 ID 也可以直接填写。",
         "outputDimensionality": "输出维度（仅 Gemini）",
         "outputDimensionalityHint": "可选。仅对 Gemini 原生 embedContent endpoint 作为 `output_dimensionality` 发送；OpenAI 兼容 endpoint 会忽略此项。留空则使用模型默认值。修改模型或维度后需要重建嵌入。",
         "extraHeaders": "自定义请求头",
@@ -502,6 +517,7 @@
         "endpointProjectsNote": "列出所有已知项目及其 ID 和路径。",
         "endpointFilesNote": "?root=wiki|sources|all；?recursive=false；?maxFiles=N（≤10000）。",
         "endpointContentNote": "?path=wiki/index.md —— 仅文本文件，最大 2 MB。",
+        "endpointReviewsNote": "?status=unresolved|resolved|all；?type=missing-page；?limit=N。默认返回未解决的 Review 项。",
         "endpointSearchNote": "JSON body：{ query, topK?, includeContent?, queryEmbedding? }。配置嵌入后使用统一的关键词 + 向量检索。",
         "endpointGraphNote": "?q=…&nodeType=…&limit=N —— 基于 wiki/*.md 的双链图谱。",
         "endpointRescanNote": "使用你的资料文件夹监控配置触发后端重新扫描。",
@@ -580,6 +596,23 @@
         "later": "稍后",
         "autoCheck": "应用启动时自动检查更新（每 6 小时最多一次）",
         "appDescription": "一个由 LLM 驱动的个人知识库。源代码："
+      },
+      "mineru": {
+        "title": "MinerU PDF 解析",
+        "description": "使用 MinerU 云端 API 获得更高质量的 PDF 解析（表格、公式、复杂排版）。默认使用内置 pdfium 提取。",
+        "privacyNotice": "启用后，PDF 内容会上传到 MinerU 云端进行解析。除非你接受这一点，否则不要用于敏感文档。",
+        "enabled": "启用 MinerU",
+        "token": "API Token",
+        "tokenHint": "从 mineru.net 获取您的 Token",
+        "model": "模型版本",
+        "modelVlm": "VLM（推荐，适合复杂排版）",
+        "modelPipeline": "Pipeline（更快）",
+        "modelHint": "PDF 解析仅使用 pipeline 或 vlm。MinerU-HTML 用于 HTML 文件，这里不会使用。",
+        "test": "测试连接",
+        "testQuotaNotice": "连接测试会向 MinerU 提交一个小型示例文件，可能消耗少量额度。",
+        "testing": "测试中...",
+        "testSuccess": "连接成功",
+        "testFailed": "测试失败"
       }
     }
   },

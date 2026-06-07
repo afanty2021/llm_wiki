@@ -107,6 +107,7 @@ type SpawnPayload = Record<string, unknown> & {
   streamId: string
   model: string
   messages: ChatMessage[]
+  isolateLocalConfig: boolean
 }
 
 /**
@@ -257,6 +258,7 @@ export async function streamClaudeCodeCli(
       streamId,
       model: config.model,
       messages,
+      isolateLocalConfig: config.localCliIsolation === true,
     }
     await invoke("claude_cli_spawn", payload)
     if (aborted || signal?.aborted) {

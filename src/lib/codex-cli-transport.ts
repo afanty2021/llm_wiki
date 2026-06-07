@@ -61,6 +61,7 @@ type SpawnPayload = Record<string, unknown> & {
   streamId: string
   model: string
   prompt: string
+  isolateLocalConfig: boolean
 }
 
 export async function streamCodexCli(
@@ -196,6 +197,7 @@ export async function streamCodexCli(
       streamId,
       model: config.model,
       prompt: buildPrompt(messages),
+      isolateLocalConfig: config.localCliIsolation === true,
     }
     await invoke("codex_cli_spawn", payload)
     if (aborted || signal?.aborted) {

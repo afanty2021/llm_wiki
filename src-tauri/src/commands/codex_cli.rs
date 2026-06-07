@@ -19,6 +19,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use super::cli_resolver::find_cli_command;
+
 #[derive(Default)]
 pub struct CodexCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
@@ -51,18 +53,8 @@ fn append_capped_line(collected: &mut String, line: &str, limit_bytes: usize) {
     }
 }
 
-fn find_codex_command() -> Result<PathBuf, String> {
-    #[cfg(windows)]
-    {
-        if let Ok(path) = which::which("codex.cmd") {
-            return Ok(path);
-        }
-        if let Ok(path) = which::which("codex.exe") {
-            return Ok(path);
-        }
-    }
-
-    which::which("codex").map_err(|_| "`codex` not found on PATH".to_string())
+async fn find_codex_command() -> Result<PathBuf, String> {
+    find_cli_command("codex", &["codex.cmd", "codex.exe"]).await
 }
 
 fn suppress_windows_console(_cmd: &mut Command) {
@@ -77,7 +69,7 @@ fn suppress_windows_console(_cmd: &mut Command) {
 
 #[tauri::command]
 pub async fn codex_cli_detect() -> Result<DetectResult, String> {
-    let path = match find_codex_command() {
+    let path = match find_codex_command().await {
         Ok(p) => p,
         Err(error) => {
             return Ok(DetectResult {
@@ -139,25 +131,16 @@ pub async fn codex_cli_spawn(
     stream_id: String,
     model: String,
     prompt: String,
+    isolate_local_config: bool,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
         return Err("No prompt to send to codex CLI".to_string());
     }
 
-    let codex = find_codex_command()?;
+    let codex = find_codex_command().await?;
     let mut cmd = Command::new(&codex);
     suppress_windows_console(&mut cmd);
-    cmd.arg("-a")
-        .arg("never")
-        .arg("exec")
-        .arg("--json")
-        .arg("--skip-git-repo-check")
-        .arg("--sandbox")
-        .arg("read-only")
-        .arg("--ephemeral")
-        .arg("--model")
-        .arg(&model)
-        .arg("-");
+    cmd.args(build_codex_cli_args(&model, isolate_local_config));
 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -284,6 +267,29 @@ pub async fn codex_cli_spawn(
     Ok(())
 }
 
+fn build_codex_cli_args(model: &str, isolate_local_config: bool) -> Vec<String> {
+    let mut args = vec!["-a".to_string(), "never".to_string(), "exec".to_string()];
+
+    if isolate_local_config {
+        args.extend([
+            "--ignore-user-config".to_string(),
+            "--ignore-rules".to_string(),
+        ]);
+    }
+
+    args.extend([
+        "--json".to_string(),
+        "--skip-git-repo-check".to_string(),
+        "--sandbox".to_string(),
+        "read-only".to_string(),
+        "--ephemeral".to_string(),
+        "--model".to_string(),
+        model.to_string(),
+        "-".to_string(),
+    ]);
+    args
+}
+
 #[tauri::command]
 pub async fn codex_cli_kill(
     state: State<'_, CodexCliState>,
@@ -323,5 +329,35 @@ mod tests {
         assert_eq!(out, "é水");
         assert_eq!(out.len(), 5);
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn codex_args_do_not_isolate_local_config_by_default() {
+        let args = build_codex_cli_args("gpt-5", false);
+
+        assert!(args
+            .windows(3)
+            .any(|pair| pair[0] == "-a" && pair[1] == "never" && pair[2] == "exec"));
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"gpt-5".to_string()));
+        assert!(!args.contains(&"--ignore-user-config".to_string()));
+        assert!(!args.contains(&"--ignore-rules".to_string()));
+    }
+
+    #[test]
+    fn codex_args_can_isolate_user_config_and_rules() {
+        let args = build_codex_cli_args("gpt-5", true);
+        let exec_pos = args.iter().position(|arg| arg == "exec").expect("exec arg");
+        let ignore_config_pos = args
+            .iter()
+            .position(|arg| arg == "--ignore-user-config")
+            .expect("ignore-user-config arg");
+        let ignore_rules_pos = args
+            .iter()
+            .position(|arg| arg == "--ignore-rules")
+            .expect("ignore-rules arg");
+
+        assert!(ignore_config_pos > exec_pos);
+        assert!(ignore_rules_pos > exec_pos);
     }
 }

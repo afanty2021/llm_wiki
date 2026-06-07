@@ -139,7 +139,15 @@
     "useAnyTxtSearch": "AnyTXT search",
     "enableAnyTxtInSettings": "Enable AnyTXT in Settings → External Information Sources",
     "sendMessage": "Send message",
-    "stopGeneration": "Stop generation"
+    "stopGeneration": "Stop generation",
+    "attachImage": "Attach image",
+    "removeImage": "Remove image",
+    "imageMessage": "Image",
+    "imageVisionHint": "Images are sent to the current LLM. Use a vision-capable model for image questions.",
+    "imageInputUnavailable": "The current provider does not support image input. Switch to a vision-capable provider in Settings.",
+    "imageTooLarge": "Image too large (max {{max}}MB): {{name}}",
+    "tooManyImages": "Too many images (max {{max}})",
+    "unsupportedImageType": "Unsupported image type: {{type}}"
   },
   "search": {
     "title": "Search",
@@ -210,6 +218,7 @@
     "saved": "Saved",
     "savedTick": "Saved ✓",
     "changeHint": "Changes apply after saving.",
+    "saveFailed": "Save failed. Some settings may not have been saved. See the console for details.",
     "language": "Language",
     "languageHint": "Interface language (wiki content follows source material language)",
     "categories": {
@@ -221,6 +230,7 @@
       "network": "Network",
       "sourceWatch": "Source Watch",
       "scheduledImport": "Scheduled Import",
+      "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
       "output": "Output",
       "interface": "Interface",
@@ -270,6 +280,10 @@
         "endpointPreviewAutoApply": "(applied automatically when you leave the input)",
         "providerTests": "Provider tests",
         "providerTestsHint": "Connection test verifies the endpoint can respond. Functional test asks the model to follow a tiny instruction.",
+        "localCliIsolation": "Isolate local CLI configuration",
+        "localCliIsolationHint": "Optional for Claude Code and Codex CLI. When enabled, LLM Wiki asks the CLI to ignore user-level rules/config/MCP/tools where supported. This is configuration isolation, not a process sandbox: the CLI still uses your local login credentials and network access. Leave off if you intentionally rely on your local CLI setup.",
+        "localCliIsolationOn": "Isolation on: user CLI rules, MCP/tools, and persisted sessions are disabled where the CLI supports it. Local credentials and network access are still controlled by the CLI itself.",
+        "localCliIsolationOff": "Isolation off: this provider can use your normal local CLI configuration.",
         "testConnection": "Test connection",
         "testFunction": "Test function",
         "testingConnection": "Testing connection…",
@@ -304,6 +318,7 @@
         "apiKey": "API Key (optional)",
         "apiKeyPlaceholder": "Leave empty for local models",
         "model": "Model",
+        "modelHint": "Common examples are suggested, but custom OpenAI-compatible model IDs are accepted.",
         "outputDimensionality": "Output dimensionality (Gemini only)",
         "outputDimensionalityHint": "Optional. Sent only for Gemini native embedContent endpoints as `output_dimensionality`; OpenAI-compatible endpoints ignore this field. Leave empty for the model default. Rebuild embeddings after changing model or dimension.",
         "extraHeaders": "Custom request headers",
@@ -502,6 +517,7 @@
         "endpointProjectsNote": "List known projects with their IDs and paths.",
         "endpointFilesNote": "?root=wiki|sources|all; ?recursive=false; ?maxFiles=N (≤10000).",
         "endpointContentNote": "?path=wiki/index.md — text files only, 2 MB max.",
+        "endpointReviewsNote": "?status=unresolved|resolved|all; ?type=missing-page; ?limit=N. Defaults to unresolved Review items.",
         "endpointSearchNote": "JSON body: { query, topK?, includeContent?, queryEmbedding? }. Uses shared keyword + vector retrieval when embeddings are configured.",
         "endpointGraphNote": "?q=…&nodeType=…&limit=N — wikilinks graph derived from wiki/*.md.",
         "endpointRescanNote": "Triggers a backend rescan using your Source Watch config.",
@@ -580,6 +596,23 @@
         "later": "Later",
         "autoCheck": "Check for updates automatically on startup (at most once every 6 hours)",
         "appDescription": "An LLM-driven personal knowledge base. Source:"
+      },
+      "mineru": {
+        "title": "MinerU PDF Parser",
+        "description": "Use MinerU cloud API for higher quality PDF parsing (tables, formulas, complex layouts). Default uses built-in pdfium extraction.",
+        "privacyNotice": "When enabled, PDF contents are uploaded to MinerU cloud for parsing. Do not enable this for sensitive documents unless you accept that.",
+        "enabled": "Enable MinerU",
+        "token": "API Token",
+        "tokenHint": "Get your token from mineru.net",
+        "model": "Model Version",
+        "modelVlm": "VLM (Recommended, best for complex layouts)",
+        "modelPipeline": "Pipeline (Faster)",
+        "modelHint": "PDF parsing supports pipeline and vlm. MinerU-HTML is for HTML files and is not used here.",
+        "test": "Test Connection",
+        "testQuotaNotice": "Connection test submits a small demo file to MinerU and may consume a small amount of quota.",
+        "testing": "Testing...",
+        "testSuccess": "Connection successful",
+        "testFailed": "Test failed"
       }
     }
   },

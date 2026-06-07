@@ -1,6 +1,6 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { ApiConfig, GeneralConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import type { ApiConfig, GeneralConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MineruConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 
@@ -108,6 +108,31 @@ export async function saveMultimodalConfig(config: MultimodalConfig): Promise<vo
 export async function loadMultimodalConfig(): Promise<MultimodalConfig | null> {
   const store = await getStore()
   return (await store.get<MultimodalConfig>(MULTIMODAL_KEY)) ?? null
+}
+
+const MINERU_KEY = "mineruConfig"
+
+function normalizeMineruConfig(config: MineruConfig): MineruConfig {
+  return {
+    enabled: config.enabled === true,
+    token: typeof config.token === "string" ? config.token : "",
+    modelVersion: config.modelVersion === "pipeline" ? "pipeline" : "vlm",
+  }
+}
+
+export const __projectStoreTest = {
+  normalizeMineruConfig,
+}
+
+export async function saveMineruConfig(config: MineruConfig): Promise<void> {
+  const store = await getStore()
+  await store.set(MINERU_KEY, normalizeMineruConfig(config))
+}
+
+export async function loadMineruConfig(): Promise<MineruConfig | null> {
+  const store = await getStore()
+  const config = await store.get<MineruConfig>(MINERU_KEY)
+  return config ? normalizeMineruConfig(config) : null
 }
 
 // IMPORTANT: Keep this key in sync with the Rust setup hook

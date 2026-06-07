@@ -18,7 +18,13 @@
  * to dropping pages without telling anyone.
  */
 import { describe, it, expect } from "vitest"
-import { parseFileBlocks, isSafeIngestPath } from "./ingest"
+import {
+  parseFileBlocks,
+  isSafeIngestPath,
+  stampGeneratedFrontmatterDates,
+  stampGeneratedLogDate,
+  buildGenerationPrompt,
+} from "./ingest"
 
 // ── Happy paths ─────────────────────────────────────────────────────
 
@@ -468,5 +474,60 @@ describe("parseFileBlocks — path-traversal guard end-to-end", () => {
       "wiki/entities/topic-b.md",
     ])
     expect(warnings.some((w) => w.includes("../config.json"))).toBe(true)
+  })
+})
+
+describe("generated ingest dates", () => {
+  it("stamps frontmatter dates to the application date instead of model guesses", () => {
+    const out = stampGeneratedFrontmatterDates(
+      [
+        "---",
+        "type: concept",
+        "title: Wrong Date",
+        "created: 2024-01-01",
+        "updated: 2025-02-02",
+        "tags: []",
+        "---",
+        "# Body",
+      ].join("\n"),
+      "2026-06-07",
+    )
+
+    expect(out).toContain("created: 2026-06-07")
+    expect(out).toContain("updated: 2026-06-07")
+    expect(out).not.toContain("2024-01-01")
+    expect(out).not.toContain("2025-02-02")
+  })
+
+  it("adds missing frontmatter dates when the model omits them", () => {
+    const out = stampGeneratedFrontmatterDates(
+      [
+        "---",
+        "type: concept",
+        "title: Missing Date",
+        "tags: []",
+        "---",
+        "# Body",
+      ].join("\n"),
+      "2026-06-07",
+    )
+
+    expect(out).toContain("created: 2026-06-07")
+    expect(out).toContain("updated: 2026-06-07")
+  })
+
+  it("stamps generated log headings to the application date", () => {
+    expect(stampGeneratedLogDate("## [2024-01-01] ingest | Foo", "2026-06-07"))
+      .toBe("## [2026-06-07] ingest | Foo")
+    expect(stampGeneratedLogDate("## [YYYY-MM-DD] ingest | Foo", "2026-06-07"))
+      .toBe("## [2026-06-07] ingest | Foo")
+  })
+
+  it("tells the model the exact current date in the generation prompt", () => {
+    const prompt = buildGenerationPrompt("", "", "", "paper.pdf")
+
+    expect(prompt).toContain("Today's date is")
+    expect(prompt).toContain("Use this exact date")
+    expect(prompt).not.toContain("created: 2026-04-29")
   })
 })

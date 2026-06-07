@@ -26,6 +26,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.21",
+    date: "2026-06-07",
+    highlights: {
+      en: [
+        "Improved chat image support with safer local image handling, MiniMax M3 provider compatibility, and GLM vision model compatibility.",
+        "Improved MinerU PDF parsing, local CLI provider resolution, API/MCP settings, and source/image ingestion reliability.",
+        "Closed a batch of fixed GitHub issues covering source monitoring, scrolling, long-document ingest, editing, and provider compatibility.",
+      ],
+      zh: [
+        "改进 AI 对话图片支持，增强本地图片处理安全性，并扩展 MiniMax M3 Provider 与 GLM 多模态模型兼容。",
+        "优化 MinerU PDF 解析、本地 CLI Provider 解析、API/MCP 设置，以及资料与图片摄取稳定性。",
+        "集中处理并关闭一批已修复的 GitHub issue，覆盖资料监控、滚动、长文档摄取、编辑保存和 Provider 兼容。",
+      ],
+    },
+  },
+  {
     version: "0.4.20",
     date: "2026-06-04",
     highlights: {

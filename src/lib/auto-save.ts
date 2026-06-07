@@ -11,11 +11,11 @@ let chatTimer: ReturnType<typeof setTimeout> | null = null
 export function setupAutoSave(): void {
   // Auto-save review items (debounced 1s)
   useReviewStore.subscribe((state) => {
+    const projectPath = useWikiStore.getState().project?.path
     if (reviewTimer) clearTimeout(reviewTimer)
     reviewTimer = setTimeout(() => {
-      const project = useWikiStore.getState().project
-      if (project) {
-        saveReviewItems(project.path, state.items).catch(() => {})
+      if (projectPath) {
+        saveReviewItems(projectPath, state.items).catch(() => {})
       }
     }, 1000)
   })
@@ -34,11 +34,11 @@ export function setupAutoSave(): void {
   // Auto-save chat conversations and messages (debounced 2s, skip during streaming)
   useChatStore.subscribe((state) => {
     if (state.isStreaming) return
+    const projectPath = useWikiStore.getState().project?.path
     if (chatTimer) clearTimeout(chatTimer)
     chatTimer = setTimeout(() => {
-      const project = useWikiStore.getState().project
-      if (project) {
-        saveChatHistory(project.path, state.conversations, state.messages).catch(() => {})
+      if (projectPath) {
+        saveChatHistory(projectPath, state.conversations, state.messages).catch(() => {})
       }
     }, 2000)
   })

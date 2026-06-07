@@ -7,6 +7,8 @@ export interface ProviderTestResult {
   message: string
 }
 
+export const LLM_PROVIDER_TEST_MAX_TOKENS = 512
+
 export async function testEmbeddingConnection(cfg: EmbeddingConfig): Promise<ProviderTestResult> {
   if (!cfg.endpoint.trim()) {
     return { ok: false, message: "Embedding endpoint is empty." }
@@ -77,7 +79,7 @@ export async function testLlmConnection(cfg: LlmConfig): Promise<ProviderTestRes
       onError: (err) => { errorMessage = err.message },
     },
     undefined,
-    { max_tokens: 32, reasoning: { mode: "off" } },
+    { max_tokens: LLM_PROVIDER_TEST_MAX_TOKENS, reasoning: { mode: "off" } },
   )
 
   if (errorMessage) return { ok: false, message: errorMessage }
@@ -107,7 +109,7 @@ export async function testLlmFunction(cfg: LlmConfig): Promise<ProviderTestResul
       onError: (err) => { errorMessage = err.message },
     },
     undefined,
-    { max_tokens: 32, reasoning: { mode: "off" } },
+    { max_tokens: LLM_PROVIDER_TEST_MAX_TOKENS, reasoning: { mode: "off" } },
   )
 
   if (errorMessage) return { ok: false, message: errorMessage }

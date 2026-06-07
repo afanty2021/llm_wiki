@@ -195,6 +195,55 @@ describe("streamCodexCli", () => {
     expect(callbacks.onError).not.toHaveBeenCalled()
   })
 
+  it("passes local CLI isolation preference to the Rust transport", async () => {
+    const callbacks = {
+      onToken: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+
+    const stream = streamCodexCli(
+      {
+        provider: "codex-cli",
+        apiKey: "",
+        model: "gpt-5.1-codex-mini",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 128000,
+        localCliIsolation: true,
+      },
+      [{ role: "user", content: "Analyze this source." }],
+      callbacks,
+    )
+
+    await vi.waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith(
+        "codex_cli_spawn",
+        expect.objectContaining({ isolateLocalConfig: true }),
+      )
+    })
+
+    const payload = tauriMocks.invoke.mock.calls[0]?.[1] as { streamId: string }
+    tauriMocks.emit(
+      `codex-cli:${payload.streamId}`,
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: "isolated analysis" },
+      }),
+    )
+    tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+      code: 0,
+      stderr: "",
+      stdout: "",
+    })
+
+    await stream
+
+    expect(callbacks.onToken).toHaveBeenCalledWith("isolated analysis")
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onError).not.toHaveBeenCalled()
+  })
+
   it("does not replay done stdout when a live agent message was already emitted", async () => {
     const callbacks = {
       onToken: vi.fn(),

@@ -228,6 +228,47 @@ describe("streamClaudeCodeCli", () => {
     expect(callbacks.onError).not.toHaveBeenCalled()
   })
 
+  it("passes local CLI isolation preference to the Rust transport", async () => {
+    const callbacks = {
+      onToken: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+
+    const stream = streamClaudeCodeCli(
+      {
+        provider: "claude-code",
+        apiKey: "",
+        model: "claude-sonnet-4-6",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 200000,
+        localCliIsolation: true,
+      },
+      [{ role: "user", content: "Analyze this source." }],
+      callbacks,
+    )
+
+    await vi.waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith(
+        "claude_cli_spawn",
+        expect.objectContaining({ isolateLocalConfig: true }),
+      )
+    })
+
+    const payload = tauriMocks.invoke.mock.calls[0]?.[1] as { streamId: string }
+    tauriMocks.emit(
+      `claude-cli:${payload.streamId}`,
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "ok" }] },
+      }),
+    )
+    tauriMocks.emit(`claude-cli:${payload.streamId}:done`, { code: 0, stderr: "" })
+
+    await stream
+  })
+
   it("surfaces a clear error when completion has no assistant text", async () => {
     const callbacks = {
       onToken: vi.fn(),

@@ -22,6 +22,37 @@ const MEDIA_EXTS: &[&str] = &[
 ];
 const LEGACY_DOC_EXTS: &[&str] = &["ppt", "pages", "numbers", "key", "epub"];
 
+fn require_absolute_path(operation: &str, path: &str) -> Result<(), String> {
+    if is_absolute_path_cross_platform(path) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{operation} requires an absolute path; got relative path '{}'",
+            path
+        ))
+    }
+}
+
+fn is_absolute_path_cross_platform(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    if Path::new(path).is_absolute() {
+        return true;
+    }
+
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[1] == b':'
+        && bytes[0].is_ascii_alphabetic()
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        return true;
+    }
+
+    path.starts_with(r"\\") || path.starts_with("//")
+}
+
 #[tauri::command]
 pub async fn read_file(path: String, extract_images: Option<bool>) -> Result<String, String> {
     // `spawn_blocking` is REQUIRED, not a perf nicety. The body does
@@ -941,6 +972,7 @@ fn extract_odf_text(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, S
 pub async fn write_file(path: String, contents: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("write_file", || {
+            require_absolute_path("write_file", &path)?;
             let p = Path::new(&path);
             if let Some(parent) = p.parent() {
                 fs::create_dir_all(parent)
@@ -961,6 +993,7 @@ pub async fn write_file(path: String, contents: String) -> Result<(), String> {
 pub async fn write_file_atomic(path: String, contents: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("write_file_atomic", || {
+            require_absolute_path("write_file_atomic", &path)?;
             let p = Path::new(&path);
             if let Some(parent) = p.parent() {
                 fs::create_dir_all(parent)
@@ -1365,6 +1398,7 @@ fn collect_related_pages(
 pub async fn create_directory(path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("create_directory", || {
+            require_absolute_path("create_directory", &path)?;
             fs::create_dir_all(&path)
                 .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
         })
@@ -1919,6 +1953,24 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn reject_relative_write_paths_before_touching_cwd() {
+        assert!(require_absolute_path("write_file", "wiki/sources/stray.md").is_err());
+        assert!(require_absolute_path("write_file", "./wiki/sources/stray.md").is_err());
+    }
+
+    #[test]
+    fn allow_absolute_write_paths() {
+        assert!(require_absolute_path("write_file", "/tmp/project/wiki/sources/page.md").is_ok());
+        assert!(require_absolute_path("write_file", "C:/project/wiki/sources/page.md").is_ok());
+        assert!(require_absolute_path("write_file", r"C:\project\wiki\sources\page.md").is_ok());
+        assert!(
+            require_absolute_path("write_file", r"\\server\share\wiki\sources\page.md").is_ok()
+        );
+        assert!(require_absolute_path("write_file", "//server/share/wiki/sources/page.md").is_ok());
+        assert!(require_absolute_path("write_file", "C:wiki/sources/page.md").is_err());
     }
 
     /// Pull the inner sync `copy_recursive` body out from

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { EmbeddingConfig, LlmConfig } from "@/stores/wiki-store"
 import {
+  LLM_PROVIDER_TEST_MAX_TOKENS,
   testEmbeddingConnection,
   testEmbeddingFunction,
   testLlmConnection,
@@ -92,7 +93,24 @@ describe("provider connection tests", () => {
       expect.any(Array),
       expect.any(Object),
       undefined,
-      { max_tokens: 32, reasoning: { mode: "off" } },
+      { max_tokens: LLM_PROVIDER_TEST_MAX_TOKENS, reasoning: { mode: "off" } },
+    )
+  })
+
+  it("uses enough output budget for reasoning-heavy local models", async () => {
+    streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
+      callbacks.onToken("OK")
+      callbacks.onDone()
+    })
+
+    await testLlmConnection(llmConfig)
+
+    expect(streamChatMock).toHaveBeenCalledWith(
+      llmConfig,
+      expect.any(Array),
+      expect.any(Object),
+      undefined,
+      expect.objectContaining({ max_tokens: 512 }),
     )
   })
 })
