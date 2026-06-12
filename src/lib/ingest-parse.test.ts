@@ -24,6 +24,9 @@ import {
   stampGeneratedFrontmatterDates,
   stampGeneratedLogDate,
   buildGenerationPrompt,
+  sourceSummaryMediaRefsForExternalMarkdown,
+  aggregatePathsNeedingRepair,
+  filterAggregateRepairOutput,
 } from "./ingest"
 
 // ── Happy paths ─────────────────────────────────────────────────────
@@ -84,6 +87,61 @@ describe("parseFileBlocks — canonical shapes", () => {
       "---END FILE---",
     ].join("\n")
     expect(parseFileBlocks(text).blocks).toHaveLength(1)
+  })
+})
+
+describe("source summary media refs", () => {
+  it("rewrites generated media refs so wiki/sources pages work in external Markdown apps", () => {
+    const input = [
+      "![Chart](media/report/001-chart.png)",
+      "![Table](./media/report/table%201.png)",
+      '<img src="media/report/raw.png" />',
+      "![Already relative](../media/report/keep.png)",
+    ].join("\n")
+
+    expect(sourceSummaryMediaRefsForExternalMarkdown(input)).toBe([
+      "![Chart](../media/report/001-chart.png)",
+      "![Table](../media/report/table%201.png)",
+      '<img src="../media/report/raw.png" />',
+      "![Already relative](../media/report/keep.png)",
+    ].join("\n"))
+  })
+})
+
+describe("aggregate repair targeting", () => {
+  it("requests missing aggregate pages and aggregate pages dropped by truncation warnings", () => {
+    expect(aggregatePathsNeedingRepair(
+      ["wiki/index.md", "wiki/log.md"],
+      ['FILE block "wiki/overview.md" was not closed before end of stream — likely truncation.'],
+    )).toEqual(["wiki/overview.md"])
+
+    expect(aggregatePathsNeedingRepair(
+      ["wiki/index.md", "wiki/overview.md", "wiki/log.md"],
+      [],
+    )).toEqual([])
+  })
+
+  it("filters aggregate repair output to the requested aggregate paths only", () => {
+    const raw = [
+      "---FILE: wiki/overview.md---",
+      "# Overview",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/sources/should-not-touch.md---",
+      "# Stray Source Summary",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/entities/stray.md---",
+      "# Stray Entity",
+      "---END FILE---",
+    ].join("\n")
+
+    const filtered = filterAggregateRepairOutput(raw, ["wiki/overview.md"])
+
+    expect(filtered.text).toContain("---FILE: wiki/overview.md---")
+    expect(filtered.text).not.toContain("should-not-touch")
+    expect(filtered.text).not.toContain("wiki/entities/stray.md")
+    expect(filtered.warnings.join("\n")).toContain("Dropped 2 non-aggregate")
   })
 })
 

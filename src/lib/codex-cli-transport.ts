@@ -62,6 +62,7 @@ type SpawnPayload = Record<string, unknown> & {
   model: string
   prompt: string
   isolateLocalConfig: boolean
+  timeoutMinutes?: number
 }
 
 export async function streamCodexCli(
@@ -198,6 +199,7 @@ export async function streamCodexCli(
       model: config.model,
       prompt: buildPrompt(messages),
       isolateLocalConfig: config.localCliIsolation === true,
+      timeoutMinutes: config.codexCliTimeoutMinutes,
     }
     await invoke("codex_cli_spawn", payload)
     if (aborted || signal?.aborted) {

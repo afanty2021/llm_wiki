@@ -137,18 +137,19 @@ export function resolveMarkdownImageSrc(
   // that case we keep the raw value rather than crash the renderer.
   const cleaned = decodePathSrc(stripped)
 
-  // Generated-wiki convention takes precedence: ingest always emits
+  // Generated-wiki convention takes precedence: ingest normally emits
   // embedded images as `media/<source-slug>/img-N.png` — a path
-  // relative to the project's `wiki/` ROOT, regardless of which
-  // wiki subdirectory the page lives in (`wiki/sources/foo.md`,
-  // `wiki/concepts/bar.md`, …). If we let `currentFileDir` win for
-  // these, a page in `wiki/sources/` would resolve `media/…` to
-  // `wiki/sources/media/…` — one level too deep — and the image
-  // 404s. So a `media/`-prefixed src is ALWAYS wiki-root-relative,
-  // never file-relative. File-relative refs use `../assets/…` /
-  // `./x.png` / bare names and never start with `media/`, so this
-  // doesn't steal any of those cases.
-  const isGeneratedMediaRef = cleaned.startsWith("media/")
+  // relative to the project's `wiki/` ROOT. Source-summary pages are
+  // written one level deeper (`wiki/sources/*.md`), so we persist those
+  // refs as `../media/...` for external Markdown apps such as Obsidian.
+  // Treat both forms as wiki-root media refs; otherwise call sites that
+  // do not know the current file dir (chat/search snippets) would resolve
+  // `../media/...` against `<project>/wiki/` and escape to `<project>/media`.
+  const isGeneratedMediaRef =
+    cleaned.startsWith("media/") || cleaned.startsWith("../media/")
+  const wikiRootMediaPath = cleaned.startsWith("../media/")
+    ? cleaned.slice("../".length)
+    : cleaned
 
   // Preferred path: resolve relative to the markdown file's own
   // directory, exactly like Obsidian. This is what makes
@@ -169,6 +170,6 @@ export function resolveMarkdownImageSrc(
   // generated wiki content use this convention (`media/<slug>/…`)
   // so the path is stable regardless of page depth, and callers
   // without a file context (chat replies) rely on it too.
-  const absolute = collapsePath(`${pp}/wiki/${cleaned}`)
+  const absolute = collapsePath(`${pp}/wiki/${wikiRootMediaPath}`)
   return isInsideProject(absolute, pp) ? convertFileSrc(absolute) : rawSrc
 }

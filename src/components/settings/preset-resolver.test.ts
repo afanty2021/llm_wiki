@@ -120,6 +120,32 @@ describe("resolveConfig", () => {
     expect(resolved.localCliIsolation).toBe(true)
   })
 
+  it("carries Codex CLI timeout only for the Codex CLI preset", () => {
+    const codexPreset: LlmPreset = {
+      id: "codex-cli",
+      label: "Codex CLI",
+      provider: "codex-cli",
+      defaultModel: "gpt-5",
+    }
+    const claudePreset: LlmPreset = {
+      id: "claude-code-cli",
+      label: "Claude Code CLI",
+      provider: "claude-code",
+      defaultModel: "sonnet",
+    }
+
+    expect(resolveConfig(
+      codexPreset,
+      { codexCliTimeoutMinutes: 9999 },
+      fallbackConfig(),
+    ).codexCliTimeoutMinutes).toBe(240)
+    expect(resolveConfig(
+      claudePreset,
+      { codexCliTimeoutMinutes: 45 },
+      fallbackConfig(),
+    ).codexCliTimeoutMinutes).toBeUndefined()
+  })
+
   it("does not apply local CLI isolation to hosted providers", () => {
     const preset: LlmPreset = {
       id: "openai",

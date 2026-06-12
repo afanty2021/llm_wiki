@@ -19,7 +19,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-use super::cli_resolver::find_cli_command;
+use super::cli_resolver::{child_path_env, find_cli_command};
 
 #[derive(Default)]
 pub struct CodexCliState {
@@ -34,7 +34,9 @@ pub struct DetectResult {
     error: Option<String>,
 }
 
-const CODEX_SPAWN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const DEFAULT_CODEX_SPAWN_TIMEOUT_MINUTES: u64 = 10;
+const MIN_CODEX_SPAWN_TIMEOUT_MINUTES: u64 = 1;
+const MAX_CODEX_SPAWN_TIMEOUT_MINUTES: u64 = 240;
 const STDERR_LIMIT_BYTES: usize = 1024 * 1024;
 const STDOUT_LIMIT_BYTES: usize = 1024 * 1024;
 
@@ -84,6 +86,12 @@ pub async fn codex_cli_detect() -> Result<DetectResult, String> {
     let path_str = path.to_string_lossy().to_string();
     let mut cmd = Command::new(&path);
     suppress_windows_console(&mut cmd);
+    // `codex` is a node shim (`#!/usr/bin/env node`); under a GUI launch the
+    // inherited PATH lacks node, so hand it the login shell PATH or its
+    // shebang fails with `env: node: No such file or directory`.
+    if let Some(path_env) = child_path_env().await {
+        cmd.env("PATH", path_env);
+    }
     let output = tokio::time::timeout(Duration::from_secs(3), cmd.arg("--version").output()).await;
 
     match output {
@@ -132,6 +140,7 @@ pub async fn codex_cli_spawn(
     model: String,
     prompt: String,
     isolate_local_config: bool,
+    timeout_minutes: Option<u64>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
         return Err("No prompt to send to codex CLI".to_string());
@@ -140,6 +149,11 @@ pub async fn codex_cli_spawn(
     let codex = find_codex_command().await?;
     let mut cmd = Command::new(&codex);
     suppress_windows_console(&mut cmd);
+    // See `codex_cli_detect`: the node shim needs the login shell PATH at run
+    // time so its shebang resolves `node` under a GUI launch.
+    if let Some(path_env) = child_path_env().await {
+        cmd.env("PATH", path_env);
+    }
     cmd.args(build_codex_cli_args(&model, isolate_local_config));
 
     cmd.stdin(Stdio::piped())
@@ -181,13 +195,15 @@ pub async fn codex_cli_spawn(
     let timed_out = Arc::new(AtomicBool::new(false));
     let timeout_flag = Arc::clone(&timed_out);
     let timeout_stream_id = stream_id.clone();
+    let timeout_minutes = codex_spawn_timeout_minutes(timeout_minutes);
+    let timeout_duration = Duration::from_secs(timeout_minutes * 60);
     let app_for_task = app.clone();
     let stream_id_task = stream_id.clone();
     let topic = format!("codex-cli:{stream_id}");
     let done_topic = format!("codex-cli:{stream_id}:done");
 
     tokio::spawn(async move {
-        tokio::time::sleep(CODEX_SPAWN_TIMEOUT).await;
+        tokio::time::sleep(timeout_duration).await;
         if let Some(mut child) = timeout_children.lock().await.remove(&timeout_stream_id) {
             timeout_flag.store(true, Ordering::SeqCst);
             let _ = child.start_kill();
@@ -240,7 +256,7 @@ pub async fn codex_cli_spawn(
             if !stderr_text.is_empty() {
                 stderr_text.push('\n');
             }
-            stderr_text.push_str("Codex CLI timed out after 10 minutes.");
+            stderr_text.push_str(&format!("Codex CLI timed out after {timeout_minutes} minutes."));
         } else if stderr_text.len() >= STDERR_LIMIT_BYTES {
             stderr_text.push_str("\n[stderr truncated]");
         }
@@ -265,6 +281,12 @@ pub async fn codex_cli_spawn(
     });
 
     Ok(())
+}
+
+fn codex_spawn_timeout_minutes(value: Option<u64>) -> u64 {
+    value
+        .unwrap_or(DEFAULT_CODEX_SPAWN_TIMEOUT_MINUTES)
+        .clamp(MIN_CODEX_SPAWN_TIMEOUT_MINUTES, MAX_CODEX_SPAWN_TIMEOUT_MINUTES)
 }
 
 fn build_codex_cli_args(model: &str, isolate_local_config: bool) -> Vec<String> {
@@ -329,6 +351,20 @@ mod tests {
         assert_eq!(out, "é水");
         assert_eq!(out.len(), 5);
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn codex_spawn_timeout_minutes_defaults_and_clamps() {
+        assert_eq!(
+            codex_spawn_timeout_minutes(None),
+            DEFAULT_CODEX_SPAWN_TIMEOUT_MINUTES
+        );
+        assert_eq!(codex_spawn_timeout_minutes(Some(0)), MIN_CODEX_SPAWN_TIMEOUT_MINUTES);
+        assert_eq!(codex_spawn_timeout_minutes(Some(42)), 42);
+        assert_eq!(
+            codex_spawn_timeout_minutes(Some(999)),
+            MAX_CODEX_SPAWN_TIMEOUT_MINUTES
+        );
     }
 
     #[test]

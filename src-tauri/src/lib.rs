@@ -195,6 +195,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::fs::read_file,
             commands::fs::write_file,
+            commands::fs::write_file_base64,
             commands::fs::write_file_atomic,
             commands::fs::list_directory,
             commands::fs::copy_file,
@@ -224,6 +225,7 @@ pub fn run() {
             commands::vectorstore::vector_search_chunks,
             commands::vectorstore::vector_delete_page,
             commands::vectorstore::vector_count_chunks,
+            commands::vectorstore::vector_clear_chunks,
             commands::vectorstore::vector_legacy_row_count,
             commands::vectorstore::vector_drop_legacy,
             commands::claude_cli::claude_cli_detect,

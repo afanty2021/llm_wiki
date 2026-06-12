@@ -244,6 +244,55 @@ describe("streamCodexCli", () => {
     expect(callbacks.onError).not.toHaveBeenCalled()
   })
 
+  it("passes the configured Codex CLI timeout to the Rust transport", async () => {
+    const callbacks = {
+      onToken: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+
+    const stream = streamCodexCli(
+      {
+        provider: "codex-cli",
+        apiKey: "",
+        model: "gpt-5.1-codex-mini",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 128000,
+        codexCliTimeoutMinutes: 45,
+      },
+      [{ role: "user", content: "Analyze this source." }],
+      callbacks,
+    )
+
+    await vi.waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith(
+        "codex_cli_spawn",
+        expect.objectContaining({ timeoutMinutes: 45 }),
+      )
+    })
+
+    const payload = tauriMocks.invoke.mock.calls[0]?.[1] as { streamId: string }
+    tauriMocks.emit(
+      `codex-cli:${payload.streamId}`,
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: "timeout-aware analysis" },
+      }),
+    )
+    tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+      code: 0,
+      stderr: "",
+      stdout: "",
+    })
+
+    await stream
+
+    expect(callbacks.onToken).toHaveBeenCalledWith("timeout-aware analysis")
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onError).not.toHaveBeenCalled()
+  })
+
   it("does not replay done stdout when a live agent message was already emitted", async () => {
     const callbacks = {
       onToken: vi.fn(),

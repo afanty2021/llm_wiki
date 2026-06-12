@@ -34,6 +34,8 @@ interface LlmConfig {
    * such controls. Default false preserves existing advanced-user setups.
    */
   localCliIsolation?: boolean
+  /** Codex CLI provider only. Overall subprocess timeout in minutes. */
+  codexCliTimeoutMinutes?: number
 }
 
 export type SearchProvider = "tavily" | "serpapi" | "searxng" | "ollama" | "none"
@@ -283,6 +285,7 @@ export interface ProviderOverride {
   maxContextSize?: number
   reasoning?: ReasoningConfig
   localCliIsolation?: boolean
+  codexCliTimeoutMinutes?: number
 }
 
 export type ProviderConfigs = Record<string, ProviderOverride>

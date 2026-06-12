@@ -304,6 +304,187 @@ describe("fetchEmbedding — provider wire formats", () => {
     expect(headers["X-Empty"]).toBeUndefined()
   })
 
+  it("does not auto-append /embeddings for generic OpenAI-compatible custom endpoints", async () => {
+    mockHttpFetch.mockResolvedValueOnce(okResponse([0.5, 0.6]))
+
+    const out = await fetchEmbedding("hi", {
+      enabled: true,
+      endpoint: "https://gateway.example.com/v1",
+      apiKey: "sk-test",
+      model: "text-embedding-3-small",
+    })
+
+    expect(out).toEqual([0.5, 0.6])
+    const [url, opts] = mockHttpFetch.mock.calls[0]
+    expect(url).toBe("https://gateway.example.com/v1")
+    expect(JSON.parse(String(opts?.body))).toEqual({
+      model: "text-embedding-3-small",
+      input: "hi",
+    })
+  })
+
+  it("auto-appends /embeddings for Volcengine OpenAI-compatible base endpoints only", async () => {
+    mockHttpFetch.mockResolvedValueOnce(okResponse([0.1, 0.2]))
+
+    const out = await fetchEmbedding("hi", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/v3",
+      apiKey: "ark-key",
+      model: "doubao-embedding-text-240715",
+    })
+
+    expect(out).toEqual([0.1, 0.2])
+    const [url, opts] = mockHttpFetch.mock.calls[0]
+    expect(url).toBe("https://ark.cn-beijing.volces.com/api/v3/embeddings")
+    expect((opts?.headers as Record<string, string>).Authorization).toBe("Bearer ark-key")
+    expect(JSON.parse(String(opts?.body))).toEqual({
+      model: "doubao-embedding-text-240715",
+      input: "hi",
+    })
+  })
+
+  it("does not infer Volcengine from a custom endpoint path or query string", async () => {
+    mockHttpFetch.mockResolvedValueOnce(okResponse([0.2, 0.3]))
+
+    await fetchEmbedding("hi", {
+      enabled: true,
+      endpoint: "https://gateway.example.com/proxy/volcengine?upstream=volces.com",
+      apiKey: "sk-test",
+      model: "text-embedding-3-small",
+    })
+
+    expect(mockHttpFetch.mock.calls[0][0]).toBe(
+      "https://gateway.example.com/proxy/volcengine?upstream=volces.com",
+    )
+  })
+
+  it("uses Volcengine Doubao multimodal embedding request and response shape", async () => {
+    mockHttpFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { embedding: [0.7, 0.8] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    const out = await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/v3",
+      apiKey: "ark-key",
+      model: "doubao-embedding-vision",
+    })
+
+    expect(out).toEqual([0.7, 0.8])
+    const [url, opts] = mockHttpFetch.mock.calls[0]
+    expect(url).toBe("https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal")
+    expect((opts?.headers as Record<string, string>).Authorization).toBe("Bearer ark-key")
+    expect(JSON.parse(String(opts?.body))).toEqual({
+      model: "doubao-embedding-vision",
+      encoding_format: "float",
+      input: [{ type: "text", text: "hello" }],
+    })
+  })
+
+  it("uses Doubao multimodal wire shape for proxied vision models without rewriting custom endpoints", async () => {
+    mockHttpFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { embedding: [0.4, 0.5] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    const out = await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://gateway.example.com/ark/embeddings/multimodal",
+      apiKey: "proxy-key",
+      model: "doubao-embedding-vision",
+    })
+
+    expect(out).toEqual([0.4, 0.5])
+    const [url, opts] = mockHttpFetch.mock.calls[0]
+    expect(url).toBe("https://gateway.example.com/ark/embeddings/multimodal")
+    expect(JSON.parse(String(opts?.body))).toEqual({
+      model: "doubao-embedding-vision",
+      encoding_format: "float",
+      input: [{ type: "text", text: "hello" }],
+    })
+  })
+
+  it("preserves query parameters when building Volcengine embedding endpoints", async () => {
+    mockHttpFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { embedding: [0.9] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings?trace=1",
+      apiKey: "ark-key",
+      model: "doubao-embedding-vision",
+    })
+
+    expect(mockHttpFetch.mock.calls[0][0]).toBe(
+      "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal?trace=1",
+    )
+  })
+
+  it("does not duplicate existing Volcengine embedding suffixes", async () => {
+    mockHttpFetch
+      .mockResolvedValueOnce(okResponse([0.1]))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { embedding: [0.2] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse([0.3]))
+
+    await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings",
+      apiKey: "ark-key",
+      model: "doubao-embedding-text-240715",
+    })
+    await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+      apiKey: "ark-key",
+      model: "doubao-embedding-vision",
+    })
+    await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+      apiKey: "ark-key",
+      model: "doubao-embedding-text-240715",
+    })
+
+    expect(mockHttpFetch.mock.calls.map((call) => call[0])).toEqual([
+      "https://ark.cn-beijing.volces.com/api/v3/embeddings",
+      "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+      "https://ark.cn-beijing.volces.com/api/v3/embeddings",
+    ])
+  })
+
+  it("reports the Doubao multimodal response shape when the vector is missing", async () => {
+    mockHttpFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ embedding: [0.1] }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    const out = await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      apiKey: "ark-key",
+      model: "doubao-embedding-vision",
+    })
+
+    expect(out).toBeNull()
+    expect(getLastEmbeddingError()).toContain("missing data.embedding")
+  })
+
   it("does not let custom headers override the Gemini API key header", async () => {
     mockHttpFetch.mockResolvedValueOnce(
       new Response(JSON.stringify({ embedding: { values: [0.7, 0.8] } }), {
@@ -1090,6 +1271,224 @@ describe("embedAllPages", () => {
     expect(pageIds).toEqual(["attention", "rope"])
   })
 
+  it("clears the chunk table before a forced rebuild", async () => {
+    listDirectoryMock.mockResolvedValueOnce(makeTree())
+    readFileMock.mockResolvedValue("# Title\n\nBody.")
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+
+    const count = await embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )
+
+    expect(count).toBe(2)
+    const commands = mockInvoke.mock.calls.map((call) => call[0])
+    expect(commands[0]).toBe("vector_clear_chunks")
+    expect(commands.filter((cmd) => cmd === "vector_upsert_chunks")).toHaveLength(2)
+  })
+
+  it("does not clear the chunk table during ordinary embedAllPages runs", async () => {
+    listDirectoryMock.mockResolvedValueOnce(makeTree())
+    readFileMock.mockResolvedValue("# Title\n\nBody.")
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+
+    await embedAllPages("/proj", cfg)
+
+    expect(mockInvoke.mock.calls.map((call) => call[0])).not.toContain("vector_clear_chunks")
+  })
+
+  it("does not clear existing chunks when forced rebuild cannot embed every page", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
+      { name: "b.md", path: "/proj/wiki/b.md", is_dir: false },
+    ])
+    readFileMock.mockResolvedValue("# Title\n\nBody.")
+    mockHttpFetch
+      .mockResolvedValueOnce(okResponse([0.5]))
+      .mockResolvedValueOnce(genericErrorResponse(500, "embedding server down"))
+
+    let message = ""
+    try {
+      await embedAllPages(
+        "/proj",
+        cfg,
+        undefined,
+        { clearExisting: true },
+      )
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err)
+    }
+    expect(message).toContain("1 of 2 pages could not be embedded")
+    expect(message).not.toContain("Re-index failed: Re-index failed")
+
+    expect(mockInvoke.mock.calls.map((call) => call[0])).not.toContain("vector_clear_chunks")
+    expect(mockInvoke.mock.calls.map((call) => call[0])).not.toContain("vector_upsert_chunks")
+  })
+
+  it("does not clear existing chunks when forced rebuild cannot embed any page", async () => {
+    listDirectoryMock.mockResolvedValueOnce(makeTree())
+    readFileMock.mockResolvedValue("# Title\n\nBody.")
+    mockHttpFetch.mockResolvedValue(genericErrorResponse(500, "embedding server down"))
+
+    await expect(embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )).rejects.toThrow("2 of 2 pages could not be embedded")
+
+    expect(mockInvoke.mock.calls.map((call) => call[0])).not.toContain("vector_clear_chunks")
+    expect(mockInvoke.mock.calls.map((call) => call[0])).not.toContain("vector_upsert_chunks")
+  })
+
+  it("skips empty content pages during forced rebuild without treating them as failures", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "empty.md", path: "/proj/wiki/empty.md", is_dir: false },
+      { name: "body.md", path: "/proj/wiki/body.md", is_dir: false },
+    ])
+    readFileMock
+      .mockResolvedValueOnce("---\ntitle: Empty Stub\n---\n")
+      .mockResolvedValueOnce("# Body\n\nThis page has content.")
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+
+    const count = await embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )
+
+    expect(count).toBe(1)
+    const commands = mockInvoke.mock.calls.map((call) => call[0])
+    expect(commands[0]).toBe("vector_clear_chunks")
+    const upserts = mockInvoke.mock.calls.filter((call) => call[0] === "vector_upsert_chunks")
+    expect(upserts).toHaveLength(1)
+    expect((upserts[0][1] as { pageId: string }).pageId).toBe("body")
+  })
+
+  it("does not clear existing chunks when a forced rebuild page only embeds partially", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "partial.md", path: "/proj/wiki/partial.md", is_dir: false },
+    ])
+    readFileMock.mockResolvedValueOnce(`${"First chunk body. ".repeat(20)}\n\n${"Second chunk body. ".repeat(20)}`)
+    const smallChunks = { ...cfg, maxChunkChars: 220, overlapChunkChars: 0 }
+    mockHttpFetch
+      .mockResolvedValueOnce(okResponse([0.5]))
+      .mockResolvedValueOnce(genericErrorResponse(500, "embedding server down"))
+
+    let message = ""
+    try {
+      await embedAllPages(
+        "/proj",
+        smallChunks,
+        undefined,
+        { clearExisting: true },
+      )
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err)
+    }
+    expect(message).toContain("chunks failed to embed")
+    expect(message).toContain("Check endpoint URL")
+
+    const commands = mockInvoke.mock.calls.map((call) => call[0])
+    expect(commands).not.toContain("vector_clear_chunks")
+    expect(commands).not.toContain("vector_upsert_chunks")
+  })
+
+  it("surfaces an incomplete-index warning when forced rebuild write fails after clearing", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
+      { name: "b.md", path: "/proj/wiki/b.md", is_dir: false },
+    ])
+    readFileMock.mockResolvedValue("# Title\n\nBody.")
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+    let upsertCount = 0
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "vector_upsert_chunks") {
+        upsertCount++
+        if (upsertCount === 2) throw new Error("lancedb write failed")
+      }
+      return undefined
+    })
+
+    await expect(embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )).rejects.toThrow("rebuilt index may be incomplete")
+
+    const commands = mockInvoke.mock.calls.map((call) => call[0])
+    expect(commands[0]).toBe("vector_clear_chunks")
+    expect(commands.filter((command) => command === "vector_upsert_chunks")).toHaveLength(2)
+  })
+
+  it("clears stale chunks when forced rebuild has no content pages in a readable wiki tree", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "index.md", path: "/proj/wiki/index.md", is_dir: false },
+      { name: "log.md", path: "/proj/wiki/log.md", is_dir: false },
+    ])
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "vector_count_chunks") return 0
+      return undefined
+    })
+
+    const out = await embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )
+
+    expect(out).toBe(0)
+    expect(mockInvoke.mock.calls.map((call) => call[0])).toContain("vector_clear_chunks")
+    expect(mockHttpFetch).not.toHaveBeenCalled()
+  })
+
+  it("does not clear existing chunks when all content pages are empty", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "empty.md", path: "/proj/wiki/empty.md", is_dir: false },
+    ])
+    readFileMock.mockResolvedValueOnce("---\ntitle: Empty Stub\n---\n")
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "vector_count_chunks") return 5
+      return undefined
+    })
+
+    await expect(embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )).rejects.toThrow("Existing index was left unchanged")
+
+    const commands = mockInvoke.mock.calls.map((call) => call[0])
+    expect(commands).toContain("vector_count_chunks")
+    expect(commands).not.toContain("vector_clear_chunks")
+    expect(mockHttpFetch).not.toHaveBeenCalled()
+  })
+
+  it("does not clear existing chunks when a readable wiki tree unexpectedly has no content pages", async () => {
+    listDirectoryMock.mockResolvedValueOnce([])
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "vector_count_chunks") return 7
+      return undefined
+    })
+
+    await expect(embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )).rejects.toThrow("Existing index was left unchanged")
+
+    const commands = mockInvoke.mock.calls.map((call) => call[0])
+    expect(commands).toContain("vector_count_chunks")
+    expect(commands).not.toContain("vector_clear_chunks")
+  })
+
   it("extracts the title from YAML frontmatter when present", async () => {
     listDirectoryMock.mockResolvedValueOnce([
       { name: "rope.md", path: "/proj/wiki/rope.md", is_dir: false },
@@ -1142,6 +1541,19 @@ describe("embedAllPages", () => {
     expect(out).toBe(0)
   })
 
+  it("does not clear existing chunks when forced rebuild cannot read the wiki tree", async () => {
+    listDirectoryMock.mockRejectedValueOnce(new Error("ENOENT: no such file"))
+
+    await expect(embedAllPages(
+      "/proj",
+      cfg,
+      undefined,
+      { clearExisting: true },
+    )).rejects.toThrow("Could not read wiki tree")
+
+    expect(mockInvoke.mock.calls.map((call) => call[0])).not.toContain("vector_clear_chunks")
+  })
+
   it("continues with remaining files when one file's readFile throws", async () => {
     listDirectoryMock.mockResolvedValueOnce([
       { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
@@ -1154,8 +1566,7 @@ describe("embedAllPages", () => {
     mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
 
     const count = await embedAllPages("/proj", cfg)
-    // `done` is incremented for every file attempted, even if embed fails.
-    expect(count).toBe(2)
+    expect(count).toBe(1)
     const upserts = mockInvoke.mock.calls.filter((c) => c[0] === "vector_upsert_chunks")
     expect(upserts).toHaveLength(1)
     expect((upserts[0][1] as { pageId: string }).pageId).toBe("b")

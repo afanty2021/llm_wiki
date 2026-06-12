@@ -26,6 +26,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.22",
+    date: "2026-06-08",
+    highlights: {
+      en: [
+        "Improved MinerU PDF previews by extracting images from MinerU result archives and rewriting them into Markdown image links.",
+        "Converted MinerU HTML tables inside Markdown output into Markdown tables for cleaner preview and ingest.",
+        "Hardened MinerU image handling for spaces, parentheses, path traversal, duplicate names, and partial image-save failures.",
+      ],
+      zh: [
+        "改进 MinerU PDF 预览：从 MinerU 结果压缩包提取图片，并重写为 Markdown 图片引用。",
+        "将 MinerU Markdown 输出中的 HTML 表格转换为 Markdown 表格，让预览和摄取更干净。",
+        "强化 MinerU 图片处理，覆盖空格、括号、路径穿越、重名图片和图片保存部分失败等边界。",
+      ],
+    },
+  },
+  {
     version: "0.4.21",
     date: "2026-06-07",
     highlights: {

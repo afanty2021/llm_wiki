@@ -223,6 +223,9 @@ describe("resolveMarkdownImageSrc", () => {
       expect(resolveMarkdownImageSrc("media/slug/img-1.png", PROJECT)).toBe(
         "tauri-asset:/Users/me/MyWiki/wiki/media/slug/img-1.png",
       )
+      expect(resolveMarkdownImageSrc("../media/slug/img-1.png", PROJECT)).toBe(
+        "tauri-asset:/Users/me/MyWiki/wiki/media/slug/img-1.png",
+      )
     })
 
     it("keeps `media/` refs wiki-root-relative even WITH a currentFileDir set", () => {
@@ -234,6 +237,15 @@ describe("resolveMarkdownImageSrc", () => {
       expect(
         resolveMarkdownImageSrc(
           "media/易配置平台2.0培训-1/001-abc.jpg",
+          PROJECT,
+          `${PROJECT}/wiki/sources`,
+        ),
+      ).toBe(
+        "tauri-asset:/Users/me/MyWiki/wiki/media/易配置平台2.0培训-1/001-abc.jpg",
+      )
+      expect(
+        resolveMarkdownImageSrc(
+          "../media/易配置平台2.0培训-1/001-abc.jpg",
           PROJECT,
           `${PROJECT}/wiki/sources`,
         ),

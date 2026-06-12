@@ -990,6 +990,32 @@ pub async fn write_file(path: String, contents: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn write_file_base64(path: String, base64: String) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    tauri::async_runtime::spawn_blocking(move || {
+        run_guarded("write_file_base64", || {
+            require_absolute_path("write_file_base64", &path)?;
+            let bytes = B64
+                .decode(base64.as_bytes())
+                .map_err(|e| format!("Invalid base64 for '{}': {}", path, e))?;
+            let p = Path::new(&path);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path, e))?;
+            }
+            file_sync::mark_app_write_path(p);
+            fs::write(&path, bytes)
+                .map_err(|e| format!("Failed to write binary file '{}': {}", path, e))?;
+            file_sync::mark_app_write_path(p);
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("write_file_base64 blocking task join error: {e}"))?
+}
+
+#[tauri::command]
 pub async fn write_file_atomic(path: String, contents: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("write_file_atomic", || {
@@ -1614,6 +1640,45 @@ mod tests {
         let result = extract_doc_with_office_oxide("/nonexistent/path/that/does/not/exist.doc");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to parse DOC"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_file_base64_writes_decoded_binary_bytes() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "llm-wiki-base64-{}.bin",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path_str = path.to_string_lossy().to_string();
+
+        write_file_base64(path_str.clone(), "AAECA/8=".to_string())
+            .await
+            .unwrap();
+
+        let bytes = fs::read(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        assert_eq!(bytes, vec![0, 1, 2, 3, 255]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_file_base64_rejects_invalid_base64_and_relative_paths() {
+        let invalid = write_file_base64(
+            std::env::temp_dir()
+                .join("llm-wiki-invalid-base64.bin")
+                .to_string_lossy()
+                .to_string(),
+            "not!!base64".to_string(),
+        )
+        .await;
+        assert!(invalid.is_err());
+        assert!(invalid.unwrap_err().contains("Invalid base64"));
+
+        let relative = write_file_base64("relative.bin".to_string(), "AA==".to_string()).await;
+        assert!(relative.is_err());
+        assert!(relative.unwrap_err().contains("requires an absolute path"));
     }
 
     /// Ad-hoc probe: run the production PDF extraction path against every

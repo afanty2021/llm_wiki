@@ -460,12 +460,15 @@ pub async fn vector_upsert_chunks(
                 .await
                 .map_err(|e| format!("Open table error: {e}"))?;
 
-            if let Err(e) = table.delete(&format!("page_id = '{}'", page_id)).await {
-                eprintln!(
-                    "[vectorstore v2] Warning: delete before upsert failed for page '{}': {}",
-                    page_id, e
-                );
-            }
+            table
+                .delete(&format!("page_id = '{}'", page_id))
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Delete existing chunks before upsert failed for page '{}': {}",
+                        page_id, e
+                    )
+                })?;
 
             table
                 .add(data)
@@ -644,6 +647,36 @@ pub async fn vector_count_chunks(project_path: String) -> Result<usize, String> 
             .map_err(|e| format!("Count error: {e}"))?;
 
         Ok(count)
+    })
+    .await
+}
+
+/// Drop the v2 chunk table entirely. Used by Settings → Embedding
+/// "Re-index all pages" so a rebuild reflects the current wiki tree
+/// exactly and removes chunks for deleted/renamed pages.
+#[tauri::command]
+pub async fn vector_clear_chunks(project_path: String) -> Result<(), String> {
+    run_guarded_async("vector_clear_chunks", async move {
+        let db = connect(&db_path(&project_path))
+            .execute()
+            .await
+            .map_err(|e| format!("DB connect error: {e}"))?;
+
+        let tables = db
+            .table_names()
+            .execute()
+            .await
+            .map_err(|e| format!("List tables error: {e}"))?;
+
+        if !tables.contains(&TABLE_V2.to_string()) {
+            return Ok(());
+        }
+
+        db.drop_table(TABLE_V2, &[])
+            .await
+            .map_err(|e| format!("Drop chunk table error: {e}"))?;
+
+        Ok(())
     })
     .await
 }
@@ -919,6 +952,26 @@ mod tests_v2 {
             .unwrap();
 
         assert_eq!(vector_count_chunks(pp).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn v2_clear_chunks_drops_entire_chunk_table_and_is_idempotent() {
+        let p = tmp_project();
+        let pp = p.to_string_lossy().to_string();
+
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+            .await
+            .unwrap();
+        vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 4, 16))
+            .await
+            .unwrap();
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 7);
+
+        vector_clear_chunks(pp.clone()).await.unwrap();
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 0);
+
+        vector_clear_chunks(pp.clone()).await.unwrap();
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 0);
     }
 
     #[tokio::test]

@@ -24,6 +24,11 @@ export async function writeFile(path: string, contents: string): Promise<void> {
   return invoke<void>("write_file", { path, contents })
 }
 
+export async function writeFileBase64(path: string, base64: string): Promise<void> {
+  assertAbsoluteFsPath("writeFileBase64", path)
+  return invoke<void>("write_file_base64", { path, base64 })
+}
+
 export async function writeFileAtomic(path: string, contents: string): Promise<void> {
   assertAbsoluteFsPath("writeFileAtomic", path)
   return invoke<void>("write_file_atomic", { path, contents })

@@ -20,6 +20,10 @@ export function resolveConfig(
     ov.maxContextSize ?? preset.suggestedContextSize ?? fallback.maxContextSize
   const reasoning = ov.reasoning ?? { mode: "auto" as const }
   const localCliIsolation = ov.localCliIsolation === true
+  const codexCliTimeoutMinutes =
+    typeof ov.codexCliTimeoutMinutes === "number" && Number.isFinite(ov.codexCliTimeoutMinutes)
+      ? Math.max(1, Math.min(240, Math.floor(ov.codexCliTimeoutMinutes)))
+      : undefined
 
   if (preset.provider === "custom") {
     return {
@@ -75,6 +79,7 @@ export function resolveConfig(
       maxContextSize,
       reasoning,
       localCliIsolation,
+      codexCliTimeoutMinutes: preset.provider === "codex-cli" ? codexCliTimeoutMinutes : undefined,
     }
   }
 

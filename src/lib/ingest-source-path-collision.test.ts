@@ -112,7 +112,7 @@ vi.mock("./mineru", () => ({
   parseWithMineru: vi.fn(),
 }))
 
-import { autoIngest, executeIngestWrites } from "./ingest"
+import { autoIngest, executeIngestWrites, hasMineruImageRefs } from "./ingest"
 import { streamChat } from "./llm-client"
 import { parseWithMineru } from "./mineru"
 
@@ -183,6 +183,21 @@ describe("autoIngest source summary paths", () => {
   afterEach(async () => {
     await tmp?.cleanup()
     tmp = undefined
+  })
+
+  it("detects MinerU image refs with URL-encoded source summary slugs", () => {
+    expect(hasMineruImageRefs(
+      "![chart](media/%E6%B1%A1%E6%B0%B4%20paper/mineru/images/chart%281%29.png)",
+      "污水 paper",
+    )).toBe(true)
+    expect(hasMineruImageRefs(
+      "![chart](media/污水 paper/mineru/images/chart.png)",
+      "污水 paper",
+    )).toBe(true)
+    expect(hasMineruImageRefs(
+      "![chart](media/other/mineru/images/chart.png)",
+      "污水 paper",
+    )).toBe(false)
   })
 
   it("keeps distinct source summaries for same-basename files in different source subdirectories", async () => {

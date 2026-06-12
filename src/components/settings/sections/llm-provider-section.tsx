@@ -129,6 +129,7 @@ function PresetRow({
   const context = ov.maxContextSize ?? preset.suggestedContextSize ?? 131072
   const reasoning = ov.reasoning ?? { mode: "auto" as const }
   const localCliIsolation = ov.localCliIsolation === true
+  const codexCliTimeoutMinutes = Math.max(1, Math.min(240, ov.codexCliTimeoutMinutes ?? 10))
   const isLocalCliProvider = preset.provider === "claude-code" || preset.provider === "codex-cli"
   const [testState, setTestState] = useState<ProviderTestState>({ kind: "idle" })
   const hasConfig = !!apiKey || !!ov.baseUrl || !!ov.model || !!ov.azureApiVersion || !!ov.azureModelFamily
@@ -350,6 +351,35 @@ function PresetRow({
                   ? t("settings.sections.llm.localCliIsolationOn")
                   : t("settings.sections.llm.localCliIsolationOff")}
               </div>
+            </div>
+          )}
+
+          {preset.provider === "codex-cli" && (
+            <div className="space-y-2 rounded-md border p-3">
+              <Label>{t("settings.sections.llm.codexCliTimeout")}</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={1}
+                  max={240}
+                  className="w-28"
+                  value={codexCliTimeoutMinutes}
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    onChange({
+                      codexCliTimeoutMinutes: Number.isFinite(n)
+                        ? Math.max(1, Math.min(240, Math.floor(n)))
+                        : undefined,
+                    })
+                  }}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {t("settings.sections.llm.codexCliTimeoutUnit")}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t("settings.sections.llm.codexCliTimeoutHint")}
+              </p>
             </div>
           )}
 

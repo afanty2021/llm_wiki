@@ -24,6 +24,7 @@ type ReindexState =
   | { kind: "idle" }
   | { kind: "running"; done: number; total: number }
   | { kind: "done"; count: number }
+  | { kind: "error"; message: string }
 
 type TestState =
   | { kind: "idle" }
@@ -52,6 +53,8 @@ const EMBEDDING_MODEL_SUGGESTIONS = [
   "gemini-embedding-001",
   "gemini-embedding-2",
   "text-embedding-004",
+  "doubao-embedding-vision",
+  "doubao-embedding-text-240715",
   "text-embedding-qwen3-embedding-0.6b",
   "nomic-embed-text",
   "mxbai-embed-large",
@@ -113,11 +116,22 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
   const handleReindex = useCallback(async () => {
     if (!project) return
     setReindex({ kind: "running", done: 0, total: 0 })
-    const count = await embedAllPages(project.path, embeddingConfig, (done, total) => {
-      setReindex({ kind: "running", done, total })
-    })
-    setReindex({ kind: "done", count })
-    await refreshStats()
+    try {
+      const count = await embedAllPages(
+        project.path,
+        embeddingConfig,
+        (done, total) => {
+          setReindex({ kind: "running", done, total })
+        },
+        { clearExisting: true },
+      )
+      setReindex({ kind: "done", count })
+      await refreshStats()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setReindex({ kind: "error", message })
+      await refreshStats()
+    }
   }, [project, embeddingConfig, refreshStats])
 
   const handleDropLegacy = useCallback(async () => {
@@ -403,6 +417,12 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
             {reindex.kind === "done" && (
               <p className="text-xs text-muted-foreground">
                 {t("settings.sections.embedding.reindexDone", { count: reindex.count })}
+              </p>
+            )}
+
+            {reindex.kind === "error" && (
+              <p className="text-xs text-destructive">
+                {t("settings.sections.embedding.reindexError", { message: reindex.message })}
               </p>
             )}
 

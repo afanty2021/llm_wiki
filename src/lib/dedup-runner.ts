@@ -9,6 +9,28 @@ import { streamChat } from "@/lib/llm-client"
 import { normalizePath } from "@/lib/path-utils"
 import type { LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
+
+/**
+ * Detection emits a bounded JSON list of duplicate groups — a few tens
+ * of tokens per group — so a modest cap covers even a very duplicate-
+ * heavy wiki. The cap's real job is a safety net: without it, a model
+ * that ignores the reasoning-off lever (an unrecognized reasoning model
+ * behind a custom endpoint, e.g. a vLLM Nemotron build) could stream
+ * chain-of-thought unbounded until the 30-min backstop fires — which
+ * surfaces to the user as a bare "request cancelled". Capping turns a
+ * 30-min hang into a fast (truncated) response instead.
+ */
+const DEDUP_DETECTION_MAX_TOKENS = 8_192
+
+/**
+ * Merge rewrites a COMPLETE page that gets written to disk, so it needs
+ * a generous cap that won't truncate the canonical content. 16K tokens
+ * is ~64KB of text — far beyond any realistic merged entity/concept
+ * page — while still bounding a runaway short of the 30-min backstop.
+ * Kept local (not the ingest generation ladder) so this module doesn't
+ * drag in the heavy ingest dependency graph.
+ */
+const DEDUP_MERGE_MAX_TOKENS = 16_384
 import {
   detectDuplicateGroups,
   extractEntitySummary,
@@ -25,8 +47,17 @@ import { loadNotDuplicates } from "./dedup-storage"
  * Wrap streamChat into the (system, user, signal) → string shape
  * the dedup module expects. Same pattern page-merge uses — keeps
  * the algorithm modules free of any LlmConfig knowledge.
+ *
+ * `maxTokens` is required, not defaulted: detection and merge have
+ * very different output-size needs (a tiny JSON list vs. a complete
+ * rewritten page), and silently sharing one cap risks truncating a
+ * merged page on disk. Forcing each caller to state its budget makes
+ * that choice explicit.
  */
-export function buildDedupLlmCall(llmConfig: LlmConfig): DedupLlmCall {
+export function buildDedupLlmCall(
+  llmConfig: LlmConfig,
+  maxTokens: number,
+): DedupLlmCall {
   return async (systemPrompt, userMessage, signal) => {
     let result = ""
     let streamError: Error | null = null
@@ -48,7 +79,14 @@ export function buildDedupLlmCall(llmConfig: LlmConfig): DedupLlmCall {
           },
         },
         signal,
-        { temperature: 0.1 },
+        // Dedup detection + merge want JSON, never chain-of-thought.
+        // Like every other structured caller (ingest, connection-tests,
+        // vision-caption, anytxt-search), disable thinking AND cap output
+        // so a reasoning-capable model (an Ollama thinking model, or an
+        // unrecognized reasoning model behind a custom endpoint) doesn't
+        // spend its whole budget on reasoning and run the stream to the
+        // 30-min backstop — which surfaces as a bare "Request cancelled".
+        { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: maxTokens },
       ).catch((err) => {
         streamError = err instanceof Error ? err : new Error(String(err))
         resolve()
@@ -139,7 +177,7 @@ export async function runDuplicateDetection(
   const summaries = await loadAllEntitySummaries(projectPath)
   if (summaries.length < 2) return []
   const notDup = await loadNotDuplicates(projectPath)
-  const llm = buildDedupLlmCall(llmConfig)
+  const llm = buildDedupLlmCall(llmConfig, DEDUP_DETECTION_MAX_TOKENS)
   return detectDuplicateGroups(summaries, llm, {
     signal: options.signal,
     notDuplicates: notDup,
@@ -198,7 +236,10 @@ export async function executeMerge(
   const groupPaths = new Set(groupPages.map((p) => p.path))
   const otherPages = allPages.filter((p) => !groupPaths.has(p.path))
 
-  const llm = buildDedupLlmCall(llmConfig)
+  // Merge rewrites a COMPLETE page that gets written to disk, so it gets
+  // the generous merge budget — never the small detection cap, which
+  // would truncate the canonical content.
+  const llm = buildDedupLlmCall(llmConfig, DEDUP_MERGE_MAX_TOKENS)
   const result = await mergeDuplicateGroup(
     {
       group: groupPages,

@@ -50,6 +50,7 @@ const INGEST_GENERATION_TOKENS_256K = 24_576
 const INGEST_GENERATION_TOKENS_512K = 32_768
 const REVIEW_STAGE_MIN_SIGNAL_CHARS = 10_000
 const REVIEW_STAGE_MIN_FILE_BLOCKS = 4
+const AGGREGATE_WIKI_PATHS = ["wiki/index.md", "wiki/overview.md", "wiki/log.md"] as const
 
 function appendSavedImageRefsForCaption(content: string, images: SavedImage[]): string {
   if (images.length === 0) return content
@@ -137,6 +138,30 @@ function promptImageUrlToAbs(projectPath: string, url: string): string {
 
 function stripWikiMediaAbsPaths(projectPath: string, content: string): string {
   return content.split(`${projectPath}/wiki/media/`).join("media/")
+}
+
+export function sourceSummaryMediaRefsForExternalMarkdown(content: string): string {
+  return content
+    .replace(/(\]\()\.?\/?media\//g, "$1../media/")
+    .replace(/(\bsrc=["'])\.?\/?media\//gi, "$1../media/")
+}
+
+function toSourceSummaryImageRef(relPath: string): string {
+  const normalized = relPath.replace(/^\.\//, "")
+  return normalized.startsWith("media/") ? `../${normalized}` : relPath
+}
+
+function encodeMarkdownPathSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  )
+}
+
+export function hasMineruImageRefs(content: string, sourceSummarySlug: string): boolean {
+  return (
+    content.includes(`media/${sourceSummarySlug}/mineru/`) ||
+    content.includes(`media/${encodeMarkdownPathSegment(sourceSummarySlug)}/mineru/`)
+  )
 }
 
 interface SourceChunk {
@@ -482,8 +507,8 @@ async function autoIngestImpl(
   const lowerExt = fileName.includes(".") ? fileName.split(".").pop()?.toLowerCase() : ""
   const isPdf = lowerExt === "pdf"
   const mineruCfg = useWikiStore.getState().mineruConfig
+  let mineruSucceeded = false
   if (isPdf && mineruCfg.enabled && mineruCfg.token) {
-    let mineruSucceeded = false
     try {
       const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
       const cachePath = `${cacheDir}/.cache/${fileName}.txt`
@@ -491,7 +516,10 @@ async function autoIngestImpl(
       console.log(`[ingest:mineru] submitting "${fileName}" to MinerU API`)
       const markdown = await parseWithMineru(mineruCfg, sp, undefined, (msg) => {
         activity.updateItem(activityId, { detail: `MinerU: ${msg}` })
-      }, signal)
+      }, signal, {
+        projectPath: pp,
+        sourceSummarySlug,
+      })
       await createDirectory(`${cacheDir}/.cache`)
       await writeFile(cachePath, markdown)
       mineruSucceeded = true
@@ -532,7 +560,10 @@ async function autoIngestImpl(
   if (cachedFiles !== null) {
     try {
       console.log(`[ingest:diag] cache-hit branch: starting image extraction for ${sp}`)
-      let savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+      const skipNativePdfImageExtraction = isPdf && hasMineruImageRefs(sourceContent, sourceSummarySlug)
+      let savedImages = skipNativePdfImageExtraction
+        ? []
+        : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
       const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
       savedImages = [...savedImages, ...markdownImages]
       console.log(`[ingest:diag] cache-hit branch: got ${savedImages.length} image(s)`)
@@ -625,7 +656,12 @@ async function autoIngestImpl(
   // and returns [] on any error.
   activity.updateItem(activityId, { detail: "Extracting embedded images..." })
   console.log(`[ingest:diag] full-pipeline branch: starting image extraction for ${sp}`)
-  let savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+  const skipNativePdfImageExtraction = isPdf && (
+    hasMineruImageRefs(sourceContent, sourceSummarySlug)
+  )
+  let savedImages = skipNativePdfImageExtraction
+    ? []
+    : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
   const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
   savedImages = [...savedImages, ...markdownImages]
   console.log(`[ingest:diag] full-pipeline branch: got ${savedImages.length} image(s)`)
@@ -899,7 +935,7 @@ async function autoIngestImpl(
   // ── Step 3: Write files ───────────────────────────────────────
   activity.updateItem(activityId, { detail: "Writing files..." })
   await migrateLegacySourceSummaryIfSafe(pp, sourceIdentity, sourceSummaryPath)
-  const { writtenPaths, warnings: writeWarnings, hardFailures } = await writeFileBlocks(
+  const writeResult = await writeFileBlocks(
     pp,
     generation,
     llmConfig,
@@ -907,6 +943,90 @@ async function autoIngestImpl(
     sourceSummaryPath,
     signal,
   )
+  const writtenPaths = writeResult.writtenPaths
+  const writeWarnings = writeResult.warnings
+  const hardFailures = writeResult.hardFailures
+
+  const aggregateRepairPaths = aggregatePathsNeedingRepair(writtenPaths, writeWarnings)
+  const repairableAggregatePaths = aggregateRepairPaths.filter((path) =>
+    isAggregateRepairSafe(path, index, overview, llmConfig.maxContextSize),
+  )
+  const skippedAggregatePaths = aggregateRepairPaths.filter((path) =>
+    !repairableAggregatePaths.includes(path),
+  )
+  if (skippedAggregatePaths.length > 0) {
+    writeWarnings.push(
+      `Skipped aggregate repair for ${skippedAggregatePaths.join(", ")} because the existing file is too large to safely regenerate without truncating existing entries.`,
+    )
+  }
+  if (repairableAggregatePaths.length > 0 && !signal?.aborted) {
+    activity.updateItem(activityId, {
+      detail: `Repairing aggregate wiki files: ${repairableAggregatePaths.join(", ")}`,
+    })
+    let aggregateRepairOutput = ""
+    try {
+      await streamChat(
+        llmConfig,
+        [
+          {
+            role: "system",
+            content: buildAggregateRepairPrompt(
+              repairableAggregatePaths,
+              purpose,
+              index,
+              overview,
+              sourceIdentity,
+              analysis,
+              sourceContext,
+              generation,
+              llmConfig.maxContextSize,
+            ),
+          },
+          {
+            role: "user",
+            content: "Emit the requested aggregate FILE blocks now. Start immediately with `---FILE:`.",
+          },
+        ],
+        {
+          onToken: (token) => { aggregateRepairOutput += token },
+          onDone: () => {},
+          onError: (err) => {
+            writeWarnings.push(`Aggregate repair failed: ${err.message}`)
+          },
+        },
+        signal,
+        {
+          temperature: 0.1,
+          reasoning: { mode: "off" },
+          max_tokens: computeIngestReviewMaxTokens(llmConfig.maxContextSize),
+        },
+      )
+      if (signal?.aborted) throw new Error("Ingest cancelled")
+      if (aggregateRepairOutput.trim()) {
+        const filteredRepair = filterAggregateRepairOutput(
+          aggregateRepairOutput,
+          repairableAggregatePaths,
+        )
+        writeWarnings.push(...filteredRepair.warnings)
+        const repairResult = await writeFileBlocks(
+          pp,
+          filteredRepair.text,
+          llmConfig,
+          sourceIdentity,
+          sourceSummaryPath,
+          signal,
+        )
+        writtenPaths.push(...repairResult.writtenPaths)
+        writeWarnings.push(...repairResult.warnings)
+        hardFailures.push(...repairResult.hardFailures)
+      }
+    } catch (err) {
+      if (signal?.aborted) throw err
+      writeWarnings.push(
+        `Aggregate repair failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
 
   // Surface parser / writer warnings to the activity panel so users
   // don't have to open devtools to find out a block was dropped.
@@ -1083,6 +1203,52 @@ function isListingPath(relativePath: string): boolean {
     relativePath === "wiki/overview.md" ||
     relativePath.endsWith("/overview.md")
   )
+}
+
+export function aggregatePathsNeedingRepair(writtenPaths: string[], warnings: string[]): string[] {
+  const written = new Set(writtenPaths.map((path) => normalizePath(path)))
+  const warningText = warnings.join("\n")
+  return AGGREGATE_WIKI_PATHS.filter((path) =>
+    !written.has(path) || warningText.includes(`"${path}"`),
+  )
+}
+
+export function filterAggregateRepairOutput(text: string, allowedPaths: string[]): {
+  text: string
+  warnings: string[]
+} {
+  const allowed = new Set(allowedPaths.map((path) => normalizePath(path)))
+  const { blocks, warnings } = parseFileBlocks(text)
+  const kept = blocks.filter((block) => allowed.has(normalizePath(block.path)))
+  const dropped = blocks.filter((block) => !allowed.has(normalizePath(block.path)))
+  if (dropped.length > 0) {
+    warnings.push(
+      `Dropped ${dropped.length} non-aggregate block(s) from aggregate repair output: ${dropped.map((block) => block.path).join(", ")}`,
+    )
+  }
+  return {
+    text: kept
+      .map((block) => `---FILE: ${block.path}---\n${block.content.trimEnd()}\n---END FILE---`)
+      .join("\n\n"),
+    warnings,
+  }
+}
+
+function aggregateRepairSectionCap(maxContextSize: number | undefined): number {
+  const { maxCtx } = computeContextBudget(maxContextSize)
+  return Math.max(4_000, Math.floor(maxCtx * 0.12))
+}
+
+function isAggregateRepairSafe(
+  path: string,
+  index: string,
+  overview: string,
+  maxContextSize: number | undefined,
+): boolean {
+  const cap = aggregateRepairSectionCap(maxContextSize)
+  if (path === "wiki/index.md") return index.length <= cap
+  if (path === "wiki/overview.md") return overview.length <= cap
+  return true
 }
 
 function canonicalizeSourcesField(content: string, sourceIdentity: string): string {
@@ -1348,6 +1514,9 @@ async function writeFileBlocks(
     }
     if (!isLogPath(relativePath) && !isListingPath(relativePath)) {
       content = canonicalizeSourcesField(content, sourceFileName)
+    }
+    if (sourceSummaryPath && relativePath === sourceSummaryPath) {
+      content = sourceSummaryMediaRefsForExternalMarkdown(content)
     }
 
     if (
@@ -1803,6 +1972,62 @@ function buildReviewSuggestionPrompt(
     trimLongText(sourceContext, sectionCap),
     "",
     "## Generated Wiki Output",
+    trimLongText(generation, sectionCap),
+  ].filter(Boolean).join("\n")
+}
+
+function buildAggregateRepairPrompt(
+  paths: string[],
+  purpose: string,
+  index: string,
+  overview: string,
+  sourceIdentity: string,
+  analysis: string,
+  sourceContext: string,
+  generation: string,
+  maxContextSize: number | undefined,
+): string {
+  const sectionCap = aggregateRepairSectionCap(maxContextSize)
+  const today = currentWikiDate()
+  return [
+    "You are repairing aggregate wiki files after an ingest generation.",
+    "Do not output chain-of-thought, hidden reasoning, or explanatory preamble.",
+    "",
+    languageRule(sourceContext),
+    "",
+    "Generate ONLY the requested aggregate FILE blocks listed below.",
+    "Do not generate entity, concept, source summary, query, comparison, or synthesis pages.",
+    "",
+    "Requested paths:",
+    ...paths.map((path) => `- ${path}`),
+    "",
+    "Rules:",
+    `- Use today's date ${today} for log entries and frontmatter dates.`,
+    "- For wiki/index.md: output the complete updated index, preserving existing entries and adding the new source-derived entries.",
+    "- For wiki/overview.md: output the complete updated overview, reflecting the full wiki plus this new source.",
+    "- For wiki/log.md: output only the new log entry to append, format `## [YYYY-MM-DD] ingest | Title`.",
+    "- Output only FILE blocks. Nothing else.",
+    "",
+    "FILE block template:",
+    "```",
+    "---FILE: wiki/path.md---",
+    "(complete file content, or just the new log entry for wiki/log.md)",
+    "---END FILE---",
+    "```",
+    "",
+    purpose ? `## Wiki Purpose\n${trimLongText(purpose, Math.floor(sectionCap * 0.5))}` : "",
+    index ? `## Current Wiki Index\n${trimLongText(index, sectionCap)}` : "",
+    overview ? `## Current Overview\n${trimLongText(overview, sectionCap)}` : "",
+    "",
+    `## Source\n${sourceIdentity}`,
+    "",
+    "## Stage 1 Analysis",
+    trimLongText(analysis, sectionCap),
+    "",
+    "## Source Context",
+    trimLongText(sourceContext, sectionCap),
+    "",
+    "## First Generation Output",
     trimLongText(generation, sectionCap),
   ].filter(Boolean).join("\n")
 }
@@ -2391,7 +2616,13 @@ async function injectImagesIntoSourceSummary(
     // by image content (e.g. "find the chart with revenue data")
     // never matches because alt text was empty.
     const captionsBySha = await loadCaptionCache(pp)
-    const newSection = buildImageMarkdownSection(savedImages as never, captionsBySha)
+    const newSection = buildImageMarkdownSection(
+      savedImages.map((img) => ({
+        ...img,
+        relPath: toSourceSummaryImageRef(img.relPath),
+      })) as never,
+      captionsBySha,
+    )
     const marker = "<!-- llm-wiki:embedded-images -->"
     const wrapped = `\n\n${marker}\n${newSection.trim()}\n${marker}\n`
     if (existing) {
