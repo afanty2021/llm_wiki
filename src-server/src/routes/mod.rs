@@ -6,6 +6,7 @@ mod projects;
 mod files;
 mod search;
 mod chat;
+mod graph;
 
 use axum::{Router, routing::get};
 use crate::AppState;
@@ -20,5 +21,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/files", files::file_routes())
         .nest("/api/v1/search", search::search_routes())
         .nest("/api/v1/chat", chat::chat_routes())
+        .nest("/api/v1/graph", graph::graph_routes())
         .with_state(state)
 }
