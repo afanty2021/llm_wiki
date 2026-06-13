@@ -88,3 +88,34 @@ CREATE TABLE activity_logs (
 
 CREATE INDEX idx_activity_logs_user ON activity_logs(user_id);
 CREATE INDEX idx_activity_logs_project ON activity_logs(project_id);
+
+-- Wiki 页面表（项目中的知识页面）
+CREATE TABLE wiki_pages (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    path VARCHAR(500) NOT NULL,
+    title VARCHAR(255),
+    content TEXT,
+    frontmatter JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(project_id, path)
+);
+
+CREATE INDEX idx_wiki_pages_project ON wiki_pages(project_id);
+CREATE INDEX idx_wiki_pages_path ON wiki_pages(project_id, path);
+
+-- 已摄取文件表（跟踪已处理的源文件）
+CREATE TABLE ingested_files (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    original_path VARCHAR(1000) NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    file_type VARCHAR(20),
+    file_size BIGINT,
+    ingested_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(project_id, original_path)
+);
+
+CREATE INDEX idx_ingested_files_project ON ingested_files(project_id);
+CREATE INDEX idx_ingested_files_hash ON ingested_files(project_id, content_hash);
