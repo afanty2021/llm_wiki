@@ -30,6 +30,7 @@ bcrypt = "0.15"
 aes-gcm = "0.10"
 rand = "0.8"
 hex = "0.4"
+sha2 = "0.10"
 
 # 日志
 tracing = "0.1"
