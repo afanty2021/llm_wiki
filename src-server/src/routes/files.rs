@@ -99,7 +99,7 @@ pub async fn list_files(
     };
 
     if !dir_path.exists() {
-        storage::ensure_dir(&dir_path)?;
+        // GET 不应产生副作用 — 返回空列表而非自动创建目录
         return Ok(Json(serde_json::json!([])));
     }
 
