@@ -1,10 +1,12 @@
-// Routes will be implemented in Task 1.5
+mod health;
+mod auth;
 
-use axum::Router;
+use axum::{Router, routing::get};
 use crate::AppState;
 
 pub fn create_router(state: AppState) -> Router {
     Router::new()
-        .route("/", axum::routing::get(|| async { "Hello, World!" }))
+        .route("/health", get(health::health_check))
+        .nest("/api/v1/auth", auth::auth_routes())
         .with_state(state)
 }

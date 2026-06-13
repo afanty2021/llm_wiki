@@ -11,13 +11,17 @@ pub mod services;
 pub mod utils;
 
 pub use config::AppConfig;
-pub use db::DbPool;
-pub use error::{AppError, IntoAppError};
+pub use db::{create_pool, create_redis_pool, DbPool, RedisPoolType as RedisPool};
+pub use error::{
+    AppError, IntoAppError, ERR_AUTH_INVALID, ERR_AUTH_EXPIRED, ERR_PERMISSION_DENIED,
+    ERR_RESOURCE_NOT_FOUND, ERR_VALIDATION_FAILED, ERR_DATABASE_ERROR, ERR_FILE_UPLOAD_FAILED,
+    ERR_LLM_API_ERROR, ERR_INTERNAL_ERROR,
+};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
-    pub redis: deadpool_redis::Pool,
+    pub redis: RedisPool,
     pub config: Arc<AppConfig>,
 }
 
