@@ -10,6 +10,9 @@ pub mod routes;
 pub mod services;
 pub mod utils;
 
+#[cfg(test)]
+mod tests;
+
 pub use config::AppConfig;
 pub use db::{create_pool, create_redis_pool, DbPool, RedisPoolType as RedisPool};
 pub use error::{

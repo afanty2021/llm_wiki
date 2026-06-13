@@ -27,6 +27,7 @@ AGENTS.md
 
 # Benchmark and test data (local only)
 tests/
+!src-server/src/tests/
 
 # Editor directories and files
 .vscode/*
@@ -49,3 +50,4 @@ pnpm-debug.log*
 # Brainstorm assets (not tracked in source control)
 .superpowers/
 .claude/
+src-server/target/
