@@ -23,9 +23,9 @@ pub fn generate_access_token(user_id: i32, username: &str, secret: &str, ttl: Du
     let claims = Claims {
         sub: user_id.to_string(),
         username: username.to_string(),
-        exp: expire.timestamp() as usize,
-        iat: now.timestamp() as usize,
-        jti: uuid::Uuid::new_v4().to_string(),
+        exp: expire.timestamp(),
+        iat: now.timestamp(),
+        jti: String::new(), // Empty string for access tokens (no JTI needed)
     };
 
     let token = encode(

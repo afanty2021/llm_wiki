@@ -19,19 +19,20 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 
 /// Encrypt an API key using AES-256-GCM
 /// Returns hex-encoded (nonce + ciphertext)
-pub fn encrypt_api_key(api_key: &str, secret: &[u8; 32]) -> String {
+pub fn encrypt_api_key(api_key: &str, secret: &[u8; 32]) -> Result<String, AppError> {
     let key = Key::<Aes256Gcm>::from_slice(secret);
     let cipher = Aes256Gcm::new(key);
 
     // Generate random nonce (must be unique for each encryption)
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
-    let ciphertext = cipher.encrypt(&nonce, api_key.as_bytes()).unwrap();
+    let ciphertext = cipher.encrypt(&nonce, api_key.as_bytes())
+        .map_err(|e| AppError::EncryptionError(format!("Encryption failed: {}", e)))?;
 
     // Combine nonce + ciphertext and encode as hex
     let mut combined = nonce.to_vec();
     combined.extend_from_slice(&ciphertext);
-    hex::encode(combined)
+    Ok(hex::encode(combined))
 }
 
 /// Decrypt an API key using AES-256-GCM

@@ -105,7 +105,7 @@ mod tests {
             121, 116, 101, 115, 95, 108, 111, 110, 103, 95, 102, 111, 114, 95, 97, 101,
         ]; // "test_secret_32_bytes_long_for_ae" in bytes
 
-        let encrypted = crate::utils::encrypt_api_key(api_key, &secret);
+        let encrypted = crate::utils::encrypt_api_key(api_key, &secret).unwrap();
         assert!(!encrypted.is_empty());
         assert_ne!(encrypted, api_key);
 
@@ -125,7 +125,7 @@ mod tests {
             95, 51, 50, 95, 98, 121, 116, 101, 115, 95, 108, 111, 110, 103, 95, 104,
         ]; // "different_secret_32_bytes_long_h" in bytes
 
-        let encrypted = crate::utils::encrypt_api_key(api_key, &secret);
+        let encrypted = crate::utils::encrypt_api_key(api_key, &secret).unwrap();
 
         let result = crate::utils::decrypt_api_key(&encrypted, &wrong_secret);
         assert!(result.is_err());

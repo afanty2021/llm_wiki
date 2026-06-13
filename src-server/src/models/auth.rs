@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct Claims {
     pub sub: String,      // user_id
     pub username: String, // username
-    pub exp: usize,       // expiry time
-    pub iat: usize,       // issued at
+    pub exp: i64,         // expiry time
+    pub iat: i64,         // issued at
     pub jti: String,      // JWT ID (for refresh token)
 }
 
