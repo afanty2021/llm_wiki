@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
+use axum::middleware::from_fn;
 
 pub mod config;
 pub mod db;
@@ -41,8 +42,13 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
         config: Arc::new(config),
     };
 
-    // 构建路由
-    let app = routes::create_router(state.clone());
+    // 构建 CORS 中间件层
+    let cors_layer = middleware::create_cors_layer(state.config.allowed_origins());
+
+    // 构建路由并附加中间件层（从外到内: CORS -> Logging -> Router）
+    let app = routes::create_router(state.clone())
+        .layer(from_fn(middleware::logging_middleware))
+        .layer(cors_layer);
 
     Ok((app, state))
 }
