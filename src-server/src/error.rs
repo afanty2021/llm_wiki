@@ -154,6 +154,19 @@ impl From<std::num::ParseIntError> for AppError {
     }
 }
 
+// reqwest 错误转换（LLM API 调用 + embedding API 调用）
+impl From<reqwest::Error> for AppError {
+    fn from(err: reqwest::Error) -> Self {
+        AppError::LlmApiError(format!("HTTP request failed: {}", err))
+    }
+}
+
+impl From<reqwest::header::ToStrError> for AppError {
+    fn from(err: reqwest::header::ToStrError) -> Self {
+        AppError::InternalError(format!("Header conversion error: {}", err))
+    }
+}
+
 // anyhow::Error 转换（用于 utils 函数的 anyhow::Result）
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {

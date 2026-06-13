@@ -49,3 +49,21 @@ thiserror = "1.0"
 
 # 配置
 config = "0.14"
+
+# 文件上传
+multer = "3"
+mime_guess = "2"
+
+# HTTP 客户端（LLM API 调用 + embedding API）
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# 流处理
+futures = "0.3"
+tokio-stream = "0.1"
+
+# 正则解析 wikilinks
+regex-lite = "0.1"
+
+# 文档解析（复用 Tauri 后端 crate）
+docx-rs = "0.4"
+calamine = "0.35"
