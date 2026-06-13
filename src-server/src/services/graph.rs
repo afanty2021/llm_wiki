@@ -45,21 +45,32 @@ static GRAPH_CACHE: std::sync::LazyLock<Mutex<HashMap<(i32, i64), WikiGraph>>> =
 
 /// 从 wiki_pages 表构建知识图谱
 /// 链接通过 [[wikilink]] 引用解析得出
-/// 使用基本内存缓存 — 当 wiki_pages updated_at 变更时自动失效
+/// 使用项目级内存缓存 — 通过 MAX(updated_at) 时间戳验证新鲜度
 pub async fn build_graph(
     pool: &PgPool,
     project_id: i32,
 ) -> Result<WikiGraph, AppError> {
-    // 0. 检查缓存
+    // 0. 获取 wiki_pages 的最新 updated_at 时间戳作为缓存键
+    let max_ts: Option<i64> = sqlx::query_scalar(
+        "SELECT EXTRACT(EPOCH FROM COALESCE(MAX(updated_at), TIMESTAMPTZ '1970-01-01'))::BIGINT \
+         FROM wiki_pages WHERE project_id = $1"
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::DatabaseError(e))?
+    .flatten();
+
+    let cache_ts = max_ts.unwrap_or(0);
+
+    // 1. 检查缓存 — 使用 (project_id, timestamp) 精确匹配
     if let Ok(cache) = GRAPH_CACHE.lock() {
-        for ((pid, _ts), graph) in cache.iter() {
-            if *pid == project_id {
-                return Ok(WikiGraph {
-                    nodes: graph.nodes.clone(),
-                    edges: graph.edges.clone(),
-                    communities: graph.communities.clone(),
-                });
-            }
+        if let Some(graph) = cache.get(&(project_id, cache_ts)) {
+            return Ok(WikiGraph {
+                nodes: graph.nodes.clone(),
+                edges: graph.edges.clone(),
+                communities: graph.communities.clone(),
+            });
         }
     }
 
@@ -164,9 +175,11 @@ pub async fn build_graph(
 
     let graph = WikiGraph { nodes, edges, communities };
 
-    // 6. 写入缓存
+    // 6. 写入缓存 — 以真实 MAX(updated_at) 时间戳为键，后续更新自动失效
     if let Ok(mut cache) = GRAPH_CACHE.lock() {
-        cache.insert((project_id, 0), WikiGraph {
+        // 清理同一项目的旧缓存条目（timestamp 不匹配的）
+        cache.retain(|&(pid, _ts), _| pid != project_id);
+        cache.insert((project_id, cache_ts), WikiGraph {
             nodes: graph.nodes.clone(),
             edges: graph.edges.clone(),
             communities: graph.communities.clone(),

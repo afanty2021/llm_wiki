@@ -1,19 +1,39 @@
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use tower_http::cors::{Any, CorsLayer};
 use std::time::Duration;
 
 /// 创建 CORS 中间件层
 /// 允许指定的源、方法和头部
+/// 如果包含 "*" 通配符，则允许所有源但禁用 credentials
 pub fn create_cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    // 检查是否包含通配符
+    if allowed_origins.iter().any(|o| o == "*") {
+        // 通配符模式下禁用 credentials
+        return CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
+            .allow_headers(Any)
+            .allow_credentials(false)
+            .expose_headers([axum::http::HeaderName::from_static("content-length")])
+            .max_age(Duration::from_secs(86400));
+    }
+
     let allowed_origins: Vec<HeaderValue> = allowed_origins
         .iter()
         .filter_map(|origin| origin.parse::<HeaderValue>().ok())
         .collect();
 
+    // 当 credentials 为 true 时，不能使用通配符 headers
+    let allowed_headers: Vec<HeaderName> = vec![
+        HeaderName::from_static("content-type"),
+        HeaderName::from_static("authorization"),
+        HeaderName::from_static("x-requested-with"),
+    ];
+
     CorsLayer::new()
         .allow_origin(allowed_origins)
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
-        .allow_headers(Any)
+        .allow_headers(allowed_headers)
         .allow_credentials(true)
         .expose_headers([axum::http::HeaderName::from_static("content-length")])
         .max_age(Duration::from_secs(86400))

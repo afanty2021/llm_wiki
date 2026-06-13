@@ -10,7 +10,7 @@ COPY migrations ./migrations
 RUN cargo build --release
 
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates libssl3 poppler-utils && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/target/release/llm-wiki-server /app/llm-wiki-server
 COPY --from=builder /app/migrations /app/migrations

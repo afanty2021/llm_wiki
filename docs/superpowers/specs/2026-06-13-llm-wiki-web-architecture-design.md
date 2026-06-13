@@ -1,7 +1,7 @@
 # LLM Wiki Web 版架构设计文档
 
 > **创建时间**: 2026-06-13
-> **版本**: 1.0.0
+> **版本**: 1.0.5
 > **状态**: 设计阶段
 
 ---
@@ -45,7 +45,7 @@
                           ↕
 ┌─────────────────────────────────────────────────────────────┐
 │                    数据层                                    │
-│  PostgreSQL + 文件存储 + LanceDB + Redis                     │
+│  PostgreSQL + pgvector + 文件存储 + Redis                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,9 +89,9 @@ src-server/                      # Rust HTTP 服务（独立于 Tauri）
 │   │   ├── mod.rs
 │   │   ├── auth.rs          # JWT 认证中间件
 │   │   └── cors.rs          # CORS 处理
-│   ├── extractors/           # 自定义 extractors
+│   ├── extractors/           # Axum Path 提取 + 权限检查函数
 │   │   ├── mod.rs
-│   │   └── project.rs       # ProjectId extractor
+│   │   └── project.rs       # 项目权限检查辅助函数
 │   ├── models/              # 数据模型
 │   │   ├── mod.rs
 │   │   ├── user.rs
@@ -115,6 +115,7 @@ src-server/                      # Rust HTTP 服务（独立于 Tauri）
 /api/v1/
 ├── /auth              # 认证
 │   ├── POST /login    # 登录
+│   ├── POST /register # 注册
 │   ├── POST /logout   # 登出
 │   └── POST /refresh  # 刷新 token
 ├── /users             # 用户管理
@@ -162,8 +163,7 @@ src/
 │   ├── RegisterPage.tsx      # 注册页面（可选）
 │   └── TeamSwitcher.tsx      # 团队切换器
 ├── lib/
-│   ├── api-client.ts         # HTTP 客户端（新增）
-│   └── extractors.ts         # 自定义类型提取器
+│   └── api-client.ts         # HTTP 客户端（新增）
 └── stores/
     └── auth-store.ts         # Zustand 认证 store
 ```
@@ -172,6 +172,21 @@ src/
 
 ```typescript
 // src/lib/api-client.ts
+
+// 错误响应类型（与 §15.1 格式对应）
+// 使用 class（而非 interface）以支持 instanceof 运行时检查
+class ApiError {
+  code: string;
+  message: string;
+  details?: any;
+
+  constructor(code: string, message: string, details?: any) {
+    this.code = code;
+    this.message = message;
+    this.details = details;
+  }
+}
+
 class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
@@ -182,8 +197,8 @@ class ApiClient {
     this.token = localStorage.getItem('auth_token');
   }
 
-  // 通用请求方法（支持自动 token 刷新）
-  private async request<T>(
+  // 内部方法：执行实际 HTTP 请求（不处理业务错误）
+  private async fetch<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
@@ -197,22 +212,52 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    let response = await fetch(url, { ...options, headers });
-
-    // 401 时尝试刷新 token 并重试
-    if (response.status === 401 && this.hasRefreshToken()) {
-      await this.refreshAccessToken();
-      
-      // 重试原请求
-      headers['Authorization'] = `Bearer ${this.token}`;
-      response = await fetch(url, { ...options, headers });
-    }
+    const response = await fetch(url, { ...options, headers });
 
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status}`);
+      const body = await response.json().catch(() => ({ code: 'UNKNOWN', message: 'Request failed' }));
+      throw new ApiError(body.code, body.message, body.details);
     }
 
     return response.json();
+  }
+
+  // 公开方法：包含业务错误处理 + 自动 token 刷新
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<T> {
+    try {
+      return await this.fetch<T>(endpoint, options);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        switch (error.code) {
+          case 'AUTH_EXPIRED':
+            // 401 时尝试刷新 token 并重试一次
+            await this.refreshAccessToken();
+            return await this.fetch<T>(endpoint, options);
+          case 'AUTH_INVALID':
+            // Token 无效，清除本地状态并跳转登录
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('refresh_token');
+            window.location.href = '/login';
+            throw new Error('认证失效，请重新登录');
+          case 'PERMISSION_DENIED':
+            throw new Error('权限不足，请联系管理员');
+          case 'RESOURCE_NOT_FOUND':
+            throw new Error(error.message || '资源不存在');
+          case 'VALIDATION_FAILED': {
+            const fields = error.details?.errors
+              ?.map((e: { field: string }) => e.field)
+              .join(', ');
+            throw new Error(`验证失败: ${fields}`);
+          }
+          default:
+            throw new Error(error.message);
+        }
+      }
+      throw error;
+    }
   }
 
   private hasRefreshToken(): boolean {
@@ -314,9 +359,9 @@ class ApiClient {
     });
   }
 
-  // 聊天流式
+  // 聊天流式（含 401 处理：刷新 token 后重新建立流，已消费内容不回放）
   async *chatStream(message: string, projectId: number): AsyncGenerator<string> {
-    const response = await fetch(`${this.baseUrl}/chat/stream`, {
+    let response = await fetch(`${this.baseUrl}/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -324,6 +369,24 @@ class ApiClient {
       },
       body: JSON.stringify({ message, project_id: projectId }),
     });
+
+    // 401 时尝试刷新 token 并重试（流式重试不回放已消费内容）
+    if (response.status === 401 && this.hasRefreshToken()) {
+      await this.refreshAccessToken();
+      response = await fetch(`${this.baseUrl}/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify({ message, project_id: projectId }),
+      });
+    }
+
+    if (!response.ok) {
+      const error: ApiError = await response.json().catch(() => ({ code: 'UNKNOWN', message: 'Stream request failed' }));
+      throw new Error(error.message);
+    }
 
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
@@ -445,13 +508,23 @@ CREATE INDEX idx_projects_created_by ON projects(created_by);
 CREATE TABLE embeddings (
     id SERIAL PRIMARY KEY,
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    wiki_page_id VARCHAR(255) NOT NULL,
+    wiki_page_id VARCHAR(255) NOT NULL,  -- 格式: {project_id}/wiki/{path}.md
     content VECTOR(1536),  -- OpenAI embedding 维度
     created_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE INDEX idx_embeddings_project ON embeddings(project_id);
 CREATE INDEX idx_embeddings_content ON embeddings USING ivfflat (content vector_cosine_ops) WITH (lists = 100);
+-- ⚠️ 索引参数调优建议:
+-- - lists 参数应根据向量数量调整，通常设为 sqrt(rows) 或 rows/1000
+-- - 示例：100 万向量 → lists=1000，10 万向量 → lists=316，1 万向量 → lists=100
+-- - 过小会降低召回率，过大会降低查询性能
+-- - 建议在实际部署前根据向量规模测试不同 lists 值
+
+-- wiki_page_id 与文件系统路径映射:
+-- wiki_page_id 格式: "{project_id}/wiki/entities/Alice.md"
+-- 文件系统路径: "/data/storage/teams/{team_id}/projects/{project_id}/wiki/entities/Alice.md"
+-- 两者一一对应，通过字符串拼接转换
 
 -- 刷新令牌表
 CREATE TABLE refresh_tokens (
@@ -529,15 +602,21 @@ TTL: 3600  # 1 小时
            ↓
     验证用户名密码（bcrypt）
            ↓
-    生成 JWT token
-    - Payload: {user_id, username, team_ids, exp}
-    - Secret: 环境变量
+    生成 JWT token（不含 team_ids）
+    - Payload: {sub: user_id, username: exp, iat}
+    - Access Token: 5 分钟 TTL
            ↓
-    返回 {token, user} 给前端
+    生成 Refresh Token（存储到数据库）
+           ↓
+    返回 {token, refresh_token, user} 给前端
            ↓
     前端存储 token（localStorage）
            ↓
     后续请求携带 Authorization: Bearer {token}
+           ↓
+    中间件验证 token 签名和有效期
+           ↓
+    Handler 从数据库实时查询用户权限
 ```
 
 ### 5.2 JWT Token 结构
@@ -572,34 +651,6 @@ TTL: 3600  # 1 小时
 #### 权限检查示例
 
 ```rust
-// 自定义 extractor：从路径提取项目 ID
-pub struct ProjectId(i32);
-
-impl<S> FromRequestParts<S> for ProjectId
-where
-    S: Send + Sync,
-{
-    type Rejection = (StatusCode, String);
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        let uri = parts.uri.clone();
-        let path = uri.path();
-        
-        // 从路径中提取项目 ID
-        // 例如: /api/v1/projects/123/files
-        let segments: Vec<&str> = path.split('/').collect();
-        let project_id = segments
-            .get(4)
-            .and_then(|s| s.parse::<i32>().ok())
-            .ok_or((StatusCode::BAD_REQUEST, "Invalid project ID".to_string()))?;
-            
-        Ok(ProjectId(project_id))
-    }
-}
-
 // 权限检查函数
 async fn check_project_access(
     db: &PgPool,
@@ -626,11 +677,11 @@ async fn check_project_access(
     }
 }
 
-// Handler 使用示例
+// Handler 使用 Axum 原生 Path 提取
 pub async fn get_project_files(
     State(db): State<PgPool>,
     Auth(user): Auth<User>,
-    ProjectId(project_id): ProjectId,  // 自定义 extractor
+    Path(project_id): Path<i32>,  // Axum 原生提取，直接使用
 ) -> Result<impl Reply, impl Reply> {
     // 检查权限
     check_project_access(&db, user.id, project_id).await?;
@@ -820,7 +871,8 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      # 使用 TCP probe 检查（Rust 容器无需 curl）
+      test: ["CMD-SHELL", "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -854,6 +906,16 @@ VITE_API_BASE_URL=http://192.168.1.100/api
 # 启动 Docker 服务
 docker-compose up -d
 
+# 等待数据库就绪
+echo "等待数据库启动..."
+until docker-compose exec -T postgres pg_isready -U llmwiki; do
+  sleep 1
+done
+
+# 运行数据库迁移
+echo "运行数据库迁移..."
+docker-compose exec -T api sqlx migrate run
+
 # 构建前端
 cd ../
 npm run build
@@ -863,6 +925,8 @@ sudo cp -r dist/* /var/www/llm-wiki/
 
 # 重启 Nginx
 sudo systemctl reload nginx
+
+echo "启动完成！访问 http://192.168.1.100"
 ```
 
 ---
@@ -904,7 +968,7 @@ sudo systemctl reload nginx
 | SSE 流式响应实现 | 低 | 参考 Tauri 现有实现 |
 | 文件上传大文件处理 | 中 | 使用分片上传或流式处理 |
 | pgvector 性能优化 | 中 | 评估向量规模，必要时考虑专业向量库 |
-| 权限中间件复杂度 | 低 | 使用自定义 extractor 模式 |
+| 权限中间件复杂度 | 低 | 使用 Axum Path 提取 + 数据库查询模式 |
 
 ---
 
@@ -1021,9 +1085,47 @@ error!(error = %err, "Database query failed");
 
 ### 12.1 水平扩展
 
-- API 服务无状态设计，支持多实例
-- PostgreSQL 主从复制
-- Redis 集群
+**单实例部署（初始配置）**：
+- API 服务：1 实例
+- 文件存储：本地 `/data/storage`（Docker volume）
+- 适用场景：团队 < 20 人，日活 < 100
+
+**水平扩展部署（高负载配置）**：
+- API 服务：多实例负载均衡
+- 文件存储：MinIO 或 NFS 共享存储
+- 适用场景：团队 > 20 人，或需要高可用
+
+**MinIO 配置示例**：
+```yaml
+# docker-compose.yml (高负载版本)
+services:
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  api:
+    environment:
+      # 使用 MinIO 替代本地文件系统
+      STORAGE_TYPE: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: ${MINIO_PASSWORD}
+      S3_BUCKET: llmwiki-storage
+      S3_REGION: us-east-1
+```
 
 ### 12.2 功能扩展
 
@@ -1074,8 +1176,8 @@ pub async fn get_team_projects(
     let limit = params.limit.unwrap_or(20).min(100);
     
     let projects = if let Some(cursor) = params.cursor {
-        // 解码 cursor（base64 编码的 (id, created_at)）
-        let (last_id, created_at) = decode_cursor(cursor)?;
+        // 解码 cursor（hex 编码的 (id, created_at)）
+        let (last_id, created_at) = decode_cursor(&cursor)?;
         
         sqlx::query!(
             "SELECT id, name, storage_path, created_at
@@ -1120,20 +1222,40 @@ pub async fn get_team_projects(
 
 ### 13.3 Cursor 编解码
 
+**方案：使用 hex 编码（推荐）**
+
 ```rust
-// 简单的 base64 编码
-fn encode_cursor<T: serde::Serialize>(data: T) -> String {
-    let json = serde_json::to_string(&data).unwrap();
-    base64::encode(json)
+use serde::{Serialize, Deserialize};
+use hex::{ToHex, FromHex};
+
+// 编码：序列化为 JSON → hex 编码
+fn encode_cursor<T: serde::Serialize>(data: &T) -> String {
+    let json = serde_json::to_vec(data).unwrap();
+    json.to_hex() // 将 json 字节数组编码为 hex 字符串
 }
 
+// 解码：hex 解码 → 反序列化
 fn decode_cursor<T: serde::de::DeserializeOwned>(
-    cursor: String,
+    cursor: &str,
 ) -> Result<T, Error> {
-    let json = base64::decode(&cursor)?;
-    serde_json::from_str(&json).map_err(|_| Error::InvalidCursor)
+    let bytes = Vec::from_hex(cursor)
+        .map_err(|_| Error::InvalidCursor)?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| Error::InvalidCursor)
+}
+
+// 错误类型定义
+#[derive(Debug)]
+pub enum Error {
+    InvalidCursor,
+    // ... 其他错误
 }
 ```
+
+**优势**：
+- ✅ 无需处理 base64 padding 字符
+- ✅ hex 字符串 URL 安全
+- ✅ 实现简单，不易出错
 
 ---
 
@@ -1225,7 +1347,10 @@ async fn test_auth_flow() {
 ### 14.3 E2E 测试
 
 **端到端测试**：
-- 测试框架：`Playwright` 或 `Cypress`
+- **测试框架选择：Playwright**
+  - 选择原因：更好的 TypeScript 支持、并行测试能力、稳定的跨浏览器特性
+  - 与 vitest 生态集成良好
+
 - 覆盖场景：
   - 用户登录 → 创建团队 → 创建项目 → 上传文件 → 搜索
   - 多用户协作（不同权限）
@@ -1273,6 +1398,296 @@ test('complete wiki workflow', async ({ page }) => {
 
 ---
 
+## 15. API 错误响应规范
+
+### 15.1 统一错误格式
+
+所有 API 错误响应使用统一的 JSON 格式：
+
+```typescript
+// 标准错误响应
+interface ErrorResponse {
+  error: {
+    code: string;        // 错误码（机器可读）
+    message: string;      // 错误消息（人类可读）
+    details?: {           // 可选的详细信息
+      field?: string;     // 验证错误字段名
+      value?: any;        // 验证错误的值
+      constraint?: string; // 约束说明
+    };
+    stack_trace?: string; // 开发环境堆栈跟踪
+  };
+}
+```
+
+### 15.2 错误码定义
+
+```rust
+// 错误码常量
+pub const ERR_AUTH_INVALID: &str = "AUTH_INVALID";
+pub const ERR_AUTH_EXPIRED: &str = "AUTH_EXPIRED";
+pub const ERR_PERMISSION_DENIED: &str = "PERMISSION_DENIED";
+pub const ERR_RESOURCE_NOT_FOUND: &str = "RESOURCE_NOT_FOUND";
+pub const ERR_VALIDATION_FAILED: &str = "VALIDATION_FAILED";
+pub const ERR_DATABASE_ERROR: &str = "DATABASE_ERROR";
+pub const ERR_FILE_UPLOAD_FAILED: &str = "FILE_UPLOAD_FAILED";
+pub const ERR_LLM_API_ERROR: &str = "LLM_API_ERROR";
+
+// 使用示例
+pub async fn get_project(
+    State(db): State<PgPool>,
+    Auth(user): Auth<User>,
+    Path(id): Path<i32>,
+) -> Result<impl Reply, impl Reply> {
+    let project = match sqlx::query!("SELECT * FROM projects WHERE id = $1", id)
+        .fetch_optional(&db)
+        .await
+    {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return Ok(Json(json!({
+                "error": {
+                    "code": ERR_RESOURCE_NOT_FOUND,
+                    "message": format!("项目 {} 不存在", id)
+                }
+            }))).into_response());
+        }
+        Err(e) => {
+            return Ok(Json(json!({
+                "error": {
+                    "code": ERR_DATABASE_ERROR,
+                    "message": "数据库查询失败",
+                    "stack_trace": Some(e.to_string())
+                }
+            }))).into_response());
+        }
+    };
+    
+    // ...
+}
+```
+
+### 15.3 验证错误响应
+
+字段级验证错误包含详细字段信息：
+
+```json
+// 400 Bad Request - 验证失败示例
+{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "请求参数验证失败",
+    "details": {
+      "errors": [
+        {
+          "field": "username",
+          "value": "",
+          "constraint": "不能为空"
+        },
+        {
+          "field": "email",
+          "value": "invalid-email",
+          "constraint": "必须是有效的邮箱地址"
+        }
+      ]
+    }
+  }
+}
+```
+
+### 15.4 HTTP 状态码映射
+
+| HTTP 状态 | 错误码 | 场景 |
+|----------|--------|------|
+| 400 | VALIDATION_FAILED | 请求参数验证失败 |
+| 401 | AUTH_INVALID | Token 无效或缺失 |
+| 401 | AUTH_EXPIRED | Token 已过期 |
+| 403 | PERMISSION_DENIED | 权限不足 |
+| 404 | RESOURCE_NOT_FOUND | 资源不存在 |
+| 409 | RESOURCE_CONFLICT | 资源冲突（如重复创建） |
+| 413 | PAYLOAD_TOO_LARGE | 文件过大 |
+| 500 | DATABASE_ERROR | 数据库错误 |
+| 500 | LLM_API_ERROR | LLM API 调用失败 |
+| 500 | INTERNAL_ERROR | 其他内部错误 |
+
+### 15.5 前端错误处理
+
+错误处理逻辑已集成在 ApiClient 中（见 §3.2.2）。`fetch()` 抛出结构化 `ApiError`，`request()` 按错误码路由：
+
+| 错误码 | 处理策略 |
+|--------|---------|
+| `AUTH_EXPIRED` | 自动 refresh token → 重试一次 |
+| `AUTH_INVALID` | 清除本地 token → 跳转登录页 |
+| `PERMISSION_DENIED` | 显示提示"权限不足，请联系管理员" |
+| `VALIDATION_FAILED` | 显示具体字段验证错误 |
+| `RESOURCE_NOT_FOUND` | 显示"资源不存在" |
+| 其他 | 显示 `error.message` |
+
+> **注**：`ApiError` 使用 `class`（而非 `interface`）定义以支持 `instanceof` 运行时检查（见 §3.2.2）。
+
+---
+
+## 16. LLM Provider 配置
+
+### 16.1 支持的 LLM Provider
+
+Web 版支持与桌面版相同的 LLM provider：
+
+- **OpenAI**: GPT-4o, GPT-4o-mini, o1（需要 API key）
+- **Anthropic**: Claude 3.5 Sonnet, Claude 3.5 Haiku（需要 API key）
+- **Google**: Gemini Pro, Gemini Flash（需要 API key）
+- **Ollama**: 本地部署模型（内网推荐）
+- **自定义**: OpenAI-compatible API（如 Azure OpenAI）
+
+### 16.2 配置存储
+
+LLM provider 配置存储在数据库中，每个团队可以独立配置：
+
+```sql
+-- LLM Provider 配置表
+CREATE TABLE llm_providers (
+    id SERIAL PRIMARY KEY,
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+    provider_type VARCHAR(50) NOT NULL,  -- 'openai', 'anthropic', 'ollama', 'custom'
+    api_key TEXT,                         -- 加密存储
+    base_url TEXT,                        -- 自定义 endpoint
+    model VARCHAR(100) NOT NULL,
+    is_default BOOLEAN DEFAULT FALSE,     -- 是否为该 provider 的默认配置
+    config JSONB,                         -- 其他配置
+    created_by INTEGER REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(team_id, provider_type, model)  -- 允许同一 provider 配置多个模型
+);
+
+-- 注意：is_default 在 DB 级别不强制唯一。应用层需确保：
+-- 1. 设置默认时，先 UPDATE 同 (team_id, provider_type) 的其他行 SET is_default = FALSE
+-- 2. 查询默认模型时取 WHERE is_default = TRUE LIMIT 1
+-- 3. 注册页/API 不依赖 is_default 自动选择 — 应由用户或团队管理员显式指定
+
+CREATE INDEX idx_llm_providers_team ON llm_providers(team_id);
+CREATE INDEX idx_llm_providers_default ON llm_providers(team_id, provider_type) WHERE is_default = TRUE;
+```
+
+**配置加密**：
+```rust
+// API key 使用 AES-256-GCM 加密
+// Cargo.toml 依赖：
+// aes-gcm = "0.10"
+// rand = "0.8"
+
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use rand::Rng;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+pub fn encrypt_api_key(key: &str, secret: &[u8; 32]) -> String {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(secret));
+    
+    // 生成随机 nonce（每次加密必须不同）
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    let ciphertext = cipher.encrypt(nonce, key.as_bytes(), &[]).unwrap();
+    
+    // 将 nonce + 密文一起编码（nonce 需要存储以供解密）
+    let mut combined = nonce_bytes.to_vec();
+    combined.extend_from_slice(&ciphertext);
+    STANDARD.encode(&combined)
+}
+
+pub fn decrypt_api_key(encrypted: &str, secret: &[u8; 32]) -> Result<String, String> {
+    let combined = STANDARD.decode(encrypted).map_err(|_| "Invalid base64")?;
+    
+    if combined.len() < 12 {
+        return Err("Invalid encrypted data".to_string());
+    }
+    
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(secret));
+    
+    cipher
+        .decrypt(nonce, ciphertext, &[])
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        .map_err(|_| "Decryption failed".to_string())
+}
+```
+
+### 16.3 内网部署 LLM 方案
+
+#### 方案 A：Ollama（推荐）
+
+**优势**：
+- ✅ 完全离线运行
+- ✅ 无 API key 管理
+- ✅ 数据不出内网
+- ✅ 免费
+
+**部署示例**：
+```bash
+# 在内网服务器部署 Ollama
+docker run -d --gpus all -p 11434:11434 \
+  -v ollama:/root/.ollama \
+  ollama/ollama
+
+# 拉取模型
+docker exec ollama ollama pull llama3.1
+docker exec ollama ollama pull qwen2.5
+
+# API 配置
+# provider_type: 'ollama'
+# base_url: 'http://ollama:11434'
+# model: 'llama3.1'
+```
+
+#### 方案 B：HTTP Proxy
+
+如果需要访问外部 API（如 OpenAI），配置 HTTP Proxy：
+
+```bash
+# 环境变量
+HTTP_PROXY=http://proxy.company.com:8080
+HTTPS_PROXY=http://proxy.company.com:8080
+NO_PROXY=localhost,127.0.0.1,.company.com
+
+# 或在 Docker Compose 中
+api:
+  environment:
+    HTTP_PROXY: http://proxy.company.com:8080
+    HTTPS_PROXY: http://proxy.company.com:8080
+```
+
+### 16.4 LLM 调用流程
+
+```
+用户操作 → 获取团队 LLM 配置（从数据库）
+          ↓
+    解密 API key（如需要）
+          ↓
+    调用 LLM API（OpenAI/Anthropic/Ollama）
+          ↓
+    返回结果给用户
+```
+
+### 16.5 配置界面
+
+前端提供 LLM 配置管理界面：
+
+```
+设置 → LLM Provider → 添加 Provider
+  - Provider Type: [OpenAI | Anthropic | Ollama | 自定义]
+  - API Key: ********（加密存储）
+  - Base URL: https://api.openai.com/v1（或自定义）
+  - Model: gpt-4o（或自定义）
+  - 高级配置:
+    - Temperature: 0.7
+    - Max Tokens: 4096
+    - Timeout: 60s
+```
+
+---
+
 ## 附录
 
 ### A. 参考资料
@@ -1286,5 +1701,9 @@ test('complete wiki workflow', async ({ page }) => {
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.0.5 | 2026-06-13 | 修复代码示例细节：1) ApiError 改为 class（支持 instanceof）2) 添加 AUTH_INVALID 和 RESOURCE_NOT_FOUND 错误处理 case |
+| 1.0.4 | 2026-06-13 | 修复一致性问题：1) §3.2.2 与 §15.5 ApiClient 统一为 fetch()+request() 分层 2) chatStream 添加 401 刷新 3) 移除废弃 extractor 引用（改用 Axum Path） 4) is_default 标注应用层唯一约束规则 |
+| 1.0.3 | 2026-06-13 | 修复安全问题：1) AES nonce 改为随机生成（避免硬编码）。修复一致性问题：1) 架构图同步更新为 pgvector 2) llm_providers 支持多模型配置 3) cursor hex 编码修复代码错误 4) 更新注释为 hex 5) 错误处理示例与 ApiClient 设计一致 |
+| 1.0.2 | 2026-06-13 | 完善实施细节：1) 添加 pgvector 索引参数调优说明 2) 移除未使用的 extractors.ts 引用 3) 启动脚本添加数据库迁移步骤 4) cursor codec 改用 hex 编码 5) E2E 测试明确选择 Playwright |
 | 1.0.1 | 2026-06-13 | 修复严重问题：1) 用 pgvector 替代 LanceDB（解决并发问题）2) JWT 短 TTL + 实时 DB 查询（解决成员变更）3) 权限检查改用 extractor。修复中等问题：1) 添加 refresh_tokens 表 2) API 客户端 token 自动刷新 3) Docker Compose 健康检查。添加分页设计和测试策略章节 |
 | 1.0.0 | 2026-06-13 | 初始设计文档 |

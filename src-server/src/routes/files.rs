@@ -1,5 +1,5 @@
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, State, Json},
+    extract::{DefaultBodyLimit, Multipart, Path, State, Json, Query},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -25,12 +25,13 @@ struct FileNode {
 pub fn file_routes() -> axum::Router<AppState> {
     axum::Router::new()
         // 通配符路由匹配架构文档 §3.1.2
+        // 注意：通配符路由必须在最后定义
         .route("/:project_id/upload", axum::routing::post(upload_file)
             .layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)))
-        .route("/:project_id/list/{*dir}", axum::routing::get(list_files))
-        .route("/:project_id/{*path}", axum::routing::get(read_file))
-        .route("/:project_id/{*path}", axum::routing::post(write_file))
-        .route("/:project_id/{*path}", axum::routing::delete(delete_file))
+        .route("/:project_id/list", axum::routing::get(list_files))
+        .route("/:project_id/*path", axum::routing::get(read_file))
+        .route("/:project_id/*path", axum::routing::post(write_file))
+        .route("/:project_id/*path", axum::routing::delete(delete_file))
 }
 
 // POST /api/v1/files/:project_id/upload
@@ -84,18 +85,28 @@ pub async fn upload_file(
     }))))
 }
 
-// GET /api/v1/files/:project_id/list/{*dir}
+#[derive(Deserialize)]
+struct ListQuery {
+    dir: Option<String>,
+}
+
+// GET /api/v1/files/:project_id/list?dir=...
 pub async fn list_files(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Path((project_id, dir)): Path<(i32, String)>,
+    Path(project_id): Path<i32>,
+    Query(params): Query<ListQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
     let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    let dir_path = if dir.is_empty() {
-        base.clone()
+    let dir_path = if let Some(dir) = params.dir {
+        if dir.is_empty() {
+            base.clone()
+        } else {
+            storage::safe_resolve(&base, &dir)?
+        }
     } else {
-        storage::safe_resolve(&base, &dir)?
+        base.clone()
     };
 
     if !dir_path.exists() {
