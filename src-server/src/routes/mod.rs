@@ -3,6 +3,7 @@ mod auth;
 mod users;
 mod teams;
 mod projects;
+mod files;
 
 use axum::{Router, routing::get};
 use crate::AppState;
@@ -14,5 +15,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/users", users::user_routes())
         .nest("/api/v1/teams", teams::team_routes())
         .nest("/api/v1/projects", projects::project_routes())
+        .nest("/api/v1/files", files::file_routes())
         .with_state(state)
 }
