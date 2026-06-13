@@ -16,8 +16,36 @@ import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
 import type { WikiProject } from "@/types/wiki"
+import { useAuthStore } from "@/stores/auth-store"
+import { LoginPage } from "@/components/auth/LoginPage"
+import { RegisterPage } from "@/components/auth/RegisterPage"
 
 function App() {
+  const { isAuthenticated, isLoading: authLoading, loadSession } = useAuthStore()
+  const [authPage, setAuthPage] = useState<"login" | "register">("login")
+
+  // Load session on mount
+  useEffect(() => {
+    loadSession()
+  }, [])
+
+  // Show loading while checking session
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <p className="text-gray-500">加载中...</p>
+      </div>
+    )
+  }
+
+  // Auth gate — redirect to login/register when not authenticated
+  if (!isAuthenticated) {
+    if (authPage === "register") {
+      return <RegisterPage onNavigate={setAuthPage} />
+    }
+    return <LoginPage onNavigate={setAuthPage} />
+  }
+
   const project = useWikiStore((s) => s.project)
   const setProject = useWikiStore((s) => s.setProject)
   const setFileTree = useWikiStore((s) => s.setFileTree)
