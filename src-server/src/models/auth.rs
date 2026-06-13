@@ -2,10 +2,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,  // user_id
-    pub exp: usize,   // expiry time
-    pub iat: usize,   // issued at
-    pub jti: String,  // JWT ID (for refresh token)
+    pub sub: String,      // user_id
+    pub username: String, // username
+    pub exp: usize,       // expiry time
+    pub iat: usize,       // issued at
+    pub jti: String,      // JWT ID (for refresh token)
 }
 
 #[derive(Debug, Deserialize)]
