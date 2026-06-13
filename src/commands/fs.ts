@@ -2,6 +2,17 @@ import { invoke } from "@tauri-apps/api/core"
 import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
 import { isAbsolutePath } from "@/lib/path-utils"
+import { apiClient } from "@/lib/api-client"
+
+const USE_HTTP = import.meta.env.VITE_USE_HTTP_API === "true"
+
+// 从 store 获取当前 project id
+function getCurrentProjectId(): number {
+  if (typeof window !== "undefined") {
+    return (window as any).__currentProjectId || 0
+  }
+  return 0
+}
 
 /** Raw shape returned by the Rust commands — id is attached client-side. */
 interface RawProject {
@@ -13,6 +24,11 @@ export async function readFile(
   path: string,
   options?: { extractImages?: boolean },
 ): Promise<string> {
+  if (USE_HTTP) {
+    const projectId = getCurrentProjectId()
+    const result = await apiClient.readFile(projectId, path)
+    return result.content
+  }
   return invoke<string>("read_file", {
     path,
     extractImages: options?.extractImages,
@@ -20,34 +36,50 @@ export async function readFile(
 }
 
 export async function writeFile(path: string, contents: string): Promise<void> {
+  if (USE_HTTP) {
+    const projectId = getCurrentProjectId()
+    await apiClient.request("POST", `/api/v1/files/${projectId}/write`, { path, contents })
+    return
+  }
   assertAbsoluteFsPath("writeFile", path)
   return invoke<void>("write_file", { path, contents })
 }
 
 export async function writeFileBase64(path: string, base64: string): Promise<void> {
+  if (USE_HTTP) {
+    throw new Error("writeFileBase64 is not supported over HTTP")
+  }
   assertAbsoluteFsPath("writeFileBase64", path)
   return invoke<void>("write_file_base64", { path, base64 })
 }
 
 export async function writeFileAtomic(path: string, contents: string): Promise<void> {
+  if (USE_HTTP) {
+    return writeFile(path, contents)
+  }
   assertAbsoluteFsPath("writeFileAtomic", path)
   return invoke<void>("write_file_atomic", { path, contents })
 }
 
 export async function listDirectory(path: string): Promise<FileNode[]> {
+  if (USE_HTTP) {
+    const projectId = getCurrentProjectId()
+    const items = await apiClient.listFiles(projectId, path)
+    return items as unknown as FileNode[]
+  }
   return invoke<FileNode[]>("list_directory", { path })
 }
 
 export async function copyFile(
   source: string,
-  destination: string
+  destination: string,
 ): Promise<void> {
   return invoke("copy_file", { source, destination })
 }
 
 export async function copyDirectory(
   source: string,
-  destination: string
+  destination: string,
 ): Promise<string[]> {
   return invoke<string[]>("copy_directory", { source, destination })
 }
@@ -57,17 +89,28 @@ export async function preprocessFile(path: string): Promise<string> {
 }
 
 export async function deleteFile(path: string): Promise<void> {
+  if (USE_HTTP) {
+    const projectId = getCurrentProjectId()
+    await apiClient.request("POST", `/api/v1/files/${projectId}/delete`, { path })
+    return
+  }
   return invoke("delete_file", { path })
 }
 
 export async function findRelatedWikiPages(
   projectPath: string,
-  sourceName: string
+  sourceName: string,
 ): Promise<string[]> {
   return invoke<string[]>("find_related_wiki_pages", { projectPath, sourceName })
 }
 
 export async function createDirectory(path: string): Promise<void> {
+  if (USE_HTTP) {
+    // HTTP files API uses POST write for directory creation
+    const projectId = getCurrentProjectId()
+    await apiClient.request("POST", `/api/v1/files/${projectId}/write`, { path, contents: "" })
+    return
+  }
   assertAbsoluteFsPath("createDirectory", path)
   return invoke<void>("create_directory", { path })
 }
@@ -94,17 +137,13 @@ function assertAbsoluteFsPath(operation: string, path: string): void {
   }
 }
 
-/** Mirror of `commands::fs::FileBase64` (Rust side). */
 export interface FileBase64 {
   base64: string
   mimeType: string
 }
 
 /**
- * Read any file off disk as base64 + a guessed mime type. The
- * vision-caption pipeline uses this to pick up extracted images
- * without having to read them as UTF-8 strings (PNG bytes aren't
- * valid UTF-8 — `readFile` would corrupt them).
+ * Read any file off disk as base64 + a guessed mime type.
  */
 export async function readFileAsBase64(path: string): Promise<FileBase64> {
   return invoke<FileBase64>("read_file_as_base64", { path })
