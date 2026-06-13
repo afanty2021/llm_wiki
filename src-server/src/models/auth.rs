@@ -36,10 +36,3 @@ pub struct AuthResponse {
 pub struct RefreshTokenRequest {
     pub refresh_token: String,
 }
-
-#[derive(Debug, Serialize)]
-pub struct RefreshClaims {
-    pub sub: String,
-    pub exp: usize,
-    pub jti: String,
-}

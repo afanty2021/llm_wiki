@@ -15,6 +15,52 @@ pub fn auth_routes() -> Router<AppState> {
         .route("/refresh", axum::routing::post(refresh))
 }
 
+/// Generate access + refresh tokens and persist the refresh token hash.
+/// Returns (AuthResponse, refresh_ttl_secs, token_hash, expires_at) for caller use.
+async fn generate_and_persist_tokens(
+    state: &AppState,
+    user_id: i32,
+    username: &str,
+    user_response: UserResponse,
+) -> Result<AuthResponse, AppError> {
+    let secret = state.config.jwt_secret();
+    let access_ttl_secs = state.config.jwt_access_token_ttl().as_secs();
+    let refresh_ttl_secs = state.config.jwt_refresh_token_ttl().as_secs();
+
+    let access_token = utils::generate_access_token(
+        user_id,
+        username,
+        secret,
+        ChronoDuration::seconds(access_ttl_secs as i64),
+    )?;
+
+    let (refresh_token, _jti) = utils::generate_refresh_token(
+        user_id,
+        secret,
+        ChronoDuration::seconds(refresh_ttl_secs as i64),
+    )?;
+
+    let token_hash = utils::hash_refresh_token(&refresh_token);
+    let expires_at = chrono::Utc::now() + ChronoDuration::seconds(refresh_ttl_secs as i64);
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)"
+    )
+    .bind(user_id)
+    .bind(&token_hash)
+    .bind(expires_at)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::from)?;
+
+    Ok(AuthResponse {
+        access_token,
+        refresh_token,
+        expires_in: access_ttl_secs,
+        user: user_response,
+    })
+}
+
 /// POST /auth/register
 ///
 /// Validates input, checks for duplicate username/email, hashes password,
@@ -96,47 +142,9 @@ async fn register(
         created_at: row.get("created_at"),
     };
 
-    // Generate tokens
-    let secret = state.config.jwt_secret();
-    let access_ttl_secs = state.config.jwt_access_token_ttl().as_secs();
-    let refresh_ttl_secs = state.config.jwt_refresh_token_ttl().as_secs();
+    let auth_response = generate_and_persist_tokens(&state, user_id, username, user_response).await?;
 
-    let access_token = utils::generate_access_token(
-        user_id,
-        username,
-        secret,
-        ChronoDuration::seconds(access_ttl_secs as i64),
-    )?;
-
-    let (refresh_token, _jti) = utils::generate_refresh_token(
-        user_id,
-        secret,
-        ChronoDuration::seconds(refresh_ttl_secs as i64),
-    )?;
-
-    // Store refresh token hash in database
-    let token_hash = utils::hash_refresh_token(&refresh_token);
-    let expires_at = chrono::Utc::now() + ChronoDuration::seconds(refresh_ttl_secs as i64);
-
-    sqlx::query(
-        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)"
-    )
-    .bind(user_id)
-    .bind(&token_hash)
-    .bind(expires_at)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::from)?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(AuthResponse {
-            access_token,
-            refresh_token,
-            expires_in: access_ttl_secs,
-            user: user_response,
-        }),
-    ))
+    Ok((StatusCode::CREATED, Json(auth_response)))
 }
 
 /// POST /auth/login
@@ -182,44 +190,9 @@ async fn login(
         created_at: row.get("created_at"),
     };
 
-    // Generate tokens
-    let secret = state.config.jwt_secret();
-    let access_ttl_secs = state.config.jwt_access_token_ttl().as_secs();
-    let refresh_ttl_secs = state.config.jwt_refresh_token_ttl().as_secs();
+    let auth_response = generate_and_persist_tokens(&state, user_id, username, user_response).await?;
 
-    let access_token = utils::generate_access_token(
-        user_id,
-        username,
-        secret,
-        ChronoDuration::seconds(access_ttl_secs as i64),
-    )?;
-
-    let (refresh_token, _jti) = utils::generate_refresh_token(
-        user_id,
-        secret,
-        ChronoDuration::seconds(refresh_ttl_secs as i64),
-    )?;
-
-    // Store refresh token hash in database
-    let token_hash = utils::hash_refresh_token(&refresh_token);
-    let expires_at = chrono::Utc::now() + ChronoDuration::seconds(refresh_ttl_secs as i64);
-
-    sqlx::query(
-        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)"
-    )
-    .bind(user_id)
-    .bind(&token_hash)
-    .bind(expires_at)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::from)?;
-
-    Ok(Json(AuthResponse {
-        access_token,
-        refresh_token,
-        expires_in: access_ttl_secs,
-        user: user_response,
-    }))
+    Ok(Json(auth_response))
 }
 
 /// POST /auth/logout
@@ -255,6 +228,9 @@ async fn logout(
 /// Verifies the refresh token (JWT signature + database check), revokes the old
 /// token, generates new access and refresh tokens, stores the new refresh token
 /// hash, and returns a fresh AuthResponse.
+/// All mutations run inside a single database transaction so that a crash
+/// between revocation and new-token insertion does not leave the user with
+/// no valid refresh token.
 async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshTokenRequest>,
@@ -285,16 +261,7 @@ async fn refresh(
         return Err(AppError::AuthExpired);
     }
 
-    // Step 3: Revoke the old refresh token (token rotation)
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1"
-    )
-    .bind(&token_hash)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::from)?;
-
-    // Step 4: Look up user
+    // Step 3: Look up user
     let user_row = sqlx::query(
         "SELECT id, username, email, full_name, created_at, updated_at FROM users WHERE id = $1"
     )
@@ -313,7 +280,17 @@ async fn refresh(
         created_at: user_row.get("created_at"),
     };
 
-    // Step 5: Generate new tokens
+    // Step 4: Inside a transaction, revoke the old token and insert the new one
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
+
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1"
+    )
+    .bind(&token_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+
     let access_ttl_secs = state.config.jwt_access_token_ttl().as_secs();
     let refresh_ttl_secs = state.config.jwt_refresh_token_ttl().as_secs();
 
@@ -330,7 +307,6 @@ async fn refresh(
         ChronoDuration::seconds(refresh_ttl_secs as i64),
     )?;
 
-    // Step 6: Store new refresh token hash
     let new_token_hash = utils::hash_refresh_token(&new_refresh_token);
     let new_expires_at = chrono::Utc::now() + ChronoDuration::seconds(refresh_ttl_secs as i64);
 
@@ -340,9 +316,11 @@ async fn refresh(
     .bind(user_id)
     .bind(&new_token_hash)
     .bind(new_expires_at)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(AppError::from)?;
+
+    tx.commit().await.map_err(AppError::from)?;
 
     Ok(Json(AuthResponse {
         access_token: new_access_token,

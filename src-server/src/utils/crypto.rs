@@ -1,4 +1,3 @@
-use anyhow::Result;
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce
@@ -7,14 +6,15 @@ use sha2::{Sha256, Digest};
 use crate::AppError;
 
 /// Hash a password using bcrypt
-pub fn hash_password(password: &str) -> Result<String> {
-    let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)?;
-    Ok(hash)
+pub fn hash_password(password: &str) -> Result<String, AppError> {
+    bcrypt::hash(password, bcrypt::DEFAULT_COST)
+        .map_err(|e| AppError::InternalError(format!("Password hashing failed: {}", e)))
 }
 
 /// Verify a password against a bcrypt hash
-pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
-    Ok(bcrypt::verify(password, hash)?)
+pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
+    bcrypt::verify(password, hash)
+        .map_err(|e| AppError::InternalError(format!("Password verification failed: {}", e)))
 }
 
 /// Encrypt an API key using AES-256-GCM

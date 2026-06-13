@@ -8,8 +8,8 @@ CREATE TABLE users (
     email VARCHAR(100) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     full_name VARCHAR(100),
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_users_username ON users(username);
@@ -21,7 +21,7 @@ CREATE TABLE teams (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     created_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_teams_created_by ON teams(created_by);
@@ -31,7 +31,7 @@ CREATE TABLE team_members (
     team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     role VARCHAR(20) NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
-    joined_at TIMESTAMP DEFAULT NOW(),
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (team_id, user_id)
 );
 
@@ -44,7 +44,7 @@ CREATE TABLE projects (
     name VARCHAR(100) NOT NULL,
     storage_path TEXT NOT NULL,
     created_by INTEGER REFERENCES users(id),
-    created_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(team_id, name)
 );
 
@@ -57,7 +57,7 @@ CREATE TABLE embeddings (
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
     wiki_page_id VARCHAR(255) NOT NULL,
     content VECTOR(1536),
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_embeddings_project ON embeddings(project_id);
@@ -68,9 +68,9 @@ CREATE TABLE refresh_tokens (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     token_hash VARCHAR(255) UNIQUE NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
-    revoked_at TIMESTAMP DEFAULT NULL
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ DEFAULT NULL
 );
 
 CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
@@ -83,7 +83,7 @@ CREATE TABLE activity_logs (
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
     action VARCHAR(50) NOT NULL,
     details JSONB,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_activity_logs_user ON activity_logs(user_id);

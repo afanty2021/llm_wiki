@@ -1,4 +1,3 @@
-use anyhow::Result;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -16,7 +15,7 @@ struct InternalRefreshClaims {
 }
 
 /// Generate an access token for a user
-pub fn generate_access_token(user_id: i32, username: &str, secret: &str, ttl: Duration) -> Result<String> {
+pub fn generate_access_token(user_id: i32, username: &str, secret: &str, ttl: Duration) -> Result<String, AppError> {
     let now = Utc::now();
     let expire = now + ttl;
 
@@ -39,7 +38,7 @@ pub fn generate_access_token(user_id: i32, username: &str, secret: &str, ttl: Du
 
 /// Generate a refresh token for a user
 /// Returns (token, jti) where jti is the unique token ID
-pub fn generate_refresh_token(user_id: i32, secret: &str, ttl: Duration) -> Result<(String, String)> {
+pub fn generate_refresh_token(user_id: i32, secret: &str, ttl: Duration) -> Result<(String, String), AppError> {
     let now = Utc::now();
     let expire = now + ttl;
     let jti = uuid::Uuid::new_v4().to_string();
