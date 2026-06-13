@@ -28,6 +28,7 @@ AGENTS.md
 # Benchmark and test data (local only)
 tests/
 !src-server/src/tests/
+!src-server/tests/
 
 # Editor directories and files
 .vscode/*
