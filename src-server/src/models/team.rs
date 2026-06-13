@@ -21,6 +21,19 @@ pub struct TeamResponse {
     pub member_count: i64,
 }
 
+impl From<Team> for TeamResponse {
+    fn from(team: Team) -> Self {
+        TeamResponse {
+            id: team.id,
+            name: team.name,
+            description: team.description,
+            created_by: team.created_by,
+            created_at: team.created_at,
+            member_count: 0,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateTeamRequest {
     pub name: String,
