@@ -22,3 +22,15 @@ pub struct UserResponse {
     pub full_name: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+impl From<User> for UserResponse {
+    fn from(user: User) -> Self {
+        UserResponse {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            full_name: user.full_name,
+            created_at: user.created_at,
+        }
+    }
+}

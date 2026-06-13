@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::models::UserResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -28,6 +29,7 @@ pub struct AuthResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: u64,
+    pub user: UserResponse,
 }
 
 #[derive(Debug, Deserialize)]

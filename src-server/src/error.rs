@@ -154,6 +154,13 @@ impl From<std::num::ParseIntError> for AppError {
     }
 }
 
+// anyhow::Error 转换（用于 utils 函数的 anyhow::Result）
+impl From<anyhow::Error> for AppError {
+    fn from(err: anyhow::Error) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
 pub trait IntoAppError<T> {
     fn into_app_error(self) -> Result<T, AppError>;
 }
