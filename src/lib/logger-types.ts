@@ -34,3 +34,15 @@ export interface LoggerOptions {
   /** 批处理最大条数 */
   batchMaxSize?: number;
 }
+
+/** 日志文件信息（来自后端 get_log_files 命令） */
+export interface LogFileEntry {
+  /** 文件名 */
+  name: string;
+  /** 文件大小（字节） */
+  size: number;
+  /** 修改时间（Unix 秒） */
+  modified: number;
+  /** 是否为当前活跃日志文件 */
+  is_current: boolean;
+}
