@@ -1595,6 +1595,8 @@ git commit -m "test(logging): add end-to-end integration tests"
 **Files:**
 - Create: `src-tauri/src/logging/__tests__/rotation_test.rs`
 
+**约束说明：** `init_logging` 调用 `set_global_default`（全进程只能调用一次），多次 init 会导致 panic。`tracing_subscriber::try_close()` 不存在。因此以下测试绕过 subscriber 层，直接测试 `SizeBasedRollingFileAppender` 和 `clear_logs` 的独立逻辑。
+
 - [ ] **Step 1: 创建轮转测试文件**
 
 创建 `src-tauri/src/logging/__tests__/rotation_test.rs`，包含：
@@ -1602,70 +1604,55 @@ git commit -m "test(logging): add end-to-end integration tests"
 ```rust
 #[cfg(test)]
 mod tests {
-    use super::super::*;
+    use super::super::manager::SizeBasedRollingFileAppender;
     use std::path::PathBuf;
     use tempfile::TempDir;
+    use std::io::Write;
 
     #[test]
     fn test_log_file_creation() {
         let temp_dir = TempDir::new().unwrap();
         let app_data_dir = temp_dir.path().to_path_buf();
-
-        init_logging(app_data_dir.clone()).unwrap();
-
         let log_dir = app_data_dir.join("logs");
+
+        // 直接测试 SizeBasedRollingFileAppender，绕过 set_global_default 限制
+        let appender = SizeBasedRollingFileAppender::new(
+            &log_dir,
+            "test.log",
+            10 * 1024 * 1024,
+            5,
+        ).unwrap();
+
         assert!(log_dir.exists());
+        let log_file = log_dir.join("test.log");
 
-        let log_file = log_dir.join("llm-wiki.log");
-        // 写入一些日志后应该创建文件
-        tracing::info!("test message");
-        drop(tracing_subscriber::try_close()); // 强制刷新
+        // 通过 MakeWriter 写入后文件应被创建
+        let mut writer = appender.make_writer();
+        writer.write_all(b"test message\n").unwrap();
+        writer.flush().unwrap();
 
-        // 验证文件存在
-        // 注意：在测试环境中可能需要额外配置
+        assert!(log_file.exists());
+        let content = std::fs::read_to_string(&log_file).unwrap();
+        assert!(content.contains("test message"));
     }
 
     #[test]
-    fn test_clear_logs() {
+    fn test_clear_logs_deletes_files() {
         let temp_dir = TempDir::new().unwrap();
         let app_data_dir = temp_dir.path().to_path_buf();
-
-        init_logging(app_data_dir.clone()).unwrap();
-
-        tracing::info!("test message");
-        drop(tracing_subscriber::try_close());
-
-        clear_logs(app_data_dir.clone()).unwrap();
-
         let log_dir = app_data_dir.join("logs");
+
+        // 手动创建日志文件以模拟已有日志场景
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("llm-wiki.log"), b"existing log\n").unwrap();
+
+        super::super::manager::clear_logs(app_data_dir.clone()).unwrap();
+
         let entries = std::fs::read_dir(&log_dir).unwrap();
         assert_eq!(entries.count(), 0);
     }
 }
 ```
-
-- [ ] **Step 2: 添加 tempfile 依赖**
-
-在 `src-tauri/Cargo.toml` 的 `[dev-dependencies]` 部分添加：
-
-```toml
-tempfile = "3"
-```
-
-- [ ] **Step 3: 运行测试**
-
-Run: `cd src-tauri && cargo test rotation_test`
-Expected: 全部测试通过
-
-- [ ] **Step 4: 提交**
-
-```bash
-git add src-tauri/Cargo.toml src-tauri/src/logging/__tests__/rotation_test.rs
-git commit -m "test(logging): add log rotation tests"
-```
-
----
-
 ## Task 19: 验证控制台和文件输出格式
 
 **Files:**
