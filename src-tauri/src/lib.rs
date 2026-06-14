@@ -195,6 +195,14 @@ pub fn run() {
         // from Rust, never the webview.
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
+            // ========== 日志系统初始化（放在最前面，让后续步骤可写日志）==========
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to resolve app data dir");
+
+            logging::init_logging(app_data_dir).expect("Failed to initialize logging");
+            // ================================================================
             // Let the PDF extractor find the bundled pdfium dynamic
             // library via Tauri's platform-correct resource path.
             if let Ok(dir) = app.path().resource_dir() {
