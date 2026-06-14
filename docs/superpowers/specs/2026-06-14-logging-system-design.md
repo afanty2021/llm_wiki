@@ -1,6 +1,6 @@
 # LLM Wiki 日志系统设计
 
-> **日期**: 2026-06-14 | **版本**: 0.6.0 | **状态**: 待审批（第六轮修订）
+> **日期**: 2026-06-14 | **版本**: 0.6.0 | **状态**: 已实施（阶段 1 完成）
 
 ---
 
@@ -332,3 +332,32 @@ tracing-appender = "0.2"
 ---
 
 *设计文档完成时间：2026-06-14*
+
+---
+
+## 实施记录
+
+### 阶段 1（P0 基础设施）
+- ✅ 完成日期：2026-06-14
+- ✅ 测试覆盖：
+  - 前端 Logger Facade 单元测试：4 个（`src/lib/__tests__/logger.test.ts`）
+  - 前端集成测试：3 个（`src/lib/__tests__/logging-integration.test.ts`：级别往返、批量发送、级别过滤）
+  - 后端 Rust 测试：4 个（`logging::router::tests` 2 + `logging::manager::tests` 2）
+  - 合计 11 个自动化测试全部通过
+- ✅ 编译验证：
+  - `cargo check` 通过（仅 9 个 dead_code 警告，0 错误；生产代码 0 eprintln!）
+  - `npm run typecheck` 仅 8 个预存错误（均位于 `App.tsx` / `auth-*` / `api-client.ts` / `commands/fs.ts`，与日志系统无关，日志系统 0 错误）
+- ✅ 关键实现决策：
+  - 单 channel 架构（删除早期双 channel 设计 dead code，保留 Error 优先级通过级别本身语义表达）
+  - `OnceLock<LogManager>` 取代 `static mut`，规避 unsafe
+  - 前端 Logger Facade：50ms / 100 条批处理触发双阈值，level 过滤前置减少 IPC 往返
+  - 文件轮转：基于 10MB 大小 + 保留 5 个历史文件，rotate 时校验文件存在性避免链断裂
+  - 配置 UI：选项卡按钮模式（DEBUG / INFO / WARN / ERROR），optimistic 更新 + 失败回滚
+  - Tauri 命令：6 个（`send_log` / `get_log_level` / `set_log_level` / `list_log_files` / `read_log_file` / `clear_logs`）
+  - 初始化时序：前端 `main.tsx::initLogger()`（读后端 level 配置）+ 后端 `lib.rs::setup`（init_logging）
+  - 已迁移：`panic_guard.rs` 1 处 + 其他 Rust 文件 61 处 `eprintln!` → tracing 宏，保留 `fs.rs` 测试 7 处
+
+### 阶段 2 / 3（P1/P2 待实施）
+- ⏳ Error 日志独立大 channel（降低丢失概率）
+- ⏳ 日志导出功能（JSONL）
+- ⏳ 降级策略与采样

@@ -1,7 +1,7 @@
 # LLM Wiki - AI Context Documentation
 
-> **Last Updated**: 2026-04-13 12:30:00 UTC
-> **Version**: 0.3.1
+> **Last Updated**: 2026-06-14
+> **Version**: 0.3.2
 > **Project Type**: Cross-platform Desktop Application (Tauri v2)
 > **Architecture**: React Frontend + Rust Backend
 > **Scan Phase**: C - Deep Scan (阶段 C 深度补捞)
@@ -9,6 +9,15 @@
 ---
 
 ## 📋变更记录 (Changelog)
+
+### 2026-06-14 - 日志系统阶段 1 实施
+- ✅ 新增统一日志基础设施（前端 Logger Facade + 后端 tracing Layer）
+- 📊 前端：`src/lib/logger.ts` + `logger-types.ts` + `src/commands/logging.ts`
+- 📊 后端：`src-tauri/src/logging/`（types/router/manager/mod 四文件）
+- 🔧 配置 UI：`logging-config.tsx` 集成在 GeneralSection
+- 🔧 已迁移：62 处 `eprintln!` → tracing 宏（保留 fs.rs 测试 7 处）
+- 🧪 测试覆盖：11 个自动化测试全通过（前端 7 + 后端 4）
+- 📈 新增 `## 关键特性 / 9. 日志系统` 章节
 
 ### 2026-04-13 12:30 - 深度补捞完成
 - ✅ 完成阶段 C 深度补捞，覆盖率从 95% 提升到 98%
@@ -487,6 +496,23 @@ cargo test
 - **15 分钟超时**: 长时间摄取操作不会过早失败
 - **dataVersion 信号**: wiki 内容更改时自动刷新图和 UI
 - **级联删除**: 智能清理相关 wiki 页面，保留共享实体
+
+### 9. 日志系统
+
+- **前端 Logger Facade**: `src/lib/logger.ts`（批处理：50ms / 100 条双阈值 + 级别过滤 + IPC 发送）
+- **前端类型定义**: `src/lib/logger-types.ts`（LogLevel / LogEntry / LogFileEntry）
+- **前端命令封装**: `src/commands/logging.ts`（6 个 Tauri 命令封装）
+- **后端 Tracing Layer**: `src-tauri/src/logging/`（types / router / manager / mod 四文件）
+  - 单 channel 架构（OnceLock<LogManager>，规避 unsafe）
+  - 文件轮转：10MB + 保留 5 个历史文件，rotate 校验文件存在性
+  - 双格式：开发控制台人类可读 fmt layer + 文件 JSON 格式
+- **配置 UI**: `src/components/settings/logging-config.tsx`（DEBUG / INFO / WARN / ERROR 选项卡按钮，集成在 GeneralSection，optimistic 更新 + 失败回滚）
+- **初始化时序**:
+  - 前端：`src/main.tsx::initLogger()`（启动时读取后端 level 配置）
+  - 后端：`src-tauri/src/lib.rs` setup 钩子中 `init_logging()`
+- **eprintln! 迁移**: `panic_guard.rs` 1 处 + 其他 Rust 文件 61 处 → tracing 宏，保留 `fs.rs` 测试中 7 处
+- **Tauri 命令** (6 个): `send_log` / `get_log_level` / `set_log_level` / `list_log_files` / `read_log_file` / `clear_logs`
+- **测试**: 前端单元 4 + 集成 3 + 后端 4 = 11 个自动化测试全通过
 
 ---
 
