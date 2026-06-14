@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use tiny_http::{Header, Method, Response, Server};
+use tracing::{error, warn};
 
 static CURRENT_PROJECT: Mutex<String> = Mutex::new(String::new());
 static ALL_PROJECTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // (name, path)
@@ -57,9 +58,11 @@ pub fn start_clip_server() {
                         }
                         Err(e) => {
                             last_err = format!("{}", e);
-                            eprintln!(
-                                "[Clip Server] Bind attempt {}/{} failed: {}",
-                                attempt, MAX_BIND_RETRIES, e
+                            warn!(
+                                attempt,
+                                max_attempts = MAX_BIND_RETRIES,
+                                error = %e,
+                                "Clip Server: bind attempt failed"
                             );
                             if attempt < MAX_BIND_RETRIES {
                                 thread::sleep(std::time::Duration::from_secs(
@@ -72,9 +75,11 @@ pub fn start_clip_server() {
                 match bound {
                     Some(s) => s,
                     None => {
-                        eprintln!(
-                            "[Clip Server] Port {} unavailable after {} attempts: {}",
-                            PORT, MAX_BIND_RETRIES, last_err
+                        error!(
+                            port = PORT,
+                            attempts = MAX_BIND_RETRIES,
+                            error = %last_err,
+                            "Clip Server: port unavailable after retries, giving up"
                         );
                         DAEMON_STATUS.store(2, Ordering::Relaxed); // port_conflict
                         return; // Don't retry on port conflict — needs user action
@@ -276,16 +281,18 @@ pub fn start_clip_server() {
             restart_count += 1;
 
             if restart_count >= MAX_RESTART_RETRIES {
-                eprintln!(
-                    "[Clip Server] Exceeded max restarts ({}). Giving up.",
-                    MAX_RESTART_RETRIES
+                error!(
+                    max_restarts = MAX_RESTART_RETRIES,
+                    "Clip Server: exceeded max restarts, giving up"
                 );
                 return;
             }
 
-            eprintln!(
-                "[Clip Server] Crashed. Restarting in {}s (attempt {}/{})",
-                RESTART_DELAY_SECS, restart_count, MAX_RESTART_RETRIES
+            warn!(
+                delay_secs = RESTART_DELAY_SECS,
+                attempt = restart_count,
+                max_attempts = MAX_RESTART_RETRIES,
+                "Clip Server: crashed, restarting"
             );
             thread::sleep(std::time::Duration::from_secs(RESTART_DELAY_SECS));
         }

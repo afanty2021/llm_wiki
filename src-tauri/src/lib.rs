@@ -10,6 +10,7 @@ mod types;
 use panic_guard::run_guarded;
 use std::sync::Mutex;
 use tauri::Manager;
+use tracing::{info, warn};
 
 struct CloseBehaviorState(Mutex<String>);
 struct TrayAvailabilityState(Mutex<bool>);
@@ -94,7 +95,7 @@ fn mcp_server_entry_path(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn set_proxy_env(config: proxy::ProxyConfig) -> String {
     let summary = proxy::apply_proxy_env(&config);
-    eprintln!("[proxy] live update: {summary}");
+    info!(summary = %summary, "proxy: live update applied");
     summary
 }
 
@@ -217,15 +218,15 @@ pub fn run() {
             // research, captioning. See src-tauri/src/proxy.rs.
             if let Ok(dir) = app.path().app_data_dir() {
                 let store_path = dir.join("app-state.json");
-                eprintln!("[proxy] reading from {}", store_path.display());
+                info!(path = %store_path.display(), "proxy: reading config from store");
                 if let Some(cfg) = proxy::read_proxy_config_from_store(&store_path) {
                     let summary = proxy::apply_proxy_env(&cfg);
-                    eprintln!("[proxy] {summary}");
+                    info!(summary = %summary, "proxy: config applied");
                 } else {
-                    eprintln!("[proxy] no proxyConfig in store, requests go direct");
+                    info!("proxy: no proxyConfig in store, requests go direct");
                 }
             } else {
-                eprintln!("[proxy] could not resolve app_data_dir");
+                warn!("proxy: could not resolve app_data_dir");
             }
             // Registry of running `claude` subprocesses, keyed by the
             // frontend-generated stream id. Populated by claude_cli_spawn,
@@ -237,7 +238,7 @@ pub fn run() {
             let tray_available = match tray::create_tray(app.handle()) {
                 Ok(()) => true,
                 Err(err) => {
-                    eprintln!("[tray] system tray unavailable, continuing without it: {err}");
+                    warn!(error = %err, "tray: system tray unavailable, continuing without it");
                     false
                 }
             };

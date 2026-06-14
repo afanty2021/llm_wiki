@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use walkdir::WalkDir;
 
+use tracing::warn;
+
 use crate::commands::vectorstore;
 use crate::panic_guard::run_guarded_async;
 
@@ -111,7 +113,7 @@ pub async fn resolve_query_embedding(
     match fetch_embedding(query, &cfg).await {
         Ok(embedding) => validate_query_embedding(embedding).map(Some),
         Err(err) => {
-            eprintln!("[Search] embedding disabled for this request: {err}");
+            warn!(error = %err, "Search: embedding disabled for this request");
             Ok(None)
         }
     }
@@ -159,8 +161,10 @@ pub async fn search_project_inner(
             }
             searched_files += 1;
             if searched_files > MAX_SEARCH_FILES {
-                eprintln!(
-                    "[Search] stopped scanning wiki after {MAX_SEARCH_FILES} markdown files in {project_path}"
+                warn!(
+                    limit = MAX_SEARCH_FILES,
+                    project_path = %project_path,
+                    "Search: stopped scanning wiki after N markdown files"
                 );
                 break;
             }
@@ -174,9 +178,11 @@ pub async fn search_project_inner(
                     relative_to_project(&project_path, entry.path()),
                 );
                 if let Some(previous) = previous {
-                    eprintln!(
-                        "[Search] duplicate wiki page stem '{stem}': '{previous}' and '{}' share one vector page_id",
-                        relative_to_project(&project_path, entry.path())
+                    warn!(
+                        stem = %stem,
+                        previous = %previous,
+                        current = %relative_to_project(&project_path, entry.path()),
+                        "Search: duplicate wiki page stem — both share one vector page_id"
                     );
                 }
             }
@@ -229,9 +235,7 @@ pub async fn search_project_inner(
                     );
                 }
                 Err(err) => {
-                    eprintln!(
-                        "[Search] vector search failed; falling back to keyword results: {err}"
-                    );
+                    warn!(error = %err, "Search: vector search failed; falling back to keyword results");
                 }
             }
         }

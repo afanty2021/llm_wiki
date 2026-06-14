@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use calamine::{open_workbook_auto, Data, Reader};
 use office_oxide::Document;
+use tracing::info;
 
 use crate::commands::file_sync;
 use crate::panic_guard::run_guarded;
@@ -328,7 +329,7 @@ pub(crate) fn pdfium() -> Result<&'static pdfium_render::prelude::Pdfium, String
             let candidates = pdfium_candidate_paths();
             for path in &candidates {
                 if let Ok(bindings) = Pdfium::bind_to_library(path) {
-                    eprintln!("[pdfium] loaded dynamic library from {path}");
+                    info!(path = %path, "pdfium: loaded dynamic library");
                     return Ok(Pdfium::new(bindings));
                 }
             }

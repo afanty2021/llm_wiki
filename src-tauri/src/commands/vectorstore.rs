@@ -6,6 +6,7 @@ use lancedb::connect;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::warn;
 
 use crate::panic_guard::run_guarded_async;
 
@@ -132,9 +133,10 @@ pub async fn vector_upsert(
 
             // Delete existing entry then add new one
             if let Err(e) = table.delete(&format!("page_id = '{}'", page_id)).await {
-                eprintln!(
-                    "[vectorstore] Warning: delete before upsert failed for '{}': {}",
-                    page_id, e
+                warn!(
+                    page_id = page_id,
+                    error = %e,
+                    "vectorstore: delete before upsert failed"
                 );
             }
 

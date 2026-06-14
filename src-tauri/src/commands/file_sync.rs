@@ -8,6 +8,8 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use tracing::{error, warn};
+
 use md5::{Digest, Md5};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -245,8 +247,8 @@ pub fn start_project_file_watcher(
                         }));
                         match result {
                             Ok(Ok(())) => {}
-                            Ok(Err(err)) => eprintln!("[file-sync] change handling failed: {err}"),
-                            Err(_) => eprintln!("[file-sync] watcher worker recovered from panic"),
+                            Ok(Err(err)) => error!(error = %err, "file-sync: change handling failed"),
+                            Err(_) => error!("file-sync: watcher worker recovered from panic"),
                         }
                         maybe_periodic_rescan(
                             &app_for_thread,
@@ -276,7 +278,7 @@ pub fn start_project_file_watcher(
                     }
                 }
                 Err(err) => {
-                    eprintln!("[file-sync] watcher error; scheduling rescan: {err}");
+                    warn!(error = %err, "file-sync: watcher error; scheduling rescan");
                     let _ = tx_for_watcher.try_send(root_for_error.clone());
                 }
             },
@@ -290,9 +292,10 @@ pub fn start_project_file_watcher(
             let path = root.join(rel);
             if path.exists() {
                 if let Err(err) = watcher.watch(&path, RecursiveMode::Recursive) {
-                    eprintln!(
-                        "[file-sync] failed to add supplemental watch '{}': {err}",
-                        path.display()
+                    warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "file-sync: failed to add supplemental watch"
                     );
                 }
             }
@@ -503,8 +506,8 @@ fn maybe_periodic_rescan(
     }));
     match result {
         Ok(Ok(())) => {}
-        Ok(Err(err)) => eprintln!("[file-sync] periodic rescan failed: {err}"),
-        Err(_) => eprintln!("[file-sync] periodic rescan recovered from panic"),
+        Ok(Err(err)) => error!(error = %err, "file-sync: periodic rescan failed"),
+        Err(_) => error!("file-sync: periodic rescan recovered from panic"),
     }
 }
 

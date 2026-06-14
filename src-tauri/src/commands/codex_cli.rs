@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tracing::{error, info};
 
 use super::cli_resolver::{child_path_env, find_cli_command};
 
@@ -218,7 +219,7 @@ pub async fn codex_cli_spawn(
         let stderr_task = tokio::spawn(async move {
             let mut collected = String::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
-                eprintln!("[codex-cli stderr] {line}");
+                info!(line = %line, "codex-cli stderr");
                 append_capped_line(&mut collected, &line, STDERR_LIMIT_BYTES);
             }
             collected
@@ -235,7 +236,7 @@ pub async fn codex_cli_spawn(
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    eprintln!("[codex-cli stdout] read error: {e}");
+                    error!(error = %e, "codex-cli stdout read error");
                     break;
                 }
             }

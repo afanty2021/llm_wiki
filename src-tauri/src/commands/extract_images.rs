@@ -22,6 +22,7 @@ use std::path::Path;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tracing::{debug, info, warn};
 
 /// Filter knobs. The defaults mirror what's documented in
 /// plans/multimodal-images.md; callers (the TS layer wiring this up)
@@ -127,9 +128,11 @@ pub fn extract_pdf_markdown(
 
     let page_count = doc.pages().len();
     if media_dest_dir.is_some() {
-        eprintln!(
-            "[extract_pdf_markdown] '{path}': {page_count} page(s), images→{:?}",
-            media_dest_dir.map(|d| d.display().to_string())
+        info!(
+            path = %path,
+            page_count,
+            dest_dir = ?media_dest_dir.map(|d| d.display().to_string()),
+            "extract_pdf_markdown: starting"
         );
     }
 
@@ -166,7 +169,7 @@ pub fn extract_pdf_markdown(
             let dyn_img = match image.get_raw_image() {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("[extract_pdf_markdown] page {page_num} image read failed: {e}");
+                    warn!(page = page_num, error = %e, "extract_pdf_markdown: image read failed");
                     continue;
                 }
             };
@@ -180,7 +183,7 @@ pub fn extract_pdf_markdown(
                 &mut std::io::Cursor::new(&mut png_bytes),
                 image::ImageFormat::Png,
             ) {
-                eprintln!("[extract_pdf_markdown] page {page_num} PNG encode failed: {e}");
+                warn!(page = page_num, error = %e, "extract_pdf_markdown: PNG encode failed");
                 continue;
             }
             idx += 1;
@@ -190,7 +193,7 @@ pub fn extract_pdf_markdown(
             // pass dest_dir for both args so save_one_image's
             // strip_prefix is a no-op.
             if let Err(e) = save_one_image(&png_bytes, dest_dir, dest_dir, &file_name) {
-                eprintln!("[extract_pdf_markdown] page {page_num} save failed: {e}");
+                warn!(page = page_num, error = %e, "extract_pdf_markdown: save failed");
                 continue;
             }
             total_saved += 1;
@@ -200,10 +203,7 @@ pub fn extract_pdf_markdown(
             // name only adds noise to the LLM and to screen readers.
             page_image_md.push(format!("![]({prefix}/{file_name})"));
             if total_saved as usize >= options.max_images {
-                eprintln!(
-                    "[extract_pdf_markdown] reached max_images={} cap; skipped rest",
-                    options.max_images
-                );
+                info!(max_images = options.max_images, "extract_pdf_markdown: reached max_images cap");
                 break;
             }
         }
@@ -220,7 +220,7 @@ pub fn extract_pdf_markdown(
     }
 
     if media_dest_dir.is_some() {
-        eprintln!("[extract_pdf_markdown] '{path}' DONE — pages={page_count}, saved={total_saved}");
+        info!(path = %path, page_count, saved = total_saved, "extract_pdf_markdown: done");
     }
 
     Ok(out)
@@ -266,9 +266,10 @@ pub fn extract_pdf_images(
             let dyn_img = match image.get_raw_image() {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!(
-                        "[extract_pdf_images] page {} image read failed: {e}",
-                        page_idx + 1
+                    warn!(
+                        page = page_idx + 1,
+                        error = %e,
+                        "extract_pdf_images: image read failed"
                     );
                     continue;
                 }
@@ -289,9 +290,10 @@ pub fn extract_pdf_images(
                 &mut std::io::Cursor::new(&mut png_bytes),
                 image::ImageFormat::Png,
             ) {
-                eprintln!(
-                    "[extract_pdf_images] page {} PNG encode failed: {e}",
-                    page_idx + 1
+                warn!(
+                    page = page_idx + 1,
+                    error = %e,
+                    "extract_pdf_images: PNG encode failed"
                 );
                 continue;
             }
@@ -311,9 +313,9 @@ pub fn extract_pdf_images(
             });
 
             if out.len() >= options.max_images {
-                eprintln!(
-                    "[extract_pdf_images] reached max_images={} cap; remaining images skipped",
-                    options.max_images
+                info!(
+                    max_images = options.max_images,
+                    "extract_pdf_images: reached max_images cap; remaining images skipped"
                 );
                 break 'pages;
             }
@@ -378,7 +380,7 @@ pub fn extract_office_images(
         let mut entry = match archive.by_index(archive_idx) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("[extract_office_images] zip entry {archive_idx} read failed: {e}");
+                warn!(archive_idx, error = %e, "extract_office_images: zip entry read failed");
                 continue;
             }
         };
@@ -394,7 +396,7 @@ pub fn extract_office_images(
 
         let mut bytes = Vec::with_capacity(entry.size() as usize);
         if let Err(e) = entry.read_to_end(&mut bytes) {
-            eprintln!("[extract_office_images] read '{entry_name}' failed: {e}");
+            warn!(entry = %entry_name, error = %e, "extract_office_images: read failed");
             continue;
         }
 
@@ -404,7 +406,7 @@ pub fn extract_office_images(
         let (width, height) = match image::load_from_memory(&bytes) {
             Ok(img) => (img.width(), img.height()),
             Err(e) => {
-                eprintln!("[extract_office_images] decode '{entry_name}' failed: {e}");
+                warn!(entry = %entry_name, error = %e, "extract_office_images: decode failed");
                 continue;
             }
         };
@@ -428,9 +430,9 @@ pub fn extract_office_images(
         });
 
         if out.len() >= options.max_images {
-            eprintln!(
-                "[extract_office_images] reached max_images={} cap; remaining skipped",
-                options.max_images
+            info!(
+                max_images = options.max_images,
+                "extract_office_images: reached max_images cap; remaining skipped"
             );
             break;
         }
@@ -653,9 +655,13 @@ pub fn extract_and_save_pdf_images(
     let mut filtered_encode_err: u32 = 0;
 
     let page_count = doc.pages().len();
-    eprintln!(
-        "[extract_and_save_pdf_images] '{path}': {} page(s), filter=({}x{}) min, max={}",
-        page_count, options.min_width, options.min_height, options.max_images
+    info!(
+        path = %path,
+        page_count,
+        min_width = options.min_width,
+        min_height = options.min_height,
+        max_images = options.max_images,
+        "extract_and_save_pdf_images: starting"
     );
 
     'pages: for (page_idx, page) in doc.pages().iter().enumerate() {
@@ -670,9 +676,10 @@ pub fn extract_and_save_pdf_images(
                 Ok(b) => b,
                 Err(e) => {
                     filtered_decode_err += 1;
-                    eprintln!(
-                        "[extract_and_save_pdf_images] page {} image read failed: {e}",
-                        page_idx + 1
+                    warn!(
+                        page = page_idx + 1,
+                        error = %e,
+                        "extract_and_save_pdf_images: image read failed"
                     );
                     continue;
                 }
@@ -681,13 +688,13 @@ pub fn extract_and_save_pdf_images(
             let height = dyn_img.height();
             if width < options.min_width || height < options.min_height {
                 filtered_too_small += 1;
-                eprintln!(
-                    "[extract_and_save_pdf_images] page {} image {}x{} < min ({}x{}) — skipped",
-                    page_idx + 1,
+                debug!(
+                    page = page_idx + 1,
                     width,
                     height,
-                    options.min_width,
-                    options.min_height
+                    min_width = options.min_width,
+                    min_height = options.min_height,
+                    "extract_and_save_pdf_images: image below min size — skipped"
                 );
                 continue;
             }
@@ -698,9 +705,10 @@ pub fn extract_and_save_pdf_images(
                 image::ImageFormat::Png,
             ) {
                 filtered_encode_err += 1;
-                eprintln!(
-                    "[extract_and_save_pdf_images] page {} PNG encode failed: {e}",
-                    page_idx + 1
+                warn!(
+                    page = page_idx + 1,
+                    error = %e,
+                    "extract_and_save_pdf_images: PNG encode failed"
                 );
                 continue;
             }
@@ -722,18 +730,24 @@ pub fn extract_and_save_pdf_images(
             });
 
             if out.len() >= options.max_images {
-                eprintln!(
-                    "[extract_and_save_pdf_images] reached max_images={} cap; skipped rest",
-                    options.max_images
+                info!(
+                    max_images = options.max_images,
+                    "extract_and_save_pdf_images: reached max_images cap; skipped rest"
                 );
                 break 'pages;
             }
         }
     }
 
-    eprintln!(
-        "[extract_and_save_pdf_images] '{path}' DONE — saved={}, total_objects={}, image_objects={}, too_small={}, decode_err={}, encode_err={}",
-        out.len(), total_objects, total_image_objects, filtered_too_small, filtered_decode_err, filtered_encode_err,
+    info!(
+        path = %path,
+        saved = out.len(),
+        total_objects,
+        image_objects = total_image_objects,
+        too_small = filtered_too_small,
+        decode_err = filtered_decode_err,
+        encode_err = filtered_encode_err,
+        "extract_and_save_pdf_images: done"
     );
 
     Ok(out)
@@ -779,7 +793,7 @@ pub fn extract_and_save_office_images(
         let mut entry = match archive.by_index(archive_idx) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("[extract_and_save_office_images] zip entry read failed: {e}");
+                warn!(error = %e, "extract_and_save_office_images: zip entry read failed");
                 continue;
             }
         };
@@ -791,14 +805,14 @@ pub fn extract_and_save_office_images(
 
         let mut bytes = Vec::with_capacity(entry.size() as usize);
         if let Err(e) = entry.read_to_end(&mut bytes) {
-            eprintln!("[extract_and_save_office_images] read '{entry_name}' failed: {e}");
+            warn!(entry = %entry_name, error = %e, "extract_and_save_office_images: read failed");
             continue;
         }
 
         let (width, height) = match image::load_from_memory(&bytes) {
             Ok(img) => (img.width(), img.height()),
             Err(e) => {
-                eprintln!("[extract_and_save_office_images] decode '{entry_name}' failed: {e}");
+                warn!(entry = %entry_name, error = %e, "extract_and_save_office_images: decode failed");
                 continue;
             }
         };
@@ -825,9 +839,9 @@ pub fn extract_and_save_office_images(
         });
 
         if out.len() >= options.max_images {
-            eprintln!(
-                "[extract_and_save_office_images] reached max_images={} cap; skipped rest",
-                options.max_images
+            info!(
+                max_images = options.max_images,
+                "extract_and_save_office_images: reached max_images cap; skipped rest"
             );
             break;
         }

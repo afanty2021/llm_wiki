@@ -13,6 +13,8 @@ use tauri::{AppHandle, Manager};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 use walkdir::WalkDir;
 
+use tracing::{error, info, warn};
+
 use crate::{clip_server, commands};
 
 const PORT: u16 = 19828;
@@ -73,7 +75,7 @@ pub fn start_api_server(app: AppHandle) {
         };
 
         API_STATUS.store(1, Ordering::Relaxed);
-        eprintln!("[API Server] Listening on http://127.0.0.1:{PORT}{API_PREFIX}");
+        info!(port = PORT, prefix = API_PREFIX, "API Server: listening");
 
         for request in server.incoming_requests() {
             let method = request.method().clone();
@@ -93,13 +95,13 @@ pub fn start_api_server(app: AppHandle) {
                     process_request(app, request);
                 }));
                 if let Err(payload) = result {
-                    eprintln!("[API Server] request handler panicked: {payload:?}");
+                    error!(payload = ?payload, "API Server: request handler panicked");
                 }
             });
         }
 
         API_STATUS.store(3, Ordering::Relaxed);
-        eprintln!("[API Server] server loop exited; restarting");
+        warn!("API Server: server loop exited; restarting");
         thread::sleep(Duration::from_secs(BIND_RETRY_DELAY_SECS));
     });
 }
@@ -109,8 +111,12 @@ fn bind_server_with_retry() -> Option<Server> {
         match Server::http(format!("127.0.0.1:{PORT}")) {
             Ok(server) => return Some(server),
             Err(err) => {
-                eprintln!(
-                    "[API Server] Failed to bind 127.0.0.1:{PORT} (attempt {attempt}/{MAX_BIND_RETRIES}): {err}"
+                warn!(
+                    port = PORT,
+                    attempt,
+                    max_attempts = MAX_BIND_RETRIES,
+                    error = %err,
+                    "API Server: failed to bind"
                 );
                 if attempt < MAX_BIND_RETRIES {
                     thread::sleep(Duration::from_secs(BIND_RETRY_DELAY_SECS));
@@ -178,7 +184,7 @@ fn process_request(app: AppHandle, mut request: tiny_http::Request) {
         handle_request(&app, &method, &url, &body, &headers)
     }))
     .unwrap_or_else(|payload| {
-        eprintln!("[API Server] request panicked: {payload:?}");
+        error!(payload = ?payload, "API Server: request panicked");
         err(500, "Internal API server error")
     });
     respond_json(request, response.status, response.body);

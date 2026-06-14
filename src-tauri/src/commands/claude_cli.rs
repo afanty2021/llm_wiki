@@ -27,6 +27,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tracing::{error, info};
 
 use super::cli_resolver::find_cli_command;
 
@@ -332,7 +333,7 @@ pub async fn claude_cli_spawn(
         let stderr_task = tokio::spawn(async move {
             let mut collected = String::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
-                eprintln!("[claude-cli stderr] {line}");
+                info!(line = %line, "claude-cli stderr");
                 collected.push_str(&line);
                 collected.push('\n');
             }
@@ -348,7 +349,7 @@ pub async fn claude_cli_spawn(
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    eprintln!("[claude-cli stdout] read error: {e}");
+                    error!(error = %e, "claude-cli stdout read error");
                     break;
                 }
             }
