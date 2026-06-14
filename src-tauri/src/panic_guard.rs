@@ -10,6 +10,8 @@
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use tracing::error;
+
 /// Run a synchronous command body, converting any panic into an Err.
 pub fn run_guarded<T, F>(label: &str, f: F) -> Result<T, String>
 where
@@ -41,7 +43,7 @@ fn report(label: &str, payload: Box<dyn Any + Send>) -> String {
     } else {
         "(non-string panic payload)".to_string()
     };
-    eprintln!("[panic_guard] command '{label}' panicked: {msg}");
+    error!(command = label, panic_message = %msg, "command panicked");
     format!("Internal error in {label}: {msg}")
 }
 
