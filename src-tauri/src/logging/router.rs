@@ -10,11 +10,10 @@ pub fn route_batch_logs(entries: Vec<FrontendLogEntry>) {
 /// 路由单条日志到 tracing 层
 fn route_single_log(entry: FrontendLogEntry) {
     let trace_id = entry.trace_id;
-    let target = entry.module.as_str();
 
     match entry.level {
         LogLevel::Debug => {
-            let span = tracing::debug_span!(target: target, "frontend_log", trace_id = %trace_id);
+            let span = tracing::debug_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
             tracing::debug!("{}", entry.message);
             if let Some(data) = entry.data {
@@ -22,7 +21,7 @@ fn route_single_log(entry: FrontendLogEntry) {
             }
         }
         LogLevel::Info => {
-            let span = tracing::info_span!(target: target, "frontend_log", trace_id = %trace_id);
+            let span = tracing::info_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
             tracing::info!("{}", entry.message);
             if let Some(data) = entry.data {
@@ -30,7 +29,7 @@ fn route_single_log(entry: FrontendLogEntry) {
             }
         }
         LogLevel::Warn => {
-            let span = tracing::warn_span!(target: target, "frontend_log", trace_id = %trace_id);
+            let span = tracing::warn_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
             tracing::warn!("{}", entry.message);
             if let Some(data) = entry.data {
@@ -38,7 +37,7 @@ fn route_single_log(entry: FrontendLogEntry) {
             }
         }
         LogLevel::Error => {
-            let span = tracing::error_span!(target: target, "frontend_log", trace_id = %trace_id);
+            let span = tracing::error_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
             tracing::error!("{}", entry.message);
             if let Some(data) = entry.data {

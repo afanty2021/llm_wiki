@@ -122,7 +122,7 @@ impl Write for SizeBasedRollingFileAppender {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let file_guard = self.current_file.lock()
+        let mut file_guard = self.current_file.lock()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         file_guard.flush()
     }

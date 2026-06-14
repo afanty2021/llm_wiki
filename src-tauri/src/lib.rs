@@ -1,6 +1,7 @@
 mod api_server;
 mod clip_server;
 mod commands;
+mod logging;
 mod panic_guard;
 mod proxy;
 mod tray;
@@ -132,6 +133,50 @@ fn tray_available<R: tauri::Runtime>(window: &tauri::Window<R>) -> bool {
         .unwrap_or(false)
 }
 
+// ── Logging commands ──────────────────────────────────────────────
+
+use crate::logging::{FrontendLogEntry, LogFileEntry};
+
+#[tauri::command]
+fn send_log(logs: Vec<FrontendLogEntry>) -> Result<(), String> {
+    logging::route_batch_logs(logs);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_log_files(app: tauri::AppHandle) -> Result<Vec<LogFileEntry>, String> {
+    let app_data_dir = app.path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    logging::get_log_files(app_data_dir)
+}
+
+#[tauri::command]
+fn clear_logs(app: tauri::AppHandle) -> Result<(), String> {
+    let app_data_dir = app.path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    logging::clear_logs(app_data_dir)
+}
+
+#[tauri::command]
+fn export_logs(app: tauri::AppHandle, days: u32) -> Result<String, String> {
+    let app_data_dir = app.path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    logging::export_logs(app_data_dir, days)
+}
+
+#[tauri::command]
+fn get_log_level() -> Result<String, String> {
+    Ok(logging::get_log_level())
+}
+
+#[tauri::command]
+fn set_log_level(level: String) -> Result<(), String> {
+    logging::set_log_level(level)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     clip_server::start_clip_server();
@@ -246,6 +291,12 @@ pub fn run() {
             commands::file_sync::ignore_file_change_task,
             set_proxy_env,
             set_close_behavior,
+            send_log,
+            get_log_files,
+            clear_logs,
+            export_logs,
+            get_log_level,
+            set_log_level,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
