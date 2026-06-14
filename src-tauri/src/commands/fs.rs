@@ -1567,6 +1567,20 @@ pub async fn get_file_md5(path: String) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use tracing::{error, info, warn};
+
+    /// 在测试二进制中初始化 tracing subscriber，使迁移自 eprintln! 的 tracing 宏
+    /// 在 `cargo test -- --nocapture` 下仍可见（默认无 subscriber 时为 no-op）。
+    /// try_init 幂等：进程内已设置时返回 Err，用 `let _ =` 忽略。
+    fn init_test_logger() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+            )
+            .with_target(false)
+            .try_init();
+    }
 
     /// Write `bytes` to a fresh tmp path with `.pdf` suffix and return
     /// the path (the OS tmpdir is NOT cleaned up — acceptable for tests).
@@ -1597,6 +1611,7 @@ mod tests {
     /// future deadlocks.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_file_survives_malformed_pdf_inputs() {
+        init_test_logger();
         let payloads: &[(&str, &[u8])] = &[
             ("empty", b""),
             ("not_a_pdf", b"this is plainly not a PDF file"),
@@ -1615,7 +1630,7 @@ mod tests {
             let path = tmp_pdf_with_bytes(bytes);
             let result = read_file(path.clone(), None).await;
             let _ = fs::remove_file(&path);
-            eprintln!(
+            info!(
                 "[{name}] => {:?}",
                 result.as_ref().map(|s| &s[..s.len().min(80)])
             );
@@ -1693,11 +1708,12 @@ mod tests {
     #[test]
     #[ignore = "local probe; set PDF_PROBE_DIR"]
     fn pdf_probe() {
+        init_test_logger();
         let dir = std::env::var("PDF_PROBE_DIR")
             .unwrap_or_else(|_| "/Users/nash_su/Downloads/pdftests".to_string());
         let root = std::path::Path::new(&dir);
         if !root.exists() {
-            eprintln!("[pdf_probe] dir not found: {}", root.display());
+            warn!("[pdf_probe] dir not found: {}", root.display());
             return;
         }
 
@@ -1722,7 +1738,7 @@ mod tests {
         walk(root, &mut pdfs);
         pdfs.sort();
 
-        eprintln!(
+        info!(
             "\n[pdf_probe] found {} PDFs under {}\n",
             pdfs.len(),
             root.display()
@@ -1733,7 +1749,7 @@ mod tests {
         let mut panicked = 0usize;
 
         for (idx, path) in pdfs.iter().enumerate() {
-            let display = path.display().to_string();
+            let display_path = path.display().to_string();
             // Call extract_pdf_text directly (not read_file) so we bypass
             // the .cache sibling dir and always exercise the parser.
             let path_str = path.to_string_lossy().to_string();
@@ -1741,21 +1757,21 @@ mod tests {
             match result {
                 Ok(Ok(text)) => {
                     ok += 1;
-                    eprintln!(
+                    info!(
                         "[{:>3}/{}] OK     ({:>7} chars)  {}",
                         idx + 1,
                         pdfs.len(),
                         text.len(),
-                        display
+                        display_path
                     );
                 }
                 Ok(Err(e)) => {
                     err += 1;
-                    eprintln!(
+                    warn!(
                         "[{:>3}/{}] ERR    {}  →  {}",
                         idx + 1,
                         pdfs.len(),
-                        display,
+                        display_path,
                         e
                     );
                 }
@@ -1768,18 +1784,18 @@ mod tests {
                     } else {
                         "(non-string panic)".to_string()
                     };
-                    eprintln!(
+                    error!(
                         "[{:>3}/{}] PANIC  {}  →  {}",
                         idx + 1,
                         pdfs.len(),
-                        display,
+                        display_path,
                         msg
                     );
                 }
             }
         }
 
-        eprintln!(
+        info!(
             "\n[pdf_probe] summary: {} OK / {} ERR / {} PANIC (total {})",
             ok,
             err,

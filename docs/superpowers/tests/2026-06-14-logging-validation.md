@@ -53,7 +53,7 @@
 
 - [x] **`SizeBasedRollingFileAppender` 写入 + 轮转**：
   - 写入小数据 → 验证文件内容为 `"hello from test\n"`
-  - 写入超过 `max_size_bytes`（100 字节）的数据 → 验证当前文件被重命名为 `llm-wiki.log.1.log`，内容为旧数据；新当前文件内容为新数据
+  - 写入超过 `max_size_bytes`（100 字节）的数据 → 验证当前文件被重命名为 `llm-wiki.1.log`，内容为旧数据；新当前文件内容为新数据
   - 验证：`test_log_file_creation_and_write`
 - [x] **`clear_logs` 文件过滤**：删除 `.log` 后缀文件，保留非 `.log` 文件（如 `other.txt`）
   - 验证：`test_clear_logs_deletes_files`（断言仅剩 1 个文件 `other.txt`）
@@ -63,8 +63,8 @@
 ### 1.5 编译与类型检查
 
 - [x] **Rust 编译通过**：`cargo check` 无错误
-- [x] **日志模块 0 个 `eprintln!`/`println!`**：`src-tauri/src/logging/` 模块内部零生产侧 stderr/stdout 直写
-  - 注：仓库其他位置仍存在历史 `eprintln!`（`src-tauri/src/commands/fs.rs` 共 7 处，与日志系统无关，属阶段 1 范围外的预存技术债）
+- [x] **后端 0 个 `eprintln!`**：生产代码全部迁移到 tracing 宏（含 `panic_guard.rs` 及 `commands/*.rs` 等 11 个文件）
+  - 注：`src-tauri/src/commands/fs.rs` 测试模块内的诊断输出也已迁移到 tracing 宏，并在测试内初始化 subscriber（`init_test_logger()`），保证 `--nocapture` 可见性
   - 注：`src-tauri/src/clip_server.rs:92` 的 `println!` 是 clip_server 启动横幅，发生在 `init_logging` 之前（详见技术债）
 - [x] **TypeScript 类型检查通过**：`npm run typecheck` 在日志系统相关文件中 0 错误
   - 注：仓库整体存在 8 个预存的、与日志系统无关的类型错误（阶段 1 范围外）
@@ -115,8 +115,8 @@
 ### 2.5 文件轮转（实际触发）
 
 - [ ] **10MB 实际触发轮转**：自动化测了 100 字节阈值的轮转逻辑，10MB 是生产配置值，需要长时间运行或大量日志才能触发
-  - 验证步骤：方案 A（推荐）—— 临时修改 `init_logging` 中的 `max_size_bytes` 为小值（如 1KB），启动 app → 触发若干日志 → 确认 `llm-wiki.log.1.log` 生成；验证后回滚改动。方案 B —— 长时间运行真实应用直至自然触发
-- [ ] **保留 5 个历史文件**：多次轮转后应最多保留 `llm-wiki.log.1.log` ~ `llm-wiki.log.5.log`，第 6 次轮转时最老文件被删除
+  - 验证步骤：方案 A（推荐）—— 临时修改 `init_logging` 中的 `max_size_bytes` 为小值（如 1KB），启动 app → 触发若干日志 → 确认 `llm-wiki.1.log` 生成；验证后回滚改动。方案 B —— 长时间运行真实应用直至自然触发
+- [ ] **保留 5 个历史文件**：多次轮转后应最多保留 `llm-wiki.1.log` ~ `llm-wiki.5.log`，第 6 次轮转时最老文件被删除
   - 验证步骤：方案 A 触发 6 次以上轮转 → 列出 logs 目录 → 确认最多 5 个历史文件 + 1 个当前文件
 
 ### 2.6 trace_id 端到端传播
@@ -140,10 +140,10 @@
 
 ### 3.1 架构性妥协
 
-- **前端 `module` 丢失 EnvFilter 过滤能力** —— 来源：Task 6 / router.rs
-  - 现状：`router.rs` 将前端 `module` 字段作为 span 字段（`module = %entry.module`），而非 tracing target。这意味着后端无法用 `RUST_LOG=module_name=debug` 这样的 EnvFilter 按 module 单独调整级别。
-  - 影响：所有前端日志共享同一 target（`frontend_log`），无法细粒度过滤。
-  - 缓解：阶段 1 不需要按 module 过滤；如未来需要，应让 router 动态设置 target 或在 span 字段基础上扩展 filter 逻辑。
+- **前端日志 target 过滤粒度受限** —— 来源：Task 6 / router.rs（Task 15 复审后已部分恢复）
+  - 现状：router 的 span/event 使用固定字面量 `target: "frontend"`（tracing 宏的 callsite 要求 target 为编译期 `'static str`，无法用运行时的 `entry.module`——计划原版 `target: target` 会触发 E0435 无法编译）。前端 `module` 作为 span 字段保留。
+  - 能力：`RUST_LOG=frontend=debug` 可单独控制所有前端日志（与后端分离）；EnvFilter 字段语法 `frontend[module="src/lib/ingest.ts"]=debug` 可按模块筛选。
+  - 限制：无法做到 `RUST_LOG=src/lib/ingest.ts=debug`（动态 target 在 tracing 宏体系下不可行，需底层 Metadata API，代价过大，留待未来按需评估）。
 
 - **`message` 与 `data` 分两条 event（非原子）** —— 来源：Task 6 / router.rs
   - 现状：`route_single_log` 中先发一条 `tracing::info!("{}", entry.message)`，再发一条 `tracing::info!(data = ?data, "context")`。

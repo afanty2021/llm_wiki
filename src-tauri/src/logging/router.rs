@@ -11,37 +11,42 @@ pub fn route_batch_logs(entries: Vec<FrontendLogEntry>) {
 fn route_single_log(entry: FrontendLogEntry) {
     let trace_id = entry.trace_id;
 
+    // target 固定为字面量 "frontend"（tracing 宏的 callsite 要求 target 为编译期 &'static str，
+    // 无法用 entry.module 这种运行时变量——那会触发 E0435）。
+    // 收益：RUST_LOG=frontend=debug 可单独控制所有前端日志（与后端分离）；
+    //       EnvFilter 字段语法 frontend[module="src/lib/ingest.ts"]=debug 可按模块筛选。
+    // module 作为 span 字段保留，供 JSON 日志查询与字段过滤。
     match entry.level {
         LogLevel::Debug => {
-            let span = tracing::debug_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::debug_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
-            tracing::debug!("{}", entry.message);
+            tracing::debug!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
-                tracing::debug!(data = ?data, "context");
+                tracing::debug!(target: "frontend", data = ?data, "context");
             }
         }
         LogLevel::Info => {
-            let span = tracing::info_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::info_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
-            tracing::info!("{}", entry.message);
+            tracing::info!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
-                tracing::info!(data = ?data, "context");
+                tracing::info!(target: "frontend", data = ?data, "context");
             }
         }
         LogLevel::Warn => {
-            let span = tracing::warn_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::warn_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
-            tracing::warn!("{}", entry.message);
+            tracing::warn!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
-                tracing::warn!(data = ?data, "context");
+                tracing::warn!(target: "frontend", data = ?data, "context");
             }
         }
         LogLevel::Error => {
-            let span = tracing::error_span!("frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::error_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
             let _guard = span.enter();
-            tracing::error!("{}", entry.message);
+            tracing::error!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
-                tracing::error!(data = ?data, "context");
+                tracing::error!(target: "frontend", data = ?data, "context");
             }
         }
     }

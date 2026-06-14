@@ -35,11 +35,21 @@ struct SizeBasedRollingFileAppender {
 }
 
 impl SizeBasedRollingFileAppender {
+    /// 当前活跃日志文件路径：{log_dir}/{base_name}.log
+    fn current_path(log_dir: &Path, base_name: &str) -> PathBuf {
+        log_dir.join(format!("{}.log", base_name))
+    }
+
+    /// 轮转历史文件路径：{log_dir}/{base_name}.{n}.log
+    fn rotated_path(log_dir: &Path, base_name: &str, n: usize) -> PathBuf {
+        log_dir.join(format!("{}.{}.log", base_name, n))
+    }
+
     /// 创建新的轮转 appender
     fn new(log_dir: &Path, base_name: &str, max_size_bytes: u64, max_files: usize) -> std::io::Result<Self> {
         std::fs::create_dir_all(log_dir)?;
 
-        let current_path = log_dir.join(base_name);
+        let current_path = Self::current_path(log_dir, base_name);
         let (current_file, current_size) = Self::open_or_create_file(&current_path)?;
 
         Ok(Self {
@@ -66,22 +76,23 @@ impl SizeBasedRollingFileAppender {
     }
 
     /// 执行文件轮转
+    /// 命名约定：当前文件 {base}.log，轮转历史 {base}.1.log、{base}.2.log、…
     fn rotate_files(&self) -> std::io::Result<()> {
-        // 删除最老的文件
-        let oldest_path = self.log_dir.join(format!("{}.{}.log", self.base_name, self.max_files));
+        // 删除最老的文件 {base}.{max_files}.log
+        let oldest_path = Self::rotated_path(&self.log_dir, &self.base_name, self.max_files);
         let _ = std::fs::remove_file(&oldest_path); // 忽略不存在错误
 
-        // 后移编号文件：.4.log → .5.log，.3.log → .4.log，...，.1.log → .2.log
-        // 注意：从高到低遍历，避免覆盖（先移 .4→.5，再移 .3→.4，...）
+        // 后移编号文件：.{max-1}.log → .{max}.log，…，.1.log → .2.log
+        // 从高到低遍历，避免覆盖（先移高编号，再移低编号）
         for i in (1..self.max_files).rev() {
-            let old_name = self.log_dir.join(format!("{}.{}.log", self.base_name, i));
-            let new_name = self.log_dir.join(format!("{}.{}.log", self.base_name, i + 1));
+            let old_name = Self::rotated_path(&self.log_dir, &self.base_name, i);
+            let new_name = Self::rotated_path(&self.log_dir, &self.base_name, i + 1);
             let _ = std::fs::rename(&old_name, &new_name); // 文件不存在时静默忽略
         }
 
-        // 当前文件重命名为 .1.log
-        let current_path = self.log_dir.join(&self.base_name);
-        let slot1_path = self.log_dir.join(format!("{}.1.log", self.base_name));
+        // 当前文件 {base}.log 重命名为 {base}.1.log
+        let current_path = Self::current_path(&self.log_dir, &self.base_name);
+        let slot1_path = Self::rotated_path(&self.log_dir, &self.base_name, 1);
         let _ = std::fs::rename(&current_path, &slot1_path);
 
         Ok(())
@@ -103,7 +114,7 @@ impl Write for SizeBasedRollingFileAppender {
             self.rotate_files()?;
 
             // 创建新的当前文件
-            let current_path = self.log_dir.join(&self.base_name);
+            let current_path = Self::current_path(&self.log_dir, &self.base_name);
             let (new_file, new_size) = Self::open_or_create_file(&current_path)?;
 
             let mut file_guard = self.current_file.lock()
@@ -160,9 +171,10 @@ pub fn init_logging(app_data_dir: PathBuf) -> Result<(), String> {
         .map_err(|_| "Failed to initialize LOG_LEVEL".to_string())?;
 
     // 创建基于大小轮转的文件 appender（10MB，保留5个文件）
+    // base_name 不含扩展名：当前文件 llm-wiki.log，轮转历史 llm-wiki.1.log、llm-wiki.2.log、…
     let file_appender = SizeBasedRollingFileAppender::new(
         &log_dir,
-        "llm-wiki.log",
+        "llm-wiki",
         10 * 1024 * 1024, // 10MB
         5, // 保留5个历史文件
     ).map_err(|e| format!("Failed to create file appender: {}", e))?;
@@ -333,7 +345,8 @@ mod tests {
         let dir = TempDir::new().expect("should create temp dir");
 
         // 小 max_size_bytes 便于触发轮转
-        let mut appender = SizeBasedRollingFileAppender::new(dir.path(), "llm-wiki.log", 100, 3)
+        // base_name 不含扩展名：当前文件 {base}.log，轮转 {base}.{N}.log
+        let mut appender = SizeBasedRollingFileAppender::new(dir.path(), "llm-wiki", 100, 3)
             .expect("should create appender");
 
         // 写入数据
@@ -353,10 +366,9 @@ mod tests {
         appender.write(big_data.as_bytes()).expect("should write big data");
         appender.flush().expect("should flush");
 
-        // 检查轮转文件：原始文件应被重命名为 llm-wiki.log.1.log
-        // （base_name 包含 .log 后缀，轮转文件格式为 {base_name}.{N}.log）
-        let rotated_path = dir.path().join("llm-wiki.log.1.log");
-        assert!(rotated_path.exists(), "rotated file llm-wiki.log.1.log should exist");
+        // 检查轮转文件：原始文件 {base}.log 应被重命名为 {base}.1.log
+        let rotated_path = dir.path().join("llm-wiki.1.log");
+        assert!(rotated_path.exists(), "rotated file llm-wiki.1.log should exist");
         let rotated_content =
             std::fs::read_to_string(&rotated_path).expect("should read rotated file");
         assert_eq!(rotated_content, "hello from test\n");
