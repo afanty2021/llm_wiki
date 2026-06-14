@@ -524,7 +524,7 @@ fn route_single_log(entry: FrontendLogEntry) {
 Run: `cd src-tauri && cargo check`
 Expected: `Finished` dev profile
 
-- [ ] **Step 4: 提交**
+- [ ] **Step 3: 提交**
 
 ```bash
 git add src-tauri/src/logging/router.rs
@@ -1177,7 +1177,8 @@ git commit -m "feat(logging): add Tauri logging command wrappers"
 ```typescript
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { getLogLevel, setLogLevel } from "@/commands/logging";
+import { getLogLevel, setLogLevel as setRpcLogLevel } from "@/commands/logging";
+import { setLogLevel as setLocalLogLevel } from "@/lib/logger";
 import type { LogLevel } from "@/lib/logger-types";
 
 const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"];
@@ -1203,7 +1204,8 @@ export function LoggingConfig() {
   async function handleLevelChange(newLevel: LogLevel) {
     setLoading(true);
     try {
-      await setLogLevel(newLevel);
+      await setRpcLogLevel(newLevel);   // 更新后端 filter
+      setLocalLogLevel(newLevel);         // 同步前端缓存
       setLevel(newLevel);
     } catch (error) {
       console.error("Failed to set log level:", error);
