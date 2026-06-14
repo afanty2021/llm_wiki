@@ -221,6 +221,10 @@
     "saveFailed": "Save failed. Some settings may not have been saved. See the console for details.",
     "language": "Language",
     "languageHint": "Interface language (wiki content follows source material language)",
+    "logging": {
+      "title": "Log Level",
+      "description": "DEBUG is most verbose, ERROR is least verbose. Changes take effect immediately."
+    },
     "categories": {
       "general": "General",
       "llm": "LLM Models",

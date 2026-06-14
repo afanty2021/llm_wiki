@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next"
 import { Label } from "@/components/ui/label"
 import type { CloseBehavior } from "@/stores/wiki-store"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
+import { LoggingConfig } from "../logging-config"
 
 interface Props {
   draft: SettingsDraft
@@ -91,6 +92,8 @@ export function GeneralSection({ draft, setDraft }: Props) {
           })}
         </p>
       </div>
+
+      <LoggingConfig />
     </div>
   )
 }
