@@ -71,17 +71,18 @@ impl SizeBasedRollingFileAppender {
         let oldest_path = self.log_dir.join(format!("{}.{}.log", self.base_name, self.max_files));
         let _ = std::fs::remove_file(&oldest_path); // 忽略不存在错误
 
-        // 重命名现有文件：.5.log → .4.log，...，.log → .1.log
+        // 后移编号文件：.4.log → .5.log，.3.log → .4.log，...，.1.log → .2.log
+        // 注意：从高到低遍历，避免覆盖（先移 .4→.5，再移 .3→.4，...）
         for i in (1..self.max_files).rev() {
-            let old_name = if i == 1 {
-                self.log_dir.join(&self.base_name)
-            } else {
-                self.log_dir.join(format!("{}.{}.log", self.base_name, i))
-            };
+            let old_name = self.log_dir.join(format!("{}.{}.log", self.base_name, i));
             let new_name = self.log_dir.join(format!("{}.{}.log", self.base_name, i + 1));
-
-            let _ = std::fs::rename(&old_name, &new_name);
+            let _ = std::fs::rename(&old_name, &new_name); // 文件不存在时静默忽略
         }
+
+        // 当前文件重命名为 .1.log
+        let current_path = self.log_dir.join(&self.base_name);
+        let slot1_path = self.log_dir.join(format!("{}.1.log", self.base_name));
+        let _ = std::fs::rename(&current_path, &slot1_path);
 
         Ok(())
     }
@@ -314,6 +315,97 @@ pub fn clear_logs(app_data_dir: PathBuf) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ============================================================================
+// 测试
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    /// 测试：直接实例化 SizeBasedRollingFileAppender，写入验证（不经过 init_logging）
+    #[test]
+    fn test_log_file_creation_and_write() {
+        let dir = TempDir::new().expect("should create temp dir");
+
+        // 小 max_size_bytes 便于触发轮转
+        let mut appender = SizeBasedRollingFileAppender::new(dir.path(), "llm-wiki.log", 100, 3)
+            .expect("should create appender");
+
+        // 写入数据
+        let data = b"hello from test\n";
+        let n = appender.write(data).expect("should write");
+        assert_eq!(n, data.len());
+        appender.flush().expect("should flush");
+
+        // 验证文件存在且有内容
+        let log_path = dir.path().join("llm-wiki.log");
+        assert!(log_path.exists(), "log file should exist");
+        let content = std::fs::read_to_string(&log_path).expect("should read log file");
+        assert_eq!(content, "hello from test\n");
+
+        // 写入超过 max_size_bytes 的数据触发轮转
+        let big_data = "A".repeat(200);
+        appender.write(big_data.as_bytes()).expect("should write big data");
+        appender.flush().expect("should flush");
+
+        // 检查轮转文件：原始文件应被重命名为 llm-wiki.log.1.log
+        // （base_name 包含 .log 后缀，轮转文件格式为 {base_name}.{N}.log）
+        let rotated_path = dir.path().join("llm-wiki.log.1.log");
+        assert!(rotated_path.exists(), "rotated file llm-wiki.log.1.log should exist");
+        let rotated_content =
+            std::fs::read_to_string(&rotated_path).expect("should read rotated file");
+        assert_eq!(rotated_content, "hello from test\n");
+
+        // 当前文件应包含新数据
+        let current_content =
+            std::fs::read_to_string(&log_path).expect("should read current file");
+        assert_eq!(current_content, big_data);
+    }
+
+    /// 测试：clear_logs 删除 logs 目录下所有 .log 文件（不经过 init_logging）
+    #[test]
+    fn test_clear_logs_deletes_files() {
+        let dir = TempDir::new().expect("should create temp dir");
+
+        // clear_logs 期望 app_data_dir，内部会 join "logs"
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).expect("should create logs dir");
+
+        // 创建几个 .log 文件
+        let log_files = ["llm-wiki.log", "llm-wiki.1.log", "app.log", "other.txt"];
+        for name in &log_files {
+            let path = logs_dir.join(name);
+            std::fs::write(&path, b"dummy content").expect("should write dummy file");
+        }
+
+        // 调用 clear_logs
+        clear_logs(dir.path().to_path_buf()).expect("should clear logs");
+
+        // 验证 .log 文件被删除
+        let remaining: Vec<_> = std::fs::read_dir(&logs_dir)
+            .expect("should read logs dir")
+            .filter_map(|e| e.ok())
+            .collect();
+
+        assert_eq!(
+            remaining.len(),
+            1,
+            "only other.txt should remain, got: {:?}",
+            remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+
+        let remaining_name = remaining[0].file_name();
+        assert_eq!(
+            remaining_name.to_str().unwrap(),
+            "other.txt",
+            "non-.log file should remain"
+        );
+    }
 }
 
 /// 导出日志为 JSONL
