@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next"
 import { Label } from "@/components/ui/label"
 import { getLogLevel, setLogLevel as setRpcLogLevel } from "@/commands/logging"
 import { setLogLevel as setLocalLogLevel } from "@/lib/logger"
+import { loadErrorNotificationConfig, setErrorNotificationConfig } from "@/lib/error-notification-config"
+import { Switch } from "@/components/ui/switch"
 import type { LogLevel } from "@/lib/logger-types"
 
 const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"]
@@ -36,6 +38,15 @@ export function LoggingConfig() {
   const [level, setLevel] = useState<LogLevel>("WARN")
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState(false)
+  const [errorNotify, setErrorNotify] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    loadErrorNotificationConfig()
+      .then((val) => { if (!cancelled) setErrorNotify(val) })
+      .catch((error) => { console.error("[logging-config] failed to load error notification config:", error) })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -77,6 +88,18 @@ export function LoggingConfig() {
     }
   }
 
+  async function handleNotifyToggle(enabled: boolean) {
+    if (enabled === errorNotify) return
+    const previous = errorNotify
+    setErrorNotify(enabled)
+    try {
+      await setErrorNotificationConfig(enabled)
+    } catch (error) {
+      console.error("[logging-config] failed to set error notification:", error)
+      setErrorNotify(previous)
+    }
+  }
+
   return (
     <div className="space-y-2">
       <div>
@@ -105,6 +128,15 @@ export function LoggingConfig() {
             </button>
           )
         })}
+      </div>
+      <div className="flex items-center justify-between pt-2">
+        <div className="space-y-0.5">
+          <Label>Error Desktop Notification</Label>
+          <p className="text-xs text-muted-foreground">
+            Show a desktop notification on errors (at most once per 10 seconds)
+          </p>
+        </div>
+        <Switch checked={errorNotify} onCheckedChange={handleNotifyToggle} />
       </div>
     </div>
   )
