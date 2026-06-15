@@ -14,6 +14,7 @@ import {
   FolderSync,
   Server,
   Settings,
+  ScrollText,
   FileText,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -45,6 +46,7 @@ import { ApiServerSection } from "./sections/api-server-section"
 import { GeneralSection } from "./sections/general-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
+import { LogsSection } from "./sections/logs-section"
 import { AboutSection } from "./sections/about-section"
 
 type CategoryId =
@@ -61,6 +63,7 @@ type CategoryId =
   | "output"
   | "interface"
   | "maintenance"
+  | "logs"
   | "changelog"
   | "about"
 
@@ -87,6 +90,7 @@ const CATEGORIES: Category[] = [
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
+  { id: "logs", labelKey: "settings.categories.logs", icon: ScrollText },
   { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
@@ -607,6 +611,8 @@ export function SettingsView() {
         return <InterfaceSection draft={draft} setDraft={setDraft} onThemeChange={applyTheme} />
       case "maintenance":
         return <MaintenanceSection />
+      case "logs":
+        return <LogsSection />
       case "changelog":
         return <ChangelogSection />
       case "about":

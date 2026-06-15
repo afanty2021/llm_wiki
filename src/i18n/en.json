@@ -239,6 +239,7 @@
       "output": "Output",
       "interface": "Interface",
       "maintenance": "Maintenance",
+      "logs": "Log Viewer",
       "changelog": "Changelog",
       "about": "About"
     },
@@ -623,6 +624,17 @@
         "testSuccess": "Connection successful",
         "testFailed": "Test failed"
       }
+    },
+    "logs": {
+      "title": "Log Viewer",
+      "description": "View and search application logs",
+      "searchPlaceholder": "Search keyword...",
+      "loading": "Loading...",
+      "empty": "No log entries",
+      "loadError": "Failed to load logs",
+      "total": "{{count}} entries",
+      "prev": "Prev",
+      "next": "Next"
     }
   },
   "preview": {
