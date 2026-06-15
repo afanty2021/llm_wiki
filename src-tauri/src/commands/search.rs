@@ -325,6 +325,7 @@ async fn search_by_embedding(
         project_path.to_string(),
         query_embedding,
         (top_k * 3).max(30),
+        "none".to_string(),
     )
     .await?;
     if raw_chunks.is_empty() {

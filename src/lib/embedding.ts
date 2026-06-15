@@ -21,7 +21,7 @@
  */
 
 import { readFile, listDirectory } from "@/commands/fs"
-import { invoke } from "@tauri-apps/api/core"
+import { invokeTraced } from "@/lib/invoke-traced"
 import type { EmbeddingConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
@@ -366,7 +366,7 @@ async function vectorUpsertChunks(
   pageId: string,
   chunks: ChunkUpsertInput[],
 ): Promise<void> {
-  await invoke("vector_upsert_chunks", {
+  await invokeTraced("vector_upsert_chunks", {
     projectPath: normalizePath(projectPath),
     pageId,
     chunks: chunks.map((c) => ({
@@ -392,7 +392,7 @@ async function vectorSearchChunks(
   queryEmbedding: number[],
   topK: number,
 ): Promise<ChunkSearchResult[]> {
-  return await invoke("vector_search_chunks", {
+  return await invokeTraced("vector_search_chunks", {
     projectPath: normalizePath(projectPath),
     queryEmbedding: queryEmbedding.map((v) => Math.fround(v)),
     topK,
@@ -400,27 +400,27 @@ async function vectorSearchChunks(
 }
 
 async function vectorDeletePage(projectPath: string, pageId: string): Promise<void> {
-  await invoke("vector_delete_page", {
+  await invokeTraced("vector_delete_page", {
     projectPath: normalizePath(projectPath),
     pageId,
   })
 }
 
 async function vectorCountChunks(projectPath: string): Promise<number> {
-  return await invoke("vector_count_chunks", {
+  return await invokeTraced("vector_count_chunks", {
     projectPath: normalizePath(projectPath),
   })
 }
 
 async function vectorClearChunks(projectPath: string): Promise<void> {
-  await invoke("vector_clear_chunks", {
+  await invokeTraced("vector_clear_chunks", {
     projectPath: normalizePath(projectPath),
   })
 }
 
 export async function legacyVectorRowCount(projectPath: string): Promise<number> {
   try {
-    return await invoke("vector_legacy_row_count", {
+    return await invokeTraced("vector_legacy_row_count", {
       projectPath: normalizePath(projectPath),
     })
   } catch {
@@ -429,7 +429,7 @@ export async function legacyVectorRowCount(projectPath: string): Promise<number>
 }
 
 export async function dropLegacyVectorTable(projectPath: string): Promise<void> {
-  await invoke("vector_drop_legacy", {
+  await invokeTraced("vector_drop_legacy", {
     projectPath: normalizePath(projectPath),
   })
 }

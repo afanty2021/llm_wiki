@@ -6,9 +6,14 @@ use lancedb::connect;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::panic_guard::run_guarded_async;
+
+/// Test trace_id marker for test-caller invocations
+#[cfg(test)]
+const TEST_TRACE_ID: &str = "test";
 
 /// v1 per-page result (legacy — kept so pre-0.3.11 projects still load).
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -423,10 +428,12 @@ fn make_batch_v2(
 /// existing index (for that, call `vector_delete_page` explicitly), so
 /// transient ingest failures don't nuke previously-good embeddings.
 #[tauri::command]
+#[instrument(name = "vector_upsert_chunks", skip(project_path, chunks), fields(trace_id = %trace_id, project_path = %project_path, page_id = %page_id))]
 pub async fn vector_upsert_chunks(
     project_path: String,
     page_id: String,
     chunks: Vec<ChunkUpsertInput>,
+    trace_id: String,
 ) -> Result<(), String> {
     run_guarded_async("vector_upsert_chunks", async move {
         validate_page_id_for_v2(&page_id)?;
@@ -493,10 +500,12 @@ pub async fn vector_upsert_chunks(
 /// (1 / (1 + distance), matching v1's convention for drop-in replacement
 /// at the TS layer). TS is responsible for grouping by page_id.
 #[tauri::command]
+#[instrument(name = "vector_search_chunks", skip(project_path, query_embedding), fields(trace_id = %trace_id, project_path = %project_path))]
 pub async fn vector_search_chunks(
     project_path: String,
     query_embedding: Vec<f32>,
     top_k: usize,
+    trace_id: String,
 ) -> Result<Vec<ChunkSearchResult>, String> {
     run_guarded_async("vector_search_chunks", async move {
         let db = connect(&db_path(&project_path))
@@ -582,7 +591,8 @@ pub async fn vector_search_chunks(
 /// Delete every chunk belonging to a page. Used when a source document
 /// is removed, or before a full re-embed of a page whose content shrank.
 #[tauri::command]
-pub async fn vector_delete_page(project_path: String, page_id: String) -> Result<(), String> {
+#[instrument(name = "vector_delete_page", skip(project_path), fields(trace_id = %trace_id, project_path = %project_path, page_id = %page_id))]
+pub async fn vector_delete_page(project_path: String, page_id: String, trace_id: String) -> Result<(), String> {
     run_guarded_async("vector_delete_page", async move {
         validate_page_id_for_v2(&page_id)?;
 
@@ -620,7 +630,8 @@ pub async fn vector_delete_page(project_path: String, page_id: String) -> Result
 /// Total chunk count in the v2 table (not pages — chunks). Useful for
 /// "vector index has N chunks" status text.
 #[tauri::command]
-pub async fn vector_count_chunks(project_path: String) -> Result<usize, String> {
+#[instrument(name = "vector_count_chunks", skip(project_path), fields(trace_id = %trace_id, project_path = %project_path))]
+pub async fn vector_count_chunks(project_path: String, trace_id: String) -> Result<usize, String> {
     run_guarded_async("vector_count_chunks", async move {
         let db = connect(&db_path(&project_path))
             .execute()
@@ -657,7 +668,8 @@ pub async fn vector_count_chunks(project_path: String) -> Result<usize, String> 
 /// "Re-index all pages" so a rebuild reflects the current wiki tree
 /// exactly and removes chunks for deleted/renamed pages.
 #[tauri::command]
-pub async fn vector_clear_chunks(project_path: String) -> Result<(), String> {
+#[instrument(name = "vector_clear_chunks", skip(project_path), fields(trace_id = %trace_id, project_path = %project_path))]
+pub async fn vector_clear_chunks(project_path: String, trace_id: String) -> Result<(), String> {
     run_guarded_async("vector_clear_chunks", async move {
         let db = connect(&db_path(&project_path))
             .execute()
@@ -688,7 +700,8 @@ pub async fn vector_clear_chunks(project_path: String) -> Result<(), String> {
 /// Settings → Embedding after upgrading. Returns 0 when v1 is absent or
 /// empty; otherwise returns the row count.
 #[tauri::command]
-pub async fn vector_legacy_row_count(project_path: String) -> Result<usize, String> {
+#[instrument(name = "vector_legacy_row_count", skip(project_path), fields(trace_id = %trace_id, project_path = %project_path))]
+pub async fn vector_legacy_row_count(project_path: String, trace_id: String) -> Result<usize, String> {
     run_guarded_async("vector_legacy_row_count", async move {
         let db = connect(&db_path(&project_path))
             .execute()
@@ -725,7 +738,8 @@ pub async fn vector_legacy_row_count(project_path: String) -> Result<usize, Stri
 /// after the user has re-indexed into v2 so the orphaned v1 table stops
 /// taking disk space. No-op if v1 isn't present.
 #[tauri::command]
-pub async fn vector_drop_legacy(project_path: String) -> Result<(), String> {
+#[instrument(name = "vector_drop_legacy", skip(project_path), fields(trace_id = %trace_id, project_path = %project_path))]
+pub async fn vector_drop_legacy(project_path: String, trace_id: String) -> Result<(), String> {
     run_guarded_async("vector_drop_legacy", async move {
         let db = connect(&db_path(&project_path))
             .execute()
@@ -816,11 +830,11 @@ mod tests_v2 {
         let pp = p.to_string_lossy().to_string();
 
         let chunks = make_chunks("my-page", 3, 16);
-        vector_upsert_chunks(pp.clone(), "my-page".into(), chunks)
+        vector_upsert_chunks(pp.clone(), "my-page".into(), chunks, TEST_TRACE_ID.to_string())
             .await
             .unwrap();
 
-        let count = vector_count_chunks(pp.clone()).await.unwrap();
+        let count = vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap();
         assert_eq!(count, 3);
     }
 
@@ -834,12 +848,12 @@ mod tests_v2 {
         vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 5, 16))
             .await
             .unwrap();
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 5);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 5);
 
         vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16))
             .await
             .unwrap();
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 2);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 2);
     }
 
     #[tokio::test]
@@ -854,7 +868,7 @@ mod tests_v2 {
             .await
             .unwrap();
 
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 7);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 7);
     }
 
     #[tokio::test]
@@ -868,12 +882,12 @@ mod tests_v2 {
         vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 2, 16))
             .await
             .unwrap();
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 5);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 5);
 
-        vector_delete_page(pp.clone(), "page-a".into())
+        vector_delete_page(pp.clone(), "page-a".into(), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 2);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 2);
     }
 
     #[tokio::test]
@@ -886,7 +900,7 @@ mod tests_v2 {
             .unwrap();
 
         let query = fake_embedding(1, 16);
-        let results = vector_search_chunks(pp.clone(), query, 10).await.unwrap();
+        let results = vector_search_chunks(pp.clone(), query, 10, TEST_TRACE_ID.to_string()).await.unwrap();
         assert!(!results.is_empty());
         // Every result should carry page_id, chunk_id, chunk_text, heading_path.
         for r in &results {
@@ -907,11 +921,11 @@ mod tests_v2 {
         vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
             .await
             .unwrap();
-        vector_upsert_chunks(pp.clone(), "page-a".into(), vec![])
+        vector_upsert_chunks(pp.clone(), "page-a".into(), vec![], TEST_TRACE_ID.to_string())
             .await
             .unwrap();
 
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 3);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 3);
     }
 
     #[tokio::test]
@@ -920,7 +934,7 @@ mod tests_v2 {
         let pp = p.to_string_lossy().to_string();
 
         let query = fake_embedding(1, 16);
-        let results = vector_search_chunks(pp, query, 10).await.unwrap();
+        let results = vector_search_chunks(pp, query, 10, TEST_TRACE_ID.to_string()).await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -929,7 +943,7 @@ mod tests_v2 {
         let p = tmp_project();
         let pp = p.to_string_lossy().to_string();
 
-        assert_eq!(vector_count_chunks(pp).await.unwrap(), 0);
+        assert_eq!(vector_count_chunks(pp, TEST_TRACE_ID.to_string()).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -938,7 +952,7 @@ mod tests_v2 {
         let pp = p.to_string_lossy().to_string();
 
         // Delete on missing table: ok.
-        vector_delete_page(pp.clone(), "never-existed".into())
+        vector_delete_page(pp.clone(), "never-existed".into(), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
 
@@ -946,14 +960,14 @@ mod tests_v2 {
         vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16))
             .await
             .unwrap();
-        vector_delete_page(pp.clone(), "page-a".into())
+        vector_delete_page(pp.clone(), "page-a".into(), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
-        vector_delete_page(pp.clone(), "page-a".into())
+        vector_delete_page(pp.clone(), "page-a".into(), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
 
-        assert_eq!(vector_count_chunks(pp).await.unwrap(), 0);
+        assert_eq!(vector_count_chunks(pp, TEST_TRACE_ID.to_string()).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -967,13 +981,13 @@ mod tests_v2 {
         vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 4, 16))
             .await
             .unwrap();
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 7);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 7);
 
-        vector_clear_chunks(pp.clone()).await.unwrap();
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 0);
+        vector_clear_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap();
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 0);
 
-        vector_clear_chunks(pp.clone()).await.unwrap();
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 0);
+        vector_clear_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap();
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -996,7 +1010,7 @@ mod tests_v2 {
                 embedding: fake_embedding(1, 8),
             },
         ];
-        let result = vector_upsert_chunks(pp, "page-a".into(), bad).await;
+        let result = vector_upsert_chunks(pp, "page-a".into(), bad, TEST_TRACE_ID.to_string()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_lowercase().contains("dim"));
     }
@@ -1007,7 +1021,7 @@ mod tests_v2 {
         let pp = p.to_string_lossy().to_string();
 
         // Quote would be a SQL-injection footgun for the delete filter.
-        let result = vector_upsert_chunks(pp, "bad'; DROP".into(), make_chunks("x", 1, 16)).await;
+        let result = vector_upsert_chunks(pp, "bad'; DROP".into(), make_chunks("x", 1, 16), TEST_TRACE_ID.to_string()).await;
         assert!(result.is_err());
     }
 
@@ -1017,7 +1031,7 @@ mod tests_v2 {
         let pp = p.to_string_lossy().to_string();
 
         // v1 table doesn't exist in a fresh temp project.
-        assert_eq!(vector_legacy_row_count(pp).await.unwrap(), 0);
+        assert_eq!(vector_legacy_row_count(pp, TEST_TRACE_ID.to_string()).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -1030,11 +1044,11 @@ mod tests_v2 {
             .await
             .unwrap();
 
-        let count = vector_legacy_row_count(pp.clone()).await.unwrap();
+        let count = vector_legacy_row_count(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap();
         assert_eq!(count, 1);
 
         // v2 count is untouched.
-        assert_eq!(vector_count_chunks(pp).await.unwrap(), 0);
+        assert_eq!(vector_count_chunks(pp, TEST_TRACE_ID.to_string()).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -1049,17 +1063,18 @@ mod tests_v2 {
             pp.clone(),
             "new-page".into(),
             make_chunks("new-page", 2, 16),
+            TEST_TRACE_ID.to_string(),
         )
         .await
         .unwrap();
 
-        assert_eq!(vector_legacy_row_count(pp.clone()).await.unwrap(), 1);
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 2);
+        assert_eq!(vector_legacy_row_count(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 1);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 2);
 
-        vector_drop_legacy(pp.clone()).await.unwrap();
+        vector_drop_legacy(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap();
 
-        assert_eq!(vector_legacy_row_count(pp.clone()).await.unwrap(), 0);
-        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 2);
+        assert_eq!(vector_legacy_row_count(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 0);
+        assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 2);
     }
 
     #[tokio::test]
@@ -1068,6 +1083,6 @@ mod tests_v2 {
         let pp = p.to_string_lossy().to_string();
 
         // Should just return Ok(()), not error.
-        vector_drop_legacy(pp).await.unwrap();
+        vector_drop_legacy(pp, TEST_TRACE_ID.to_string()).await.unwrap();
     }
 }
