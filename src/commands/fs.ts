@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
+import { invokeTraced } from "@/lib/invoke-traced"
 import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
 import { isAbsolutePath } from "@/lib/path-utils"
@@ -29,7 +30,7 @@ export async function readFile(
     const result = await apiClient.readFile(projectId, path)
     return result.content
   }
-  return invoke<string>("read_file", {
+  return invokeTraced<string>("read_file", {
     path,
     extractImages: options?.extractImages,
   })
@@ -42,7 +43,7 @@ export async function writeFile(path: string, contents: string): Promise<void> {
     return
   }
   assertAbsoluteFsPath("writeFile", path)
-  return invoke<void>("write_file", { path, contents })
+  return invokeTraced<void>("write_file", { path, contents })
 }
 
 export async function writeFileBase64(path: string, base64: string): Promise<void> {
@@ -67,7 +68,7 @@ export async function listDirectory(path: string): Promise<FileNode[]> {
     const items = await apiClient.listFiles(projectId, path)
     return items as unknown as FileNode[]
   }
-  return invoke<FileNode[]>("list_directory", { path })
+  return invokeTraced<FileNode[]>("list_directory", { path })
 }
 
 export async function copyFile(
@@ -94,7 +95,7 @@ export async function deleteFile(path: string): Promise<void> {
     await apiClient.request("POST", `/api/v1/files/${projectId}/delete`, { path })
     return
   }
-  return invoke("delete_file", { path })
+  return invokeTraced<void>("delete_file", { path })
 }
 
 export async function findRelatedWikiPages(

@@ -42,9 +42,12 @@ describe("fs command path guards", () => {
 
     await writeFile("/tmp/project/wiki/sources/page.md", "content")
 
-    expect(mocks.invoke).toHaveBeenCalledWith("write_file", {
-      path: "/tmp/project/wiki/sources/page.md",
-      contents: "content",
-    })
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "write_file",
+      expect.objectContaining({
+        path: "/tmp/project/wiki/sources/page.md",
+        contents: "content",
+      }),
+    )
   })
 })
