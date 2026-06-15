@@ -183,6 +183,7 @@ pub fn run() {
     clip_server::start_clip_server();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init()) // 错误桌面通知 (logging phase 2)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
