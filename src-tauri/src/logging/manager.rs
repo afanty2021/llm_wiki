@@ -171,8 +171,10 @@ pub fn init_logging(app_data_dir: PathBuf, app_handle: AppHandle) -> Result<(), 
     std::fs::create_dir_all(&log_dir)
         .map_err(|e| format!("Failed to create log directory: {}", e))?;
 
-    // 初始化日志级别（默认 WARN）
-    LOG_LEVEL.set(Mutex::new("WARN".to_string()))
+    // 初始化日志级别：优先读取持久化配置（fallback WARN）
+    let initial_level = crate::logging::config::read_log_level(&app_data_dir)
+        .unwrap_or_else(|| "WARN".to_string());
+    LOG_LEVEL.set(Mutex::new(initial_level))
         .map_err(|_| "Failed to initialize LOG_LEVEL".to_string())?;
 
     // 创建基于大小轮转的文件 appender（10MB，保留5个文件）
@@ -245,8 +247,12 @@ pub fn get_log_level() -> String {
         .unwrap_or_else(|| "WARN".to_string())
 }
 
-/// 设置日志级别（立即生效，通过 reload handle）
-pub fn set_log_level(level: String) -> Result<(), String> {
+/// 设置日志级别（立即生效，通过 reload handle；并持久化到 app-state.json）
+pub fn set_log_level(app_data_dir: PathBuf, level: String) -> Result<(), String> {
+    // 校验级别（必须在内存更新前校验，避免脏数据）
+    if !crate::logging::config::is_valid_level(&level) {
+        return Err(format!("Invalid log level: {}", level));
+    }
     // 更新全局级别变量
     if let Some(level_guard) = LOG_LEVEL.get() {
         if let Ok(mut guard) = level_guard.lock() {
@@ -256,9 +262,14 @@ pub fn set_log_level(level: String) -> Result<(), String> {
 
     // 通过 reload handle 实际更新 EnvFilter（立即生效）
     if let Some(handle) = FILTER_HANDLE.get() {
-        let new_filter = EnvFilter::new(level);
+        let new_filter = EnvFilter::new(level.clone());
         handle.reload(new_filter)
             .map_err(|e| format!("Failed to reload log filter: {}", e))?;
+    }
+
+    // 持久化（失败不阻断主流程，仅记录警告）
+    if let Err(e) = crate::logging::config::write_log_level(&app_data_dir, &level) {
+        tracing::warn!(error = %e, "failed to persist log level to app-state.json");
     }
 
     Ok(())

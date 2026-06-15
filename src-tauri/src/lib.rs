@@ -174,8 +174,10 @@ fn get_log_level() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn set_log_level(level: String) -> Result<(), String> {
-    logging::set_log_level(level)
+fn set_log_level(app: tauri::AppHandle, level: String) -> Result<(), String> {
+    let app_data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    logging::set_log_level(app_data_dir, level)
 }
 
 #[tauri::command]
