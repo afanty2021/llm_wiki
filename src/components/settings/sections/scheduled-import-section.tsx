@@ -12,6 +12,9 @@ import {
   resolveImportPath,
   scanAndImport,
 } from "@/lib/scheduled-import"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("scheduled-import")
 
 interface Props {
   draft: SettingsDraft
@@ -44,7 +47,7 @@ export function ScheduledImportSection({ draft, setDraft }: Props) {
     try {
       await scanAndImport(project, draft.scheduledImportPath)
     } catch (err) {
-      console.error("[Scheduled Import] Manual scan failed:", err)
+      logger.error("Manual scan failed", { error: String(err) })
     } finally {
       setIsScanning(false)
     }

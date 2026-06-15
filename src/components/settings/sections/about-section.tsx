@@ -8,6 +8,9 @@ import { API_SERVER_HEALTH_URL, API_SERVER_PORT } from "@/lib/api-server-constan
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { checkForUpdates, toLatestReleaseUrl } from "@/lib/update-check"
 import { saveUpdateCheckState } from "@/lib/project-store"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("about")
 
 interface ApiHealth {
   enabled?: boolean
@@ -223,7 +226,7 @@ export function AboutSection() {
             onClick={(e) => {
               e.preventDefault()
               void openUrl("https://github.com/nashsu/llm_wiki").catch((err) => {
-                console.error("[about] openUrl failed:", err)
+                logger.error("openUrl failed", { error: String(err) })
               })
             }}
           >
@@ -270,7 +273,7 @@ function UpdateAvailableBanner({
     try {
       await openUrl(targetUrl)
     } catch (err) {
-      console.error("[update-banner] openUrl failed:", err)
+      logger.error("openUrl failed", { error: String(err) })
       try {
         await navigator.clipboard.writeText(targetUrl)
         // eslint-disable-next-line no-alert

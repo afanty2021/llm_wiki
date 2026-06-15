@@ -18,6 +18,9 @@ import { API_SERVER_BASE_URL, API_SERVER_HEALTH_URL } from "@/lib/api-server-con
 import { generateApiToken } from "@/lib/api-token"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("api-server")
 
 interface Props {
   draft: SettingsDraft
@@ -108,7 +111,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
       setCopiedField("token")
       setTimeout(() => setCopiedField(null), 1500)
     } catch (err) {
-      console.error("[api-settings] copy token failed:", err)
+      logger.error("copy token failed", { error: String(err) })
     }
   }, [draft.apiToken])
 
@@ -155,7 +158,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
       setCopiedField("curl")
       setTimeout(() => setCopiedField(null), 1500)
     } catch (err) {
-      console.error("[api-settings] copy curl failed:", err)
+      logger.error("copy curl failed", { error: String(err) })
     }
   }, [sampleCurl])
 
@@ -166,13 +169,13 @@ export function ApiServerSection({ draft, setDraft }: Props) {
       setCopiedField("mcp")
       setTimeout(() => setCopiedField(null), 1500)
     } catch (err) {
-      console.error("[api-settings] copy MCP config failed:", err)
+      logger.error("copy MCP config failed", { error: String(err) })
     }
   }, [mcpEntryPath, sampleMcpConfig])
 
   const handleOpenHealth = useCallback(() => {
     void openUrl(API_SERVER_HEALTH_URL).catch((err) => {
-      console.error("[api-settings] open health failed:", err)
+      logger.error("open health failed", { error: String(err) })
     })
   }, [])
 

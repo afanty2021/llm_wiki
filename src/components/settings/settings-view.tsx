@@ -28,7 +28,10 @@ import { loadSourceWatchConfig, saveLanguage, saveTheme, loadTheme } from "@/lib
 import { applyTheme, type AppTheme } from "@/lib/theme"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
+import { createLogger } from "@/lib/logger"
 import { LlmProviderSection } from "./sections/llm-provider-section"
+
+const logger = createLogger("settings")
 import { EmbeddingSection } from "./sections/embedding-section"
 import { MultimodalSection } from "./sections/multimodal-section"
 import { WebSearchSection } from "./sections/web-search-section"
@@ -427,7 +430,7 @@ export function SettingsView() {
         const { startProjectFileSync, stopProjectFileSync } = await import("@/lib/project-file-sync")
         if (newSourceWatch.enabled) {
           await startProjectFileSync(project, newSourceWatch).catch((err) =>
-            console.error("Failed to start project file sync:", err)
+            logger.error("Failed to start project file sync", { error: String(err) })
           )
         } else {
           await stopProjectFileSync()
@@ -440,7 +443,7 @@ export function SettingsView() {
       try {
         await invoke<string>("set_proxy_env", { config: newProxy })
       } catch (err) {
-        console.warn("[proxy] live update failed; restart will still apply:", err)
+        logger.warn("live update failed; restart will still apply", { error: String(err) })
       }
 
       if (project) {
@@ -466,7 +469,7 @@ export function SettingsView() {
       try {
         await invoke<string>("api_server_reload_config")
       } catch (err) {
-        console.warn("[api] failed to reload API server config cache:", err)
+        logger.warn("failed to reload API server config cache", { error: String(err) })
       }
 
       await saveGeneralConfig(newGeneralConfig)
@@ -477,12 +480,12 @@ export function SettingsView() {
           await disableAutostart()
         }
       } catch (err) {
-        console.warn("[general] failed to update autostart:", err)
+        logger.warn("failed to update autostart", { error: String(err) })
       }
       try {
         await invoke<string>("set_close_behavior", { value: newGeneralConfig.closeBehavior })
       } catch (err) {
-        console.warn("[general] failed to update close behavior:", err)
+        logger.warn("failed to update close behavior", { error: String(err) })
       }
 
       if (draft.uiLanguage !== i18n.language) {
@@ -502,7 +505,7 @@ export function SettingsView() {
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error("[settings] failed to save settings:", err)
+      logger.error("failed to save settings", { error: String(err) })
       const resultValue = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
         result.status === "fulfilled" ? result.value : fallback
       try {
@@ -541,7 +544,7 @@ export function SettingsView() {
         setApiConfig(resultValue(persistedApi, null) ?? apiConfig)
         setGeneralConfig(resultValue(persistedGeneral, generalConfig))
       } catch (reloadErr) {
-        console.warn("[settings] failed to reload persisted settings after save failure:", reloadErr)
+        logger.warn("failed to reload persisted settings after save failure", { error: String(reloadErr) })
       }
       setSaveError(message || "unknown error")
     }

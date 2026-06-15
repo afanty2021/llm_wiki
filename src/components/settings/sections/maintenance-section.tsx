@@ -25,6 +25,9 @@ import {
   type DedupTask,
 } from "@/lib/dedup-queue"
 import type { DuplicateGroup } from "@/lib/dedup"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("maintenance")
 
 interface GroupUiEntry {
   group: DuplicateGroup
@@ -108,7 +111,7 @@ export function MaintenanceSection() {
         // waiting for the next 1s poll tick.
         setTasks([...getQueue()])
       } catch (err) {
-        console.error("[Maintenance] enqueue failed:", err)
+        logger.error("enqueue failed", { error: String(err) })
       }
     },
     [project],
@@ -135,7 +138,7 @@ export function MaintenanceSection() {
           prev.map((g, i) => (i === idx ? { ...g, skipped: true } : g)),
         )
       } catch (err) {
-        console.error("[Maintenance] addNotDuplicate failed:", err)
+        logger.error("addNotDuplicate failed", { error: String(err) })
       }
     },
     [project, groups],

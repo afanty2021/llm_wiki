@@ -6,6 +6,9 @@ import { setLogLevel as setLocalLogLevel } from "@/lib/logger"
 import { loadErrorNotificationConfig, setErrorNotificationConfig } from "@/lib/error-notification-config"
 import { Switch } from "@/components/ui/switch"
 import type { LogLevel } from "@/lib/logger-types"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("logging-config")
 
 const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"]
 
@@ -44,7 +47,7 @@ export function LoggingConfig() {
     let cancelled = false
     loadErrorNotificationConfig()
       .then((val) => { if (!cancelled) setErrorNotify(val) })
-      .catch((error) => { console.error("[logging-config] failed to load error notification config:", error) })
+      .catch((error) => { logger.error("failed to load error notification config", { error: String(error) }) })
     return () => { cancelled = true }
   }, [])
 
@@ -56,7 +59,7 @@ export function LoggingConfig() {
         setLevel(coerceLogLevel(current))
       })
       .catch((error) => {
-        console.error("[logging-config] failed to load log level:", error)
+        logger.error("failed to load log level", { error: String(error) })
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -80,7 +83,7 @@ export function LoggingConfig() {
       await setRpcLogLevel(newLevel)
       setLocalLogLevel(newLevel)
     } catch (error) {
-      console.error("[logging-config] failed to set log level:", error)
+      logger.error("failed to set log level", { error: String(error) })
       // Revert to the real backend level captured before the optimistic update.
       setLevel(previousLevel)
     } finally {
@@ -95,7 +98,7 @@ export function LoggingConfig() {
     try {
       await setErrorNotificationConfig(enabled)
     } catch (error) {
-      console.error("[logging-config] failed to set error notification:", error)
+      logger.error("failed to set error notification", { error: String(error) })
       setErrorNotify(previous)
     }
   }
