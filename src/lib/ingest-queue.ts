@@ -4,6 +4,9 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
 import { getProjectPathById } from "@/lib/project-identity"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("ingest-queue")
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -223,7 +226,7 @@ export async function enqueueBatch(
   }
 
   await saveQueue(currentProjectPath)
-  console.log(`[Ingest Queue] Enqueued ${files.length} files`)
+  logger.info("enqueued files", { count: files.length })
   processNext(currentProjectId)
 
   return ids
@@ -287,7 +290,7 @@ export async function cancelTask(taskId: string): Promise<void> {
     // Clean up any files written by the interrupted ingest
     if (lastWrittenFiles.length > 0) {
       await cleanupWrittenFiles(currentProjectPath, lastWrittenFiles)
-      console.log(`[Ingest Queue] Cleaned up ${lastWrittenFiles.length} files from cancelled task`)
+      logger.info("cleaned up files from cancelled task", { count: lastWrittenFiles.length })
       lastWrittenFiles = []
     }
 
@@ -296,7 +299,7 @@ export async function cancelTask(taskId: string): Promise<void> {
 
   queue = queue.filter((t) => t.id !== taskId)
   await saveQueue(currentProjectPath)
-  console.log(`[Ingest Queue] Cancelled: ${task.sourcePath}`)
+  logger.info("cancelled task", { sourcePath: task.sourcePath })
 
   processNext(currentProjectId)
 }
@@ -334,7 +337,7 @@ export async function cancelAllTasks(): Promise<number> {
   const removed = before - queue.length
 
   await saveQueue(currentProjectPath)
-  console.log(`[Ingest Queue] Cancelled all: ${removed} tasks removed`)
+  logger.info("cancelled all tasks", { removed })
   return removed
 }
 
@@ -460,8 +463,9 @@ export async function restoreQueue(
   // but defends against a corrupt queue file).
   const mine = saved.filter((t) => t.projectId === projectId)
   if (mine.length !== saved.length) {
-    console.warn(
-      `[Ingest Queue] Dropped ${saved.length - mine.length} cross-project tasks during restore`,
+    logger.warn(
+      "dropped cross-project tasks during restore",
+      { dropped: saved.length - mine.length },
     )
   }
 
@@ -481,7 +485,7 @@ export async function restoreQueue(
   const failed = queue.filter((t) => t.status === "failed").length
 
   if (pending > 0 || restored > 0) {
-    console.log(`[Ingest Queue] Restored: ${pending} pending, ${failed} failed, ${restored} resumed from interrupted`)
+    logger.info("restored queue", { pending, failed, restored })
     processNext(projectId)
   }
 }
@@ -504,7 +508,7 @@ async function onQueueDrained(projectId: string, projectPath: string): Promise<v
     const { sweepResolvedReviews } = await import("@/lib/sweep-reviews")
     await sweepResolvedReviews(projectPath, signal)
   } catch (err) {
-    console.error("[Ingest Queue] Failed to load sweep-reviews:", err)
+    logger.error("failed to load sweep-reviews", { error: String(err) })
   } finally {
     if (sweepAbortController && sweepAbortController.signal === signal) {
       sweepAbortController = null
@@ -523,7 +527,7 @@ async function processNext(projectId: string): Promise<void> {
     // Queue drained — trigger review cleanup (auto-resolve stale items)
     const pathAtDrain = currentProjectPath
     onQueueDrained(projectId, pathAtDrain).catch((err) =>
-      console.error("[Ingest Queue] sweep failed:", err)
+      logger.error("sweep failed", { error: String(err) })
     )
     return
   }
@@ -566,7 +570,10 @@ async function processNext(projectId: string): Promise<void> {
     ? normalizePath(next.sourcePath)
     : `${pp}/${next.sourcePath}`
 
-  console.log(`[Ingest Queue] Processing: ${next.sourcePath} (${queue.filter((t) => t.projectId === projectId && t.status === "pending").length} remaining)`)
+  logger.info("processing task", {
+    sourcePath: next.sourcePath,
+    remaining: queue.filter((t) => t.projectId === projectId && t.status === "pending").length,
+  })
 
   currentAbortController = new AbortController()
   lastWrittenFiles = []
@@ -596,7 +603,7 @@ async function processNext(projectId: string): Promise<void> {
     processedSinceDrain = true
     await saveQueue(pp)
 
-    console.log(`[Ingest Queue] Done: ${next.sourcePath}`)
+    logger.info("task done", { sourcePath: next.sourcePath })
   } catch (err) {
     if (currentProjectId !== projectId) return
     currentAbortController = null
@@ -606,10 +613,10 @@ async function processNext(projectId: string): Promise<void> {
 
     if (next.retryCount >= MAX_RETRIES) {
       next.status = "failed"
-      console.log(`[Ingest Queue] Failed (${next.retryCount}x): ${next.sourcePath} — ${message}`)
+      logger.warn("task failed permanently", { sourcePath: next.sourcePath, retryCount: next.retryCount, error: message })
     } else {
       next.status = "pending" // will retry
-      console.log(`[Ingest Queue] Error (retry ${next.retryCount}/${MAX_RETRIES}): ${next.sourcePath} — ${message}`)
+      logger.warn("task error (will retry)", { sourcePath: next.sourcePath, retryCount: next.retryCount, maxRetries: MAX_RETRIES, error: message })
     }
 
     await saveQueue(pp)

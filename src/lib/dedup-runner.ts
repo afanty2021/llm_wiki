@@ -9,6 +9,9 @@ import { streamChat } from "@/lib/llm-client"
 import { normalizePath } from "@/lib/path-utils"
 import type { LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("dedup-runner")
 
 /**
  * Detection emits a bounded JSON list of duplicate groups — a few tens
@@ -274,7 +277,7 @@ export async function executeMerge(
       await deleteFile(`${pp}/${dead}`)
     } catch (err) {
       // Surface as a warning — backup is still safe.
-      console.warn(`[dedup] failed to delete ${dead}: ${err}`)
+      logger.warn("failed to delete page", { path: dead, error: String(err) })
     }
   }
 

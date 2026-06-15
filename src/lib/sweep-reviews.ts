@@ -19,6 +19,9 @@ import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { normalizeReviewTitle } from "@/lib/review-utils"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("sweep-reviews")
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -245,13 +248,13 @@ async function judgeBatch(
         onDone: () => {},
         onError: (err) => {
           hadError = true
-          console.warn("[Sweep Reviews] LLM error:", err.message)
+          logger.warn("LLM error during review judgment", { error: err.message })
         },
       },
       signal,
     )
   } catch (err) {
-    console.warn("[Sweep Reviews] LLM call failed:", err)
+    logger.warn("LLM call failed during review judgment", { error: String(err) })
     return new Set()
   }
 
@@ -260,7 +263,7 @@ async function judgeBatch(
   try {
     const cleaned = extractJsonObject(raw)
     if (!cleaned) {
-      console.warn("[Sweep Reviews] No JSON object in response:", raw.slice(0, 300))
+      logger.warn("no JSON object in LLM response", { raw: raw.slice(0, 300) })
       return new Set()
     }
     const parsed = JSON.parse(cleaned) as { resolved?: unknown }
@@ -275,7 +278,7 @@ async function judgeBatch(
     }
     return resolved
   } catch (err) {
-    console.warn("[Sweep Reviews] Failed to parse LLM response:", err, raw.slice(0, 300))
+    logger.warn("failed to parse LLM response", { error: String(err), raw: raw.slice(0, 300) })
     return new Set()
   }
 }
@@ -454,7 +457,7 @@ export async function sweepResolvedReviews(
     })
   }
 
-  if (total > 0) console.log(`[Sweep Reviews] ${detail}`)
+  if (total > 0) logger.info("auto-resolved stale review items", { total, ruleResolved, llmResolved })
 
   return total
 }

@@ -25,6 +25,9 @@
  */
 import { parseFrontmatter } from "./frontmatter"
 import { mergeArrayFieldsIntoContent } from "./sources-merge"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("page-merge")
 
 /** Frontmatter array fields unioned across re-ingests. */
 const UNION_FIELDS = ["sources", "tags", "related"] as const
@@ -126,8 +129,9 @@ export async function mergePageContent(
       opts.signal,
     )
   } catch (err) {
-    console.warn(
-      `[page-merge] LLM merge failed for ${opts.pagePath}, falling back to incoming + array-field union: ${err instanceof Error ? err.message : err}`,
+    logger.warn(
+      "LLM merge failed, falling back to incoming + array-field union",
+      { pagePath: opts.pagePath, error: err instanceof Error ? err.message : String(err) },
     )
     await tryBackup(opts, existingContent)
     return arrayMerged
@@ -137,8 +141,9 @@ export async function mergePageContent(
   // page. No-frontmatter output would silently corrupt the page.
   const llmParsed = parseFrontmatter(llmOutput)
   if (llmParsed.frontmatter === null) {
-    console.warn(
-      `[page-merge] LLM output for ${opts.pagePath} has no frontmatter — rejecting, falling back`,
+    logger.warn(
+      "LLM output has no frontmatter — rejecting, falling back",
+      { pagePath: opts.pagePath },
     )
     await tryBackup(opts, existingContent)
     return arrayMerged
@@ -150,8 +155,9 @@ export async function mergePageContent(
   const llmBodyLen = llmParsed.body.length
   const minThreshold = Math.max(oldBodyLen, newBodyLen) * BODY_SHRINK_THRESHOLD
   if (llmBodyLen < minThreshold) {
-    console.warn(
-      `[page-merge] LLM merge for ${opts.pagePath} produced body ${llmBodyLen} chars, below threshold ${minThreshold.toFixed(0)} (max input was ${Math.max(oldBodyLen, newBodyLen)}) — rejecting, falling back`,
+    logger.warn(
+      "LLM merge body too short — rejecting, falling back",
+      { pagePath: opts.pagePath, llmBodyLen, minThreshold: Math.round(minThreshold), maxInputLen: Math.max(oldBodyLen, newBodyLen) },
     )
     await tryBackup(opts, existingContent)
     return arrayMerged
@@ -188,8 +194,9 @@ async function tryBackup(
   try {
     await opts.backup(existingContent)
   } catch (err) {
-    console.warn(
-      `[page-merge] backup failed for ${opts.pagePath}: ${err instanceof Error ? err.message : err}`,
+    logger.warn(
+      "backup failed",
+      { pagePath: opts.pagePath, error: err instanceof Error ? err.message : String(err) },
     )
   }
 }

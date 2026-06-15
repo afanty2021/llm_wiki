@@ -37,6 +37,9 @@ import { captionMarkdownImages, loadCaptionCache } from "@/lib/image-caption-pip
 import type { MultimodalConfig } from "@/stores/wiki-store"
 import { GENERATION_WIKI_TYPES } from "@/lib/wiki-page-types"
 import { computeContextBudget } from "@/lib/context-budget"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("ingest")
 
 const LONG_SOURCE_MIN_BUDGET = 8_000
 const LONG_SOURCE_MAX_SINGLE_PASS_BUDGET = 300_000
@@ -420,7 +423,7 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
       // sent, but we surface the drop instead of silently hiding it.
       const pathLabel = path || "(unnamed)"
       const msg = `FILE block "${pathLabel}" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped.`
-      console.warn(`[ingest] ${msg}`)
+      logger.warn(msg)
       warnings.push(msg)
       continue
     }
@@ -428,7 +431,7 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
     if (!path) {
       // H6 fix: surface empty-path blocks.
       const msg = `FILE block with empty path skipped (LLM omitted the path after \`---FILE:\`).`
-      console.warn(`[ingest] ${msg}`)
+      logger.warn(msg)
       warnings.push(msg)
       continue
     }
@@ -437,7 +440,7 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
       // Path-traversal guard. Drops blocks whose path tries to escape
       // wiki/ — see isSafeIngestPath for the threat model.
       const msg = `FILE block with unsafe path "${path}" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names).`
-      console.warn(`[ingest] ${msg}`)
+      logger.warn(msg)
       warnings.push(msg)
       continue
     }
@@ -494,7 +497,7 @@ async function autoIngestImpl(
   const sourceIdentity = sourceIdentityForPath(pp, sp)
   const sourceSummarySlug = sourceSummarySlugFromIdentity(sourceIdentity)
   const sourceSummaryPath = `wiki/sources/${sourceSummarySlug}.md`
-  console.log(`[ingest:diag] autoIngestImpl ENTRY for "${fileName}" (project="${pp}", source="${sp}")`)
+  logger.debug("autoIngestImpl ENTRY", { fileName, project: pp, source: sp })
   const activityId = activity.addItem({
     type: "ingest",
     title: fileName,
@@ -513,7 +516,7 @@ async function autoIngestImpl(
       const cacheDir = sp.substring(0, sp.lastIndexOf("/"))
       const cachePath = `${cacheDir}/.cache/${fileName}.txt`
       activity.updateItem(activityId, { detail: "MinerU: parsing PDF..." })
-      console.log(`[ingest:mineru] submitting "${fileName}" to MinerU API`)
+      logger.debug("submitting source to MinerU API", { fileName })
       const markdown = await parseWithMineru(mineruCfg, sp, undefined, (msg) => {
         activity.updateItem(activityId, { detail: `MinerU: ${msg}` })
       }, signal, {
@@ -523,11 +526,11 @@ async function autoIngestImpl(
       await createDirectory(`${cacheDir}/.cache`)
       await writeFile(cachePath, markdown)
       mineruSucceeded = true
-      console.log(`[ingest:mineru] cached MinerU output for "${fileName}" (${markdown.length} chars)`)
+      logger.debug("cached MinerU output", { fileName, chars: markdown.length })
     } catch (err) {
       if (signal?.aborted) throw err
       const msg = trimInlineStatus(err instanceof Error ? err.message : String(err))
-      console.warn(`[ingest:mineru] MinerU parsing failed, falling back to pdfium: ${msg}`)
+      logger.warn("MinerU parsing failed, falling back to pdfium", { message: msg })
       activity.updateItem(activityId, {
         detail: `MinerU failed, falling back to built-in PDF extraction: ${msg}`,
       })
@@ -556,17 +559,17 @@ async function autoIngestImpl(
   // source-summary page on the current pipeline's contract regardless
   // of when the file was first ingested.
   const cachedFiles = await checkIngestCache(pp, sourceIdentity, sourceContent)
-  console.log(`[ingest:diag] cache check for "${sourceIdentity}":`, cachedFiles === null ? "MISS (full pipeline)" : `HIT (${cachedFiles.length} cached files)`)
+  logger.debug("cache check", { sourceIdentity, result: cachedFiles === null ? "MISS (full pipeline)" : `HIT (${cachedFiles.length} cached files)` })
   if (cachedFiles !== null) {
     try {
-      console.log(`[ingest:diag] cache-hit branch: starting image extraction for ${sp}`)
+      logger.debug("cache-hit branch: starting image extraction", { source: sp })
       const skipNativePdfImageExtraction = isPdf && hasMineruImageRefs(sourceContent, sourceSummarySlug)
       let savedImages = skipNativePdfImageExtraction
         ? []
         : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
       const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
       savedImages = [...savedImages, ...markdownImages]
-      console.log(`[ingest:diag] cache-hit branch: got ${savedImages.length} image(s)`)
+      logger.debug("cache-hit branch: extracted images", { count: savedImages.length })
       if (savedImages.length > 0) {
         // Caption first (populates the cache), THEN inject — the
         // safety-net section uses the cache to populate alt text.
@@ -586,8 +589,9 @@ async function autoIngestImpl(
         // to start clean.)
         const mmCfg = useWikiStore.getState().multimodalConfig
         if (!mmCfg.enabled) {
-          console.log(
-            `[ingest:caption] cache-hit + disabled — skipping caption + safety-net inject (${savedImages.length} image(s) untouched on disk)`,
+          logger.debug(
+            "cache-hit + disabled — skipping caption + safety-net inject (images untouched on disk)",
+            { imageCount: savedImages.length },
           )
         } else {
           const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
@@ -605,9 +609,9 @@ async function autoIngestImpl(
                   }),
               })
             } catch (err) {
-              console.warn(
-                `[ingest:caption] cache-hit caption pass failed:`,
-                err instanceof Error ? err.message : err,
+              logger.warn(
+                "cache-hit caption pass failed",
+                { error: err instanceof Error ? err.message : String(err) },
               )
             }
           }
@@ -621,12 +625,12 @@ async function autoIngestImpl(
           await reembedSourceSummary(pp, sourceIdentity, sourceSummarySlug)
         }
       } else {
-        console.log(`[ingest:diag] cache-hit branch: skipping injection (no images returned from extraction)`)
+        logger.debug("cache-hit branch: skipping injection (no images returned from extraction)")
       }
     } catch (err) {
-      console.warn(
-        `[ingest:images] cache-hit injection failed for "${fileName}":`,
-        err instanceof Error ? err.message : err,
+      logger.warn(
+        "cache-hit injection failed",
+        { fileName, error: err instanceof Error ? err.message : String(err) },
       )
     }
     activity.updateItem(activityId, {
@@ -655,7 +659,7 @@ async function autoIngestImpl(
   // Failure here is never fatal — extractAndSaveSourceImages logs
   // and returns [] on any error.
   activity.updateItem(activityId, { detail: "Extracting embedded images..." })
-  console.log(`[ingest:diag] full-pipeline branch: starting image extraction for ${sp}`)
+  logger.debug("full-pipeline branch: starting image extraction", { source: sp })
   const skipNativePdfImageExtraction = isPdf && (
     hasMineruImageRefs(sourceContent, sourceSummarySlug)
   )
@@ -664,10 +668,11 @@ async function autoIngestImpl(
     : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
   const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
   savedImages = [...savedImages, ...markdownImages]
-  console.log(`[ingest:diag] full-pipeline branch: got ${savedImages.length} image(s)`)
+  logger.debug("full-pipeline branch: extracted images", { count: savedImages.length })
   if (savedImages.length > 0) {
-    console.log(
-      `[ingest:images] saved ${savedImages.length} image(s) for "${sourceIdentity}" → wiki/media/${sourceSummarySlug}/`,
+    logger.debug(
+      "saved images",
+      { sourceIdentity, imageCount: savedImages.length, targetDir: `wiki/media/${sourceSummarySlug}/` },
     )
   }
 
@@ -724,8 +729,9 @@ async function autoIngestImpl(
       /!\[[^\]]*\]\([^)\s]+\)/g,
       " ",
     )
-    console.log(
-      `[ingest:caption] disabled — stripped image refs from sourceContent (${savedImages.length} image(s) won't appear in wiki pages)`,
+    logger.debug(
+      "disabled — stripped image refs from sourceContent (images won't appear in wiki pages)",
+      { imageCount: savedImages.length },
     )
   } else if (
     captionLlm &&
@@ -751,13 +757,14 @@ async function autoIngestImpl(
           }),
       })
       enrichedSourceContent = stripWikiMediaAbsPaths(pp, result.enrichedMarkdown)
-      console.log(
-        `[ingest:caption] images=${savedImages.length} fresh=${result.freshCaptions} cached=${result.cachedCaptions} failed=${result.failed}`,
+      logger.debug(
+        "caption results",
+        { images: savedImages.length, fresh: result.freshCaptions, cached: result.cachedCaptions, failed: result.failed },
       )
     } catch (err) {
-      console.warn(
-        `[ingest:caption] pipeline failed for "${fileName}":`,
-        err instanceof Error ? err.message : err,
+      logger.warn(
+        "caption pipeline failed",
+        { fileName, error: err instanceof Error ? err.message : String(err) },
       )
       // Fall through with original (empty-alt) source content —
       // captioning failure must NEVER break ingest.
@@ -914,7 +921,7 @@ async function autoIngestImpl(
           onDone: () => {},
           onError: (err) => {
             reviewStageHadError = true
-            console.warn(`[ingest] Review suggestion generation failed for "${sourceIdentity}": ${err.message}`)
+            logger.warn("Review suggestion generation failed", { sourceIdentity, error: err.message })
           },
         },
         signal,
@@ -926,7 +933,7 @@ async function autoIngestImpl(
       )
     } catch (err) {
       if (signal?.aborted) throw err
-      console.warn(`[ingest] Review suggestion generation failed for "${sourceIdentity}":`, err)
+      logger.warn("Review suggestion generation failed", { sourceIdentity, error: String(err) })
     }
     if (signal?.aborted) throw new Error("Ingest cancelled")
     if (reviewStageHadError) reviewSuggestionOutput = ""
@@ -1118,8 +1125,9 @@ async function autoIngestImpl(
       await clearLongSourceCheckpoint(longSourceCheckpointPath)
     }
   } else if (hardFailures.length > 0) {
-    console.warn(
-      `[ingest] Skipping cache save for "${sourceIdentity}" — ${hardFailures.length} block(s) failed to write: ${hardFailures.join(", ")}`,
+    logger.warn(
+      "Skipping cache save — block(s) failed to write",
+      { sourceIdentity, failureCount: hardFailures.length, paths: hardFailures.join(", ") },
     )
   }
 
@@ -1334,9 +1342,9 @@ async function migrateLegacySourceSummaryIfSafe(
     await writeFile(canonicalFullPath, canonicalizeSourcesField(legacyContent, sourceIdentity))
     await deleteFile(legacyFullPath)
   } catch (err) {
-    console.warn(
-      `[ingest] failed to migrate legacy source summary ${legacyPath} -> ${sourceSummaryPath}:`,
-      err instanceof Error ? err.message : err,
+    logger.warn(
+      "failed to migrate legacy source summary",
+      { legacyPath, targetPath: sourceSummaryPath, error: err instanceof Error ? err.message : String(err) },
     )
   }
 }
@@ -1382,9 +1390,9 @@ async function migrateExactLegacySourceSummaryIfSafe(
       await deleteFile(legacyFullPath)
       return true
     } catch (err) {
-      console.warn(
-        `[ingest] failed to migrate legacy source summary ${legacyPath} -> ${sourceSummaryPath}:`,
-        err instanceof Error ? err.message : err,
+      logger.warn(
+        "failed to migrate legacy source summary",
+        { legacyPath, targetPath: sourceSummaryPath, error: err instanceof Error ? err.message : String(err) },
       )
       return false
     }
@@ -1531,7 +1539,7 @@ async function writeFileBlocks(
       )
       if (routingIssue) {
         const msg = `Dropped "${relativePath}" — ${routingIssue.message}`
-        console.warn(`[ingest] ${msg}`)
+        logger.warn(msg)
         warnings.push(msg)
         continue
       }
@@ -1559,7 +1567,7 @@ async function writeFileBlocks(
       !contentMatchesTargetLanguage(content, targetLang)
     ) {
       const msg = `Dropped "${relativePath}" — body language doesn't match target ${targetLang}.`
-      console.warn(`[ingest] ${msg}`)
+      logger.warn(msg)
       warnings.push(msg)
       continue
     }
@@ -1611,7 +1619,7 @@ async function writeFileBlocks(
       writtenPaths.push(relativePath)
     } catch (err) {
       const msg = `Failed to write "${relativePath}": ${err instanceof Error ? err.message : String(err)}`
-      console.error(`[ingest] ${msg}`)
+      logger.error("block write failed", { relativePath, error: err instanceof Error ? err.message : String(err) })
       warnings.push(msg)
       hardFailures.push(relativePath)
     }
@@ -2606,10 +2614,10 @@ async function injectImagesIntoSourceSummary(
   if (savedImages.length === 0) return
   const sourceSummaryPath = `wiki/sources/${sourceSummarySlug}.md`
   const sourceSummaryFullPath = `${pp}/${sourceSummaryPath}`
-  console.log(`[ingest:diag] injectImagesIntoSourceSummary: target=${sourceSummaryFullPath}, images=${savedImages.length}`)
+  logger.debug("injectImagesIntoSourceSummary", { target: sourceSummaryFullPath, imageCount: savedImages.length })
   try {
     const existing = await tryReadFile(sourceSummaryFullPath)
-    console.log(`[ingest:diag] injectImagesIntoSourceSummary: existing file ${existing ? `read OK (${existing.length} chars)` : "MISSING (will write stub)"}`)
+    logger.debug("injectImagesIntoSourceSummary existing file", { status: existing ? `read OK (${existing.length} chars)` : "MISSING (will write stub)" })
     // Load captions from the on-disk cache so the safety-net
     // section embeds caption text as alt — the embedding pipeline
     // indexes whatever's in the wiki page, so without this, search
@@ -2657,13 +2665,14 @@ async function injectImagesIntoSourceSummary(
       ].join("\n")
       await writeFile(sourceSummaryFullPath, stubFrontmatter + wrapped)
     }
-    console.log(
-      `[ingest:images] injected ${savedImages.length} image reference(s) into ${sourceSummaryPath}`,
+    logger.debug(
+      "injected image reference(s) into source-summary page",
+      { sourceSummaryPath, imageCount: savedImages.length },
     )
   } catch (err) {
-    console.warn(
-      `[ingest:images] failed to append images to ${sourceSummaryPath}:`,
-      err instanceof Error ? err.message : err,
+    logger.warn(
+      "failed to append images to source-summary page",
+      { sourceSummaryPath, error: err instanceof Error ? err.message : String(err) },
     )
   }
 }
@@ -2698,11 +2707,11 @@ async function reembedSourceSummary(
     const title = titleMatch ? titleMatch[1].trim() : sourceIdentity
     const { embedPage } = await import("@/lib/embedding")
     await embedPage(pp, sourceSummarySlug, title, content, embCfg)
-    console.log(`[ingest:caption] re-embedded ${sourceSummarySlug} with captioned alt text`)
+    logger.debug("re-embedded source-summary page with captioned alt text", { sourceSummarySlug })
   } catch (err) {
-    console.warn(
-      `[ingest:caption] re-embed failed for ${sourceSummarySlug}:`,
-      err instanceof Error ? err.message : err,
+    logger.warn(
+      "re-embed failed for source-summary page",
+      { sourceSummarySlug, error: err instanceof Error ? err.message : String(err) },
     )
   }
 }
@@ -2733,9 +2742,9 @@ export async function startIngest(
   // any error and logs internally; we never want image extraction
   // to break the ingest chat flow.
   void extractSourceImagesOnce(pp, sp, sourceSummarySlug).catch((err) => {
-    console.warn(
-      `[startIngest:images] eager extraction failed for "${getFileName(sp)}":`,
-      err instanceof Error ? err.message : err,
+    logger.warn(
+      "eager extraction failed",
+      { fileName: getFileName(sp), error: err instanceof Error ? err.message : String(err) },
     )
   })
 
@@ -2934,7 +2943,7 @@ export async function executeIngestWrites(
       }
       writtenPaths.push(fullPath)
     } catch (err) {
-      console.error(`Failed to write ${fullPath}:`, err)
+      logger.error("Failed to write file", { fullPath, error: String(err) })
     }
   }
 
@@ -2980,9 +2989,9 @@ export async function executeIngestWrites(
         await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
       }
     } catch (err) {
-      console.warn(
-        `[executeIngestWrites:images] post-write injection failed:`,
-        err instanceof Error ? err.message : err,
+      logger.warn(
+        "post-write injection failed",
+        { error: err instanceof Error ? err.message : String(err) },
       )
     } finally {
       if (extractionKey) ingestImageExtractionPromises.delete(extractionKey)

@@ -1,5 +1,8 @@
 import { readFile, writeFile, fileExists } from "@/commands/fs"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("ingest-cache")
 
 /**
  * SHA256-based ingest cache.
@@ -77,9 +80,7 @@ export async function checkIngestCache(
       : `${pp}/${filePath}`
     try {
       if (!(await fileExists(fullPath))) {
-        console.log(
-          `[ingest-cache] cache miss for ${sourceFileName}: ${filePath} no longer on disk`,
-        )
+        logger.debug("cache miss: file no longer on disk", { sourceFileName, filePath })
         return null
       }
     } catch {

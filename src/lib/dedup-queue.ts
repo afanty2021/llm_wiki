@@ -22,6 +22,9 @@ import { getProjectPathById } from "@/lib/project-identity"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
 import { executeMerge } from "@/lib/dedup-runner"
 import type { DuplicateGroup } from "@/lib/dedup"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("dedup-queue")
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -256,8 +259,9 @@ export async function restoreQueue(
 
   const mine = saved.filter((t) => t.projectId === projectId)
   if (mine.length !== saved.length) {
-    console.warn(
-      `[Dedup Queue] Dropped ${saved.length - mine.length} cross-project tasks during restore`,
+    logger.warn(
+      "dropped cross-project tasks during restore",
+      { dropped: saved.length - mine.length },
     )
   }
 
@@ -275,9 +279,7 @@ export async function restoreQueue(
   const pending = queue.filter((t) => t.status === "pending").length
   const failed = queue.filter((t) => t.status === "failed").length
   if (pending > 0 || restored > 0) {
-    console.log(
-      `[Dedup Queue] Restored: ${pending} pending, ${failed} failed, ${restored} resumed from interrupted`,
-    )
+    logger.info("restored queue", { pending, failed, restored })
     processNext(projectId)
   }
 }
@@ -322,9 +324,10 @@ async function processNext(projectId: string): Promise<void> {
     return
   }
 
-  console.log(
-    `[Dedup Queue] Processing: merge ${next.group.slugs.join(",")} → ${next.canonicalSlug}`,
-  )
+  logger.info("processing merge", {
+    slugs: next.group.slugs.join(","),
+    canonicalSlug: next.canonicalSlug,
+  })
 
   currentAbortController = new AbortController()
 
@@ -340,7 +343,7 @@ async function processNext(projectId: string): Promise<void> {
     // Tell the rest of the app the wiki tree changed.
     useWikiStore.getState().bumpDataVersion()
 
-    console.log(`[Dedup Queue] Done: ${next.group.slugs.join(",")}`)
+    logger.info("merge done", { slugs: next.group.slugs.join(",") })
   } catch (err) {
     if (currentProjectId !== projectId) return
     currentAbortController = null
@@ -350,14 +353,10 @@ async function processNext(projectId: string): Promise<void> {
 
     if (next.retryCount >= MAX_RETRIES) {
       next.status = "failed"
-      console.log(
-        `[Dedup Queue] Failed (${next.retryCount}x): ${next.group.slugs.join(",")} — ${message}`,
-      )
+      logger.warn("task failed permanently", { slugs: next.group.slugs.join(","), retryCount: next.retryCount, error: message })
     } else {
       next.status = "pending"
-      console.log(
-        `[Dedup Queue] Error (retry ${next.retryCount}/${MAX_RETRIES}): ${next.group.slugs.join(",")} — ${message}`,
-      )
+      logger.warn("task error (will retry)", { slugs: next.group.slugs.join(","), retryCount: next.retryCount, maxRetries: MAX_RETRIES, error: message })
     }
     await saveQueue(pp)
   }
