@@ -46,3 +46,20 @@ export interface LogFileEntry {
   /** 是否为当前活跃日志文件 */
   is_current: boolean;
 }
+
+/** 日志查看器展示的单条日志 */
+export interface LogDisplayEntry {
+  timestamp: string;
+  level: LogLevel;
+  module: string;
+  message: string;
+  trace_id: string | null;
+}
+
+/** read_log_file 命令的返回 */
+export interface ReadLogResponse {
+  entries: LogDisplayEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+}

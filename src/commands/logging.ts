@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { FrontendLogEntry, LogLevel, LogFileEntry } from "@/lib/logger-types";
+import type { FrontendLogEntry, LogLevel, LogFileEntry, ReadLogResponse } from "@/lib/logger-types";
 
 /** 批量发送日志到后端 */
 export async function sendLog(logs: FrontendLogEntry[]): Promise<void> {
@@ -29,4 +29,21 @@ export async function getLogLevel(): Promise<LogLevel> {
 /** 设置日志级别 */
 export async function setLogLevel(level: LogLevel): Promise<void> {
   return invoke("set_log_level", { level });
+}
+
+/** 分页读取日志（带级别/关键字/trace_id 过滤） */
+export async function readLogFile(
+  limit: number = 100,
+  offset: number = 0,
+  level?: LogLevel[],
+  keyword?: string,
+  traceId?: string,
+): Promise<ReadLogResponse> {
+  return invoke<ReadLogResponse>("read_log_file", {
+    limit,
+    offset,
+    level,
+    keyword,
+    traceId,
+  });
 }

@@ -178,6 +178,24 @@ fn set_log_level(level: String) -> Result<(), String> {
     logging::set_log_level(level)
 }
 
+#[tauri::command]
+async fn read_log_file(
+    app: tauri::AppHandle,
+    limit: usize,
+    offset: usize,
+    level: Option<Vec<String>>,
+    keyword: Option<String>,
+    trace_id: Option<String>,
+) -> Result<logging::ReadLogResponse, String> {
+    let app_data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        logging::read_log_file(app_data_dir, limit, offset, level, keyword, trace_id)
+    })
+    .await
+    .map_err(|e| format!("read_log_file task join error: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     clip_server::start_clip_server();
@@ -308,6 +326,7 @@ pub fn run() {
             export_logs,
             get_log_level,
             set_log_level,
+            read_log_file,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
