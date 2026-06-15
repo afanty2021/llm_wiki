@@ -422,6 +422,187 @@ mod tests {
             "non-.log file should remain"
         );
     }
+
+    // ========================================================================
+    // read_log_file 测试辅助函数
+    // ========================================================================
+
+    fn write_test_log(path: &std::path::Path, lines: &[&str]) {
+        let content = lines.join("\n") + "\n";
+        std::fs::write(path, content).unwrap();
+    }
+
+    fn backend_log(ts: &str, level: &str, target: &str, msg: &str, trace_id: Option<&str>) -> String {
+        let tid = match trace_id {
+            Some(t) => format!(r#","span":{{"name":"cmd","trace_id":"{}"}}"#, t),
+            None => String::new(),
+        };
+        format!(
+            r#"{{"timestamp":"{}","level":"{}","target":"{}"{},"fields":{{"message":"{}"}}}}"#,
+            ts, level, target, tid, msg
+        )
+    }
+
+    fn frontend_log(ts: &str, level: &str, module: &str, msg: &str, trace_id: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{}","level":"{}","target":"frontend","span":{{"name":"frontend_log","trace_id":"{}","module":"{}"}},"fields":{{"message":"{}"}}}}"#,
+            ts, level, trace_id, module, msg
+        )
+    }
+
+    // ========================================================================
+    // read_log_file 测试
+    // ========================================================================
+
+    #[test]
+    fn read_empty_dir_returns_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, None, None, None).unwrap();
+        assert_eq!(res.entries.len(), 0);
+        assert_eq!(res.total, 0);
+    }
+
+    #[test]
+    fn read_missing_dir_returns_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, None, None, None).unwrap();
+        assert_eq!(res.entries.len(), 0);
+        assert_eq!(res.total, 0);
+    }
+
+    #[test]
+    fn basic_pagination() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        let lines: Vec<String> = (0..10).map(|i| {
+            backend_log(&format!("2026-06-15T10:00:{:02}Z", i), "INFO", "app", &format!("msg {}", i), None)
+        }).collect();
+        let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &line_refs);
+        let p1 = read_log_file(dir.path().to_path_buf(), 5, 0, None, None, None).unwrap();
+        assert_eq!(p1.entries.len(), 5);
+        assert_eq!(p1.total, 10);
+        assert_eq!(p1.entries[0].message, "msg 9");
+        assert_eq!(p1.entries[4].message, "msg 5");
+        let p2 = read_log_file(dir.path().to_path_buf(), 5, 5, None, None, None).unwrap();
+        assert_eq!(p2.entries.len(), 5);
+        assert_eq!(p2.entries[0].message, "msg 4");
+    }
+
+    #[test]
+    fn offset_beyond_total_returns_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &backend_log("2026-06-15T10:00:00Z", "INFO", "app", "only", None),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 100, 100, None, None, None).unwrap();
+        assert_eq!(res.entries.len(), 0);
+        assert_eq!(res.total, 1);
+    }
+
+    #[test]
+    fn level_filter() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &backend_log("2026-06-15T10:00:00Z", "ERROR", "app", "e1", None),
+            &backend_log("2026-06-15T10:00:01Z", "WARN", "app", "w1", None),
+            &backend_log("2026-06-15T10:00:02Z", "INFO", "app", "i1", None),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, Some(vec!["ERROR".into()]), None, None).unwrap();
+        assert_eq!(res.entries.len(), 1);
+        assert_eq!(res.entries[0].level, "ERROR");
+        assert_eq!(res.total, 1);
+    }
+
+    #[test]
+    fn keyword_search_case_insensitive() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &backend_log("2026-06-15T10:00:00Z", "INFO", "ingest", "Failed to READ file", None),
+            &backend_log("2026-06-15T10:00:01Z", "INFO", "app", "unrelated", None),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, None, Some("read".into()), None).unwrap();
+        assert_eq!(res.entries.len(), 1);
+        assert!(res.entries[0].message.contains("READ"));
+    }
+
+    #[test]
+    fn keyword_matches_module() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &backend_log("2026-06-15T10:00:00Z", "INFO", "llm_wiki::commands::fs", "hello", None),
+            &backend_log("2026-06-15T10:00:01Z", "INFO", "app", "world", None),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, None, Some("commands".into()), None).unwrap();
+        assert_eq!(res.entries.len(), 1);
+        assert_eq!(res.entries[0].module, "llm_wiki::commands::fs");
+    }
+
+    #[test]
+    fn trace_id_exact_match() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &backend_log("2026-06-15T10:00:00Z", "INFO", "app", "a", Some("aaa-111")),
+            &backend_log("2026-06-15T10:00:01Z", "INFO", "app", "b", Some("bbb-222")),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, None, None, Some("bbb-222".into())).unwrap();
+        assert_eq!(res.entries.len(), 1);
+        assert_eq!(res.entries[0].trace_id, Some("bbb-222".into()));
+    }
+
+    #[test]
+    fn frontend_log_module_extraction() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &frontend_log("2026-06-15T10:00:00Z", "INFO", "src/lib/ingest.ts", "ingest done", "tid-1"),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, None, None, None).unwrap();
+        assert_eq!(res.entries.len(), 1);
+        assert_eq!(res.entries[0].module, "src/lib/ingest.ts");
+        assert_eq!(res.entries[0].trace_id, Some("tid-1".into()));
+    }
+
+    #[test]
+    fn invalid_jsonl_line_skipped() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &backend_log("2026-06-15T10:00:00Z", "INFO", "app", "valid", None),
+            "this is not json {{{",
+            &backend_log("2026-06-15T10:00:01Z", "INFO", "app", "also valid", None),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 100, 0, None, None, None).unwrap();
+        assert_eq!(res.entries.len(), 2);
+        assert_eq!(res.total, 2);
+    }
+
+    #[test]
+    fn limit_clamped_to_max() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        write_test_log(&logs_dir.join("llm-wiki.log"), &[
+            &backend_log("2026-06-15T10:00:00Z", "INFO", "app", "x", None),
+        ]);
+        let res = read_log_file(dir.path().to_path_buf(), 10000, 0, None, None, None).unwrap();
+        assert_eq!(res.limit, 500);
+    }
 }
 
 /// 导出日志为 JSONL
@@ -469,4 +650,124 @@ pub fn export_logs(app_data_dir: PathBuf, days: u32) -> Result<String, String> {
     Ok(export_path.to_str()
         .ok_or("Export path is not valid UTF-8")?
         .to_string())
+}
+
+// ============================================================================
+// read_log_file（日志查看器读取，支持分页 / 级别 / 关键字 / trace_id 过滤）
+// ============================================================================
+
+use super::types::{LogDisplayEntry, ReadLogResponse};
+use std::collections::HashSet;
+
+const MAX_LOG_LIMIT: usize = 500;
+
+pub fn read_log_file(
+    app_data_dir: PathBuf,
+    limit: usize,
+    offset: usize,
+    level_filter: Option<Vec<String>>,
+    keyword: Option<String>,
+    trace_id: Option<String>,
+) -> Result<ReadLogResponse, String> {
+    let limit = limit.min(MAX_LOG_LIMIT);
+    let log_dir = app_data_dir.join("logs");
+
+    // Collect *.log files sorted by mtime desc (current file first)
+    let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("log") {
+                if let Ok(meta) = path.metadata() {
+                    if let Ok(mtime) = meta.modified() {
+                        files.push((path, mtime));
+                    }
+                }
+            }
+        }
+    }
+    files.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Normalize: empty string = None
+    let keyword = keyword.and_then(|k| {
+        let trimmed = k.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed.to_lowercase()) }
+    });
+    let trace_id = trace_id.and_then(|t| {
+        let trimmed = t.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    });
+    let level_set: Option<HashSet<String>> = level_filter.map(|v| {
+        v.into_iter().map(|s| s.to_uppercase()).collect()
+    });
+
+    let mut page: Vec<LogDisplayEntry> = Vec::new();
+    let mut total: usize = 0;
+    let need_end = offset + limit;
+
+    for (path, _mtime) in &files {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for line in content.lines().rev() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let json: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let entry = match extract_entry(&json) {
+                Some(e) => e,
+                None => continue,
+            };
+            if !matches_filter(&entry, &level_set, &keyword, &trace_id) { continue; }
+            if total >= offset && total < need_end {
+                page.push(entry);
+            }
+            total += 1;
+        }
+    }
+
+    Ok(ReadLogResponse { entries: page, total, offset, limit })
+}
+
+fn extract_entry(json: &serde_json::Value) -> Option<LogDisplayEntry> {
+    let timestamp = json.get("timestamp")?.as_str()?.to_string();
+    let level = json.get("level")?.as_str()?.to_string();
+    let module = json.get("span")
+        .and_then(|s| s.get("module")).and_then(|m| m.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            let target = json.get("target").and_then(|t| t.as_str());
+            target.filter(|t| *t != "frontend").map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "(unknown)".to_string());
+    let message = json.get("fields")
+        .and_then(|f| f.get("message")).and_then(|m| m.as_str())
+        .unwrap_or("(no message)").to_string();
+    let trace_id = json.get("span")
+        .and_then(|s| s.get("trace_id")).and_then(|t| t.as_str())
+        .map(|s| s.to_string());
+    Some(LogDisplayEntry { timestamp, level, module, message, trace_id })
+}
+
+fn matches_filter(
+    entry: &LogDisplayEntry,
+    level_set: &Option<HashSet<String>>,
+    keyword: &Option<String>,
+    trace_id: &Option<String>,
+) -> bool {
+    if let Some(set) = level_set {
+        if !set.contains(&entry.level.to_uppercase()) { return false; }
+    }
+    if let Some(tid) = trace_id {
+        if entry.trace_id.as_deref() != Some(tid.as_str()) { return false; }
+    }
+    if let Some(kw) = keyword {
+        let msg_lower = entry.message.to_lowercase();
+        let mod_lower = entry.module.to_lowercase();
+        if !msg_lower.contains(kw) && !mod_lower.contains(kw) { return false; }
+    }
+    true
 }

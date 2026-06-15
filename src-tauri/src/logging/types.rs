@@ -31,6 +31,25 @@ pub struct LogFileEntry {
     pub is_current: bool,
 }
 
+/// 日志查看器展示的单条日志（从 JSONL 提取）
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LogDisplayEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub module: String,
+    pub message: String,
+    pub trace_id: Option<String>,
+}
+
+/// read_log_file 命令的返回
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadLogResponse {
+    pub entries: Vec<LogDisplayEntry>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+}
+
 /// 转换 LogLevel 为 tracing Level
 impl From<LogLevel> for tracing::Level {
     fn from(level: LogLevel) -> Self {
