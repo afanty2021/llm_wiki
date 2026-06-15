@@ -8,6 +8,9 @@ import { normalizePath } from "@/lib/path-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 import { isImeComposing } from "@/lib/keyboard-utils"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("search")
 
 /**
  * One image hit displayed in the Images section.
@@ -54,7 +57,7 @@ export function SearchView() {
         const found = await searchWiki(normalizePath(project.path), q)
         setResults(found)
       } catch (err) {
-        console.error("Search failed:", err)
+        logger.error("Search failed", { error: String(err) })
         setResults([])
       } finally {
         setSearching(false)
@@ -120,7 +123,7 @@ export function SearchView() {
       setSelectedFile(path)
       setFileContent(content)
     } catch (err) {
-      console.error("Failed to open search result:", err)
+      logger.error("Failed to open search result", { error: String(err) })
     }
   }
 
@@ -161,13 +164,11 @@ export function SearchView() {
       const pp = normalizePath(projectPath)
       const rawPath = await findRawSourceForImage(hit.url, pp)
       if (rawPath) {
-        console.log(`[search:jump] ${hit.url} → raw source ${rawPath}`)
+        logger.debug("search jump", { url: hit.url, rawPath })
         openPath = rawPath
         scrollTarget = imageUrlToAbsolute(scrollTarget, pp)
       } else {
-        console.warn(
-          `[search:jump] no raw source found for image ${hit.url} — falling back to wiki page`,
-        )
+        logger.warn("no raw source found for image — falling back to wiki page", { url: hit.url })
       }
     }
 
@@ -178,7 +179,7 @@ export function SearchView() {
       setFileContent(content)
       setLightbox(null)
     } catch (err) {
-      console.error("Failed to jump to source:", err)
+      logger.error("Failed to jump to source", { error: String(err) })
     }
   }
 

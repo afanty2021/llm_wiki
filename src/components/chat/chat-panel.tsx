@@ -18,6 +18,9 @@ import { isGreeting } from "@/lib/greeting-detector"
 import { computeContextBudget } from "@/lib/context-budget"
 import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search"
 import { resolveSearchConfig, webSearch, type WebSearchResult } from "@/lib/web-search"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("chat")
 
 // Store the page mapping from the last query so SourceFilesBar can show which pages were cited
 export let lastQueryPages: { title: string; path: string }[] = []
@@ -574,7 +577,7 @@ export function ChatPanel() {
         // ignore
       }
     } catch (err) {
-      console.error("Failed to write to wiki:", err)
+      logger.error("Failed to write to wiki", { error: String(err) })
     }
   }, [project, llmConfig, setFileTree])
 

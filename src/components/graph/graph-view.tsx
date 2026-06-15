@@ -17,6 +17,9 @@ import { optimizeResearchTopic } from "@/lib/optimize-research-topic"
 import { normalizePath } from "@/lib/path-utils"
 import { applyGraphFilters, DEFAULT_GRAPH_FILTERS, hasActiveGraphFilters, type GraphFilterState } from "@/lib/graph-filters"
 import { applyGraphSearch } from "@/lib/graph-search"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("graph")
 import { wikiTypeLabel } from "@/lib/wiki-page-types"
 import { useTranslation } from "react-i18next"
 
@@ -201,7 +204,7 @@ function makeLayoutWorker(): Worker | null {
   try {
     return new Worker(new URL("./graph-layout-worker.ts", import.meta.url), { type: "module" })
   } catch (err) {
-    console.warn("[Graph] failed to start layout worker; falling back to main-thread layout:", err)
+    logger.warn("failed to start layout worker; falling back to main-thread layout", { error: String(err) })
     return null
   }
 }
@@ -334,7 +337,7 @@ function GraphLoader({
       }
       worker.onerror = (event) => {
         if (cancelled) return
-        console.warn("[Graph] layout worker failed; falling back to main-thread layout:", event.message)
+        logger.warn("layout worker failed; falling back to main-thread layout", { error: event.message })
         if (pendingLayoutDataKey === dataKey) pendingLayoutDataKey = ""
         runMainThreadLayout()
         loadGraph(graph)
@@ -651,7 +654,7 @@ export function GraphView() {
         setSelectedFile(node.path)
         setFileContent(content)
       } catch (err) {
-        console.error("Failed to open wiki page:", err)
+        logger.error("Failed to open wiki page", { error: String(err) })
       }
     },
     [nodes, setSelectedFile, setFileContent],

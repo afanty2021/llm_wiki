@@ -28,6 +28,9 @@ import { detectLanguage } from "@/lib/detect-language"
 import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
 import { inferWikiTypeFromPath } from "@/lib/wiki-page-types"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("chat-message")
 
 // Module-level cache of source file names
 let cachedSourceFiles: string[] = []
@@ -263,11 +266,11 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
       if (hasUsableLlm(llmConfig)) {
         const { autoIngest } = await import("@/lib/ingest")
         autoIngest(pp, filePath, llmConfig).catch((err) =>
-          console.error("Failed to auto-ingest saved query:", err)
+          logger.error("Failed to auto-ingest saved query", { error: String(err) })
         )
       }
     } catch (err) {
-      console.error("Failed to save to wiki:", err)
+      logger.error("Failed to save to wiki", { error: String(err) })
     } finally {
       setSaving(false)
     }
@@ -451,10 +454,10 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
           setPendingScrollImageSrc(imageUrlToAbsolute(firstUrl, pp))
           setSelectedFile(rawPath)
           setFileContent(content)
-          console.log(`[refs:image-jump] ${firstUrl} → raw source ${rawPath}`)
+          logger.debug("image jump", { url: firstUrl, rawPath })
           return
         } catch (err) {
-          console.warn(`[refs:image-jump] failed to read ${rawPath}:`, err)
+          logger.warn("failed to read image jump at", { rawPath, error: String(err) })
         }
       }
       // Fallback: open the wiki summary itself with same scroll
@@ -466,7 +469,7 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
         setSelectedFile(`${pp}/${fallbackPath}`)
         setFileContent(content)
       } catch (err) {
-        console.warn(`[refs:image-jump] fallback also failed:`, err)
+        logger.warn("image jump fallback also failed", { error: String(err) })
       }
     },
     [project, setPendingScrollImageSrc, setSelectedFile, setFileContent],
@@ -529,7 +532,7 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
               }
               if (target) {
                 await openUrl(target).catch((err) => {
-                  console.warn("[chat refs] failed to open external reference:", err)
+                  logger.warn("failed to open external reference", { error: String(err) })
                 })
               }
               return

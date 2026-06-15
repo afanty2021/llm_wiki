@@ -21,6 +21,9 @@ import { hasUsableLlm } from "@/lib/has-usable-llm"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 import { useTranslation } from "react-i18next"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("lint")
 
 export function groupLintResultsForDisplay(results: readonly LintItem[]): {
   warnings: LintItem[]
@@ -102,7 +105,7 @@ export function LintView() {
       addLintItems(all)
       setHasRun(true)
     } catch (err) {
-      console.error("Lint failed:", err)
+      logger.error("Lint failed", { error: String(err) })
     } finally {
       setRunning(false)
     }
@@ -148,7 +151,7 @@ export function LintView() {
       setFileTree(tree)
       bumpDataVersion()
     } catch (err) {
-      console.error("Batch fix orphans failed:", err)
+      logger.error("Batch fix orphans failed", { error: String(err) })
     } finally {
       setBatchFixing(false)
     }
@@ -180,7 +183,7 @@ export function LintView() {
           content = content.replace(linkPattern, '')
           await writeFile(pagePath, content)
         } catch (err) {
-          console.error(`Failed to remove broken link from ${result.page}:`, err)
+          logger.error(`Failed to remove broken link from ${result.page}`, { error: String(err) })
         }
       }
 
@@ -194,7 +197,7 @@ export function LintView() {
       setFileTree(tree)
       bumpDataVersion()
     } catch (err) {
-      console.error("Batch fix broken links failed:", err)
+      logger.error("Batch fix broken links failed", { error: String(err) })
     } finally {
       setBatchFixing(false)
     }
@@ -236,7 +239,7 @@ export function LintView() {
       setFileTree(tree)
       bumpDataVersion()
     } catch (err) {
-      console.error("Batch send to review failed:", err)
+      logger.error("Batch send to review failed", { error: String(err) })
     } finally {
       setBatchFixing(false)
     }
@@ -350,7 +353,7 @@ export function LintView() {
       setFileTree(tree)
       bumpDataVersion()
     } catch (err) {
-      console.error("Fix failed:", err)
+      logger.error("Fix failed", { error: String(err) })
     } finally {
       setFixingId(null)
     }
@@ -379,7 +382,7 @@ export function LintView() {
       setFileTree(tree)
       bumpDataVersion()
     } catch (err) {
-      console.error("Delete failed:", err)
+      logger.error("Delete failed", { error: String(err) })
     }
   }
 

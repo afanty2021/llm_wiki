@@ -19,6 +19,9 @@ import { normalizePath } from "@/lib/path-utils"
 import { hasConfiguredDeepResearchSources } from "@/lib/web-search"
 import { makeQueryFileName } from "@/lib/wiki-filename"
 import { useTranslation } from "react-i18next"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("review")
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
   contradiction: { icon: AlertTriangle, label: "Contradiction", color: "text-amber-500" },
@@ -108,7 +111,7 @@ export function ReviewView() {
 
         resolveItem(id, "Saved to Wiki")
       } catch (err) {
-        console.error("Failed to save to wiki from review:", err)
+        logger.error("Failed to save to wiki from review", { error: String(err) })
         resolveItem(id, "Save failed")
       }
     } else if ((action.startsWith("open:") || actionLooksLikeOpen(action)) && project) {
@@ -143,7 +146,7 @@ export function ReviewView() {
         setFileTree(tree)
         resolveItem(id, "Deleted")
       } catch (err) {
-        console.error("Failed to delete:", err)
+        logger.error("Failed to delete", { error: String(err) })
         resolveItem(id, "Delete failed")
       }
     } else if (actionLooksLikeResearch(action) && project) {
@@ -219,7 +222,7 @@ export function ReviewView() {
 
           resolveItem(id, `Created: wiki/${dir}/${fileName}`)
         } catch (err) {
-          console.error("Failed to create page from review:", err)
+          logger.error("Failed to create page from review", { error: String(err) })
           resolveItem(id, "Create failed")
         }
       } else {

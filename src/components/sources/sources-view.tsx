@@ -18,6 +18,9 @@ import {
   importSourceFiles,
   importSourceFolder,
 } from "@/lib/source-lifecycle"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("sources")
 
 const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
@@ -86,7 +89,7 @@ export function SourcesView() {
       await rescanProjectFileSync(project, useWikiStore.getState().sourceWatchConfig)
       setRefreshError(null)
     } catch (err) {
-      console.warn("[sources] failed to rescan project files:", err)
+      logger.warn("failed to rescan project files", { error: String(err) })
       setRefreshError(String(err))
     } finally {
       await loadSources()
@@ -160,7 +163,7 @@ export function SourcesView() {
       await importSourceFolder(project, selected, llmConfig, sourceWatchConfig)
       await loadSources()
     } catch (err) {
-      console.error(`Failed to import folder:`, err)
+      logger.error("Failed to import folder", { error: String(err) })
     } finally {
       setImporting(false)
     }
@@ -172,7 +175,7 @@ export function SourcesView() {
       const content = await readFile(node.path)
       setFileContent(content)
     } catch (err) {
-      console.error("Failed to read source:", err)
+      logger.error("Failed to read source", { error: String(err) })
     }
   }
 
@@ -198,7 +201,7 @@ export function SourcesView() {
         setSelectedFile(null)
       }
     } catch (err) {
-      console.error("Failed to delete source:", err)
+      logger.error("Failed to delete source", { error: String(err) })
       window.alert(`Failed to delete: ${err}`)
     }
   }
@@ -233,7 +236,7 @@ export function SourcesView() {
         setSelectedFile(null)
       }
     } catch (err) {
-      console.error("Failed to delete folder:", err)
+      logger.error("Failed to delete folder", { error: String(err) })
       window.alert(`Failed to delete folder: ${err}`)
     }
   }
@@ -251,7 +254,7 @@ export function SourcesView() {
     try {
       await enqueueSourceIngest(project, [node.path], llmConfig)
     } catch (err) {
-      console.error("Failed to enqueue ingest:", err)
+      logger.error("Failed to enqueue ingest", { error: String(err) })
     } finally {
       setIngestingPath(null)
     }
