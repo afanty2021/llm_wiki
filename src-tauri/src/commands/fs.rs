@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use calamine::{open_workbook_auto, Data, Reader};
 use office_oxide::Document;
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::commands::file_sync;
 use crate::panic_guard::run_guarded;
@@ -55,7 +55,16 @@ fn is_absolute_path_cross_platform(path: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn read_file(path: String, extract_images: Option<bool>) -> Result<String, String> {
+#[instrument(name = "read_file", skip(path), fields(trace_id = %trace_id, path = %path))]
+pub async fn read_file(
+    path: String,
+    extract_images: Option<bool>,
+    trace_id: String,
+) -> Result<String, String> {
+    // 捕获 #[instrument] 创建的当前 span，供 spawn_blocking 闭包显式进入。
+    // spawn_blocking 在独立阻塞线程执行，默认不继承调用线程的 span context，
+    // 不显式 enter 则内部 run_guarded 的 error! 不带 trace_id。
+    let span = tracing::Span::current();
     // `spawn_blocking` is REQUIRED, not a perf nicety. The body does
     // synchronous PDF/Office text extraction (pdfium FFI, calamine,
     // zip + image decode) that can take 10s+ on big files. Running
@@ -66,6 +75,7 @@ pub async fn read_file(path: String, extract_images: Option<bool>) -> Result<Str
     // place). `spawn_blocking` moves the work to tokio's blocking
     // pool where blocking-for-seconds is the contract.
     tauri::async_runtime::spawn_blocking(move || {
+        let _span_guard = span.enter();
         run_guarded("read_file", || {
             let p = Path::new(&path);
             let ext = p
@@ -970,8 +980,11 @@ fn extract_odf_text(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, S
 }
 
 #[tauri::command]
-pub async fn write_file(path: String, contents: String) -> Result<(), String> {
+#[instrument(name = "write_file", skip(path, contents), fields(trace_id = %trace_id, path = %path))]
+pub async fn write_file(path: String, contents: String, trace_id: String) -> Result<(), String> {
+    let span = tracing::Span::current();
     tauri::async_runtime::spawn_blocking(move || {
+        let _span_guard = span.enter();
         run_guarded("write_file", || {
             require_absolute_path("write_file", &path)?;
             let p = Path::new(&path);
@@ -1062,8 +1075,11 @@ pub async fn write_file_atomic(path: String, contents: String) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn list_directory(path: String) -> Result<Vec<FileNode>, String> {
+#[instrument(name = "list_directory", skip(path), fields(trace_id = %trace_id, path = %path))]
+pub async fn list_directory(path: String, trace_id: String) -> Result<Vec<FileNode>, String> {
+    let span = tracing::Span::current();
     tauri::async_runtime::spawn_blocking(move || {
+        let _span_guard = span.enter();
         run_guarded("list_directory", || {
             let p = Path::new(&path);
             if !p.exists() {
@@ -1221,8 +1237,11 @@ pub async fn copy_directory(source: String, destination: String) -> Result<Vec<S
 }
 
 #[tauri::command]
-pub async fn delete_file(path: String) -> Result<(), String> {
+#[instrument(name = "delete_file", skip(path), fields(trace_id = %trace_id, path = %path))]
+pub async fn delete_file(path: String, trace_id: String) -> Result<(), String> {
+    let span = tracing::Span::current();
     tauri::async_runtime::spawn_blocking(move || {
+        let _span_guard = span.enter();
         run_guarded("delete_file", || {
             let p = Path::new(&path);
             file_sync::mark_app_write_path(p);
@@ -1628,7 +1647,7 @@ mod tests {
 
         for (name, bytes) in payloads {
             let path = tmp_pdf_with_bytes(bytes);
-            let result = read_file(path.clone(), None).await;
+            let result = read_file(path.clone(), None, "test-read".to_string()).await;
             let _ = fs::remove_file(&path);
             info!(
                 "[{name}] => {:?}",
@@ -1646,6 +1665,7 @@ mod tests {
         let result = read_file(
             "/nonexistent/path/that/does/not/exist.pdf".to_string(),
             None,
+            "test-read".to_string(),
         )
         .await;
         assert!(result.is_err() || result.is_ok()); // must at least return
