@@ -203,7 +203,8 @@ pub fn run() {
                 .app_data_dir()
                 .expect("Failed to resolve app data dir");
 
-            logging::init_logging(app_data_dir).expect("Failed to initialize logging");
+            logging::init_logging(app_data_dir, app.handle().clone())
+                .expect("Failed to initialize logging");
             // ================================================================
             // Let the PDF extractor find the bundled pdfium dynamic
             // library via Tauri's platform-correct resource path.

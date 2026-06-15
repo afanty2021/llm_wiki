@@ -2,8 +2,11 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::AppHandle;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, prelude::*, registry::Registry, EnvFilter, reload};
+
+use crate::logging::NotifyLayer;
 
 // ============================================================================
 // 全局静态变量
@@ -159,7 +162,7 @@ impl Clone for SizeBasedRollingFileAppender {
 // ============================================================================
 
 /// 初始化日志系统
-pub fn init_logging(app_data_dir: PathBuf) -> Result<(), String> {
+pub fn init_logging(app_data_dir: PathBuf, app_handle: AppHandle) -> Result<(), String> {
     let log_dir = app_data_dir.join("logs");
 
     // 创建日志目录
@@ -219,7 +222,8 @@ pub fn init_logging(app_data_dir: PathBuf) -> Result<(), String> {
                 .json()
                 .with_writer(normal_appender)
                 .with_target(true)
-        );
+        )
+        .with(NotifyLayer::new(app_handle));
 
     tracing::subscriber::set_global_default(subscriber)
         .map_err(|e| format!("Failed to set tracing subscriber: {}", e))?;
