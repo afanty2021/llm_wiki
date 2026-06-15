@@ -10,6 +10,9 @@ import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 import { inferWikiTypeFromPath, wikiTypeLabel } from "@/lib/wiki-page-types"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("knowledge-tree")
 
 interface WikiPageInfo {
   path: string
@@ -110,7 +113,7 @@ export function KnowledgeTree() {
         bumpDataVersion()
         if (selectedFile === pagePath) setSelectedFile(null)
       } catch (err) {
-        console.error("[KnowledgeTree] delete failed:", err)
+        logger.error("delete failed", { error: String(err) })
         window.alert(`Failed to delete: ${err}`)
       } finally {
         setDeletingPath(null)

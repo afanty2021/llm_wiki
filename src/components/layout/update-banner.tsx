@@ -5,6 +5,9 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
 import { saveUpdateCheckState } from "@/lib/project-store"
 import { toLatestReleaseUrl } from "@/lib/update-check"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("update-banner")
 
 /**
  * App-wide update-available banner.
@@ -43,7 +46,7 @@ export function UpdateBanner() {
     try {
       await openUrl(toLatestReleaseUrl(result.release.html_url))
     } catch (err) {
-      console.error("[update-banner] openUrl failed:", err)
+      logger.error("openUrl failed", { error: String(err) })
     }
   }, [result])
 

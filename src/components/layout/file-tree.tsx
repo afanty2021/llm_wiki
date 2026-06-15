@@ -6,6 +6,9 @@ import { useWikiStore } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
 import { openProjectFolder } from "@/commands/fs"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("file-tree")
 
 function TreeNode({ node, depth }: { node: FileNode; depth: number }) {
   const [expanded, setExpanded] = useState(depth < 1)
@@ -65,7 +68,7 @@ export function FileTree() {
     try {
       await openProjectFolder(project.path)
     } catch (err) {
-      console.error("[FileTree] open project folder failed:", err)
+      logger.error("open project folder failed", { error: String(err) })
       await message(
         t("fileTree.openProjectFolderFailed", {
           defaultValue: "Failed to open the project folder.",

@@ -11,6 +11,9 @@ import { ResearchPanel } from "./research-panel"
 import { ActivityPanel } from "./activity-panel"
 import { useResearchStore } from "@/stores/research-store"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("layout")
 
 interface AppLayoutProps {
   onSwitchProject: () => void
@@ -34,7 +37,7 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
       const tree = await listDirectory(normalizePath(project.path))
       setFileTree(tree)
     } catch (err) {
-      console.error("Failed to load file tree:", err)
+      logger.error("Failed to load file tree", { error: String(err) })
     }
   }, [project, setFileTree])
 

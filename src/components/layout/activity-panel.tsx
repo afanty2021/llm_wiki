@@ -24,6 +24,9 @@ import {
   type FileChangeTask,
 } from "@/commands/file-sync"
 import { inferWikiTypeFromPath, wikiTypeLabel } from "@/lib/wiki-page-types"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("activity")
 
 const FILE_TYPE_ICONS: Record<string, typeof FileText> = {
   sources: BookOpen,
@@ -112,7 +115,7 @@ export function ActivityPanel() {
     void retryAllFailedTasks()
       .then(() => setQueueTasks([...getQueue()]))
       .catch((err) => {
-        console.error("[activity-panel] failed to retry failed ingest tasks:", err)
+        logger.error("failed to retry failed ingest tasks", { error: String(err) })
       })
   }, [project])
 

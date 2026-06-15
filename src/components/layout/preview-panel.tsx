@@ -6,6 +6,9 @@ import { getFileCategory, isBinary, isExtractedTextPreviewFile } from "@/lib/fil
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
 import { getFileName } from "@/lib/path-utils"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("preview")
 
 export function PreviewPanel() {
   const selectedFile = useWikiStore((s) => s.selectedFile)
@@ -57,7 +60,7 @@ export function PreviewPanel() {
         lastLoadedRef.current = markdown
         if (syncStore) setFileContent(markdown)
       })
-      .catch((err) => console.error("Failed to save:", err))
+      .catch((err) => logger.error("Failed to save", { error: String(err) }))
   }, [setFileContent])
 
   const handleSave = useCallback(
