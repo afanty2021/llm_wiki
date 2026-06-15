@@ -36,6 +36,57 @@ function shouldLog(level: LogLevel): boolean {
   return levels.indexOf(level) >= levels.indexOf(globalLogLevel);
 }
 
+/** 采样配置：每秒最多记录的非 ERROR 日志条数。
+ *  默认 Infinity（不启用限流）。当前无高频源，保持关闭。
+ *  未来高频模块出现时，改为具体数值（如 100）或从 app-state.json 读取。 */
+const RATE_LIMIT_PER_SEC = Infinity;
+
+/** 采样器状态（模块级，所有 Logger 实例共享） */
+let sampleWindowStart = 0;
+let sampleWindowCount = 0;
+
+/** 纯函数：时间窗口采样判定（无副作用，供单测直接调用）。
+ *  - ERROR 永不采样丢弃
+ *  - 未启用限流（Infinity）时全通过
+ *  - 每秒一个窗口，窗口内超阈值则丢弃该条 */
+export function shouldSampleAt(
+  level: LogLevel,
+  now: number,
+  windowStart: number,
+  windowCount: number,
+  threshold: number
+): { allow: boolean; newWindowStart: number; newWindowCount: number } {
+  if (level === "ERROR") {
+    return { allow: true, newWindowStart: windowStart, newWindowCount: windowCount };
+  }
+  if (threshold === Infinity) {
+    return { allow: true, newWindowStart: windowStart, newWindowCount: windowCount };
+  }
+  if (now - windowStart >= 1000) {
+    return { allow: 1 <= threshold, newWindowStart: now, newWindowCount: 1 };
+  }
+  const newCount = windowCount + 1;
+  return {
+    allow: newCount <= threshold,
+    newWindowStart: windowStart,
+    newWindowCount: newCount,
+  };
+}
+
+/** 薄包装：读取模块级状态 → 调用纯函数 → 写回状态。 */
+function shouldSample(level: LogLevel): boolean {
+  const result = shouldSampleAt(
+    level,
+    Date.now(),
+    sampleWindowStart,
+    sampleWindowCount,
+    RATE_LIMIT_PER_SEC
+  );
+  sampleWindowStart = result.newWindowStart;
+  sampleWindowCount = result.newWindowCount;
+  return result.allow;
+}
+
 /** 刷新批处理缓冲区 */
 async function flushBatch(): Promise<void> {
   if (batchBuffer.length === 0) return;
@@ -77,6 +128,7 @@ function addToBatch(entry: FrontendLogEntry): void {
 /** 记录日志核心函数 */
 function log(level: LogLevel, message: string, data?: Record<string, unknown>): void {
   if (!shouldLog(level)) return;
+  if (!shouldSample(level)) return; // 采样拦截（ERROR 免疫，默认 Infinity 全通过）
 
   const entry: FrontendLogEntry = {
     timestamp: new Date().toISOString(),
