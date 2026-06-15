@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,6 +7,7 @@ use tauri::AppHandle;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, prelude::*, registry::Registry, EnvFilter, reload};
 
+use super::types::{LogDisplayEntry, ReadLogResponse};
 use crate::logging::NotifyLayer;
 
 // ============================================================================
@@ -655,9 +657,6 @@ pub fn export_logs(app_data_dir: PathBuf, days: u32) -> Result<String, String> {
 // ============================================================================
 // read_log_file（日志查看器读取，支持分页 / 级别 / 关键字 / trace_id 过滤）
 // ============================================================================
-
-use super::types::{LogDisplayEntry, ReadLogResponse};
-use std::collections::HashSet;
 
 const MAX_LOG_LIMIT: usize = 500;
 
