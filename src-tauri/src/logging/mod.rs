@@ -1,3 +1,4 @@
+mod config;
 mod manager;
 mod router;
 mod types;
