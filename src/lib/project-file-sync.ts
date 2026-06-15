@@ -20,6 +20,9 @@ import {
 } from "@/lib/source-lifecycle"
 import { isPathAllowedBySourceWatch, normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 
+const logger = createLogger("file-sync")
+import { createLogger } from "@/lib/logger"
+
 let unlistenQueue: UnlistenFn | null = null
 let unlistenChanged: UnlistenFn | null = null
 let startSeq = 0
@@ -188,7 +191,7 @@ async function refreshAfterFileChanges(project: WikiProject, relativePaths: stri
     const tree = await listDirectory(pp)
     useWikiStore.getState().setFileTree(tree)
   } catch (err) {
-    console.warn("[file-sync] failed to refresh file tree:", err)
+    logger.warn("Failed to refresh file tree", { error: String(err) })
   }
 
   store.bumpDataVersion()
@@ -225,7 +228,7 @@ async function enqueueRawSourceChanges(project: WikiProject, tasks: FileChangeTa
   try {
     await enqueueSourceIngest(project, paths, useWikiStore.getState().llmConfig)
   } catch (err) {
-    console.error("[file-sync] failed to enqueue raw source ingest:", err)
+    logger.error("Failed to enqueue raw source ingest", { error: String(err) })
   }
 }
 
@@ -254,7 +257,7 @@ async function cleanupDeletedFiles(project: WikiProject, tasks: FileChangeTask[]
       })
       deletedWikiSlugs = new Set(result.deletedWikiPaths.map((path) => getFileStem(path)))
     } catch (err) {
-      console.error("[file-sync] failed to clean deleted raw sources:", err)
+      logger.error("Failed to clean deleted raw sources", { error: String(err) })
     }
   }
 
@@ -263,7 +266,7 @@ async function cleanupDeletedFiles(project: WikiProject, tasks: FileChangeTask[]
     try {
       await cleanupDeletedWikiPages(project.path, wikiPagesToClean)
     } catch (err) {
-      console.error("[file-sync] failed to clean deleted wiki pages:", err)
+      logger.error("Failed to clean deleted wiki pages", { error: String(err) })
     }
   }
 }

@@ -17,6 +17,9 @@ import { load } from "@tauri-apps/plugin-store"
 import { readFile, writeFile } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 
+const logger = createLogger("project-identity")
+import { createLogger } from "@/lib/logger"
+
 const STORE_NAME = "app-state.json"
 const REGISTRY_KEY = "projectRegistry"
 
@@ -62,7 +65,7 @@ export async function ensureProjectId(projectPath: string): Promise<string> {
   try {
     await writeFile(path, JSON.stringify(identity, null, 2))
   } catch (err) {
-    console.warn("[project-identity] failed to write identity file:", err)
+    logger.warn("Failed to write project identity file", { error: String(err) })
   }
   return identity.id
 }

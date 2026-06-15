@@ -22,11 +22,14 @@
 
 import { readFile, listDirectory } from "@/commands/fs"
 import { invokeTraced } from "@/lib/invoke-traced"
+import { createLogger } from "@/lib/logger"
 import type { EmbeddingConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { getHttpFetch, isFetchNetworkError } from "@/lib/tauri-fetch"
 import { chunkMarkdown, type Chunk } from "@/lib/text-chunker"
+
+const logger = createLogger("embedding")
 
 const RESERVED_EMBEDDING_HEADER_NAMES = new Set([
   "authorization",
@@ -161,7 +164,7 @@ export async function fetchEmbedding(
             ? "data.embedding"
             : "data[0].embedding"
         lastEmbeddingError = `Embedding response missing ${expectedShape} (got ${JSON.stringify(data).slice(0, 200)})`
-        console.warn(`[Embedding] ${lastEmbeddingError}`)
+        logger.warn("Embedding response missing expected shape", { shape: expectedShape, data: JSON.stringify(data).slice(0, 200) })
         return null
       }
 
@@ -179,22 +182,26 @@ export async function fetchEmbedding(
         if (current.length > 64 && attempts <= maxRetries) {
           const prev = current.length
           current = current.slice(0, Math.floor(current.length / 2))
-          console.warn(
-            `[Embedding] auto-halving after HTTP ${resp.status} at ${prev} chars → retrying at ${current.length} chars (attempt ${attempts}/${maxRetries + 1})`,
-          )
+          logger.warn("Auto-halving embedding text after oversize error", {
+            httpStatus: resp.status,
+            prevChars: prev,
+            currentChars: current.length,
+            attempt: attempts,
+            maxRetries: maxRetries + 1,
+          })
           continue
         }
         // Out of retries on a SERVER-oversize error — give the user a
         // message that names the smallest size that still failed so
         // they can tune Settings → Embedding accordingly.
         lastEmbeddingError = `Endpoint rejected input even at ${current.length} chars — server context smaller than expected. Lower Settings → Embedding → Max Chunk Chars (${bodyText.slice(0, 160)}).`
-        console.warn(`[Embedding] ${lastEmbeddingError}`)
+        logger.warn("Embedding endpoint rejected input even at smallest size", { error: lastEmbeddingError, charsAt: current.length })
         return null
       }
 
       // Non-oversize definitive failure (auth, rate limit, server down, …).
       lastEmbeddingError = `API ${resp.status} ${resp.statusText}${bodyText ? ` — ${bodyText.slice(0, 200)}` : ""} at ${endpoint}`
-      console.warn(`[Embedding] ${lastEmbeddingError}`)
+      logger.warn("Embedding API definitive failure", { error: lastEmbeddingError, httpStatus: resp.status })
       return null
     } catch (err) {
       if (isFetchNetworkError(err)) {
@@ -202,7 +209,7 @@ export async function fetchEmbedding(
       } else {
         lastEmbeddingError = err instanceof Error ? err.message : String(err)
       }
-      console.warn(`[Embedding] ${lastEmbeddingError}`)
+      logger.warn("Embedding network or unexpected error", { error: lastEmbeddingError })
       return null
     }
   }
@@ -210,7 +217,7 @@ export async function fetchEmbedding(
   // Exhausted retries (only reachable if every halving round triggered
   // the retry branch and then the loop condition ended).
   lastEmbeddingError = `Embedding endpoint rejected every size down to ${current.length} chars — the server's context is smaller than ${current.length * 2}. Lower Settings → Embedding → Max Chunk Chars.`
-  console.warn(`[Embedding] ${lastEmbeddingError}`)
+  logger.warn("Embedding exhausted all retries", { error: lastEmbeddingError, charsDownTo: current.length })
   return null
 }
 
@@ -544,18 +551,14 @@ export async function embedPage(
 
   if (prepared.status !== "ready") {
     if (prepared.status === "failed") {
-      console.log(
-        `[Embedding] Indexed nothing for "${pageId}" — no chunks could be embedded. See getLastEmbeddingError().`,
-      )
+      logger.debug("Indexed nothing for page — no chunks could be embedded", { pageId })
     }
     return false
   }
 
   await vectorUpsertChunks(projectPath, pageId, prepared.page.rows)
   const elapsed = Math.round(performance.now() - t0)
-  console.log(
-    `[Embedding] Indexed "${pageId}": ${prepared.page.rows.length}/${prepared.page.chunkCount} chunks (${prepared.page.failedChunks} skipped) in ${elapsed}ms`,
-  )
+  logger.debug("Indexed page chunks", { pageId, rows: prepared.page.rows.length, chunkCount: prepared.page.chunkCount, skipped: prepared.page.failedChunks, elapsedMs: elapsed })
   return true
 }
 
@@ -668,9 +671,7 @@ export async function embedAllPages(
         )
       }
       written++
-      console.log(
-        `[Embedding] Rebuilt "${page.pageId}": ${page.rows.length}/${page.chunkCount} chunks (${page.failedChunks} skipped)`,
-      )
+      logger.debug("Rebuilt page chunks", { pageId: page.pageId, rows: page.rows.length, chunkCount: page.chunkCount, skipped: page.failedChunks })
     }
 
     return written
@@ -732,7 +733,7 @@ export async function searchByEmbedding(
   try {
     rawChunks = await vectorSearchChunks(projectPath, queryEmb, Math.max(topK * 3, 30))
   } catch (err) {
-    console.log(`[Embedding] LanceDB chunk search failed: ${err instanceof Error ? err.message : err}`)
+    logger.debug("LanceDB chunk search failed", { error: err instanceof Error ? err.message : String(err) })
     return []
   }
   if (rawChunks.length === 0) return []
@@ -768,9 +769,7 @@ export async function searchByEmbedding(
   ranked.sort((a, b) => b.score - a.score)
 
   const elapsed = Math.round(performance.now() - t0)
-  console.log(
-    `[Embedding] LanceDB chunk search: ${rawChunks.length} chunks → ${ranked.length} pages in ${elapsed}ms`,
-  )
+  logger.debug("LanceDB chunk search completed", { rawChunks: rawChunks.length, pages: ranked.length, elapsedMs: elapsed })
 
   return ranked.slice(0, topK)
 }

@@ -4,6 +4,9 @@ import { normalizePath } from "@/lib/path-utils"
 import { streamChat } from "@/lib/llm-client"
 import type { WebSearchResult } from "./web-search"
 
+const logger = createLogger("anytxt-search")
+import { createLogger } from "@/lib/logger"
+
 export const DEFAULT_ANYTXT_ENDPOINT = "http://127.0.0.1:9920"
 export const DEFAULT_ANYTXT_FILTER_EXT = "*"
 export const DEFAULT_ANYTXT_LIMIT = 20
@@ -115,7 +118,7 @@ export async function prepareAnyTxtQueries(queries: string[], llmConfig?: LlmCon
     return uniqueAnyTxtQueries([...rewritten, ...cleanQueries])
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.warn("[AnyTXT] query rewrite failed, using original queries:", message)
+    logger.warn("AnyTXT query rewrite failed, using original queries", { error: message })
     return cleanQueries
   }
 }

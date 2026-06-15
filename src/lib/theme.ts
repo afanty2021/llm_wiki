@@ -1,6 +1,9 @@
 import { loadTheme } from "@/lib/project-store"
 import { getCurrentWindow, type Theme as NativeTheme } from "@tauri-apps/api/window"
 
+const logger = createLogger("theme")
+import { createLogger } from "@/lib/logger"
+
 export type AppTheme = "light" | "dark" | "system"
 
 let activeTheme: AppTheme = "system"
@@ -20,10 +23,10 @@ function syncNativeWindowTheme(resolved: NativeTheme): void {
   const win = getCurrentWindow()
   const background = resolved === "dark" ? "#27282b" : "#ffffff"
   void win.setTheme(resolved).catch((err) => {
-    console.warn("[theme] failed to sync native window theme:", err)
+    logger.warn("Failed to sync native window theme", { error: String(err) })
   })
   void win.setBackgroundColor(background).catch((err) => {
-    console.warn("[theme] failed to sync native window background:", err)
+    logger.warn("Failed to sync native window background", { error: String(err) })
   })
 }
 

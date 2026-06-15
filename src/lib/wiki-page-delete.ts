@@ -36,6 +36,9 @@ import {
 } from "@/lib/sources-merge"
 import type { FileNode } from "@/types/wiki"
 
+const logger = createLogger("wiki-delete")
+import { createLogger } from "@/lib/logger"
+
 /**
  * Detect whether a wiki page lives under `wiki/sources/`. We treat
  * those as source-summary pages — each owns its source's extracted
@@ -190,7 +193,7 @@ export async function cascadeDeleteWikiPagesWithRefs(
       await cascadeDeleteWikiPage(pp, pagePath)
       result.deletedPaths.push(pagePath)
     } catch (err) {
-      console.warn(`[wiki-delete] failed to delete ${pagePath}:`, err)
+      logger.warn("Failed to delete wiki page", { pagePath, error: String(err) })
     }
   }
 
@@ -236,7 +239,7 @@ export async function cascadeDeleteWikiPagesWithRefs(
         await writeFile(file.path, updated)
         result.rewrittenFiles++
       } catch (err) {
-        console.warn(`[wiki-delete] failed to rewrite ${file.path}:`, err)
+        logger.warn("Failed to rewrite wiki file during cascade delete", { path: file.path, error: String(err) })
       }
     }
   }

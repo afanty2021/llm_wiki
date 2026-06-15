@@ -34,6 +34,28 @@ vi.mock("@/commands/fs", () => ({
   listDirectory: vi.fn(),
 }))
 
+// Mock the logger so that warn/debug/info/error calls go directly to the
+// corresponding console methods — prevents logger batch-flush from calling
+// the mocked invoke (avoiding spurious mockInvoke calls in test assertions).
+vi.mock("@/lib/logger", () => {
+  const noop = (..._args: unknown[]) => {}
+  return {
+    createLogger: () => ({
+      debug: (...args: unknown[]) => console.debug(...args),
+      info: (...args: unknown[]) => console.info(...args),
+      warn: (...args: unknown[]) => console.warn(...args),
+      error: (...args: unknown[]) => console.error(...args),
+    }),
+    initLogger: () => Promise.resolve(),
+    setLogLevel: noop,
+    shouldSampleAt: (_level: string, now: number, windowStart: number, windowCount: number, threshold: number) => ({
+      allow: true,
+      newWindowStart: windowStart,
+      newWindowCount: windowCount,
+    }),
+  }
+})
+
 import {
   searchByEmbedding,
   fetchEmbedding,

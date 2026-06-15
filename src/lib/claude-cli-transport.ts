@@ -16,6 +16,9 @@ import type { LlmConfig } from "@/stores/wiki-store"
 import type { ChatMessage, RequestOverrides } from "./llm-providers"
 import type { StreamCallbacks } from "./llm-client"
 
+const logger = createLogger("claude-cli")
+import { createLogger } from "@/lib/logger"
+
 /**
  * Public parse entry point. Given one stream-json line from claude's
  * stdout, returns any assistant text it contains (or null for events
@@ -133,7 +136,7 @@ export async function streamClaudeCodeCli(
     for (const key of ["temperature", "top_p", "top_k", "max_tokens", "stop"] as const) {
       if (overrides[key] !== undefined) {
         // eslint-disable-next-line no-console
-        console.warn(`[claude-code] ignoring unsupported override "${key}": CLI has no equivalent flag`)
+        logger.warn("Ignoring unsupported override in Claude Code CLI", { key })
       }
     }
   }

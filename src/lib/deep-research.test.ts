@@ -3,6 +3,22 @@ import { collectResearchSources, makeDeepResearchFileName } from "./deep-researc
 import type { SearchApiConfig } from "@/stores/wiki-store"
 import type { WebSearchResult } from "./web-search"
 
+// Mock the logger so that debug/info/warn/error calls go to the corresponding
+// console methods — existing test spies on console.info continue to work.
+vi.mock("@/lib/logger", () => {
+  const noop = (..._args: unknown[]) => {}
+  return {
+    createLogger: () => ({
+      debug: (...args: unknown[]) => console.debug(...args),
+      info: (...args: unknown[]) => console.info(...args),
+      warn: (...args: unknown[]) => console.warn(...args),
+      error: (...args: unknown[]) => console.error(...args),
+    }),
+    initLogger: () => Promise.resolve(),
+    setLogLevel: noop,
+  }
+})
+
 const webResult: WebSearchResult = {
   title: "Web",
   url: "https://example.com/web",

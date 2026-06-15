@@ -13,6 +13,9 @@ import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useResearchStore } from "@/stores/research-store"
 
+const logger = createLogger("reset-project")
+import { createLogger } from "@/lib/logger"
+
 export async function resetProjectState(): Promise<void> {
   // Zustand stores — clear all per-project data (synchronous)
   useChatStore.setState({
@@ -52,10 +55,10 @@ export async function resetProjectState(): Promise<void> {
     try {
       scheduledImportMod.value.stopScheduledImport()
     } catch (err) {
-      console.warn("[Reset Project State] stopScheduledImport failed:", err)
+      logger.warn("stopScheduledImport failed in reset", { error: String(err) })
     }
   } else {
-    console.warn("[Reset Project State] Failed to load scheduled-import:", scheduledImportMod.reason)
+    logger.warn("Failed to load scheduled-import failed in reset", { error: String(scheduledImportMod.reason) })
   }
 
   if (queueMod.status === "fulfilled") {
@@ -66,40 +69,40 @@ export async function resetProjectState(): Promise<void> {
       // new project's restoreQueue reads its own file.
       await queueMod.value.pauseQueue()
     } catch (err) {
-      console.warn("[Reset Project State] pauseQueue failed:", err)
+      logger.warn("pauseQueue failed in reset", { error: String(err) })
     }
   } else {
-    console.warn("[Reset Project State] Failed to load ingest-queue:", queueMod.reason)
+    logger.warn("Failed to load ingest-queue failed in reset", { error: String(queueMod.reason) })
   }
 
   if (dedupQueueMod.status === "fulfilled") {
     try {
       await dedupQueueMod.value.pauseQueue()
     } catch (err) {
-      console.warn("[Reset Project State] dedup pauseQueue failed:", err)
+      logger.warn("dedup pauseQueue failed in reset", { error: String(err) })
     }
   } else {
-    console.warn("[Reset Project State] Failed to load dedup-queue:", dedupQueueMod.reason)
+    logger.warn("Failed to load dedup-queue failed in reset", { error: String(dedupQueueMod.reason) })
   }
 
   if (graphMod.status === "fulfilled") {
     try {
       graphMod.value.clearGraphCache()
     } catch (err) {
-      console.warn("[Reset Project State] clearGraphCache failed:", err)
+      logger.warn("clearGraphCache failed in reset", { error: String(err) })
     }
   } else {
-    console.warn("[Reset Project State] Failed to load graph-relevance:", graphMod.reason)
+    logger.warn("Failed to load graph-relevance failed in reset", { error: String(graphMod.reason) })
   }
 
   if (fileSyncMod.status === "fulfilled") {
     try {
       await fileSyncMod.value.stopProjectFileSync()
     } catch (err) {
-      console.warn("[Reset Project State] stopProjectFileSync failed:", err)
+      logger.warn("stopProjectFileSync failed in reset", { error: String(err) })
     }
   } else {
-    console.warn("[Reset Project State] Failed to load project-file-sync:", fileSyncMod.reason)
+    logger.warn("Failed to load project-file-sync failed in reset", { error: String(fileSyncMod.reason) })
   }
 
 }

@@ -36,6 +36,9 @@ import { collectAllFilesIncludingDot } from "@/lib/sources-tree-delete"
 import { isPathAllowedBySourceWatch, normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import type { SourceWatchConfig } from "@/stores/wiki-store"
 
+const logger = createLogger("source-lifecycle")
+import { createLogger } from "@/lib/logger"
+
 export const INGESTABLE_SOURCE_EXTENSIONS = new Set([
   "md",
   "mdx",
@@ -180,7 +183,7 @@ export async function importSourceFiles(
       importedPaths.push(destPath)
       preprocessFile(destPath).catch(() => {})
     } catch (err) {
-      console.error(`Failed to import ${originalName}:`, err)
+      logger.error("Failed to import file", { originalName, error: String(err) })
     }
   }
 
@@ -304,7 +307,7 @@ export async function deleteSourceFiles(
   try {
     allMd = flattenMd(await listDirectory(`${pp}/wiki`))
   } catch (err) {
-    console.warn("[source-lifecycle] failed to scan wiki sources during delete:", err)
+    logger.warn("Failed to scan wiki sources during delete", { error: String(err) })
   }
 
   for (const file of allMd) {
@@ -312,7 +315,7 @@ export async function deleteSourceFiles(
     try {
       content = await readFile(file.path)
     } catch (err) {
-      console.warn(`[source-lifecycle] failed to read ${file.path}:`, err)
+      logger.warn("Failed to read file during source delete", { path: file.path, error: String(err) })
       continue
     }
 
@@ -336,7 +339,7 @@ export async function deleteSourceFiles(
         await writeFile(file.path, writeSources(content, survivors))
         rewrittenSourcePages++
       } catch (err) {
-        console.warn(`[source-lifecycle] failed to rewrite sources for ${file.path}:`, err)
+        logger.warn("Failed to rewrite sources", { path: file.path, error: String(err) })
       }
     }
   }
@@ -355,9 +358,7 @@ export async function deleteSourceFiles(
   })
 
   if (skippedPages > 0) {
-    console.debug(
-      `[source-lifecycle] skipped ${skippedPages} wiki pages with no parseable sources while deleting ${sourceInfos.length} source(s)`,
-    )
+    logger.debug("Skipped wiki pages with no parseable sources", { skippedPages, sourceCount: sourceInfos.length })
   }
 
   return { deletedWikiPaths, rewrittenSourcePages, skippedPages }
@@ -382,7 +383,7 @@ export async function deleteSourceFolder(
     try {
       await deleteFile(folder.path)
     } catch (err) {
-      console.warn(`Failed to remove folder ${folder.path}:`, err)
+      logger.warn("Failed to remove folder", { path: folder.path, error: String(err) })
     }
   }
 
@@ -439,7 +440,7 @@ export async function cleanupDeletedWikiPages(
       try {
         await writeFile(file.path, updated)
       } catch (err) {
-        console.warn(`[source-lifecycle] failed to rewrite ${file.path}:`, err)
+        logger.warn("Failed to rewrite file during cleanup", { path: file.path, error: String(err) })
       }
     }
   }
@@ -486,7 +487,7 @@ async function appendSourceDeleteLog(
     const logEntry = `\n## [${date}] ${detail.reason} | ${subject}\n\nDeleted ${names.length} source file${names.length === 1 ? "" : "s"} and ${detail.deletedWikiCount} wiki pages.${detail.keptWikiCount > 0 ? ` ${detail.keptWikiCount} shared pages kept (have other sources).` : ""}${listed}\n`
     await writeFile(logPath, logContent.trimEnd() + logEntry)
   } catch (err) {
-    console.warn("[source-lifecycle] failed to append delete log:", err)
+    logger.warn("Failed to append delete log", { error: String(err) })
   }
 }
 

@@ -12,6 +12,9 @@ import type { LlmConfig } from "@/stores/wiki-store"
 import type { ChatMessage, ContentBlock, RequestOverrides } from "./llm-providers"
 import type { StreamCallbacks } from "./llm-client"
 
+const logger = createLogger("codex-cli")
+import { createLogger } from "@/lib/logger"
+
 export function parseCodexCliLine(rawLine: string): string | null {
   const line = rawLine.trim()
   if (!line) return null
@@ -78,7 +81,7 @@ export async function streamCodexCli(
     for (const key of ["temperature", "top_p", "top_k", "max_tokens", "stop"] as const) {
       if (overrides[key] !== undefined) {
         // eslint-disable-next-line no-console
-        console.warn(`[codex-cli] ignoring unsupported override "${key}": CLI has no equivalent flag`)
+        logger.warn("Ignoring unsupported override in Codex CLI", { key })
       }
     }
   }

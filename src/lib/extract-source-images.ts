@@ -17,6 +17,9 @@ import { invoke } from "@tauri-apps/api/core"
 import { copyFile, createDirectory, fileExists, readFileAsBase64 } from "@/commands/fs"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 
+const logger = createLogger("extract-images")
+import { createLogger } from "@/lib/logger"
+
 /** Mirrors `commands::extract_images::SavedImage` on the Rust side. */
 export interface SavedImage {
   index: number
@@ -189,10 +192,7 @@ export async function extractAndSaveSourceImages(
         )
       })
   } catch (err) {
-    console.warn(
-      `[ingest:images] extraction failed for "${fileName}":`,
-      err instanceof Error ? err.message : err,
-    )
+    logger.warn("Image extraction failed", { fileName, error: err instanceof Error ? err.message : String(err) })
     return []
   }
 }
@@ -216,7 +216,7 @@ export async function extractAndSaveMarkdownImages(
   try {
     await createDirectory(destDir)
   } catch (err) {
-    console.warn("[ingest:images] failed to create markdown image directory:", err)
+    logger.warn("Failed to create markdown image directory", { error: String(err) })
     return []
   }
 
@@ -243,10 +243,7 @@ export async function extractAndSaveMarkdownImages(
         sha256,
       })
     } catch (err) {
-      console.warn(
-        `[ingest:images] markdown image import failed for "${ref}":`,
-        err instanceof Error ? err.message : err,
-      )
+      logger.warn("Markdown image import failed", { ref, error: err instanceof Error ? err.message : String(err) })
     }
   }
 

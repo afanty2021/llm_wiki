@@ -39,6 +39,9 @@ import { captionImage } from "@/lib/vision-caption"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { normalizePath } from "@/lib/path-utils"
 
+const logger = createLogger("image-caption")
+import { createLogger } from "@/lib/logger"
+
 interface CaptionEntry {
   caption: string
   mimeType: string
@@ -101,10 +104,7 @@ async function readCache(projectPath: string): Promise<CaptionCache> {
     // Corrupt cache (e.g. truncated mid-write before we added
     // atomic writes) — start fresh rather than wedging the whole
     // ingest pipeline. Log so it's visible in the activity feed.
-    console.warn(
-      `[caption-cache] corrupt cache at ${cachePath}, starting empty:`,
-      err instanceof Error ? err.message : err,
-    )
+    logger.warn("Corrupt caption cache, starting empty", { cachePath, error: err instanceof Error ? err.message : String(err) })
   }
   return {}
 }
@@ -308,9 +308,7 @@ export async function captionMarkdownImages(
   }
 
   if (llmConfig.provider === "codex-cli") {
-    console.warn(
-      "[caption-pipeline] skipped image captioning: Codex CLI transport does not support image input yet.",
-    )
+    logger.warn("Skipped image captioning: Codex CLI transport does not support image input")
     return {
       enrichedMarkdown: markdown,
       freshCaptions: 0,
@@ -373,10 +371,7 @@ export async function captionMarkdownImages(
     try {
       bytes = await readFileAsBase64(absPath)
     } catch (err) {
-      console.warn(
-        `[caption-pipeline] failed to read ${absPath}:`,
-        err instanceof Error ? err.message : err,
-      )
+      logger.warn("Failed to read image for captioning", { absPath, error: err instanceof Error ? err.message : String(err) })
       failed++
       return
     }
@@ -412,10 +407,7 @@ export async function captionMarkdownImages(
       captionByUrl.set(ref.url, caption)
       freshCaptions++
     } catch (err) {
-      console.warn(
-        `[caption-pipeline] caption failed for ${absPath}:`,
-        err instanceof Error ? err.message : err,
-      )
+      logger.warn("Caption failed for image", { absPath, error: err instanceof Error ? err.message : String(err) })
       failed++
     }
   }
@@ -446,10 +438,7 @@ export async function captionMarkdownImages(
     try {
       await writeCache(projectPath, cache)
     } catch (err) {
-      console.warn(
-        `[caption-pipeline] failed to persist cache:`,
-        err instanceof Error ? err.message : err,
-      )
+      logger.warn("Failed to persist caption cache", { error: err instanceof Error ? err.message : String(err) })
     }
   }
 

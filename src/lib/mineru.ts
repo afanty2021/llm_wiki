@@ -4,6 +4,9 @@ import { createDirectory, getFileSize, readFileAsBase64, writeFileBase64 } from 
 import { getHttpFetch } from "@/lib/tauri-fetch"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 
+const logger = createLogger("mineru")
+import { createLogger } from "@/lib/logger"
+
 const API_BASE = "https://mineru.net/api/v4"
 const POLL_INTERVAL_MS = 3_000
 const POLL_TIMEOUT_MS = 300_000 // 5 minutes
@@ -562,10 +565,7 @@ async function downloadAndExtractMarkdown(
       : markdownWithTables
   } catch (err) {
     if (signal?.aborted) throw err
-    console.warn(
-      "[MinerU] failed to save extracted images; keeping parsed Markdown text:",
-      err instanceof Error ? err.message : err,
-    )
+    logger.warn("MinerU failed to save extracted images; keeping parsed Markdown text", { error: err instanceof Error ? err.message : String(err) })
     return markdownWithTables
   }
 }

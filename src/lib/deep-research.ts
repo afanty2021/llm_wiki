@@ -9,6 +9,9 @@ import { normalizePath } from "@/lib/path-utils"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { makeQueryFileName } from "@/lib/wiki-filename"
 
+const logger = createLogger("deep-research")
+import { createLogger } from "@/lib/logger"
+
 const MAX_RESEARCH_SOURCES = 20
 
 interface ResearchSourceDeps {
@@ -79,7 +82,7 @@ export async function collectResearchSources(
     for (const r of results) {
       if (allResults.length >= MAX_RESEARCH_SOURCES) {
         if (!cappedWarned) {
-          console.info(`[DeepResearch] capped at ${MAX_RESEARCH_SOURCES} research sources; later results were truncated.`)
+          logger.info("Capped at max research sources", { max: MAX_RESEARCH_SOURCES })
           cappedWarned = true
         }
         return
@@ -111,7 +114,7 @@ export async function collectResearchSources(
     } else {
       const message = item.reason instanceof Error ? item.reason.message : String(item.reason)
       errors.push(message)
-      console.warn("[DeepResearch] source search failed:", message)
+      logger.warn("Source search failed in DeepResearch", { error: message })
     }
   }
 
@@ -323,7 +326,7 @@ async function executeResearch(
     // Auto-ingest the research result to generate entities, concepts, cross-references
     if (isActiveProjectPath(pp)) {
       autoIngest(pp, `${pp}/${savedPath}`, llmConfig).catch((err) => {
-        console.error("Failed to auto-ingest research result:", err)
+        logger.error("Failed to auto-ingest research result", { error: String(err) })
       })
     }
   } catch (err) {

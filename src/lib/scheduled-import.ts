@@ -22,6 +22,9 @@ import {
 } from "@/lib/source-lifecycle"
 import { useActivityStore } from "@/stores/activity-store"
 
+const logger = createLogger("scheduled-import")
+import { createLogger } from "@/lib/logger"
+
 interface ImportDb {
   files: Record<string, string>
   lastScan: number | null
@@ -291,7 +294,7 @@ async function loadDbStore(projectPath: string): Promise<ImportDbStore> {
       directories: parsed.directories as Record<string, ImportDb>,
     }
   } catch (err) {
-    console.warn("Failed to load scheduled import database:", err)
+    logger.warn("Failed to load scheduled import database", { error: String(err) })
     return emptyStore()
   }
 }
@@ -337,9 +340,7 @@ export async function scanAndImport(
   const projectPath = normalizePath(project.path)
   const importRoot = resolveImportPath(projectPath, importPath)
   if (isProjectManagedScheduledImportPath(projectPath, importRoot)) {
-    console.warn(
-      `[scheduled-import] skipped self-referential path "${importRoot}". Use source folder monitoring for project sources instead.`,
-    )
+    logger.warn("Skipped self-referential scheduled import path", { importRoot })
     notifyManagedScheduledImportPath(project, importRoot)
     return
   }
@@ -376,9 +377,7 @@ export async function scanAndImport(
 
         const size = await getFileSize(sourcePath)
         if (size > MAX_SCHEDULED_IMPORT_BYTES) {
-          console.warn(
-            `[scheduled-import] skipping ${sourcePath}: ${(size / 1024 / 1024).toFixed(1)} MB exceeds 100 MB limit`,
-          )
+          logger.warn("Skipping file exceeding 100 MB limit", { sourcePath, sizeMB: (size / 1024 / 1024).toFixed(1) })
           continue
         }
 
@@ -396,7 +395,7 @@ export async function scanAndImport(
         }
         changedFiles.push({ key, md5, destPath })
       } catch (err) {
-        console.warn(`[scheduled-import] skipped ${file.path}:`, err)
+        logger.warn("Skipped file during import scan", { path: file.path, error: String(err) })
       }
     }
 
@@ -417,7 +416,7 @@ export async function scanAndImport(
           useWikiStore.getState().setFileTree(projectTree)
           useWikiStore.getState().bumpDataVersion()
         } else {
-          console.warn("[scheduled-import] LLM is not configured; changed files were not marked imported")
+          logger.warn("LLM not configured; changed files not marked imported")
         }
       }
     }
@@ -439,7 +438,7 @@ export async function scanAndImport(
       })
     }
   } catch (err) {
-    console.error("Scheduled import scan failed:", err)
+    logger.error("Scheduled import scan failed", { error: String(err) })
   } finally {
     scanning = false
   }
