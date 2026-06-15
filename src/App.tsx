@@ -19,6 +19,9 @@ import type { WikiProject } from "@/types/wiki"
 import { useAuthStore } from "@/stores/auth-store"
 import { LoginPage } from "@/components/auth/LoginPage"
 import { RegisterPage } from "@/components/auth/RegisterPage"
+import { createLogger } from "@/lib/logger"
+
+const logger = createLogger("app")
 
 function App() {
   const { isAuthenticated, isLoading: authLoading, loadSession } = useAuthStore()
@@ -83,7 +86,7 @@ function App() {
             Date.now(),
           )
           useUpdateStore.getState().setDismissed(null)
-          console.log("[test] update banner cleared")
+          logger.debug("update banner cleared")
           return
         }
         useUpdateStore.getState().setResult(
@@ -106,9 +109,7 @@ function App() {
           Date.now(),
         )
         useUpdateStore.getState().setDismissed(null)
-        console.log(
-          "[test] update banner injected. Run __llmwiki_testUpdateBanner(true) to clear.",
-        )
+        logger.debug("update banner injected. Run __llmwiki_testUpdateBanner(true) to clear.")
       }
     })()
   }, [])
@@ -138,7 +139,7 @@ function App() {
 
         const state = useUpdateStore.getState()
         if (!state.enabled) {
-          console.log("[update-check] skipped: user disabled auto-check in settings")
+          logger.debug("update check skipped: user disabled auto-check in settings")
           return
         }
 
@@ -159,18 +160,16 @@ function App() {
           now - state.lastCheckedAt < UPDATE_CHECK_CACHE_MS
         if (fresh) {
           const ageMin = Math.round((now - (state.lastCheckedAt ?? 0)) / 60_000)
-          console.log(
-            `[update-check] skipped: cache hit (last check ${ageMin} min ago, ` +
-              `cache window ${UPDATE_CHECK_CACHE_MS / 60_000} min). ` +
-              `Last result: kind=${state.lastResult?.kind ?? "none"}`,
-          )
+          logger.debug("update check skipped: cache hit", {
+            lastCheckAgeMin: ageMin,
+            cacheWindowMin: UPDATE_CHECK_CACHE_MS / 60_000,
+            lastResultKind: state.lastResult?.kind ?? "none",
+          })
           return
         }
 
         useUpdateStore.getState().setChecking(true)
-        console.log(
-          `[update-check] fetching GitHub releases (local=${__APP_VERSION__})`,
-        )
+        logger.debug("update check fetching GitHub releases", { local: __APP_VERSION__ })
         const result = await checkForUpdates({
           currentVersion: __APP_VERSION__,
           repo: "nashsu/llm_wiki",
@@ -178,15 +177,11 @@ function App() {
         if (cancelled) return
         useUpdateStore.getState().setResult(result, Date.now())
         if (result.kind === "available") {
-          console.log(
-            `[update-check] update available: local=${result.local} → remote=${result.remote}`,
-          )
+          logger.debug("update available", { local: result.local, remote: result.remote })
         } else if (result.kind === "up-to-date") {
-          console.log(
-            `[update-check] up to date: local=${result.local}, remote latest=${result.remote}`,
-          )
+          logger.debug("up to date", { local: result.local, remote: result.remote })
         } else {
-          console.log(`[update-check] error: ${result.message}`)
+          logger.debug("update check error", { message: result.message })
         }
         await saveUpdateCheckState({
           enabled: useUpdateStore.getState().enabled,
@@ -283,7 +278,7 @@ function App() {
         try {
           await invoke<string>("set_close_behavior", { value: savedGeneral.closeBehavior })
         } catch (err) {
-          console.warn("[general] failed to hydrate close behavior:", err)
+          logger.warn("failed to hydrate close behavior", { error: String(err) })
         }
         try {
           const currentAutostart = await isAutostartEnabled()
@@ -293,7 +288,7 @@ function App() {
             await disableAutostart()
           }
         } catch (err) {
-          console.warn("[general] failed to sync autostart:", err)
+          logger.warn("failed to sync autostart", { error: String(err) })
         }
         const savedLang = await loadLanguage()
         if (savedLang) {
@@ -343,12 +338,12 @@ function App() {
       const { restoreQueue } = await import("@/lib/ingest-queue")
       await restoreQueue(proj.id, proj.path)
     } catch (err) {
-      console.error("Failed to restore ingest queue:", err)
+      logger.error("failed to restore ingest queue", { error: String(err) })
     }
     // Same handshake for the dedup-merge queue.
     import("@/lib/dedup-queue").then(({ restoreQueue }) => {
       restoreQueue(proj.id, proj.path).catch((err) =>
-        console.error("Failed to restore dedup queue:", err)
+        logger.error("failed to restore dedup queue", { error: String(err) })
       )
     })
     // Load per-project scheduled import config
@@ -382,7 +377,7 @@ function App() {
       import("@/lib/scheduled-import").then(({ startScheduledImport }) => {
         startScheduledImport(proj, scheduledImportConfig)
       }).catch((err) =>
-        console.error("Failed to start scheduled import:", err)
+        logger.error("failed to start scheduled import", { error: String(err) })
       )
     }
 
@@ -392,12 +387,12 @@ function App() {
       useWikiStore.getState().setSourceWatchConfig(config)
       if (config.enabled) {
         startProjectFileSync(proj, config).catch((err) =>
-          console.error("Failed to start project file sync:", err)
+          logger.error("failed to start project file sync", { error: String(err) })
         )
       } else {
         stopProjectFileSync().catch(() => {})
       }
-    }).catch((err) => console.error("Failed to configure project file sync:", err))
+    }).catch((err) => logger.error("failed to configure project file sync", { error: String(err) }))
     // Notify local clip server of the current project + all recent projects
     fetch("http://127.0.0.1:19827/project", {
       method: "POST",
@@ -418,7 +413,7 @@ function App() {
       const tree = await listDirectory(proj.path)
       setFileTree(tree)
     } catch (err) {
-      console.error("Failed to load file tree:", err)
+      logger.error("failed to load file tree", { error: String(err) })
     }
     // Load persisted review items
     try {

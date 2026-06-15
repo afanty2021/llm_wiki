@@ -11,6 +11,9 @@ import { initLogger } from "@/lib/logger";
 // correctly. Not awaited — default level (WARN) buffers safely until the
 // backend level resolves.
 initLogger().catch((error) => {
+  // KEEP as console.error: this catch fires when logger initialization
+  // ITSELF failed (e.g. Tauri invoke threw). Routing through logger here
+  // would be circular — the logger is the thing that just failed to init.
   console.error("Failed to initialize logger:", error);
 });
 
