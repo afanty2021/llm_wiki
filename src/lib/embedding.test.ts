@@ -1580,9 +1580,9 @@ describe("legacyVectorRowCount / dropLegacyVectorTable / getEmbeddingCount / rem
     mockInvoke.mockResolvedValueOnce(42)
     const n = await legacyVectorRowCount("/proj")
     expect(n).toBe(42)
-    expect(mockInvoke).toHaveBeenCalledWith("vector_legacy_row_count", {
+    expect(mockInvoke).toHaveBeenCalledWith("vector_legacy_row_count", expect.objectContaining({
       projectPath: "/proj",
-    })
+    }))
 
     mockInvoke.mockRejectedValueOnce(new Error("legacy table missing"))
     const n2 = await legacyVectorRowCount("/proj")
@@ -1592,9 +1592,9 @@ describe("legacyVectorRowCount / dropLegacyVectorTable / getEmbeddingCount / rem
   it("dropLegacyVectorTable: invokes the Rust command with normalized path, propagates throws", async () => {
     mockInvoke.mockResolvedValueOnce(undefined)
     await dropLegacyVectorTable("/proj")
-    expect(mockInvoke).toHaveBeenCalledWith("vector_drop_legacy", {
+    expect(mockInvoke).toHaveBeenCalledWith("vector_drop_legacy", expect.objectContaining({
       projectPath: "/proj",
-    })
+    }))
 
     // Unlike the read helpers, drop is destructive enough that a
     // failure SHOULD propagate — callers can show the error in UI.
@@ -1605,9 +1605,9 @@ describe("legacyVectorRowCount / dropLegacyVectorTable / getEmbeddingCount / rem
   it("getEmbeddingCount: returns chunk count, swallows errors to 0", async () => {
     mockInvoke.mockResolvedValueOnce(128)
     expect(await getEmbeddingCount("/proj")).toBe(128)
-    expect(mockInvoke).toHaveBeenCalledWith("vector_count_chunks", {
+    expect(mockInvoke).toHaveBeenCalledWith("vector_count_chunks", expect.objectContaining({
       projectPath: "/proj",
-    })
+    }))
 
     mockInvoke.mockRejectedValueOnce(new Error("table missing"))
     expect(await getEmbeddingCount("/proj")).toBe(0)
@@ -1616,10 +1616,10 @@ describe("legacyVectorRowCount / dropLegacyVectorTable / getEmbeddingCount / rem
   it("removePageEmbedding: invokes vector_delete_page, swallows errors silently", async () => {
     mockInvoke.mockResolvedValueOnce(undefined)
     await removePageEmbedding("/proj", "rope")
-    expect(mockInvoke).toHaveBeenCalledWith("vector_delete_page", {
+    expect(mockInvoke).toHaveBeenCalledWith("vector_delete_page", expect.objectContaining({
       projectPath: "/proj",
       pageId: "rope",
-    })
+    }))
 
     mockInvoke.mockRejectedValueOnce(new Error("table missing"))
     // Must not throw — source-delete flow depends on silent failure.

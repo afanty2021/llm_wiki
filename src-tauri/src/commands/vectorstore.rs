@@ -845,12 +845,12 @@ mod tests_v2 {
         let p = tmp_project();
         let pp = p.to_string_lossy().to_string();
 
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 5, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 5, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
         assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 5);
 
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
         assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 2);
@@ -861,10 +861,10 @@ mod tests_v2 {
         let p = tmp_project();
         let pp = p.to_string_lossy().to_string();
 
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
-        vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 4, 16))
+        vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 4, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
 
@@ -876,10 +876,10 @@ mod tests_v2 {
         let p = tmp_project();
         let pp = p.to_string_lossy().to_string();
 
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
-        vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 2, 16))
+        vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 2, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
         assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 5);
@@ -895,7 +895,7 @@ mod tests_v2 {
         let p = tmp_project();
         let pp = p.to_string_lossy().to_string();
 
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
 
@@ -918,7 +918,7 @@ mod tests_v2 {
 
         // Upserting [] should succeed and NOT wipe existing rows — this
         // is the "transient ingest failure shouldn't nuke index" contract.
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
         vector_upsert_chunks(pp.clone(), "page-a".into(), vec![], TEST_TRACE_ID.to_string())
@@ -957,7 +957,7 @@ mod tests_v2 {
             .unwrap();
 
         // Insert + delete + delete again: ok.
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
         vector_delete_page(pp.clone(), "page-a".into(), TEST_TRACE_ID.to_string())
@@ -975,10 +975,10 @@ mod tests_v2 {
         let p = tmp_project();
         let pp = p.to_string_lossy().to_string();
 
-        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
-        vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 4, 16))
+        vector_upsert_chunks(pp.clone(), "page-b".into(), make_chunks("page-b", 4, 16), TEST_TRACE_ID.to_string())
             .await
             .unwrap();
         assert_eq!(vector_count_chunks(pp.clone(), TEST_TRACE_ID.to_string()).await.unwrap(), 7);
