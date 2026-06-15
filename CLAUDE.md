@@ -1,7 +1,7 @@
 # LLM Wiki - AI Context Documentation
 
-> **Last Updated**: 2026-06-14
-> **Version**: 0.3.2
+> **Last Updated**: 2026-06-15
+> **Version**: 0.4.0
 > **Project Type**: Cross-platform Desktop Application (Tauri v2)
 > **Architecture**: React Frontend + Rust Backend
 > **Scan Phase**: C - Deep Scan (阶段 C 深度补捞)
@@ -9,6 +9,23 @@
 ---
 
 ## 📋变更记录 (Changelog)
+
+### 2026-06-15 - 日志系统阶段 2/3 完成 + 级别持久化
+- ✅ **阶段 2 — 请求追踪传播 + Error 桌面通知**
+  - 前端 `invokeTraced` 封装（`src/lib/invoke-traced.ts`，自动注入 UUID v4 trace_id，空串防御）
+  - 后端核心命令 `#[instrument]`（fs/embedding/vectorstore，spawn_blocking 命令用 `Span::current().enter()` 跨线程传播）
+  - Error 通知：`NotifyLayer`（自定义 tracing Layer）捕获所有 ERROR，经 `run_on_main_thread` 调度（macOS 主线程安全），10s 时间窗口去重，设置开关
+  - 依赖：`tauri-plugin-notification` + 手写 `Switch` 组件（非 radix）
+- ✅ **阶段 3 批次 A — console 迁移 + 采样**
+  - 前端 202 处 `console.*` → Logger Facade（46 文件，唯一例外 main.tsx 的 initLogger catch）
+  - 时间窗口采样器（`shouldSampleAt` 纯函数 + `shouldSample` 包装，默认 Infinity 关闭，ERROR 免疫）
+- ✅ **阶段 3 批次 B — read_log_file 命令 + 应用内查看器**
+  - `read_log_file` 命令（分页 JSONL 读取，逻辑反序，级别/关键字/trace_id 后端过滤）
+  - `LogsSection` 查看器（设置新章节：级别 toggle chip + 关键字搜索 + trace_id 过滤 + 分页 + ERROR 高亮）
+- ✅ **级别持久化**（补齐阶段 2 缺口）：`set_log_level` 写入 app-state.json，`init_logging` 启动恢复（重启不丢失）
+- 📊 新增文件：logging/{config,notify_layer}.rs、invoke-traced.ts、error-notification-config.ts、logs-section.tsx、switch.tsx
+- 🧪 测试：前端 1415 + 后端 logging 35 个测试全通过
+- 📈 设计/计划/验证文档：`docs/superpowers/`（阶段 2 + 阶段 3 批次 A/B）
 
 ### 2026-06-14 - 日志系统阶段 1 实施
 - ✅ 新增统一日志基础设施（前端 Logger Facade + 后端 tracing Layer）
@@ -499,20 +516,36 @@ cargo test
 
 ### 9. 日志系统
 
+**阶段 1 — 基础设施**
 - **前端 Logger Facade**: `src/lib/logger.ts`（批处理：50ms / 100 条双阈值 + 级别过滤 + IPC 发送）
-- **前端类型定义**: `src/lib/logger-types.ts`（LogLevel / LogEntry / LogFileEntry）
-- **前端命令封装**: `src/commands/logging.ts`（6 个 Tauri 命令封装）
-- **后端 Tracing Layer**: `src-tauri/src/logging/`（types / router / manager / mod 四文件）
+- **前端类型定义**: `src/lib/logger-types.ts`（LogLevel / LogEntry / LogFileEntry / LogDisplayEntry / ReadLogResponse）
+- **前端命令封装**: `src/commands/logging.ts`（7 个 Tauri 命令封装）
+- **后端 Tracing Layer**: `src-tauri/src/logging/`（types / router / manager / mod / config / notify_layer 六文件）
   - 单 channel 架构（OnceLock<LogManager>，规避 unsafe）
   - 文件轮转：10MB + 保留 5 个历史文件，rotate 校验文件存在性
   - 双格式：开发控制台人类可读 fmt layer + 文件 JSON 格式
-- **配置 UI**: `src/components/settings/logging-config.tsx`（DEBUG / INFO / WARN / ERROR 选项卡按钮，集成在 GeneralSection，optimistic 更新 + 失败回滚）
-- **初始化时序**:
-  - 前端：`src/main.tsx::initLogger()`（启动时读取后端 level 配置）
-  - 后端：`src-tauri/src/lib.rs` setup 钩子中 `init_logging()`
-- **eprintln! 迁移**: `panic_guard.rs` 1 处 + 其他 Rust 文件 61 处 → tracing 宏，保留 `fs.rs` 测试中 7 处
-- **Tauri 命令** (6 个): `send_log` / `get_log_level` / `set_log_level` / `list_log_files` / `read_log_file` / `clear_logs`
-- **测试**: 前端单元 4 + 集成 3 + 后端 4 = 11 个自动化测试全通过
+- **初始化时序**: 前端 `src/main.tsx::initLogger()` + 后端 `lib.rs` setup 钩子 `init_logging(app_data_dir, app_handle)`
+- **eprintln! 迁移**: `panic_guard.rs` + 其他 Rust 文件 62 处 → tracing 宏
+
+**阶段 2 — 请求追踪 + Error 通知**
+- **trace 传播**: `invokeTraced`（`src/lib/invoke-traced.ts`）自动注入 trace_id；后端核心命令 `#[instrument]` 绑定 span（spawn_blocking 命令用 `Span::current().enter()` 跨线程）
+- **Error 桌面通知**: `NotifyLayer`（自定义 tracing Layer）捕获所有 ERROR（前后端统一），经 `run_on_main_thread` 调度（macOS 主线程安全），10s 时间窗口去重，`strip_debug_quotes` 去除 Debug 引号
+- **通知配置**: `error-notification-config.ts` 读写 app-state.json（默认开启），配置 UI 开关（手写 `Switch` 组件）
+- **配置 UI**: `logging-config.tsx`（级别选项卡 + 错误通知开关，集成在 GeneralSection）
+
+**阶段 3 批次 A — console 迁移 + 采样**
+- **console 迁移**: 前端 202 处 `console.*` → Logger Facade（46 文件，module 名映射表统一）
+- **采样器**: `shouldSampleAt` 纯函数 + `shouldSample` 薄包装（默认 Infinity 关闭，ERROR 免疫，1s 窗口）
+
+**阶段 3 批次 B — read_log_file + 查看器**
+- **read_log_file 命令**: 分页读取 JSONL（逻辑反序），后端过滤（级别/关键字大小写不敏感/trace_id 精确），module 字段后备链（span.module → target≠frontend → "(unknown)"），JSONL 异常行容忍
+- **LogsSection 查看器**: `src/components/settings/sections/logs-section.tsx`（级别 toggle chip + 关键字搜索 + trace_id 过滤 + 分页 + ERROR 高亮，注册在 settings 导航）
+
+**级别持久化**（阶段 2 补齐）
+- `set_log_level` 写入 app-state.json；`init_logging` 启动恢复（重启不丢失，默认 WARN）
+
+- **Tauri 命令** (7 个): `send_log` / `get_log_level` / `set_log_level` / `get_log_files` / `read_log_file` / `clear_logs` / `export_logs`
+- **测试**: 前端 1415 + 后端 logging 35 个自动化测试全通过
 
 ---
 
