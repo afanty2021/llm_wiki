@@ -39,7 +39,8 @@ export type SlugIndex = Map<string, string[]>
 
 /**
  * 遍历 relPaths 建 slug → path[] 索引（§3）。
- * - slug = basename 去 .md（与 wiki-graph fileNameToId 语义一致，但独立实现避免耦合/信息丢失）。
+ * - slug = basename 去 .md 后缀（case-insensitive `/i`；wiki-graph fileNameToId
+ *   用 case-sensitive，生产 wiki 文件名小写故无实际差异；此处更宽容）。
  * - 排除 reserved（index.md/log.md 非概念链接目标；其自身 body 双写复用本索引）。
  * - 精确匹配，不 normalize 大小写/空格。
  */

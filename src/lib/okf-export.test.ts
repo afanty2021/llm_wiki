@@ -588,8 +588,7 @@ describe("doubleWriteContent — fm/body 分离双写", () => {
   })
 
   it("无 frontmatter（纯 body）：整体双写（也是 splitStrictFence 不匹配时的退化路径）", () => {
-    // 退化说明：convertConcept 生产路径保证 fm 合规，故 splitStrictFence 必匹配；
-    // 此用例兼测"纯 body / 退化"两条路径（行为一致：整体当 body）。
+    // 无围栏 → 整体当 body 双写（直接测试退化分支行为）。
     const idx = buildSlugIndex(["concepts/foo.md"])
     const out = doubleWriteContent("see [[foo]]", idx, "concepts/bar.md", [])
     expect(out).toBe("see [[foo]] ([Foo](/concepts/foo.md))")
@@ -620,5 +619,20 @@ describe("convertConcept — slugIndex 参数", () => {
     const out = convertConcept(content, "concepts/foo.md", new Date("2026-06-17"), [], undefined, idx)
     expect(out).toContain("self [[foo]]")
     expect(out).not.toContain("([Foo]")
+  })
+
+  it("missing-fence 无闭合 --- + slugIndex：转 truly-none 注入 fm 且 body 双写", () => {
+    // 首行 key:value（missing-fence）但无任何闭合 --- → repairMissingFenceOrThrow 抛
+    // NO_CLOSING_FENCE → catch 走 truly-none：injectMinimalFrontmatter 注入完整最小 fm，
+    // 原内容整体作 body；若同时传 slugIndex，注入后的 body 经 doubleWriteContent 双写。
+    const idx = buildSlugIndex(["concepts/foo.md"])
+    const content = "type: concept\n\nsee [[foo]]"
+    const out = convertConcept(content, "concepts/bar.md", new Date("2026-06-17"), [], undefined, idx)
+    // 注入的最小 fm（title 取 basename 去 .md = bar；timestamp 注入）
+    expect(out).toContain("type: concept")
+    expect(out).toContain("title: bar")
+    expect(out).toContain("timestamp: 2026-06-17")
+    // 原内容里的 [[foo]] 经双写（注入后的 body 段无围栏保护也被 splitStrictFence 切出）
+    expect(out).toContain("see [[foo]] ([Foo](/concepts/foo.md))")
   })
 })

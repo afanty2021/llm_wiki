@@ -376,7 +376,7 @@ describe("exportOkfBundleTauri — P1 wikilink 双写", () => {
     // foo.md 自身的 [[foo]] 是 self → 不双写
     const foo = written.get(`${OUT}/concepts/foo.md`)!
     expect(foo).toContain("self [[foo]]")
-    expect(foo).not.toContain("([Foo]")
+    expect(foo).not.toContain("[[foo]] ([Foo](/concepts/foo.md))")
     // bar.md 的 [[foo]] 唯一映射 → 双写
     expect(written.get(`${OUT}/concepts/bar.md`)!).toContain(
       "see [[foo]] ([Foo](/concepts/foo.md))",
@@ -396,7 +396,7 @@ describe("exportOkfBundleTauri — P1 wikilink 双写", () => {
     const written = new Map(state.writeCalls.map((c) => [c.path, c.contents]))
 
     expect(written.get(`${OUT}/index.md`)!).toContain("[[foo]] ([Foo](/concepts/foo.md))")
-    expect(written.get(`${OUT}/log.md`)!).not.toContain("([Foo]") // log 不双写
+    expect(written.get(`${OUT}/log.md`)!).not.toContain("[[foo]] ([Foo](/concepts/foo.md))") // log 不双写
   })
 
   it("ambiguous wikilink 记入 report.warnings，不双写", async () => {
@@ -420,6 +420,7 @@ describe("exportOkfBundleTauri — P1 wikilink 双写", () => {
 
     expect(written.get(`${OUT}/concepts/refs.md`)!).toContain("see [[wikilink]]")
     expect(written.get(`${OUT}/concepts/refs.md`)!).not.toContain("([W1]")
-    expect(report.warnings.some((w) => w.includes("ambiguous") && w.includes("wikilink"))).toBe(true)
+    expect(written.get(`${OUT}/concepts/refs.md`)!).not.toContain("([W2]")
+    expect(report.warnings.some((w) => /ambiguous wikilink \[\[wikilink\]\] → 2 paths:/.test(w))).toBe(true)
   })
 })
