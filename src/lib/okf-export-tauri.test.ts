@@ -348,3 +348,78 @@ describe("exportOkfBundleTauri", () => {
     expect(state.writeCalls.find((c) => c.path === `${OUT}/bad.md`)).toBeUndefined()
   })
 })
+
+// ──────────────────────────────────────────────────────────────────
+// P1 wikilink 双写：端到端集成测试（resolvable fixture 填补 Task 6 reviewer 指出的 gap）
+//
+// Task 6 reviewer 备注：现有 fixture wikilinks 都是 dangling（双写 no-op），
+// 无法验证编排层确实把 slugIndex 接线到 convertConcept/doubleWriteContent 并产出
+// 双写 link。下面 3 个 case 用 resolvable fixture（target .md 真实存在）真正触发双写。
+// ──────────────────────────────────────────────────────────────────
+describe("exportOkfBundleTauri — P1 wikilink 双写", () => {
+  beforeEach(() => resetState())
+
+  it("concept body 的 [[slug]] 双写为标准 link，原 wikilink 保留；self 不双写", async () => {
+    addDir(`${WIKI}/concepts`)
+    writeFile(
+      `${WIKI}/concepts/foo.md`,
+      PAGE("type: concept\ntitle: Foo\nupdated: 2026-05-19", "# Foo\n\nself [[foo]]"),
+    )
+    writeFile(
+      `${WIKI}/concepts/bar.md`,
+      PAGE("type: concept\ntitle: Bar\nupdated: 2026-05-19", "# Bar\n\nsee [[foo]]"),
+    )
+
+    await exportOkfBundleTauri(WIKI, OUT)
+    const written = new Map(state.writeCalls.map((c) => [c.path, c.contents]))
+
+    // foo.md 自身的 [[foo]] 是 self → 不双写
+    const foo = written.get(`${OUT}/concepts/foo.md`)!
+    expect(foo).toContain("self [[foo]]")
+    expect(foo).not.toContain("([Foo]")
+    // bar.md 的 [[foo]] 唯一映射 → 双写
+    expect(written.get(`${OUT}/concepts/bar.md`)!).toContain(
+      "see [[foo]] ([Foo](/concepts/foo.md))",
+    )
+  })
+
+  it("index.md 的 [[slug]] 双写，log.md 不双写", async () => {
+    addDir(`${WIKI}/concepts`)
+    writeFile(
+      `${WIKI}/concepts/foo.md`,
+      PAGE("type: concept\ntitle: Foo\nupdated: 2026-05-19", "# Foo"),
+    )
+    writeFile(`${WIKI}/index.md`, PAGE("type: index", "# Index\n\n- [[foo]]"))
+    writeFile(`${WIKI}/log.md`, "# Log\n\n## 2026-05-19\n\nsee [[foo]]\n")
+
+    await exportOkfBundleTauri(WIKI, OUT)
+    const written = new Map(state.writeCalls.map((c) => [c.path, c.contents]))
+
+    expect(written.get(`${OUT}/index.md`)!).toContain("[[foo]] ([Foo](/concepts/foo.md))")
+    expect(written.get(`${OUT}/log.md`)!).not.toContain("([Foo]") // log 不双写
+  })
+
+  it("ambiguous wikilink 记入 report.warnings，不双写", async () => {
+    addDir(`${WIKI}/concepts`)
+    addDir(`${WIKI}/entities`)
+    writeFile(
+      `${WIKI}/concepts/wikilink.md`,
+      PAGE("type: concept\ntitle: W1\nupdated: 2026-05-19", "# W1"),
+    )
+    writeFile(
+      `${WIKI}/entities/wikilink.md`,
+      PAGE("type: concept\ntitle: W2\nupdated: 2026-05-19", "# W2"),
+    )
+    writeFile(
+      `${WIKI}/concepts/refs.md`,
+      PAGE("type: concept\ntitle: Refs\nupdated: 2026-05-19", "see [[wikilink]]"),
+    )
+
+    const report = await exportOkfBundleTauri(WIKI, OUT)
+    const written = new Map(state.writeCalls.map((c) => [c.path, c.contents]))
+
+    expect(written.get(`${OUT}/concepts/refs.md`)!).toContain("see [[wikilink]]")
+    expect(written.get(`${OUT}/concepts/refs.md`)!).not.toContain("([W1]")
+    expect(report.warnings.some((w) => w.includes("ambiguous") && w.includes("wikilink"))).toBe(true)
+  })
+})
