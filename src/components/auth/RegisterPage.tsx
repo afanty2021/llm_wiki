@@ -61,7 +61,7 @@ export function RegisterPage({ onNavigate }: { onNavigate: (page: "login" | "reg
             <button
               type="button"
               className="text-blue-600 hover:underline ml-1"
-              onClick={() => onNavigate("login")}
+              onClick={() => { clearError(); onNavigate("login") }}
             >
               登录
             </button>

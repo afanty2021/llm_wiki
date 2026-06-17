@@ -53,7 +53,7 @@ export function LoginPage({ onNavigate }: { onNavigate: (page: "login" | "regist
             <button
               type="button"
               className="text-blue-600 hover:underline ml-1"
-              onClick={() => onNavigate("register")}
+              onClick={() => { clearError(); onNavigate("register") }}
             >
               注册
             </button>
