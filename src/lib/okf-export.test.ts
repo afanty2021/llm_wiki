@@ -514,3 +514,50 @@ describe("doubleWriteWikilinks — 唯一映射双写", () => {
     expect(out).toBe("[[a]] ([A](/concepts/a.md)) 和 [[b]] ([B](/concepts/b.md))")
   })
 })
+
+// ──────────────────────────────────────────────────────────────────
+// doubleWriteWikilinks — 边界（alias / anchor / blockref / ambiguous / self / 相对路径）
+// ──────────────────────────────────────────────────────────────────
+describe("doubleWriteWikilinks — 边界", () => {
+  const idx = buildSlugIndex(["concepts/foo.md", "concepts/wikilink.md", "entities/wikilink.md"])
+
+  it("alias：[[foo|My Foo]] → Title 用 alias", () => {
+    const out = doubleWriteWikilinks("[[foo|My Foo]]", idx, "concepts/bar.md", [])
+    expect(out).toBe("[[foo|My Foo]] ([My Foo](/concepts/foo.md))")
+  })
+
+  it("anchor：[[foo#Sec]] → 保留 #Sec", () => {
+    const out = doubleWriteWikilinks("[[foo#Sec]]", idx, "concepts/bar.md", [])
+    expect(out).toBe("[[foo#Sec]] ([Foo](/concepts/foo.md#Sec))")
+  })
+
+  it("anchor+alias 标准形式：[[foo#Sec|My Foo]] → slug foo, Title alias, anchor #Sec", () => {
+    const out = doubleWriteWikilinks("[[foo#Sec|My Foo]]", idx, "concepts/bar.md", [])
+    expect(out).toBe("[[foo#Sec|My Foo]] ([My Foo](/concepts/foo.md#Sec))")
+  })
+
+  it("block ref：[[foo#^blk]] → 丢弃 ^blk，不双写 anchor", () => {
+    const out = doubleWriteWikilinks("[[foo#^blk]]", idx, "concepts/bar.md", [])
+    expect(out).toBe("[[foo#^blk]] ([Foo](/concepts/foo.md))")
+  })
+
+  it("ambiguous：[[wikilink]] 重名 → 原样 + warning 含两 path", () => {
+    const warnings: string[] = []
+    const out = doubleWriteWikilinks("[[wikilink]]", idx, "concepts/bar.md", warnings)
+    expect(out).toBe("[[wikilink]]")
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain("ambiguous")
+    expect(warnings[0]).toContain("concepts/wikilink.md")
+    expect(warnings[0]).toContain("entities/wikilink.md")
+  })
+
+  it("self：[[foo]] 在 concepts/foo.md 内 → 原样", () => {
+    const out = doubleWriteWikilinks("[[foo]]", idx, "concepts/foo.md", [])
+    expect(out).toBe("[[foo]]")
+  })
+
+  it("相对路径：[[../bar/foo]] 含 / → 原样不双写", () => {
+    const out = doubleWriteWikilinks("[[../bar/foo]]", idx, "concepts/x.md", [])
+    expect(out).toBe("[[../bar/foo]]")
+  })
+})
