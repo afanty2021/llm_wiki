@@ -8,8 +8,20 @@
 // 的编排，以及 outDir 防护、目录创建、mtime 获取等 IO 协调。
 //
 // 不实现：UI（P0b-2）、wikilink 双写（P1）、description/resource 派生（P2）。
+//
+// ⚠️ client-safe：本模块被 app webview 间接 import
+// （okf-export-section → 本模块），故**禁止**顶层 `import ... from "node:*"`——
+// Vite 会 externalize 给 client 并白屏。路径工具一律用项目自带的
+// `@/lib/path-utils`（纯字符串）或本地自实现，不引 node:path。
+// 转换函数从 `@/lib/okf-convert`（零 node 依赖）import，不从 `@/lib/okf-export`
+// import（后者顶层 import node:fs）。
 
-import { relative, basename, dirname, join } from "node:path"
+import {
+  normalizePath,
+  joinPath,
+  getFileName,
+  getRelativePath,
+} from "@/lib/path-utils"
 import {
   readFile,
   writeFile,
@@ -23,11 +35,32 @@ import {
   normalizeLogContent,
   convertBundleRootIndex,
   convertSubdirIndex,
-  isAbsoluteLike,
+  RESERVED,
   type ExportReport,
-} from "./okf-export"
+} from "@/lib/okf-convert"
 
-const RESERVED = new Set(["index.md", "log.md"])
+/**
+ * 自实现 dirname（纯字符串，无 node:path 依赖）。
+ *
+ * 行为对齐 node:path 在本模块调用点的实际语义：
+ *   - 输入均为 POSIX 形式（relPath 已 `.replace(/\\/g, "/")`；outPath 由
+ *     joinPath 拼成 `/`-分隔）。
+ *   - 末段去掉后若剩 "" → 返回 "."（对齐 `dirname("foo.md") === "."`）。
+ *   - 单段无分隔符 → "."；根路径 "/foo" → "/"。
+ *
+ * 不处理 node:path.win32 的 UNC/盘符细节——本模块路径来自 Tauri 后端 / 用户
+ * 选目录对话框，进入此函数前都已被 normalizePath 归一为 `/`-分隔。
+ */
+function dirname(p: string): string {
+  if (!p) return "."
+  const normalized = p.replace(/\\/g, "/")
+  // 去掉末尾分隔符
+  const trimmed = normalized.replace(/\/+$/, "")
+  const slashIdx = trimmed.lastIndexOf("/")
+  if (slashIdx === -1) return "."
+  if (slashIdx === 0) return "/"
+  return trimmed.slice(0, slashIdx)
+}
 
 /**
  * 收集 wikiDir 下所有 .md 文件（绝对路径 + 相对 wikiDir 的 POSIX relPath）。
@@ -72,7 +105,10 @@ async function walkMarkdownTauri(
         // node.path 由后端 build_tree 填充为绝对路径;依赖此契约,不提供会拼错子目录层级的回退
         if (!node.path) continue
         const abs = node.path
-        const relPath = relative(base, abs).replace(/\\/g, "/")
+        // abs 始终在 base (wikiDir) 下（walkMarkdownTauri 从 wikiDir 根起递归），
+        // getRelativePath(fullPath, basePath) 返回 base 之后的相对段，等价 node 版
+        // relative(base, abs)。再 normalize 到 POSIX（后端可能返回 \ on Windows）。
+        const relPath = getRelativePath(abs, base).replace(/\\/g, "/")
         out.push({ abs, relPath })
       }
     }
@@ -103,25 +139,39 @@ export async function exportOkfBundleTauri(
   const report: ExportReport = { written: 0, concepts: 0, reserved: 0, warnings: [] }
 
   // I1: 防止 outDir 落在 wikiDir 内（含相等），避免源被污染。
-  // 判定逻辑与 node 版 exportOkfBundle 完全一致（复用 isAbsoluteLike）。
-  const rel = relative(wikiDir, outDir)
-  if (rel === "") {
+  // 判定逻辑与 node 版 exportOkfBundle 完全等价（node 版用 path.relative，这里用
+  // 纯字符串前缀检测，规避 node:path 依赖）：
+  //   - 归一化两者为 `/`-分隔（统一 macOS/Windows）。
+  //   - 相等 / outDir === wikiDir + "/" → 污染（throw 不能等于）。
+  //   - outDir 以 `wikiDir + "/"` 开头 → 在 wikiDir 子目录内（throw 不能位于子目录内）。
+  //   - 否则合法（outDir 在 wikiDir 外或不同盘符）。
+  //
+  // 与 node 版 path.relative 的差异点已用等价语义覆盖：
+  //   - node 版 `rel === ""`（相等） ↔ 这里 `nOut === nWiki`。
+  //   - node 版 `rel.startsWith("..")`（outDir 在外）或 `isAbsoluteLike(rel)`（不同盘符）
+  //     视为合法 ↔ 这里 "outDir 不以 wikiDir+/" 开头" 即合法（外置或不同盘符都不以前缀开头）。
+  //   - node 版 "其他相对路径"（outDir 在 wikiDir 内） ↔ 这里 `nOut.startsWith(nWiki + "/")`。
+  const nWiki = normalizePath(wikiDir)
+  const nOut = normalizePath(outDir)
+  if (nOut === nWiki) {
     throw new Error(
       `outDir 不能等于 wikiDir，否则会污染源 wiki（wikiDir=${wikiDir}, outDir=${outDir}）`,
     )
   }
-  if (!rel.startsWith("..") && !isAbsoluteLike(rel)) {
+  if (nOut.startsWith(nWiki + "/")) {
     throw new Error(
-      `outDir 不能位于 wikiDir 子目录内，否则会污染源 wiki（wikiDir=${wikiDir}, outDir=${outDir}, relative=${rel}）`,
+      `outDir 不能位于 wikiDir 子目录内，否则会污染源 wiki（wikiDir=${wikiDir}, outDir=${outDir}）`,
     )
   }
+  // 注：outDir 在 wikiDir 外（合法）或不同盘符（合法）均不会满足上述前缀检查，
+  //     语义覆盖 node 版 `rel.startsWith("..") || isAbsoluteLike(rel)` 的合法分支。
 
   const files = await walkMarkdownTauri(wikiDir)
   const now = new Date()
   const createdDirs = new Set<string>()
 
   for (const { abs, relPath } of files) {
-    const name = basename(relPath)
+    const name = getFileName(relPath)
     const isReserved = RESERVED.has(name)
 
     // 读源（strip UTF-8 BOM，跨平台 bug：BOM 使首字符非 -，被误分类为 truly-none）
@@ -138,7 +188,7 @@ export async function exportOkfBundleTauri(
       fileMtime = undefined
     }
 
-    const outPath = join(outDir, relPath)
+    const outPath = joinPath(outDir, relPath)
     const outParent = dirname(outPath)
     // 确保写出目录存在（去重，避免对同一目录重复 invoke）
     if (!createdDirs.has(outParent)) {

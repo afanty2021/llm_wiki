@@ -17,7 +17,7 @@ import {
   errorMessage,
   MAX_WARNINGS_SHOWN,
 } from "./okf-export-helpers"
-import type { ExportReport } from "@/lib/okf-export"
+import type { ExportReport } from "@/lib/okf-convert"
 
 describe("deriveWikiDir", () => {
   it("returns null when project path is undefined", () => {

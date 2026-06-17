@@ -15,7 +15,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { exportOkfBundleTauri } from "@/lib/okf-export-tauri"
-import type { ExportReport } from "@/lib/okf-export"
+import type { ExportReport } from "@/lib/okf-convert"
 import { createLogger } from "@/lib/logger"
 import {
   deriveWikiDir,

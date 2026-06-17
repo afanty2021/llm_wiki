@@ -6,7 +6,7 @@
 // 放在此处，组件只做渲染与编排。
 
 import { normalizePath } from "@/lib/path-utils"
-import type { ExportReport } from "@/lib/okf-export"
+import type { ExportReport } from "@/lib/okf-convert"
 
 /**
  * 从项目路径推导 wiki 目录约定路径。
