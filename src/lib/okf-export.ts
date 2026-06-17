@@ -36,8 +36,11 @@ export {
   mtimeDate,
   NO_CLOSING_FENCE,
   RESERVED,
+  buildSlugIndex,
+  doubleWriteWikilinks,
+  doubleWriteContent,
 } from "./okf-convert"
-export type { ExportReport } from "./okf-convert"
+export type { ExportReport, SlugIndex } from "./okf-convert"
 
 // ──────────────────────────────────────────────────────────────────
 // exportOkfBundle — 端到端（node:fs 版，仅 CLI/test）

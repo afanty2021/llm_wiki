@@ -7,7 +7,7 @@
 // 都是纯字符串函数，直接 import 复用，零逻辑重写。本模块只负责"遍历 → 读 → 转换 → 写"
 // 的编排，以及 outDir 防护、目录创建、mtime 获取等 IO 协调。
 //
-// 不实现：UI（P0b-2）、wikilink 双写（P1）、description/resource 派生（P2）。
+// 不实现：description/resource 派生（P2）。wikilink 双写（P1）已实现。
 //
 // ⚠️ client-safe：本模块被 app webview 间接 import
 // （okf-export-section → 本模块），故**禁止**顶层 `import ... from "node:*"`——
@@ -35,6 +35,8 @@ import {
   normalizeLogContent,
   convertBundleRootIndex,
   convertSubdirIndex,
+  buildSlugIndex,
+  doubleWriteContent,
   RESERVED,
   type ExportReport,
 } from "@/lib/okf-convert"
@@ -167,6 +169,7 @@ export async function exportOkfBundleTauri(
   //     语义覆盖 node 版 `rel.startsWith("..") || isAbsoluteLike(rel)` 的合法分支。
 
   const files = await walkMarkdownTauri(wikiDir)
+  const slugIndex = buildSlugIndex(files.map((f) => f.relPath)) // P1: 建 slug→path[] 索引
   const now = new Date()
   const createdDirs = new Set<string>()
 
@@ -203,14 +206,16 @@ export async function exportOkfBundleTauri(
       if (name === "index.md") {
         // bundle-root index.md vs 子目录 index.md
         const isRoot = dirname(relPath) === "."
-        converted = isRoot ? convertBundleRootIndex(content) : convertSubdirIndex(content)
+        const idxConverted = isRoot ? convertBundleRootIndex(content) : convertSubdirIndex(content)
+        // P1: index.md 双写（root/subdir 均经 doubleWriteContent 处理 fm/body）
+        converted = doubleWriteContent(idxConverted, slugIndex, relPath, report.warnings)
       } else {
-        // log.md
+        // log.md：不双写（normalize 后是日期条目，无 wikilink）
         converted = normalizeLogContent(content)
       }
     } else {
       report.concepts++
-      converted = convertConcept(content, relPath, now, report.warnings, fileMtime)
+      converted = convertConcept(content, relPath, now, report.warnings, fileMtime, slugIndex)
     }
 
     await writeFile(outPath, converted)
