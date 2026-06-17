@@ -2,7 +2,7 @@
 //
 // 依据 https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
 // 仅做硬性转换（frontmatter 格式修复 / timestamp 注入 / index.md & log.md 规整）。
-// 不做 wikilink 双写（P1）、Tauri 命令（P0b）、description/resource 派生（P2）。
+// 不做 description/resource 派生（P2）。wikilink 双写（P1）已实现。
 //
 // ⚠️ 本模块**仅 CLI/Node/test 可用**：顶层 `import { ... } from "node:fs"` 与
 // `node:path`。app webview（client bundle）**禁止**直接或间接 import 本模块——
@@ -53,6 +53,8 @@ import {
   convertSubdirIndex as _convertSubdirIndex,
   normalizeLogContent as _normalizeLogContent,
   convertConcept as _convertConcept,
+  buildSlugIndex as _buildSlugIndex,
+  doubleWriteContent as _doubleWriteContent,
   type ExportReport as _ExportReport,
 } from "./okf-convert"
 
@@ -109,6 +111,7 @@ export async function exportOkfBundle(wikiDir: string, outDir: string): Promise<
     )
   }
   const files = walkMarkdown(wikiDir)
+  const slugIndex = _buildSlugIndex(files.map((f) => relative(wikiDir, f).replace(/\\/g, "/"))) // P1: 建 slug→path[] 索引
   const now = new Date()
 
   for (const abs of files) {
@@ -129,14 +132,16 @@ export async function exportOkfBundle(wikiDir: string, outDir: string): Promise<
       if (name === "index.md") {
         // bundle-root index.md vs 子目录 index.md
         const isRoot = dirname(relPath) === "."
-        converted = isRoot ? _convertBundleRootIndex(content) : _convertSubdirIndex(content)
+        const idxConverted = isRoot ? _convertBundleRootIndex(content) : _convertSubdirIndex(content)
+        // P1: index.md 双写（root/subdir 均经 doubleWriteContent 处理 fm/body）
+        converted = _doubleWriteContent(idxConverted, slugIndex, relPath, report.warnings)
       } else {
-        // log.md
+        // log.md：不双写（normalize 后是日期条目，无 wikilink）
         converted = _normalizeLogContent(content)
       }
     } else {
       report.concepts++
-      converted = _convertConcept(content, relPath, now, report.warnings, mtime)
+      converted = _convertConcept(content, relPath, now, report.warnings, mtime, slugIndex)
     }
 
     writeFileSync(outPath, converted, "utf8")
