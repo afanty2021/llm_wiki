@@ -39,7 +39,7 @@ export async function readFile(
 export async function writeFile(path: string, contents: string): Promise<void> {
   if (USE_HTTP) {
     const projectId = getCurrentProjectId()
-    await apiClient.request("POST", `/api/v1/files/${projectId}/write`, { path, contents })
+    await apiClient.writeFile(projectId, path, contents)
     return
   }
   assertAbsoluteFsPath("writeFile", path)
@@ -92,7 +92,7 @@ export async function preprocessFile(path: string): Promise<string> {
 export async function deleteFile(path: string): Promise<void> {
   if (USE_HTTP) {
     const projectId = getCurrentProjectId()
-    await apiClient.request("POST", `/api/v1/files/${projectId}/delete`, { path })
+    await apiClient.deleteFile(projectId, path)
     return
   }
   return invokeTraced<void>("delete_file", { path })
@@ -109,7 +109,7 @@ export async function createDirectory(path: string): Promise<void> {
   if (USE_HTTP) {
     // HTTP files API uses POST write for directory creation
     const projectId = getCurrentProjectId()
-    await apiClient.request("POST", `/api/v1/files/${projectId}/write`, { path, contents: "" })
+    await apiClient.writeFile(projectId, path, "")
     return
   }
   assertAbsoluteFsPath("createDirectory", path)

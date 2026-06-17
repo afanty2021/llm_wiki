@@ -162,8 +162,16 @@ class ApiClient {
     return this.request("GET", `/api/v1/files/${projectId}/read?${params}`)
   }
 
+  async writeFile(projectId: number, path: string, contents: string): Promise<void> {
+    await this.request("POST", `/api/v1/files/${projectId}/write`, { path, contents })
+  }
+
+  async deleteFile(projectId: number, path: string): Promise<void> {
+    await this.request("POST", `/api/v1/files/${projectId}/delete`, { path })
+  }
+
   // === Chat (SSE) ===
-  streamChat(projectId: number, messages: Array<{ role: string; content: string }>, model?: string): EventSource {
+  streamChat(_projectId: number, messages: Array<{ role: string; content: string }>, model?: string): EventSource {
     const params = new URLSearchParams({ messages: JSON.stringify(messages) })
     if (model) params.set("model", model)
     const url = `${API_BASE}/api/v1/chat/stream?${params}`
