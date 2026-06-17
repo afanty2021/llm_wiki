@@ -11,7 +11,7 @@ import {
   convertSubdirIndex,
   deriveTimestamp,
 } from "./okf-export"
-import { buildSlugIndex, doubleWriteWikilinks } from "./okf-convert"
+import { buildSlugIndex, doubleWriteWikilinks, doubleWriteContent } from "./okf-convert"
 
 const PAGE = (fm: string, body: string) => `---\n${fm}\n---\n\n${body}`
 
@@ -573,5 +573,52 @@ describe("doubleWriteWikilinks — fenced code block skip", () => {
     expect(out).toContain("const x = [[foo]]") // 块内未双写
     expect(out).not.toContain("[[foo]] ([Foo]")
     expect(out).toContain("after [[y]] ([Y](/concepts/y.md))")
+  })
+})
+
+// doubleWriteContent — fm/body 分离双写（Task 5）
+describe("doubleWriteContent — fm/body 分离双写", () => {
+  it("有 frontmatter：只双写 body，fm 不动", () => {
+    const idx = buildSlugIndex(["concepts/foo.md"])
+    const content = "---\ntype: concept\ntitle: 关于 [[foo]] 的笔记\n---\n\nsee [[foo]]"
+    const out = doubleWriteContent(content, idx, "concepts/bar.md", [])
+    expect(out).toContain("title: 关于 [[foo]] 的笔记")
+    expect(out).not.toContain("title: 关于 [[foo]] ([Foo]")
+    expect(out).toContain("see [[foo]] ([Foo](/concepts/foo.md))")
+  })
+
+  it("无 frontmatter（纯 body）：整体双写（也是 splitStrictFence 不匹配时的退化路径）", () => {
+    // 退化说明：convertConcept 生产路径保证 fm 合规，故 splitStrictFence 必匹配；
+    // 此用例兼测"纯 body / 退化"两条路径（行为一致：整体当 body）。
+    const idx = buildSlugIndex(["concepts/foo.md"])
+    const out = doubleWriteContent("see [[foo]]", idx, "concepts/bar.md", [])
+    expect(out).toBe("see [[foo]] ([Foo](/concepts/foo.md))")
+  })
+})
+
+// convertConcept — slugIndex 参数（Task 5）
+describe("convertConcept — slugIndex 参数", () => {
+  it("不传 slugIndex：行为不变（P0a 零回归，不双写）", () => {
+    const content = "---\ntype: concept\n---\n\nsee [[foo]]"
+    const out = convertConcept(content, "concepts/bar.md", new Date("2026-06-17"), [], undefined)
+    expect(out).toContain("timestamp: 2026-06-17")
+    expect(out).toContain("see [[foo]]")
+    expect(out).not.toContain("([Foo]")
+  })
+
+  it("传 slugIndex：body 内 [[foo]] 双写，fm 保留 timestamp 注入", () => {
+    const idx = buildSlugIndex(["concepts/foo.md"])
+    const content = "---\ntype: concept\n---\n\nsee [[foo]]"
+    const out = convertConcept(content, "concepts/bar.md", new Date("2026-06-17"), [], undefined, idx)
+    expect(out).toContain("timestamp: 2026-06-17")
+    expect(out).toContain("see [[foo]] ([Foo](/concepts/foo.md))")
+  })
+
+  it("self：convertConcept 处理 concepts/foo.md 时，自身 [[foo]] 不双写", () => {
+    const idx = buildSlugIndex(["concepts/foo.md"])
+    const content = "---\ntype: concept\n---\n\nself [[foo]]"
+    const out = convertConcept(content, "concepts/foo.md", new Date("2026-06-17"), [], undefined, idx)
+    expect(out).toContain("self [[foo]]")
+    expect(out).not.toContain("([Foo]")
   })
 })

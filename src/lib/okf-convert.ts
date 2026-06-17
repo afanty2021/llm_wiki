@@ -88,6 +88,25 @@ export function doubleWriteWikilinks(
     .join("")
 }
 
+/**
+ * 对可能含 frontmatter 的 content 双写 body（§6 契约统一入口）。
+ * 有严格围栏 → 分离 fm/body，只双写 body，重组；无围栏 → 整体当 body 双写。
+ * convertConcept（concept）与编排层（index.md）共用，保证 fm 绝不进双写。
+ */
+export function doubleWriteContent(
+  content: string,
+  slugIndex: SlugIndex,
+  currentRelPath: string,
+  warnings: string[],
+): string {
+  const split = splitStrictFence(content)
+  if (!split) {
+    return doubleWriteWikilinks(content, slugIndex, currentRelPath, warnings)
+  }
+  const rewritten = doubleWriteWikilinks(split.body, slugIndex, currentRelPath, warnings)
+  return content.slice(0, content.length - split.body.length) + rewritten
+}
+
 /** prose 段内的 [[wikilink]] 双写（不含代码块）。 */
 function rewriteProseWikilinks(
   prose: string,
@@ -361,6 +380,7 @@ export function convertConcept(
   nowFallback: Date,
   warnings: string[],
   fileMtime?: Date,
+  slugIndex?: SlugIndex,
 ): string {
   const cls = classifyFrontmatter(content)
   let fixed: string
@@ -378,18 +398,20 @@ export function convertConcept(
         // 无闭合 ---：不能把 body 吞进 frontmatter（会致 YAML 解析失败）。
         // 转走 truly-none 路径——注入完整最小 fm，原内容作 body。
         if (e === NO_CLOSING_FENCE) {
-          return injectMinimalFrontmatter(content, filename, nowFallback, fileMtime, warnings)
+          const injected = injectMinimalFrontmatter(content, filename, nowFallback, fileMtime, warnings)
+          return slugIndex ? doubleWriteContent(injected, slugIndex, filename, warnings) : injected
         }
         throw e
       }
       break
     case "truly-none":
       fixed = injectMinimalFrontmatter(content, filename, nowFallback, fileMtime, warnings)
-      // truly-none 已注入 timestamp，直接返回
-      return fixed
+      // truly-none 已注入 timestamp，直接返回（按需双写）
+      return slugIndex ? doubleWriteContent(fixed, slugIndex, filename, warnings) : fixed
   }
-  // normal / leading-blank / missing-fence：补 timestamp
-  return injectTimestamp(fixed, nowFallback, fileMtime)
+  // normal / leading-blank / missing-fence：补 timestamp + 按需双写
+  const withTs = injectTimestamp(fixed, nowFallback, fileMtime)
+  return slugIndex ? doubleWriteContent(withTs, slugIndex, filename, warnings) : withTs
 }
 
 /** leading-blank: strip 前导空白与空行，使 --- 成为首字符。 */
