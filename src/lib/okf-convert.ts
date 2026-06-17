@@ -59,6 +59,72 @@ export function buildSlugIndex(relPaths: string[]): SlugIndex {
   return index
 }
 
+// ──────────────────────────────────────────────────────────────────
+// P1: wikilink 双写（[[slug]] → [[slug]] ([Title](/path.md[#anchor]))）
+// ──────────────────────────────────────────────────────────────────
+
+/**
+ * 对 body 中的 [[wikilink]] 就地双写标准 link（§4/§5）。
+ *
+ * ⚠️ 契约：入参 `body` **必须**是已剥离 frontmatter 的正文——调用方负责
+ * splitStrictFence 分离后只传 body。绝不可传完整 content（fm 字段值里的
+ * `[[...]]` 会被双写致 YAML 损坏）。
+ *
+ * - unique：追加 ([Title](/path.md[#anchor]))，Title = alias ?? slug
+ * - ambiguous/dangling/self：原样保留（ambiguous 记 warning）
+ * - 含 "/" 的相对路径 wikilink：原样保留
+ * - 已知限制：反引号 fenced code block 内 skip；~~~ tilde 围栏与行内代码内暂不 skip（见 §5.3）
+ */
+export function doubleWriteWikilinks(
+  body: string,
+  slugIndex: SlugIndex,
+  currentRelPath: string,
+  warnings: string[],
+): string {
+  // 按 fenced code block 切段：捕获组（代码块）跳过，只双写 prose 段
+  const segments = body.split(/(```[\s\S]*?```)/g)
+  return segments
+    .map((seg, i) => (i % 2 === 1 ? seg : rewriteProseWikilinks(seg, slugIndex, currentRelPath, warnings)))
+    .join("")
+}
+
+/** prose 段内的 [[wikilink]] 双写（不含代码块）。 */
+function rewriteProseWikilinks(
+  prose: string,
+  slugIndex: SlugIndex,
+  currentRelPath: string,
+  warnings: string[],
+): string {
+  return prose.replace(/\[\[([^\[\]]+?)\]\]/g, (full, inner: string) => {
+    // 含 "/" 的相对路径形式 → slug 模糊，不双写（§4）
+    if (inner.includes("/")) return full
+    // linkPart = target[#anchor]，aliasPart = 纯 display（Obsidian：anchor 在 | 前）
+    const [linkPart, aliasPart] = inner.split("|")
+    const [slugRaw, anchorRaw] = linkPart.split(/#/)
+    const slug = slugRaw.trim()
+    if (!slug) return full
+    const paths = slugIndex.get(slug)
+    if (!paths || paths.length === 0) return full // dangling
+    if (paths.length > 1) {
+      warnings.push(`ambiguous wikilink [[${slug}]] → ${paths.length} paths: ${JSON.stringify(paths)}`)
+      return full // ambiguous：宁可丢边不造错边
+    }
+    const path = paths[0]
+    if (path === currentRelPath) return full // self
+    // Title 来源（§4 决策 C）：有 alias 用 alias 原样；无 alias 用 slug 首字母大写。
+    // 首字母大写为显示约定（spec §4 表示例：[[foo]] → [Foo]），与 slug 精确匹配（决策 E）正交。
+    const title = aliasPart ? aliasPart.trim() : capitalizeFirst(slug)
+    const anchor = anchorRaw && !anchorRaw.startsWith("^") ? `#${anchorRaw.trim()}` : ""
+    return `${full} ([${title}](/${path}${anchor}))`
+  })
+}
+
+/** 首字母大写（显示约定，仅用于无 alias 时的 title 文本）。 */
+function capitalizeFirst(s: string): string {
+  if (!s) return s
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
 // 判断 relative() 返回值是否表示不同盘符的绝对路径（macOS/Linux: 以 / 开头；Windows: 以 X:\ 开头）
 //
 // exported for P0b-1 编排层（okf-export-tauri.ts）复用同一 outDir 防护判定，避免逻辑重复。

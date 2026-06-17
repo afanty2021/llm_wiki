@@ -11,7 +11,7 @@ import {
   convertSubdirIndex,
   deriveTimestamp,
 } from "./okf-export"
-import { buildSlugIndex } from "./okf-convert"
+import { buildSlugIndex, doubleWriteWikilinks } from "./okf-convert"
 
 const PAGE = (fm: string, body: string) => `---\n${fm}\n---\n\n${body}`
 
@@ -487,5 +487,30 @@ describe("buildSlugIndex", () => {
   it("重名 slug 收集为多 path 数组", () => {
     const idx = buildSlugIndex(["concepts/wikilink.md", "entities/wikilink.md"])
     expect(idx.get("wikilink")).toEqual(["concepts/wikilink.md", "entities/wikilink.md"])
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────
+// doubleWriteWikilinks — 唯一映射双写
+// ──────────────────────────────────────────────────────────────────
+describe("doubleWriteWikilinks — 唯一映射双写", () => {
+  it("[[foo]] 唯一映射 → 追加括号标准 link，保留原 wikilink", () => {
+    const idx = buildSlugIndex(["concepts/foo.md"])
+    const out = doubleWriteWikilinks("see [[foo]] here", idx, "concepts/bar.md", [])
+    expect(out).toBe("see [[foo]] ([Foo](/concepts/foo.md)) here")
+  })
+
+  it("[[nope]] 无映射（dangling）→ 原样保留，无 warning", () => {
+    const warnings: string[] = []
+    const idx = buildSlugIndex(["concepts/foo.md"])
+    const out = doubleWriteWikilinks("see [[nope]]", idx, "concepts/bar.md", warnings)
+    expect(out).toBe("see [[nope]]")
+    expect(warnings).toEqual([])
+  })
+
+  it("多个 wikilink 各自双写", () => {
+    const idx = buildSlugIndex(["concepts/a.md", "concepts/b.md"])
+    const out = doubleWriteWikilinks("[[a]] 和 [[b]]", idx, "concepts/c.md", [])
+    expect(out).toBe("[[a]] ([A](/concepts/a.md)) 和 [[b]] ([B](/concepts/b.md))")
   })
 })
