@@ -114,6 +114,7 @@ anchor = anchorRaw && !anchorRaw.startsWith("^") ? `#${anchorRaw}` : undefined
 |------|------|------|
 | fenced code block（` ``` ` 区块） | **skip**（prose-only：按 ` ``` ` 切段，只处理非代码段） | 代码示例里的 `[[example]]` 是字面文本，双写会破坏代码 |
 | 行内代码（`` `[[x]]` ``） | **暂不 skip**（已知限制） | 行内配对识别复杂、生产场景罕见；首版不实现，记录待评估 |
+| tilde 围栏（` ~~~ ` 区块） | **暂不 skip**（已知限制） | 生产 wiki 反引号围栏占主导，tilde 极少；首版同行内代码暂不处理（实现易：切段正则扩展即可） |
 
 > 若实测生产 wiki 的 concept body 在代码区频繁出现 `[[...]]`，再考虑行内代码 skip。当前 fenced block skip 已覆盖主要风险。
 
@@ -143,7 +144,7 @@ export function buildSlugIndex(relPaths: string[]): SlugIndex
  * - unique：追加 ([Title](/path.md[#anchor]))
  * - ambiguous/dangling/self：原样保留（ambiguous 记 warning）
  * - 含 "/" 的相对路径 wikilink：原样保留
- * - 已知限制：fenced code block（```）内 skip；行内代码（`）内暂不 skip（见 §5.3）
+ * - 已知限制：反引号 fenced code block 内 skip；~~~ tilde 围栏与行内代码内暂不 skip（见 §5.3）
  */
 export function doubleWriteWikilinks(
   body: string,
