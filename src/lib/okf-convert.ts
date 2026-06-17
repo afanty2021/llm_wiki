@@ -30,6 +30,35 @@ export const RESERVED = new Set(["index.md", "log.md"])
 const KEY_VALUE_RE = /^[A-Za-z0-9_-]+\s*:\s*\S/
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
+// ──────────────────────────────────────────────────────────────────
+// P1: slug→path 索引（wikilink 双写）
+// ──────────────────────────────────────────────────────────────────
+
+/** slug → 候选 path 列表（bundle-relative，如 "concepts/foo.md"，不含 wiki/ 前缀）。 */
+export type SlugIndex = Map<string, string[]>
+
+/**
+ * 遍历 relPaths 建 slug → path[] 索引（§3）。
+ * - slug = basename 去 .md（与 wiki-graph fileNameToId 语义一致，但独立实现避免耦合/信息丢失）。
+ * - 排除 reserved（index.md/log.md 非概念链接目标；其自身 body 双写复用本索引）。
+ * - 精确匹配，不 normalize 大小写/空格。
+ */
+export function buildSlugIndex(relPaths: string[]): SlugIndex {
+  const index: SlugIndex = new Map()
+  for (const relPath of relPaths) {
+    const name = basename(relPath)
+    if (RESERVED.has(name)) continue
+    const slug = name.replace(/\.md$/i, "")
+    let arr = index.get(slug)
+    if (!arr) {
+      arr = []
+      index.set(slug, arr)
+    }
+    arr.push(relPath)
+  }
+  return index
+}
+
 // 判断 relative() 返回值是否表示不同盘符的绝对路径（macOS/Linux: 以 / 开头；Windows: 以 X:\ 开头）
 //
 // exported for P0b-1 编排层（okf-export-tauri.ts）复用同一 outDir 防护判定，避免逻辑重复。

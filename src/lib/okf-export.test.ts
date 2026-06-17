@@ -11,6 +11,7 @@ import {
   convertSubdirIndex,
   deriveTimestamp,
 } from "./okf-export"
+import { buildSlugIndex } from "./okf-convert"
 
 const PAGE = (fm: string, body: string) => `---\n${fm}\n---\n\n${body}`
 
@@ -463,5 +464,28 @@ describe("exportOkfBundle (end-to-end)", () => {
     expect(c).toContain("title: 语义")
     expect(c).toMatch(/timestamp: \d{4}-\d{2}-\d{2}/)
     expect(c).toContain("# 语义")
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────
+// buildSlugIndex — §3 slug→path[] 索引
+// ──────────────────────────────────────────────────────────────────
+describe("buildSlugIndex", () => {
+  it("maps slug → [relPath]，去 .md 后缀", () => {
+    const idx = buildSlugIndex(["concepts/foo.md", "entities/bar.md"])
+    expect(idx.get("foo")).toEqual(["concepts/foo.md"])
+    expect(idx.get("bar")).toEqual(["entities/bar.md"])
+  })
+
+  it("排除 reserved（index.md / log.md，含子目录）", () => {
+    const idx = buildSlugIndex(["index.md", "concepts/index.md", "log.md", "concepts/foo.md"])
+    expect(idx.has("index")).toBe(false)
+    expect(idx.has("log")).toBe(false)
+    expect(idx.get("foo")).toEqual(["concepts/foo.md"])
+  })
+
+  it("重名 slug 收集为多 path 数组", () => {
+    const idx = buildSlugIndex(["concepts/wikilink.md", "entities/wikilink.md"])
+    expect(idx.get("wikilink")).toEqual(["concepts/wikilink.md", "entities/wikilink.md"])
   })
 })
