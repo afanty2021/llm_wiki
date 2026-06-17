@@ -48,7 +48,7 @@ vi.mock("@/lib/logger", () => {
     }),
     initLogger: () => Promise.resolve(),
     setLogLevel: noop,
-    shouldSampleAt: (_level: string, now: number, windowStart: number, windowCount: number, threshold: number) => ({
+    shouldSampleAt: (_level: string, _now: number, windowStart: number, windowCount: number, _threshold: number) => ({
       allow: true,
       newWindowStart: windowStart,
       newWindowCount: windowCount,

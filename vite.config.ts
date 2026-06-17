@@ -30,7 +30,9 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // 绑 127.0.0.1（IPv4）：vite 默认监听 IPv6 [::1]，而 Tauri WKWebView 把
+    // localhost 解析为 IPv4 127.0.0.1，连不上 IPv6 → webview 白屏。
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",

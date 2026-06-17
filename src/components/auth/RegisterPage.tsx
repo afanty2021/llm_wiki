@@ -3,7 +3,7 @@ import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-export function RegisterPage({ onNavigate }: { onNavigate: (page: string) => void }) {
+export function RegisterPage({ onNavigate }: { onNavigate: (page: "login" | "register") => void }) {
   const [username, setUsername] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -61,7 +61,7 @@ export function RegisterPage({ onNavigate }: { onNavigate: (page: string) => voi
             <button
               type="button"
               className="text-blue-600 hover:underline ml-1"
-              onClick={() => onNavigate("login")}
+              onClick={() => { clearError(); onNavigate("login") }}
             >
               登录
             </button>

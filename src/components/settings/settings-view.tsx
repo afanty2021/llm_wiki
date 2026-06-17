@@ -16,6 +16,7 @@ import {
   Settings,
   ScrollText,
   FileText,
+  FolderOutput,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -47,6 +48,7 @@ import { GeneralSection } from "./sections/general-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { LogsSection } from "./sections/logs-section"
+import { OkfExportSection } from "./sections/okf-export-section"
 import { AboutSection } from "./sections/about-section"
 
 type CategoryId =
@@ -64,6 +66,7 @@ type CategoryId =
   | "interface"
   | "maintenance"
   | "logs"
+  | "okf-export"
   | "changelog"
   | "about"
 
@@ -91,6 +94,7 @@ const CATEGORIES: Category[] = [
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
   { id: "logs", labelKey: "settings.categories.logs", icon: ScrollText },
+  { id: "okf-export", labelKey: "settings.categories.okfExport", icon: FolderOutput },
   { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
@@ -613,6 +617,8 @@ export function SettingsView() {
         return <MaintenanceSection />
       case "logs":
         return <LogsSection />
+      case "okf-export":
+        return <OkfExportSection />
       case "changelog":
         return <ChangelogSection />
       case "about":

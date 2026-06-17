@@ -240,6 +240,7 @@
       "interface": "界面",
       "maintenance": "维护",
       "logs": "日志查看器",
+      "okfExport": "OKF 导出",
       "changelog": "更新日志",
       "about": "关于"
     },
@@ -635,6 +636,22 @@
       "total": "共 {{count}} 条",
       "prev": "上一页",
       "next": "下一页"
+    },
+    "okfExport": {
+      "title": "导出为 OKF bundle",
+      "description": "把当前 wiki 只读转换为 OKF v0.1 bundle。源 wiki 不会被修改，结果写入你选择的输出目录。",
+      "exportButton": "导出为 OKF bundle",
+      "exporting": "导出中...",
+      "selectOutDir": "选择输出目录",
+      "noProject": "请先打开一个 wiki 项目。",
+      "successTitle": "导出完成",
+      "written": "写出文件：{{count}}",
+      "concepts": "其中 concept 文件：{{count}}",
+      "reserved": "其中保留文件（index/log）：{{count}}",
+      "warnings": "警告：{{count}}",
+      "warningsTitle": "警告详情",
+      "moreWarnings": "还有 {{count}} 条未显示...",
+      "errorPrefix": "导出失败"
     }
   },
   "preview": {

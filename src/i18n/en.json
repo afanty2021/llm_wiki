@@ -240,6 +240,7 @@
       "interface": "Interface",
       "maintenance": "Maintenance",
       "logs": "Log Viewer",
+      "okfExport": "OKF Export",
       "changelog": "Changelog",
       "about": "About"
     },
@@ -635,6 +636,22 @@
       "total": "{{count}} entries",
       "prev": "Prev",
       "next": "Next"
+    },
+    "okfExport": {
+      "title": "Export as OKF bundle",
+      "description": "Convert the current wiki read-only into an OKF v0.1 bundle. The source wiki is not modified; the result is written to an output directory you choose.",
+      "exportButton": "Export as OKF bundle",
+      "exporting": "Exporting...",
+      "selectOutDir": "Select Output Directory",
+      "noProject": "Please open a wiki project first.",
+      "successTitle": "Export complete",
+      "written": "Files written: {{count}}",
+      "concepts": "Concept files: {{count}}",
+      "reserved": "Reserved files (index/log): {{count}}",
+      "warnings": "Warnings: {{count}}",
+      "warningsTitle": "Warning details",
+      "moreWarnings": "{{count}} more not shown...",
+      "errorPrefix": "Export failed"
     }
   },
   "preview": {
