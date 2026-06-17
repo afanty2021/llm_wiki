@@ -561,3 +561,17 @@ describe("doubleWriteWikilinks — 边界", () => {
     expect(out).toBe("[[../bar/foo]]")
   })
 })
+
+// doubleWriteWikilinks — fenced code block skip（验证 Task 2 的 fenced split）
+describe("doubleWriteWikilinks — fenced code block skip", () => {
+  const idx = buildSlugIndex(["concepts/foo.md", "concepts/y.md"])
+
+  it("代码块内 [[x]] 原样，块外 [[y]] 双写", () => {
+    const body = "before [[y]]\n\n```\nconst x = [[foo]]\n```\n\nafter [[y]]"
+    const out = doubleWriteWikilinks(body, idx, "concepts/bar.md", [])
+    expect(out).toContain("before [[y]] ([Y](/concepts/y.md))")
+    expect(out).toContain("const x = [[foo]]") // 块内未双写
+    expect(out).not.toContain("[[foo]] ([Foo]")
+    expect(out).toContain("after [[y]] ([Y](/concepts/y.md))")
+  })
+})
