@@ -25,7 +25,9 @@ const KEY_VALUE_RE = /^[A-Za-z0-9_-]+\s*:\s*\S/
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 // 判断 relative() 返回值是否表示不同盘符的绝对路径（macOS/Linux: 以 / 开头；Windows: 以 X:\ 开头）
-function isAbsoluteLike(p: string): boolean {
+//
+// exported for P0b-1 编排层（okf-export-tauri.ts）复用同一 outDir 防护判定，避免逻辑重复。
+export function isAbsoluteLike(p: string): boolean {
   return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)
 }
 
