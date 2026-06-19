@@ -8,6 +8,7 @@ mod search;
 mod chat;
 mod graph;
 mod pages;
+mod ingest;
 
 pub use pages::WikiPage;
 
@@ -25,5 +26,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/search", search::search_routes())
         .nest("/api/v1/chat", chat::chat_routes())
         .nest("/api/v1/graph", graph::graph_routes())
+        .merge(ingest::global_ingest_routes())
         .with_state(state)
 }

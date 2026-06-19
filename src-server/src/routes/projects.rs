@@ -15,6 +15,7 @@ use crate::{
     },
 };
 use super::pages;
+use super::ingest;
 
 // --- Cursor helpers ---
 
@@ -48,6 +49,7 @@ pub fn project_routes() -> Router<AppState> {
         .route("/{id}", axum::routing::put(update_project))
         .route("/{id}", axum::routing::delete(delete_project))
         .merge(pages::pages_routes())
+        .merge(ingest::ingest_routes())
 }
 
 // --- Permission helpers ---
