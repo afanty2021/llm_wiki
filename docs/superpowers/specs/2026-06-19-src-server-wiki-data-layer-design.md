@@ -65,7 +65,7 @@ DELETE /projects/:pid/page?path=xxx      删除
 ```
 - `title` 冗余到 `title` 列（列表查询/排序）。
 - **`sources`/`images` 列同步**：migration 003 加了 `sources`/`images` JSONB 列。frontmatter JSONB 存完整解析结果；`sources`/`images` 列作规范化列，**写入（POST/PUT/ingest/导入）时从 frontmatter 同步填充**；**读取（GET/列表）统一从分列取**（不查 frontmatter JSONB）——这正是分列的意义（查询/过滤用规范化列）。
-- **`page_type` 列同步**：migration 003 加了 `page_type VARCHAR(50)`。写入时从 `frontmatter.type` 同步填充；GET `?type=concept` 查询用 `page_type` 列过滤。
+- **`page_type` 列同步**：migration 003 加了 `page_type VARCHAR(50)`。写入时从 `frontmatter.type` 同步填充；若 type 缺失取列默认值 `'concept'`（migration 003 DEFAULT）。GET `?type=concept` 查询用 `page_type` 列过滤。
 - 丢失原始格式（注释/顺序/空行）——权衡：查询便利 > 格式保真（wiki_pages 是结构化存储，非文件镜像）。
 
 ---
@@ -81,7 +81,7 @@ DELETE /projects/:pid/page?path=xxx      删除
    - 读 storage 源文档（source_paths）
    - 解析（**pdf/docx/xlsx/pptx → 文本**，覆盖主流格式，对齐 §4.3；抽桌面 src-tauri 解析逻辑成 crate 复用；.doc/odt/ods 按需后续）
    - **图片提取（MVP）**：PDF → 提取图片存 storage/media/（对齐桌面 `extractAndSaveSourceImages`）；多模态 caption（image-caption-pipeline）后续补
-   - **缓存**：源文档分析结果按 content hash 缓存（可跨 project 复用，避免重复 LLM 烧 token，对齐桌面 `ingest-cache`）
+   - **缓存**：源文档分析结果按 content hash 缓存（可跨 project 复用，避免重复 LLM 烧 token，对齐桌面 `ingest-cache`）。存 redis（`ingest:cache:{content_hash}` → Step 1 分析 JSON，TTL 按需）；`ingested_files` 表（migration 001，UNIQUE project_id+original_path）记录摄取历史供去重
    - **长文档分块**：> context budget 时拆 chunk 分批分析 → global digest → 合并（对齐桌面 ingest；具体 prompt 见实施 plan）
    - LLM 两步（调 llm_providers 配置的 provider；Rust HTTP+SSE，等价桌面 streamChat）
      · Step 1 分析：源 → 结构化分析（实体/概念/连接/矛盾）
@@ -107,13 +107,13 @@ DELETE /projects/:pid/page?path=xxx      删除
 ### 4.4 产出
 
 - 新 wiki_pages（concept/entity，path=`concepts/foo.md`/`entities/bar.md`）。
-- 更新 reserved pages：`index.md`（目录）、`log.md`（摄取日志）、`overview.md`（总览）——也作 wiki_pages（path=`index.md` 等）。**从 scratch 重建**（对齐桌面 `updateReservedPages`）：index.md 遍历 wiki_pages 生成目录、log.md 追加摄取条目、overview.md 重建总览。reserved pages per-project（`UNIQUE(project_id, path)` 隐含），不同 project 互不影响。
-- **reserved pages 并发锁**：多用户/多 worker 并发 ingest 更新同一 log.md/index.md 竞态 → 写入用 `SELECT ... FOR UPDATE` 行锁（即使 MVP 单 worker 也应加，为多 worker 预留）。
+- 更新 reserved pages：`index.md`（目录）、`log.md`（摄取日志）、`overview.md`（总览）——也作 wiki_pages（path=`index.md` 等）。**从 scratch 重建**（对齐桌面 `updateReservedPages`）：index.md 遍历 wiki_pages 生成目录、log.md 重建所有摄取条目（按 created_at 排序）、overview.md 重建总览。reserved pages per-project（`UNIQUE(project_id, path)` 隐含），不同 project 互不影响。
+- **reserved pages 并发锁**：多用户/多 worker 并发 ingest 更新同一 log.md/index.md 竞态 → **读写 reserved pages 时 `SELECT ... FOR UPDATE` 行锁**（读取即加锁，同一事务内写回，避免读-改-写覆盖；即使 MVP 单 worker 也应加，为多 worker 预留）。
 
 ### 4.5 异步队列
 
 - redis 队列（list，LPUSH/BRPOP），job_id（UUID）。
-- worker **串行**处理（对齐桌面 ingest-queue 串行 + 崩溃恢复）。
+- worker **串行**处理（对齐桌面 ingest-queue 串行 + 崩溃恢复）。**失败不自动重试（MVP）**：worker panic / LLM 超时 → job 标记 failed（人类介入）；下次启动 BRPOP 取回重试（幂等：分析结果已缓存则复用）。后续多 worker 引入 retryCount。
 - 进度：redis hash（job_id → status/stage/progress）。
 - 前端：`GET /ingest/jobs/:id` 轮询（SSE 后续）。
 
