@@ -4,7 +4,7 @@
 
 **Goal:** 实现 `StreamChatProvider` trait + OpenAI/Anthropic SSE 流式实现 + `provider_for_project` 工厂，为 ingest pipeline (D) 提供统一 LLM 调用接口。
 
-**Architecture:** `services/llm_stream.rs`（~550 行单文件）：trait + 共用类型 → OpenAI impl（标准 SSE 解析）→ Anthropic impl（event: 状态机，简化为单 content_block）→ 工厂函数 `provider_for_project(pool, project_id)` 读 `llm_providers` 表 + 复用 `llm.rs` 解密 key。行缓冲（`line_buf`）两 impl 共用。测试用 table-driven + mock。
+**Architecture:** `services/llm_stream.rs`（~550 行单文件）：trait + 共用类型 → OpenAI impl（标准 SSE 解析）→ Anthropic impl（event: 状态机，简化为单 content_block）→ 工厂函数 `provider_for_project(state, project_id)` 复用 `llm.rs` 解密 key + base_url 拼接。行缓冲（`line_buf`）两 impl 共用。测试用 table-driven + mock。
 
 **Tech Stack:** Rust + axum（不直接用到，复用现有 deps）+ reqwest 0.12（新增，`stream` feature）+ sqlx（查 `llm_providers` 表）+ chrono + tokio。
 

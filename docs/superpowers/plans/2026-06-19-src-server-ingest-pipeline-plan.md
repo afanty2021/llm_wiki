@@ -254,6 +254,7 @@ mod tests {
         let text = "See ![alt](page3_image1.png) and ![alt2](image2.jpg)";
         let images = vec![("page3_image1.png".into(), vec![]), ("image2.jpg".into(), vec![])];
         let result = replace_image_paths(text, 42, &images);
+// 替换全文中的图片名——若图片名碰巧出现在非 image 句中被误替换，parser 生成的 page3_image1.png 模式撞车概率低，MVP 接受。
         assert!(result.contains("media/42/page3_image1.png"));
         assert!(result.contains("media/42/image2.jpg"));
         assert!(!result.contains("page3_image1.png"));
@@ -286,7 +287,7 @@ fn chunk_document(text: &str, context_budget: usize) -> Vec<String> {
         }
         // 超长段落按句子硬拆
         if estimate_tokens(p) > context_budget {
-            for sent in p.split_inclusive(&['.', '?', '!', '\n', '。'][..]) {
+            for sent in p.split_inclusive(&['.', '?', '!', '。'][..]) {
                 if estimate_tokens(&cur) + estimate_tokens(sent) > context_budget && !cur.is_empty() {
                     chunks.push(std::mem::take(&mut cur));
                 }
@@ -581,7 +582,9 @@ async fn process_source_path(
     state: &AppState, project_id: i32, team_id: i32, source_path: &str,
 ) -> Result<Vec<WikiPageInsert>, AppError> {
     let storage_base = state.config.storage_path();
-    let full_path = format!("{}/{}/{}", storage_base.trim_end_matches('/'), team_id, source_path);
+    // 文件路径：{storage}/teams/{team_id}/projects/{project_id}/{source_path}
+    let full_path = crate::services::storage::project_base(storage_base, team_id, project_id)
+        .join(source_path);
     let bytes = tokio::fs::read(&full_path).await
         .map_err(|e| AppError::IoError(e))?;
 
@@ -602,7 +605,7 @@ async fn process_source_path(
     // —— B stub: 直接当纯文本 page，不做 LLM ——
     // TODO: B 就绪后替换为 step1_cache → step1_analyze → step2_generate → parse_file_blocks
     let path = source_path
-        .trim_start_matches(&format!("{}/{}/", storage_base.trim_end_matches('/'), team_id))
+        .trim_start_matches(&format!("{}/", crate::services::storage::project_base(storage_base, team_id, project_id).display()))
         .to_string();
     let title = text.lines().next().and_then(|l| l.strip_prefix("# ").map(String::from));
     let page = WikiPageInsert {
@@ -635,7 +638,7 @@ async fn upsert_wiki_page(state: &AppState, project_id: i32, page: &WikiPageInse
 ### Step 3: 实现 reserved 重建
 
 ```rust
-/// 事务内全量重建 index.md / log.md / overview.md。
+/// 事务内全量重建 wiki/index.md / wiki/log.md / wiki/overview.md。
 /// MVP: 最近 100 条摄入日志（后续按时间窗口扩展，spec §5）。
 async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec<String>, AppError> {
     let mut tx = state.db.begin().await?;
@@ -643,7 +646,7 @@ async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec
     // index.md
     let pages: Vec<(String, Option<String>)> = sqlx::query_as(
         "SELECT path, title FROM wiki_pages WHERE project_id = $1 \
-         AND path NOT IN ('index.md','log.md','overview.md') ORDER BY path"
+         AND path NOT IN ('wiki/index.md','wiki/log.md','wiki/overview.md') ORDER BY path"
     )
     .bind(project_id).fetch_all(&mut *tx).await?;
     let mut index = "# Project Index\n\n".to_string();
@@ -666,12 +669,12 @@ async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec
     // overview.md
     let page_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM wiki_pages WHERE project_id = $1 \
-         AND path NOT IN ('index.md','log.md','overview.md')"
+         AND path NOT IN ('wiki/index.md','wiki/log.md','wiki/overview.md')"
     )
     .bind(project_id).fetch_one(&mut *tx).await?;
     let type_counts: Vec<(String, i64)> = sqlx::query_as(
         "SELECT page_type, count(*) AS cnt FROM wiki_pages WHERE project_id = $1 \
-         AND path NOT IN ('index.md','log.md','overview.md') GROUP BY page_type"
+         AND path NOT IN ('wiki/index.md','wiki/log.md','wiki/overview.md') GROUP BY page_type"
     )
     .bind(project_id).fetch_all(&mut *tx).await?;
     let mut overview = format!("# Overview\n\n**Total pages:** {}\n\n", page_count);
@@ -681,7 +684,7 @@ async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec
 
     // Upsert 三条
     for (path, content) in [
-        ("index.md", index), ("log.md", log), ("overview.md", overview),
+        ("wiki/index.md", index), ("wiki/log.md", log), ("wiki/overview.md", overview),
     ] {
         sqlx::query(
             "INSERT INTO wiki_pages (project_id, path, title, content, page_type) \
@@ -693,7 +696,7 @@ async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec
     }
 
     tx.commit().await?;
-    Ok(vec!["index.md".into(), "log.md".into(), "overview.md".into()])
+    Ok(vec!["wiki/index.md".into(), "wiki/log.md".into(), "wiki/overview.md".into()])
 }
 ```
 
