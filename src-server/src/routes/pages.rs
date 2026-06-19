@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::{AppError, AppState};
+use crate::AppState;
 
 /// wiki_pages 表的 API 视图模型。
 /// created_at/updated_at 用 DateTime<Utc>（chrono serde 序列化为 RFC3339），
@@ -47,28 +47,6 @@ pub struct ListQuery {
 #[derive(Debug, Deserialize)]
 pub struct PathQuery {
     pub path: String,
-}
-
-/// 校验 user 是 project 的 team member；返回 role。无权限 → ResourceNotFound。
-/// 调用方须先经 require_auth 提取 user_id。
-pub(crate) async fn check_project_access(
-    state: &AppState,
-    project_id: i32,
-    user_id: i32,
-) -> Result<String, AppError> {
-    // 运行时查询（非宏），JOIN projects↔team_members 取 role
-    let role: Option<String> = sqlx::query_scalar(
-        "SELECT tm.role FROM projects p \
-         JOIN team_members tm ON p.team_id = tm.team_id \
-         WHERE p.id = $1 AND tm.user_id = $2",
-    )
-    .bind(project_id)
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?;
-    role.ok_or_else(|| AppError::ResourceNotFound(
-        "Project not found or you are not a member".to_string()
-    ))
 }
 
 /// 从 frontmatter 同步填充规范化列（title/page_type/sources/images）。
