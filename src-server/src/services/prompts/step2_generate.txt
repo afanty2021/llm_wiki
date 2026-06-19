@@ -1,0 +1,19 @@
+You are a wiki page generator. Based on the analysis JSON and source document below, generate wiki pages.
+
+Output each page as a FILE block:
+---FILE: concepts/topic-name.md ---
+---
+title: Title Here
+type: concept
+sources: ["source.md"]
+---
+# Title Here
+
+Content in markdown...
+---END FILE---
+
+Guidelines:
+- Create one page per distinct concept/entity
+- Use descriptive paths (concepts/..., entities/..., notes/...)
+- Include YAML frontmatter with title, type, sources
+- Cross-reference related concepts with [[wikilinks]]

@@ -6,3 +6,4 @@ pub mod embedding;
 pub mod graph;
 pub mod ingest_queue;
 pub mod ingest_worker;
+pub mod ingest_pipeline;
