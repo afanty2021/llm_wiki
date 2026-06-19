@@ -4,3 +4,4 @@ pub mod llm;
 pub mod llm_stream;
 pub mod embedding;
 pub mod graph;
+pub mod ingest_queue;
