@@ -47,7 +47,7 @@ use crate::{AppError, AppState};
 use crate::middleware::project_guard::check_project_access;
 use crate::services::ingest_queue;
 
-// ── Request DTO ──
+// ── Request DTO / Response struct ──
 
 #[derive(Debug, Deserialize)]
 pub struct CreateIngestRequest {
@@ -58,6 +58,12 @@ pub struct CreateIngestRequest {
 pub struct ListIngestJobsQuery {
     pub status: Option<String>,
     pub limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListJobsResponse {
+    items: Vec<ingest_queue::JobResponse>,
+    count: usize,
 }
 
 // ── Handlers ──
@@ -85,10 +91,11 @@ async fn list_ingest_jobs(
     Path(project_id): Path<i32>,
     Query(q): Query<ListIngestJobsQuery>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<ListJobsResponse>, AppError> {
     check_project_access(&state, &headers, project_id).await?;
     let items = ingest_queue::list_jobs(&state, project_id, q.status.as_deref(), q.limit).await?;
-    Ok(Json(serde_json::json!({"items": items, "count": items.len()})))
+    let count = items.len();
+    Ok(Json(ListJobsResponse { items, count }))
 }
 
 /// GET /api/v1/ingest/jobs/:id
@@ -96,9 +103,9 @@ async fn list_ingest_jobs(
 async fn get_job_status(
     State(state): State<AppState>,
     Path(job_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<ingest_queue::JobResponse>, AppError> {
     let job = ingest_queue::job_status(&state, job_id).await?;
-    Ok(Json(serde_json::json!(job)))
+    Ok(Json(job))
 }
 
 // ── Routers ──
