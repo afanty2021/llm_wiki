@@ -70,3 +70,8 @@ calamine = "0.35"
 
 [dev-dependencies]
 axum-test = "15"
+
+# tests/integration 使用 mod.rs 入口（非 cargo 默认的 main.rs），需显式声明 target
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"

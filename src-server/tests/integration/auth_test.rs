@@ -9,17 +9,18 @@ mod tests {
     // 注意: 完整集成测试需要先创建测试数据库
     // 此处提供基本框架，实际运行时需要设置 DATABASE_URL
 
-    fn setup_test_app() -> (axum::Router, llm_wiki_server::AppState) {
+    async fn setup_test_app() -> (axum::Router, llm_wiki_server::AppState) {
         let config = llm_wiki_server::AppConfig::from_env()
             .expect("Failed to load test config");
-        tokio_test::block_on(llm_wiki_server::create_app(config))
+        llm_wiki_server::create_app(config)
+            .await
             .expect("Failed to create test app")
     }
 
     #[tokio::test]
     #[ignore = "Requires database — run with DATABASE_URL set"]
     async fn test_health_check() {
-        let (app, _state) = setup_test_app();
+        let (app, _state) = setup_test_app().await;
 
         let response = app
             .oneshot(Request::builder()
@@ -35,7 +36,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires database — run with DATABASE_URL set"]
     async fn test_register_and_login_flow() {
-        let (app, _state) = setup_test_app();
+        let (app, _state) = setup_test_app().await;
 
         // 注册
         let register_body = serde_json::json!({
@@ -71,5 +72,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn register_creates_personal_team_with_owner_membership() {
+        let (app, state) = setup_test_app().await;
+        // 用唯一用户名保证可重复运行（测试共享 live DB，硬编码会二次冲突）
+        let username = format!("teamtest_{}", std::process::id());
+        let body = serde_json::json!({
+            "username": username,
+            "email": format!("{}@t.com", username),
+            "password": "password123"
+        });
+        let response = app
+            .oneshot(Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/register")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // 查 teams：应有 1 行 created_by = 新用户
+        let team: Option<(i32, String)> = sqlx::query_as(
+            "SELECT id, name FROM teams WHERE created_by = (SELECT id FROM users WHERE username = $1)"
+        ).bind(&username).fetch_optional(&state.db).await.unwrap();
+        let (team_id, team_name) = team.expect("personal team should be created");
+        assert!(team_name.contains(&username), "team name should contain username, got: {}", team_name);
+
+        // team_members：owner
+        let role: Option<String> = sqlx::query_scalar(
+            "SELECT role FROM team_members WHERE team_id = $1"
+        ).bind(team_id).fetch_one(&state.db).await.unwrap();
+        assert_eq!(role.as_deref(), Some("owner"));
     }
 }

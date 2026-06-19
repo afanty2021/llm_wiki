@@ -133,6 +133,27 @@ async fn register(
 
     let user_id: i32 = row.get("id");
 
+    // —— 建 personal team（owner=self），事务内（避免第二个 INSERT 失败留 orphan team）——
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
+    let team_row = sqlx::query(
+        "INSERT INTO teams (name, created_by) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("{}'s team", username))
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+    let team_id: i32 = team_row.get("id");
+    sqlx::query(
+        "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(team_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+    tx.commit().await.map_err(AppError::from)?;
+
     // Build UserResponse from the row
     let user_response = UserResponse {
         id: row.get("id"),
