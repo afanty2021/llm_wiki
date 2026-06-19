@@ -495,6 +495,7 @@ async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec
     }
 
     // Log —— 摄入日志
+    // MVP: 最近 100 条。后续按时间窗口或分页扩展（spec §5 "ORDER BY created_at" 全量重建）
     let log_rows: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT original_path, ingested_at FROM ingested_files WHERE project_id = $1 ORDER BY ingested_at DESC LIMIT 100"
     )
@@ -539,7 +540,9 @@ async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec
 }
 ```
 
-**关于 SELECT FOR UPDATE**：spec 要求重建前锁住索引页面。因 reserved pages 本有 UNIQUE(project_id,path)——内部 `ON CONFLICT DO NOTHING + check` 可行，但 MVP 重建是 `INSERT ON CONFLICT DO UPDATE`，不锁不影响正确性（冲突即可更新，幂等，但不存在两 worker 竞争时某 writer 会读脏数据而其他 writer 覆盖——但这在 MVP 单 worker 场景不发生。多 worker 后可通过 `SELECT ... FOR UPDATE` 先锁后改，当前不为 MVP 加复杂度）。
+**关于 SELECT FOR UPDATE**：spec 要求重建前锁住索引页面。因 reserved pages 本有 UNIQUE(project_id,path)——内部 `ON CONFLICT DO NOTHING + check` 可行，但 MVP 重建是 `INSERT ON CONFLICT DO UPDATE`，不锁不影响正确性（冲突即可更新，幂等）。**当前 MVP 单 worker 不竞态**。多 worker 后可通过 `SELECT ... FOR UPDATE` 先锁后改，注释标注。
+
+**事务回滚**：三条 reserved page upsert 中任何一条失败 → transaction 自动 drop → 整个 `rebuild_reserved_pages` 返 Err → worker 调 `mark_job_failed`。幂等 upsert 重试时覆盖，不丢数据。
 
 ---
 
