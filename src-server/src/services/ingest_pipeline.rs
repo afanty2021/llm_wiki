@@ -211,6 +211,72 @@ async fn cache_step1_result(
     Ok(())
 }
 
+// ── 两步 LLM 调用（子系统 B provider 已就绪）──
+
+/// Step 1：分析单个 chunk → 结构化 JSON（entities / concepts / connections / contradictions）。
+async fn step1_analyze(
+    state: &AppState,
+    project_id: i32,
+    text: &str,
+) -> Result<serde_json::Value, AppError> {
+    use crate::services::llm_stream::{self, ChatMessage, ChatOpts};
+    let provider = llm_stream::provider_for_project(state, project_id).await?;
+    let prompt = include_str!("prompts/step1_analyze.txt");
+    let system = "You analyze documents into structured knowledge for a personal wiki.";
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: format!("{}\n\n<document>\n{}\n</document>", prompt, text),
+    }];
+    let opts = ChatOpts {
+        model: provider.model_name().into(),
+        temperature: 0.3,
+        max_tokens: 4000,
+        system_prompt: Some(system.into()),
+        timeout_secs: None,
+    };
+    let (response, _) = provider
+        .chat_to_string(messages, opts)
+        .await
+        .map_err(|e| AppError::LlmApiError(format!("step1: {}", e)))?;
+    serde_json::from_str(&response)
+        .map_err(|e| AppError::LlmApiError(format!("step1 JSON parse: {}", e)))
+}
+
+/// Step 2：基于 step1 分析 JSON + 原文，生成 FILE blocks 形式的 wiki 页面。
+async fn step2_generate(
+    state: &AppState,
+    project_id: i32,
+    original_text: &str,
+    step1_json: &serde_json::Value,
+) -> Result<String, AppError> {
+    use crate::services::llm_stream::{self, ChatMessage, ChatOpts};
+    let provider = llm_stream::provider_for_project(state, project_id).await?;
+    let prompt = include_str!("prompts/step2_generate.txt");
+    let system = "You generate wiki pages. Output each page as a FILE block.";
+    // 【编译陷阱】AppError 无 From<serde_json::Error>，必须 map_err。
+    let analysis = serde_json::to_string_pretty(step1_json)
+        .map_err(|e| AppError::InternalError(format!("serialize step1: {}", e)))?;
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: format!(
+            "{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
+            prompt, analysis, original_text
+        ),
+    }];
+    let opts = ChatOpts {
+        model: provider.model_name().into(),
+        temperature: 0.5,
+        max_tokens: 16000,
+        system_prompt: Some(system.into()),
+        timeout_secs: None,
+    };
+    let (response, _) = provider
+        .chat_to_string(messages, opts)
+        .await
+        .map_err(|e| AppError::LlmApiError(format!("step2: {}", e)))?;
+    Ok(response)
+}
+
 struct IngestedFileStatus {
     content_hash: String,
     file_size: i64,
@@ -360,29 +426,46 @@ async fn process_source_path(
         }
     }
 
-    // —— B stub: 直接当纯文本 page，不做 LLM ——
-    // TODO: B 就绪后替换为 step1_cache → step1_analyze → step2_generate → parse_file_blocks
-    let title = text
-        .lines()
-        .next()
-        .and_then(|l| l.strip_prefix("# ").map(String::from));
-    let path = if source_path.ends_with(".md") {
-        source_path.to_string()
+    // —— B: 两步 LLM 流程 ——
+    // 查 step1 缓存（content-hash，跨 project 复用）
+    let step1_result: serde_json::Value = if let Some(cached) =
+        check_step1_cache(state, &content_hash).await
+    {
+        cached
     } else {
-        format!("{}.md", source_path)
-    };
-    let page = WikiPageInsert {
-        path,
-        title,
-        content: text,
-        frontmatter: serde_json::json!({}),
-        page_type: "concept".into(),
-        sources: serde_json::json!([]),
-        images: serde_json::json!([]),
+        let context_budget = 128_000 - 8000; // TODO: 从 get_llm_config 读 context_size 计算
+        let chunks = chunk_document(&text, context_budget);
+        let analyses: Vec<serde_json::Value> = if chunks.len() == 1 {
+            vec![step1_analyze(state, project_id, &chunks[0]).await?]
+        } else {
+            let mut v = vec![];
+            for chunk in &chunks {
+                v.push(step1_analyze(state, project_id, chunk).await?);
+            }
+            v
+        };
+        let merged = merge_analyses(&analyses);
+        cache_step1_result(state, &content_hash, &merged).await?;
+        merged
     };
 
+    let llm_output = step2_generate(state, project_id, &text, &step1_result).await?;
+    let blocks = parse_file_blocks(&llm_output);
+    let pages: Vec<WikiPageInsert> = blocks
+        .into_iter()
+        .map(|b| WikiPageInsert {
+            path: b.path,
+            title: b.title,
+            content: b.content,
+            frontmatter: b.frontmatter,
+            page_type: b.page_type,
+            sources: b.sources,
+            images: b.images,
+        })
+        .collect();
+
     mark_file_ingested(state, project_id, source_path, &content_hash, file_size, "md").await?;
-    Ok(vec![page])
+    Ok(pages)
 }
 
 /// upsert wiki_pages 记录（UNIQUE(project_id, path)）。
