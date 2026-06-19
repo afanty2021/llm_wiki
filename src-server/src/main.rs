@@ -23,6 +23,9 @@ async fn main() -> Result<()> {
     // 创建应用
     let (app, state) = create_app(config).await?;
 
+    // 启动 ingest worker（同进程 tokio task）
+    llm_wiki_server::services::ingest_worker::spawn_worker(state.clone());
+
     // 启动服务器
     let addr = format!("{}:{}", state.config.host(), state.config.port());
     tracing::info!("listening on {}", addr);
