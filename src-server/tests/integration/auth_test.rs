@@ -6,21 +6,13 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    // 注意: 完整集成测试需要先创建测试数据库
-    // 此处提供基本框架，实际运行时需要设置 DATABASE_URL
-
-    async fn setup_test_app() -> (axum::Router, llm_wiki_server::AppState) {
-        let config = llm_wiki_server::AppConfig::from_env()
-            .expect("Failed to load test config");
-        llm_wiki_server::create_app(config)
-            .await
-            .expect("Failed to create test app")
-    }
+    // 注意: setup_test_app 已抽到 crate::tests::integration::setup_test_app（mod.rs）
+    // 完整集成测试需要先创建测试数据库（当前对 live DB 5433 真跑）。
 
     #[tokio::test]
     #[ignore = "Requires database — run with DATABASE_URL set"]
     async fn test_health_check() {
-        let (app, _state) = setup_test_app().await;
+        let (app, _state) = crate::setup_test_app().await;
 
         let response = app
             .oneshot(Request::builder()
@@ -36,7 +28,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires database — run with DATABASE_URL set"]
     async fn test_register_and_login_flow() {
-        let (app, _state) = setup_test_app().await;
+        let (app, _state) = crate::setup_test_app().await;
 
         // 注册
         let register_body = serde_json::json!({
@@ -76,7 +68,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_creates_personal_team_with_owner_membership() {
-        let (app, state) = setup_test_app().await;
+        let (app, state) = crate::setup_test_app().await;
         let server = axum_test::TestServer::new(app).unwrap();
 
         // 唯一用户名保证可重复运行（测试共享 live DB）
