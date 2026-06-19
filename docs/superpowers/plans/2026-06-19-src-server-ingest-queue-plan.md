@@ -213,14 +213,12 @@ pub async fn enqueue(
 }
 ```
 
-> **实现注**：上面的 `enqueue` redis error handling 有两个分支——redis get 失败 vs LPUSH 失败。如果 `state.redis.get()` 返回 `Err`，当前 `unwrap_or_else` 逻辑会因 `!` 提前退出函数。可以简化为：`redis.get()` 失败时 log warn 并设 `redis` 为 nil/跳过 LPUSH（job 仍在 PG）。编译时按实际 deadpool-redis API 调整。
-
 ### Step 3: 编译验证 Task 1
 
 ```bash
 cargo build -p llm_wiki_server
 ```
-Expected：0 error。`enqueue` 调用 `LPUSH` 需 redis crate 已在 deps（现有 `redis = "0.24"` 已满足）。`use redis::cmd` 需加 `use redis;` 在顶部。
+Expected：0 error。`enqueue` 调用 `LPUSH` 需 redis crate 已在 deps（现有 `redis = "0.24"` 已满足）。
 
 ### Step 4: commit
 
