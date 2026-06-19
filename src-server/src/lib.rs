@@ -21,6 +21,7 @@ pub use error::{
     ERR_RESOURCE_NOT_FOUND, ERR_VALIDATION_FAILED, ERR_DATABASE_ERROR, ERR_FILE_UPLOAD_FAILED,
     ERR_LLM_API_ERROR, ERR_INTERNAL_ERROR, ERR_CONFLICT,
 };
+pub use routes::WikiPage;
 
 #[derive(Clone)]
 pub struct AppState {

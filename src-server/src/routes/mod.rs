@@ -7,6 +7,9 @@ mod files;
 mod search;
 mod chat;
 mod graph;
+mod pages;
+
+pub use pages::WikiPage;
 
 use axum::{Router, routing::get};
 use crate::AppState;
