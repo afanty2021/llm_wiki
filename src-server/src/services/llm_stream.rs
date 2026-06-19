@@ -4,6 +4,7 @@
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt};
 use serde::Serialize;
+use std::collections::VecDeque;
 
 // ── 共用类型 ──
 
@@ -243,8 +244,6 @@ impl StreamChatProvider for OpenAiProvider {
 
 // ── Anthropic 实现 ──
 
-use std::collections::VecDeque;
-
 pub struct AnthropicProvider {
     client: reqwest::Client,
     endpoint: String,
@@ -411,6 +410,24 @@ impl StreamChatProvider for AnthropicProvider {
                         // data: 无前置 event: → 忽略
                     } else if let Some(ev) = line.strip_prefix("event: ") {
                         current_event = Some(ev.trim().to_string());
+                    }
+                }
+            }
+
+            // 处理尾部残留行（无 \n 结尾的最后一帧）—— 对齐 OpenAiProvider
+            if !line_buf.is_empty() {
+                let line = std::str::from_utf8(&line_buf).unwrap_or("").trim().to_string();
+                if !line.is_empty() {
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if let Some(ev) = &current_event {
+                            if let Err(e) = Self::parse_sse_event(ev, data, &mut state) {
+                                yield Err(e);
+                                return;
+                            }
+                            while let Some(delta) = state.events.pop_front() {
+                                yield Ok(delta);
+                            }
+                        }
                     }
                 }
             }
