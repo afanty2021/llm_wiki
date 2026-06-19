@@ -6,8 +6,6 @@
 
 **Architecture:** `crates/llm-wiki-parser/`：lib.rs(公共接口+format dispatch+pdfium 全局锁) + parser/{pdf,docx,xlsx,pptx,markdown}.rs + image_utils.rs。根 Cargo.toml 新建 workspace(members=["crates/llm-wiki-parser"])，src-server 通过 path dep 引用。
 
-**Tech Stack:** Rust + pdfium-render(0.9) + docx-rs(0.4) + calamine(0.35) + zip(2.x) + image + serde_json。
-
 **依据 spec:** `docs/superpowers/specs/2026-06-19-src-server-ingest-a-parser-crate-design.md`
 
 ---
@@ -17,7 +15,7 @@
 | 文件 | 职责 | 改动 |
 |------|------|------|
 | `Cargo.toml`(根) | 新建 `[workspace]` members=["crates/llm-wiki-parser"] | Create |
-| `crates/llm-wiki-parser/Cargo.toml` | 解析 crate deps(pdfium-render+docx-rs+calamine+zip+image+serde_json) | Create |
+| `crates/llm-wiki-parser/Cargo.toml` | 解析 crate deps(pdfium-render+calamine+zip+image+serde_json) | Create |
 | `crates/llm-wiki-parser/src/lib.rs` | 公共接口 + format dispatch + pdfium 全局锁 | Create |
 | `crates/llm-wiki-parser/src/parser/mod.rs` | re-export 5 个 parser | Create |
 | `crates/llm-wiki-parser/src/parser/markdown.rs` | .md pass-through + 编码检测 | Create |
@@ -57,7 +55,6 @@ edition = "2021"
 
 [dependencies]
 pdfium-render = "0.9"
-docx-rs = "0.4"
 calamine = "0.35"
 zip = "2"
 image = "0.25"
@@ -75,8 +72,7 @@ thiserror = "1"
 // 纯函数接口：parse_bytes(filename, &[u8]) → ParsedDoc。
 // 零文件系统依赖、零 Tauri 绑定。
 
-mod image_utils;
-mod parser;
+mod parser;  // mod image_utils; 在 Task 4 添加
 
 use std::sync::Mutex;
 pub use parser::ParsedDoc;
@@ -542,7 +538,7 @@ mod tests {
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         zip.finish().unwrap();
-        let bytes = zip.finish().unwrap().into_inner();
+        let bytes = zip.into_inner().into_inner();  // 一次 finish → 取 inner writer
         let doc = parse(&bytes).unwrap();
         assert_eq!(doc.meta.file_type, "pptx");
         assert!(doc.text.is_empty());
@@ -568,6 +564,12 @@ git commit -m "feat(llm-wiki-parser): XLSX + PPTX parser + 3 单元测试（Task
 ---
 
 ## Task 4: PDF parser + image_utils + 集成测试
+
+### Step 0: lib.rs 添加 mod image_utils
+
+```rust
+mod image_utils;
+```
 
 ### Step 1: 写 image_utils
 
@@ -652,23 +654,20 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedDoc, ParseError> {
             }
         }
 
-        // images (extract from rendered page)
+        // images — 从 PDF 内嵌对象提取（桌面 extract_images.rs 用 objects API）
         if image_count < opts.max_images {
-            if let Ok(img) = page.render(
-                PdfRenderConfig::new().set_target_width(2000),
-            ) {
-                // pdfium-render 0.9: page.render() 返回 PdfBitmap
-                // 转为 image crate DynamicImage → PNG encode
-                let buf = img.as_rgba_bytes().unwrap_or(&[]);
-                if buf.len() >= (img.width() as usize * img.height() as usize * 4) {
-                    let rgba = image::RgbaImage::from_raw(
-                        img.width() as u32, img.height() as u32, buf.to_vec(),
-                    );
-                    if let Some(dynamic_img) = rgba.map(|i| image::DynamicImage::ImageRgba8(i)) {
+            for obj in page.objects().iter() {
+                if let Some(img_obj) = obj.as_image_object() {
+                    if let Ok(raw) = img_obj.get_raw_image() {
                         let name = format!("page{}_image{}.png", pi + 1, image_count + 1);
-                        if let Some(png) = image_utils::encode_png(&dynamic_img, &name, &opts) {
-                            images.push(ExtractedImage { name, data: png });
-                            image_count += 1;
+                        let rgba = image::RgbaImage::from_raw(
+                            raw.width(), raw.height(), raw.bytes().to_vec(),
+                        );
+                        if let Some(dynamic_img) = rgba.map(|i| image::DynamicImage::ImageRgba8(i)) {
+                            if let Some(png) = image_utils::encode_png(&dynamic_img, &name, &opts) {
+                                images.push(ExtractedImage { name, data: png });
+                                image_count += 1;
+                            }
                         }
                     }
                 }
@@ -688,7 +687,7 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedDoc, ParseError> {
 }
 ```
 
-> **实现注**：`page.render()` 返回 `PdfBitmap`(pdfium-render 0.9)。`as_rgba_bytes()` 取 RGBA 原始字节 → `image::RgbaImage::from_raw()` → `DynamicImage::ImageRgba8` → PNG encode。尺寸过滤在 `encode_png` 内做。pdfium 仅在 PDF 被请求时 lazy-init，不影响 `.md` 等纯 Rust parser 模块。
+> **实现注**：桌面 extract_images.rs 使用 `page.objects().iter()` + `.as_image_object()` + `.get_raw_image()` 提取内嵌图片——而非 `page.render()`（整页渲染为混合位图）。pdfium 仅在 PDF 被请求时 lazy-init，不影响 `.md` 等纯 Rust parser 模块。
 
 ### Step 3: 写集成测试
 
