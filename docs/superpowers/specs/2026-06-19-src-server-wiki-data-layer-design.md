@@ -39,16 +39,17 @@ project 属 team（现有 schema：`projects.team_id`）。
 
 ### 3.2 wiki_pages CRUD API
 
-REST，权限 = project 的 team member（`team_members` 校验）：
+REST，权限 = project 的 team member（`team_members` 校验）。**path 用 query param `?path=`**（不用 URL path segment——避免 `%2F` 被代理/框架二次 decode 导致路由失败）：
 ```
-GET    /projects/:pid/pages            列表（?type=concept&?q=标题/路径模糊）
-GET    /projects/:pid/pages/:path      单个（path URL-encoded，如 concepts%2Ffoo.md）
-POST   /projects/:pid/pages            {path, title, content, frontmatter} → 201
-PUT    /projects/:pid/pages/:path      更新 content/frontmatter
-DELETE /projects/:pid/pages/:path      删除
+GET    /projects/:pid/pages              列表（?type=concept&?q=标题/路径模糊）
+GET    /projects/:pid/page?path=xxx      单个
+POST   /projects/:pid/pages              {path, title, content, frontmatter} → 201
+PUT    /projects/:pid/page?path=xxx      替换语义（整体替换）+ 乐观锁（If-Match: <updated_at>，冲突 409）
+DELETE /projects/:pid/page?path=xxx      删除
 ```
-- `:path` 含 `/`，需 URL-encoded。
-- `UNIQUE(project_id, path)` 冲突 → POST 409。
+- path 查询/更新/删除按 `?path=`（含 `/`，query param 无需 encode）。
+- POST/PUT：`UNIQUE(project_id, path)` 冲突 → 409。
+- **PUT 替换语义**（非合并）；乐观锁防并发覆盖（单用户 MVP 够用，合并编辑后续）。
 
 ### 3.3 path 语义
 
@@ -63,6 +64,7 @@ DELETE /projects/:pid/pages/:path      删除
 { "type": "concept", "title": "Foo", "sources": [...], "related": [...], "tags": [...], "timestamp": "2026-05-19", "created": "...", "updated": "..." }
 ```
 - `title` 冗余到 `title` 列（列表查询/排序）。
+- **`sources`/`images` 列同步**：migration 003 给 wiki_pages 加了 `sources`/`images` JSONB 列。frontmatter JSONB 存完整解析结果；`sources`/`images` 列作规范化列，**写入（POST/PUT/ingest/导入）时从 frontmatter 同步填充**——单一写入路径负责保持一致，避免冗余漂移。
 - 丢失原始格式（注释/顺序/空行）——权衡：查询便利 > 格式保真（wiki_pages 是结构化存储，非文件镜像）。
 
 ---
@@ -80,14 +82,17 @@ DELETE /projects/:pid/pages/:path      删除
    - LLM 两步（调 llm_providers 配置的 provider；Rust HTTP+SSE，等价桌面 streamChat）
      · Step 1 分析：源 → 结构化分析（实体/概念/连接/矛盾）
      · Step 2 生成：分析 → wiki 页面（concept/entity + frontmatter）
+     · （**MVP 暂不含 review stage**——桌面 ingest 在 Step 2 后有 LLM 一致性 review，多用户 web 更有价值但 MVP 先跳过，后续补）
    - 写 wiki_pages（新 concept/entity）+ 更新 index.md/log.md/overview.md（reserved pages）
 ④ 进度写 redis（job_id → {status, stage, progress, error}），前端 GET /ingest/jobs/:id 轮询
 ```
 
 ### 4.2 LLM
 
-- src-server Rust 调 provider（OpenAI/Anthropic/Google/Ollama 等，HTTP+SSE 流式）。
-- key/endpoint 从 `llm_providers` 表（per-user/team，现有 schema）。
+- src-server Rust 调 provider，**MVP 只支持 OpenAI + Anthropic**（覆盖 ~90% 场景，降协议对齐风险；Google/Ollama/Azure/CLI 后续迭代）。
+- 多 provider SSE 协议差异需 `StreamChatProvider` trait + per-provider impl（OpenAI 标准 SSE / Anthropic `event:` content block delta 需 state machine 重建 token / Google 非 SSE）。**MVP 只做 OpenAI + Anthropic** 降低首版风险。
+- key/endpoint 从 `llm_providers` 表（**per-project**——`002_add_llm_providers.sql`：`project_id REFERENCES projects`，无 user_id/team_id；多 project 各自配 provider）。
+- `api_key_encrypted` 解密：复用现有 src-server `llm.rs`（JWT secret 派生 32 字节 key + AES-256-GCM）。
 - 无 CORS（服务端调）。
 
 ### 4.3 文档解析
@@ -99,6 +104,7 @@ DELETE /projects/:pid/pages/:path      删除
 
 - 新 wiki_pages（concept/entity，path=`concepts/foo.md`/`entities/bar.md`）。
 - 更新 reserved pages：`index.md`（目录）、`log.md`（摄取日志）、`overview.md`（总览）——也作 wiki_pages（path=`index.md` 等）。
+- **reserved pages 并发锁**：多用户/多 worker 并发 ingest 更新同一 log.md/index.md 竞态 → 写入用 `SELECT ... FOR UPDATE` 行锁（即使 MVP 单 worker 也应加，为多 worker 预留）。
 
 ### 4.5 异步队列
 
@@ -120,7 +126,7 @@ DELETE /projects/:pid/pages/:path      删除
 ③ 遍历 <wiki_dir>/wiki/**/*.md（English 586 / Invest 221）
 ④ 每文件：
    - path = 相对 <wiki_dir>/wiki（去 wiki/ 前缀，如 concepts/foo.md）
-   - 解析 frontmatter（YAML-ish，复用桌面 okf-convert parseFields 思路）+ body
+   - 解析 frontmatter（**serde_yaml 完整解析**，对齐桌面 `src/lib/frontmatter.ts` 的 js-yaml + wikilink-list repair；**不用** okf-convert 的简单行遍历——后者丢多行 YAML 块如 `sources:` 列表）+ body
    - title = frontmatter.title 或 H1 或 basename
    - INSERT wiki_pages（project_id, path, title, content=body, frontmatter JSONB）
    - ON CONFLICT (project_id, path) DO UPDATE（幂等，重跑可）
@@ -162,8 +168,18 @@ DELETE /projects/:pid/pages/:path      删除
 
 ## 8. 风险
 
-- **文档解析抽 crate**：桌面 src-tauri 解析逻辑可能耦合 Tauri/FS，抽 crate 需解耦。评估工作量。
-- **LLM Rust 客户端**：桌面 streamChat 是 TS（fetch+SSE），Rust 重写 LLM 流式（reqwest + eventsource）需对齐 provider 协议（OpenAI/Anthropic SSE 格式差异）。
-- **ingest-queue 持久化**：桌面用文件持久化队列，src-server 用 redis（需 redis 持久化配置 / AOF，避免重启丢队列）。
-- **frontmatter 解析一致性**：桌面 YAML-ish 解析（不引 YAML 库），脚本/服务端需一致（抽共用 parser）。
-- **多用户并发 ingest**：单 worker 串行 → 多用户排队。后续多 worker + 项目级锁。
+### 8.1 文档解析抽 crate（两块独立）
+
+- **crate 编写（~2-3 天）**：`fs.rs` 的 `extract_pdf_text`/`extract_office_text`/`extract_spreadsheet`/`extract_pptx_markdown` 等是**纯同步函数**（操作 `&str`/`Path`/`Vec<u8>`，不依赖 Tauri），抽 crate 本身不难。需内置：① **pdfium 线程安全**（桌面用 `std::sync::Mutex` 全局 `PDFIUM_LOCK` 串行化，PDFium C 库不支持跨线程并发；crate 内置锁，不留 src-server 侧）；② **缓存解耦**（桌面 `read_cache`/`write_cache` 与 Tauri FS 绑定，crate 只暴露纯解析接口，缓存由调用方实现）；③ **office_oxide（.doc）**：API 无状态可直接用，或砍掉（docx-rs+calamine 已覆盖，如不需 .doc 遗留格式）。
+- **部署分发（额外 ~1-2 天）**：pdfium 动态库（libpdfium.dylib/pdfium.dll）桌面嵌 Tauri bundle，src-server 需替代——系统安装（`apt install libpdfium-dev`）或 Docker 镜像捆绑。增加 Dockerfile + CI 复杂度。
+- **总计 ~4-5 天**，crate 与部署是两个独立问题。
+
+### 8.2 LLM Rust 流式客户端
+
+- **协议对齐（核心难度）**：多 provider SSE 格式差异（OpenAI `data:` / Anthropic `event:` content block delta 需 state machine 重建 token / Google 非 SSE 单 `\n` 分隔 / Ollama 类 OpenAI / Azure +api-version / CLI 子进程 stdout）。Rust 需 `StreamChatProvider` trait + per-provider impl，否则代码臃肿。**MVP 只做 OpenAI + Anthropic**（§4.2）降首版风险。
+- **api_key_encrypted 解密**：复用 src-server `llm.rs`（JWT secret 派生 + AES-256-GCM）。
+
+### 8.3 其他
+
+- **ingest-queue 持久化**：桌面文件持久化，src-server 用 redis（需 AOF/RDB 持久化配置，避免重启丢队列）。
+- **多用户并发 ingest**：单 worker 串行 → 排队；reserved pages 行锁（§4.4）；后续多 worker + 项目级锁。
