@@ -1,16 +1,12 @@
 // src/routes/pages.rs
 // wiki_pages CRUD（spec §3）。path 用 query param ?path=（避免 %2F 二次 decode）。
 //
-// Task 2：仅骨架——WikiPage model + 权限 helper + denormalize helper + 空 router。
-// Task 3/4 在此注册具体 route 并落地 handler 逻辑。
+// Task 2/3/4：WikiPage model + 权限 helper + denormalize helper + 完整 CRUD（list/get/create/update/delete）。
 //
-// 整个模块的 handler 尚未接入路由，model/request struct/helper 暂无调用方，
-// 模块级 allow(dead_code) 避免骨架阶段噪音；Task 3/4 接入后移除。
-#![allow(dead_code)]
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use crate::AppState;
 use crate::AppError;
@@ -46,6 +42,9 @@ pub struct CreatePageRequest {
 pub struct ListQuery {
     #[serde(rename = "type")]
     pub page_type: Option<String>,
+    /// 全文/标题搜索关键字——list_pages 尚未实现搜索逻辑（Task 5+ 检索阶段接入），
+    /// 此处预留并精确 allow，避免整模块 allow(dead_code) 掩盖其他真未用项。
+    #[allow(dead_code)]
     pub q: Option<String>,
 }
 
@@ -124,11 +123,119 @@ pub async fn get_page(
     Ok(Json(page))
 }
 
+/// POST /api/v1/projects/{pid}/pages —— 创建 page。
+/// 用 ON CONFLICT (project_id, path) DO NOTHING + RETURNING：冲突时返回 0 行（fetch_optional None）→ 409。
+/// 比 parse sqlx error code 23505 更干净（不依赖驱动特定错误字符串）。
+pub async fn create_page(
+    State(state): State<AppState>,
+    Path(project_id): Path<i32>,
+    headers: HeaderMap,
+    Json(req): Json<CreatePageRequest>,
+) -> Result<(StatusCode, Json<WikiPage>), AppError> {
+    check_project_access(&state, &headers, project_id).await?;
+    let (title, page_type, sources, images) = denormalize(&req.frontmatter, &req.title);
+    let page: Option<WikiPage> = sqlx::query_as::<_, WikiPage>(
+        "INSERT INTO wiki_pages (project_id, path, title, content, frontmatter, page_type, sources, images)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (project_id, path) DO NOTHING
+         RETURNING id, project_id, path, title, content, frontmatter, page_type, sources, images, created_at, updated_at",
+    )
+    .bind(project_id)
+    .bind(&req.path)
+    .bind(title)
+    .bind(req.content)
+    .bind(req.frontmatter)
+    .bind(page_type)
+    .bind(sources)
+    .bind(images)
+    .fetch_optional(&state.db)
+    .await?;
+    let page = page.ok_or_else(|| {
+        AppError::Conflict("path already exists in this project".to_string())
+    })?;
+    Ok((StatusCode::CREATED, Json(page)))
+}
+
+/// PUT /api/v1/projects/{pid}/page?path= —— 更新 page（If-Match 乐观锁）。
+/// If-Match 携带 GET/POST 返回的 updated_at（RFC3339），服务端解析为 DateTime<Utc> 作 timestamptz 直接比较，
+/// 避开脆弱的 to_char 字符串匹配。WHERE updated_at = $if_match 精确到微秒。
+pub async fn update_page(
+    State(state): State<AppState>,
+    Path(project_id): Path<i32>,
+    Query(pq): Query<PathQuery>,
+    headers: HeaderMap,
+    Json(req): Json<CreatePageRequest>,
+) -> Result<Json<WikiPage>, AppError> {
+    check_project_access(&state, &headers, project_id).await?;
+
+    // If-Match → DateTime<Utc>（headers 同时供 check_project_access 和此处读取，共用一个 HeaderMap 提取器）
+    let if_match_str = headers
+        .get("if-match")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::ValidationError("If-Match header required".to_string()))?;
+    let if_match: DateTime<Utc> = DateTime::parse_from_rfc3339(if_match_str)
+        .map_err(|_| {
+            AppError::ValidationError(
+                "Invalid If-Match (expected RFC3339 timestamp)".to_string(),
+            )
+        })?
+        .with_timezone(&Utc);
+
+    let (title, page_type, sources, images) = denormalize(&req.frontmatter, &req.title);
+    // 乐观锁：updated_at = $if_match（timestamptz 精确比较，冲突或 not found 都返回 0 行 → 409）
+    let page: Option<WikiPage> = sqlx::query_as::<_, WikiPage>(
+        "UPDATE wiki_pages SET title=$1, content=$2, frontmatter=$3, page_type=$4, sources=$5, images=$6,
+                                path=$7, updated_at=NOW()
+         WHERE project_id=$8 AND path=$9 AND updated_at=$10
+         RETURNING id, project_id, path, title, content, frontmatter, page_type, sources, images, created_at, updated_at",
+    )
+    .bind(title)
+    .bind(req.content)
+    .bind(req.frontmatter)
+    .bind(page_type)
+    .bind(sources)
+    .bind(images)
+    .bind(&req.path)
+    .bind(project_id)
+    .bind(&pq.path)
+    .bind(if_match)
+    .fetch_optional(&state.db)
+    .await?;
+    let page = page.ok_or_else(|| {
+        AppError::Conflict(
+            "updated_at mismatch (stale write or page not found)".to_string(),
+        )
+    })?;
+    Ok(Json(page))
+}
+
+/// DELETE /api/v1/projects/{pid}/page?path= —— 删除 page。
+/// rows_affected == 0 → 404。
+pub async fn delete_page(
+    State(state): State<AppState>,
+    Path(project_id): Path<i32>,
+    Query(pq): Query<PathQuery>,
+    headers: HeaderMap,
+) -> Result<StatusCode, AppError> {
+    check_project_access(&state, &headers, project_id).await?;
+    let n = sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2")
+        .bind(project_id)
+        .bind(&pq.path)
+        .execute(&state.db)
+        .await?;
+    if n.rows_affected() == 0 {
+        return Err(AppError::ResourceNotFound("page".to_string()));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// pages 路由（merge 进 project_routes，挂在 /api/v1/projects 下）。
 /// 路径参数语法用 :id（matchit 0.7.3 语法，与 files.rs 一致；axum 0.7.9 不转换 {id}）。
-/// Task 3：list_pages + get_page 已接入；POST/PUT/DELETE 在 Task 4。
 pub fn pages_routes() -> axum::Router<AppState> {
     axum::Router::new()
-        .route("/:id/pages", axum::routing::get(list_pages))
-        .route("/:id/page", axum::routing::get(get_page))
+        .route("/:id/pages", axum::routing::get(list_pages).post(create_page))
+        .route(
+            "/:id/page",
+            axum::routing::get(get_page).put(update_page).delete(delete_page),
+        )
 }

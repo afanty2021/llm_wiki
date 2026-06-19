@@ -127,3 +127,65 @@ async fn list_pages_unauthorized_returns_401() {
         .await;
     assert_eq!(r.status_code(), 401);
 }
+
+#[tokio::test]
+async fn crud_create_update_delete_page() {
+    let (server, state, pid, token) = setup_project("page").await;
+    let auth = format!("Bearer {}", token);
+
+    // POST 创建 → 201
+    let r = server.post(&format!("/api/v1/projects/{}/pages", pid))
+        .add_header("authorization", auth.clone())
+        .content_type("application/json")
+        .json(&serde_json::json!({
+            "path":"concepts/bar.md","title":"Bar","content":"body",
+            "frontmatter":{"type":"concept","sources":["a.md"]}
+        })).await;
+    assert_eq!(r.status_code(), 201);
+    let created: serde_json::Value = r.json();
+    assert_eq!(created["path"], "concepts/bar.md");
+    assert_eq!(created["title"], "Bar");
+    assert_eq!(created["page_type"], "concept");
+    assert_eq!(created["sources"], serde_json::json!(["a.md"]));
+    let updated_at = created["updated_at"].as_str().expect("updated_at").to_string();
+
+    // 重复 path → 409
+    let r = server.post(&format!("/api/v1/projects/{}/pages", pid))
+        .add_header("authorization", auth.clone())
+        .content_type("application/json")
+        .json(&serde_json::json!({"path":"concepts/bar.md"})).await;
+    assert_eq!(r.status_code(), 409);
+
+    // PUT 更新（If-Match 乐观锁）
+    let r = server.put(&format!("/api/v1/projects/{}/page?path=concepts/bar.md", pid))
+        .add_header("authorization", auth.clone())
+        .add_header("if-match", &updated_at)
+        .content_type("application/json")
+        .json(&serde_json::json!({"path":"concepts/bar.md","title":"Bar2","content":"new"})).await;
+    assert_eq!(r.status_code(), 200);
+    let updated: serde_json::Value = r.json();
+    assert_eq!(updated["title"], "Bar2");
+    assert_eq!(updated["content"], "new");
+    // updated_at 应变化（乐观锁推进）
+    assert_ne!(updated["updated_at"].as_str(), Some(updated_at.as_str()));
+
+    // PUT 用过期 If-Match → 409（乐观锁生效）
+    let r = server.put(&format!("/api/v1/projects/{}/page?path=concepts/bar.md", pid))
+        .add_header("authorization", auth.clone())
+        .add_header("if-match", &updated_at)  // 旧值
+        .content_type("application/json")
+        .json(&serde_json::json!({"path":"concepts/bar.md","title":"Stale"})).await;
+    assert_eq!(r.status_code(), 409);
+
+    // DELETE → 204
+    let r = server.delete(&format!("/api/v1/projects/{}/page?path=concepts/bar.md", pid))
+        .add_header("authorization", auth.clone()).await;
+    assert_eq!(r.status_code(), 204);
+
+    // 再 DELETE → 404
+    let r = server.delete(&format!("/api/v1/projects/{}/page?path=concepts/bar.md", pid))
+        .add_header("authorization", auth.clone()).await;
+    assert_eq!(r.status_code(), 404);
+
+    let _ = state; // 抑制 unused（本测试主要走 API）
+}
