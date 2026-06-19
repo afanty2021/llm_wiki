@@ -241,6 +241,193 @@ impl StreamChatProvider for OpenAiProvider {
     fn model_name(&self) -> &str { &self.model }
 }
 
+// ── Anthropic 实现 ──
+
+use std::collections::VecDeque;
+
+pub struct AnthropicProvider {
+    client: reqwest::Client,
+    endpoint: String,
+    api_key: String,
+    model: String,
+    api_version: String,
+}
+
+impl AnthropicProvider {
+    pub fn new(endpoint: String, api_key: String, model: String, timeout_secs: Option<u64>) -> Self {
+        let mut b = reqwest::Client::builder();
+        if let Some(t) = timeout_secs {
+            b = b.timeout(std::time::Duration::from_secs(t));
+        }
+        Self {
+            client: b.build().expect("reqwest Client"),
+            endpoint, api_key, model,
+            api_version: "2023-06-01".to_string(),
+        }
+    }
+}
+
+/// MVP 简化版状态：单 content_block (index=0)，不追踪 index/HashMap。
+/// 后续加工具调用时加回 Option<u32> cur_index。
+#[derive(Default)]
+pub(crate) struct AnthropicStreamState {
+    pub(crate) events: VecDeque<TokenDelta>,
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+    done: bool,
+}
+
+impl AnthropicProvider {
+    /// 解析一对 (event:, data:) 并推进状态机。emit 的 delta 写入 state.events。
+    pub(crate) fn parse_sse_event(
+        event_type: &str,
+        data: &str,
+        state: &mut AnthropicStreamState,
+    ) -> Result<(), LlmError> {
+        let v: serde_json::Value = serde_json::from_str(data)
+            .map_err(|e| LlmError::InvalidSse(format!("JSON parse: {}", e)))?;
+
+        match event_type {
+            "message_start" => {
+                if let Some(i) = v["message"]["usage"]["input_tokens"].as_u64() {
+                    state.input_tokens = Some(i as u32);
+                }
+            }
+            "content_block_delta" => {
+                let delta_type = v["delta"]["type"].as_str().unwrap_or("");
+                if delta_type == "text_delta" {
+                    if let Some(t) = v["delta"]["text"].as_str() {
+                        if !t.is_empty() {
+                            state.events.push_back(TokenDelta::Text(t.to_string()));
+                        }
+                    }
+                }
+                // 其他 delta_type (input_json_delta 等)忽略
+            }
+            "message_delta" => {
+                if let Some(o) = v["usage"]["output_tokens"].as_u64() {
+                    state.output_tokens = Some(o as u32);
+                }
+            }
+            "message_stop" => {
+                let prompt = state.input_tokens.unwrap_or(0);
+                let completion = state.output_tokens.unwrap_or(0);
+                state.events.push_back(TokenDelta::Usage {
+                    prompt_tokens: prompt,
+                    completion_tokens: completion,
+                });
+                state.events.push_back(TokenDelta::Done);
+                state.done = true;
+            }
+            _ => {} // content_block_start/stop/ping — 不 emit
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl StreamChatProvider for AnthropicProvider {
+    async fn stream_chat(
+        &self,
+        messages: Vec<ChatMessage>,
+        opts: ChatOpts,
+    ) -> Result<BoxStream<'static, Result<TokenDelta, LlmError>>, LlmError> {
+        // 系统 prompt 放顶层 system 字段（Anthropic 非 role:system message）
+        let msgs: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| serde_json::json!({"role":m.role,"content":m.content}))
+            .collect();
+
+        let mut body = serde_json::json!({
+            "model": opts.model,
+            "messages": msgs,
+            "max_tokens": opts.max_tokens,
+            "temperature": opts.temperature,
+            "stream": true,
+        });
+        if let Some(sp) = &opts.system_prompt {
+            body["system"] = serde_json::json!(sp);
+        }
+
+        let resp = self.client
+            .post(&self.endpoint)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", &self.api_version)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout(opts.timeout_secs.unwrap_or(0))
+                } else {
+                    LlmError::ConnectionFailed(e.to_string())
+                }
+            })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(LlmError::AuthFailed);
+        }
+        if status.as_u16() == 429 {
+            return Err(LlmError::RateLimited);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError { status: status.as_u16(), body });
+        }
+
+        let byte_stream = resp.bytes_stream();
+
+        // 行缓冲 + event:data: 配对解析
+        let stream = async_stream::stream! {
+            let mut line_buf: Vec<u8> = Vec::new();
+            let mut current_event: Option<String> = None;
+            let mut pinned = Box::pin(byte_stream);
+            let mut state = AnthropicStreamState::default();
+
+            while let Some(chunk_result) = pinned.next().await {
+                let chunk = match chunk_result {
+                    Ok(b) => b,
+                    Err(e) => { yield Err(LlmError::ConnectionFailed(e.to_string())); return; }
+                };
+                line_buf.extend_from_slice(&chunk);
+                while let Some(pos) = line_buf.iter().position(|&b| b == b'\n') {
+                    let line_bytes: Vec<u8> = line_buf.drain(..=pos).collect();
+                    let line = std::str::from_utf8(&line_bytes).unwrap_or("").trim().to_string();
+                    if line.is_empty() { continue; }
+
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if let Some(ev) = &current_event {
+                            if let Err(e) = Self::parse_sse_event(ev, data, &mut state) {
+                                yield Err(e);
+                                return;
+                            }
+                            while let Some(delta) = state.events.pop_front() {
+                                yield Ok(delta);
+                            }
+                            current_event = None;
+                        }
+                        // data: 无前置 event: → 忽略
+                    } else if let Some(ev) = line.strip_prefix("event: ") {
+                        current_event = Some(ev.trim().to_string());
+                    }
+                }
+            }
+
+            // 流结束时若仍未 done，以 StreamEnded 收尾
+            if !state.done {
+                yield Err(LlmError::StreamEnded);
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+
+    fn provider_type(&self) -> &'static str { "anthropic" }
+    fn model_name(&self) -> &str { &self.model }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +482,76 @@ mod tests {
             LlmError::InvalidSse(_) => {},
             e => panic!("expected InvalidSse, got {:?}", e),
         }
+    }
+
+    // ── Anthropic 状态机测试 ──
+
+    /// 模拟 Anthropic SSE 事件序列（逐对 (event:, data:)）
+    struct MockAnthropicEvents {
+        events: Vec<(&'static str, &'static str)>,
+    }
+    impl MockAnthropicEvents {
+        fn apply(&self) -> Vec<TokenDelta> {
+            let mut state = AnthropicStreamState::default();
+            let mut out = Vec::new();
+            for (ev_type, data) in &self.events {
+                AnthropicProvider::parse_sse_event(ev_type, data, &mut state).unwrap();
+                while let Some(delta) = state.events.pop_front() {
+                    out.push(delta);
+                }
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn test_anthropic_simple_text_flow() {
+        let mock = MockAnthropicEvents {
+            events: vec![
+                ("message_start", r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10}}}"#),
+                ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#),
+                ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}"#),
+                ("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#),
+                ("message_stop", r#"{"type":"message_stop"}"#),
+            ],
+        };
+        let deltas = mock.apply();
+        assert_eq!(deltas.len(), 4);
+        assert!(matches!(&deltas[0], TokenDelta::Text(t) if t == "Hello"));
+        assert!(matches!(&deltas[1], TokenDelta::Text(t) if t == " world"));
+        assert!(matches!(&deltas[2], TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 3 }));
+        assert!(matches!(&deltas[3], TokenDelta::Done));
+    }
+
+    #[test]
+    fn test_anthropic_ping_ignored() {
+        let mock = MockAnthropicEvents {
+            events: vec![
+                ("ping", r#"{"type":"ping"}"#),
+                ("message_start", r#"{"type":"message_start","message":{"id":"msg","usage":{"input_tokens":1}}}"#),
+                ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#),
+                ("message_delta", r#"{"type":"message_delta","delta":{},"usage":{"output_tokens":1}}"#),
+                ("message_stop", r#"{"type":"message_stop"}"#),
+            ],
+        };
+        let deltas = mock.apply();
+        // ping 不产出 delta → 只有 3 个（Text, Usage, Done）
+        assert_eq!(deltas.len(), 3);
+    }
+
+    #[test]
+    fn test_anthropic_missing_usage_is_zero() {
+        let mock = MockAnthropicEvents {
+            events: vec![
+                ("message_start", r#"{"type":"message_start","message":{"id":"msg"}}"#),
+                ("message_delta", r#"{"type":"message_delta","delta":{}}"#),
+                ("message_stop", r#"{"type":"message_stop"}"#),
+            ],
+        };
+        let deltas = mock.apply();
+        // 无 usage 字段时应为 (0,0) 然后 Done
+        assert_eq!(deltas.len(), 2);
+        assert!(matches!(deltas[0], TokenDelta::Usage { prompt_tokens: 0, completion_tokens: 0 }));
+        assert!(matches!(deltas[1], TokenDelta::Done));
     }
 }
