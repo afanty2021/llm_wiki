@@ -34,6 +34,43 @@
 
 ---
 
+## Task 0: 前置基础设施（Cargo.toml + error.rs Conflict variant）
+
+**编译阻断项**，Task 1-5 依赖。Files: `src-server/Cargo.toml`, `src-server/src/error.rs`
+
+- [ ] **Step 1: Cargo.toml — sqlx 加 `"json"` feature（绑 `serde_json::Value` 必需）+ dev-dep axum-test**
+
+```toml
+# [dependencies] sqlx 的 features 行追加 "json"：
+features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "migrate", "json"]
+# [dev-dependencies] 追加（Task 3/4 集成测试用）：
+axum-test = "15"
+```
+
+- [ ] **Step 2: error.rs — 加 `Conflict(String)` variant + IntoResponse 409 映射**
+
+```rust
+// AppError enum 加 variant：
+#[error("Conflict: {0}")]
+Conflict(String),
+// error.rs 顶部错误码常量（按现有风格）：
+pub const ERR_CONFLICT: &str = "CONFLICT";
+// IntoResponse 的 match 加 arm：
+AppError::Conflict(msg) => (StatusCode::CONFLICT, Json(json!({"error":{"code":ERR_CONFLICT,"message":msg}}))).into_response(),
+```
+
+> **注（审查 #1）：** `AppError::PermissionDenied` 是 **unit variant（无参数）**。Task 2 的 `check_project_access` 查不到 team membership 时，改用 `AppError::ResourceNotFound(String)`（与现有 projects.rs 同模式，语义"项目不存在或非成员"），**不要**用 `PermissionDenied("...")`（编译不过）。
+
+- [ ] **Step 3: cargo build 验证 + commit**
+
+```bash
+cargo build -p llm_wiki_server
+git add src-server/Cargo.toml src-server/Cargo.lock src-server/src/error.rs
+git commit -m "chore(src-server): 前置——sqlx json feature + axum-test + Conflict(409) variant"
+```
+
+---
+
 ## Task 1: 注册建 personal team
 
 **Files:**
@@ -75,13 +112,14 @@ Expected: FAIL — team 查不到（register 当前不建 team）
 - [ ] **Step 3: 实现**（auth.rs register，在 `let user_id: i32 = row.get("id");` 之后、token 生成之前插入）
 
 ```rust
-    // —— P1: 建 personal team（owner=self），解决"注册后无 team"——
+    // —— P1: 建 personal team（owner=self），事务内（审查 #6：避免第二个 INSERT 失败留 orphan team）——
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
     let team_row = sqlx::query(
         "INSERT INTO teams (name, created_by) VALUES ($1, $2) RETURNING id",
     )
     .bind(format!("{}'s team", username))
     .bind(user_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(AppError::from)?;
     let team_id: i32 = team_row.get("id");
@@ -90,9 +128,10 @@ Expected: FAIL — team 查不到（register 当前不建 team）
     )
     .bind(team_id)
     .bind(user_id)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(AppError::from)?;
+    tx.commit().await.map_err(AppError::from)?;
 ```
 
 - [ ] **Step 4: 跑测试验证通过**
@@ -177,7 +216,7 @@ pub(crate) async fn check_project_access(
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::from)?
-    .ok_or_else(|| AppError::PermissionDenied("no access to project".to_string()))?;
+    .ok_or_else(|| AppError::ResourceNotFound("Project not found or you are not a member".to_string()))?;
     Ok(row.role)
 }
 
@@ -209,6 +248,11 @@ pub fn pages_routes() -> axum::Router<AppState> {
 mod pages;
 ```
 
+`src-server/src/lib.rs` 加重导出（审查 #9：测试用 `WikiPage` 反序列化需 pub）：
+```rust
+pub use routes::pages::WikiPage;
+```
+
 - [ ] **Step 3: projects.rs 合并 pages_routes**
 
 `src-server/src/routes/projects.rs` 的 `project_routes()` 末尾 `.merge(pages::pages_routes())`（pages route 挂在 `/api/v1/projects` nest 下，故 pages_routes 内 route 用相对路径如 `/:pid/pages`）。加 `use super::pages;`。
@@ -235,6 +279,8 @@ git commit -m "feat(src-server): pages 模块骨架 + WikiPage model + 权限 he
 
 - [ ] **Step 1: 写失败测试**（新建 pages_test.rs，参考 auth_test.rs 的 setup_test_app + register helper）
 
+> **审查 #11：** 新建 pages_test.rs 后，`src-server/tests/integration/mod.rs` 加 `pub mod pages_test;`（否则编译 unresolved）。
+
 ```rust
 use axum_test::TestClient;
 // 复用 auth_test.rs 的 setup_test_app + register helper（或抽到 mod.rs 共享）
@@ -243,9 +289,13 @@ async fn setup_project() -> (axum::Router, AppState, i32 /*project_id*/, String 
     let (app, state) = setup_test_app();
     let token = register_and_login(&app, "pagetest", "pagetest@t.com", "password123").await;
     // register 建 team；建 project（POST /api/v1/projects）
+    // team_id 不硬编码（审查 #10）：register 建 team 后查出来
+    let team_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM teams WHERE created_by = (SELECT id FROM users WHERE username='pagetest')"
+    ).fetch_one(&state.db).await.unwrap();
     let proj_resp = TestClient::new(app.clone())
         .post("/api/v1/projects").header("authorization", format!("Bearer {}", token))
-        .body(r#"{"name":"test-proj","team_id":1,"storage_path":"/tmp/test"}"#).await;
+        .body(format!(r#"{{"name":"test-proj","team_id":{},"storage_path":"/tmp/test"}}"#, team_id)).await;
     let project_id: i32 = serde_json::from_slice::<serde_json::Value>(proj_resp.as_bytes())
         .unwrap().get("id").unwrap().as_i64().unwrap() as i32;
     (app, state, project_id, token)
@@ -439,7 +489,7 @@ pub async fn update_page(
     let row = sqlx::query!(
         "UPDATE wiki_pages SET title=$1, content=$2, frontmatter=$3, page_type=$4, sources=$5, images=$6,
                                 updated_at=NOW(), path=$7
-         WHERE project_id=$8 AND path=$9 AND to_char(updated_at,'YYYY-MM-DD\"T\"HH24:MI:SSOF')=$10
+         WHERE project_id=$8 AND path=$9 AND to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS+00:00')=$10
          RETURNING id",
         title, req.content, req.frontmatter, page_type, sources, images, req.path,
         project_id, pq.path, if_match
@@ -543,7 +593,7 @@ for (const abs of files) {
   let body = raw;
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
   if (m) {
-    try { frontmatter = yaml.load(m[1]) || {}; } catch { frontmatter = {}; }
+    try { frontmatter = yaml.load(m[1]) || {}; } catch (e) { console.warn(`YAML parse fail ${path}: ${e}`); frontmatter = {}; }
     body = raw.slice(m[0].length);
   }
   // path 相对 wikiRoot，POSIX（去 wiki/ 前缀，spec §3.3）
@@ -566,7 +616,7 @@ console.log(`imported ${count} pages into ${PROJECT_NAME}`);
 await client.end();
 ```
 
-> **依赖：** `npm i -D pg js-yaml`（若项目已有 pg 复用）。frontmatter 用 js-yaml（对齐桌面 frontmatter.ts），**不用** okf-convert 简单遍历（丢多行 YAML 块）。
+> **依赖（审查 #7）：** `npm i -D pg js-yaml`（项目当前无 pg，必须装）。frontmatter 用 js-yaml（对齐桌面 frontmatter.ts），**不用** okf-convert 简单遍历（丢多行 YAML 块）。
 
 - [ ] **Step 2: 跑脚本导入 English-Teaching**
 
