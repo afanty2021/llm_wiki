@@ -1,6 +1,7 @@
 // src-server/src/services/llm_stream.rs
 // LLM 流式客户端：StreamChatProvider trait + OpenAI/Anthropic SSE 实现 + provider 工厂。
 
+use crate::{AppError, AppState};
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt};
 use serde::Serialize;
@@ -443,6 +444,50 @@ impl StreamChatProvider for AnthropicProvider {
 
     fn provider_type(&self) -> &'static str { "anthropic" }
     fn model_name(&self) -> &str { &self.model }
+}
+
+// ── Provider 工厂 ──
+
+/// 从 llm_providers 表为指定 project 构造 StreamChatProvider。
+/// 复用 services/llm.rs 的 get_llm_config（含 provider_type/base_url/加密 key）→ 解密 key → 构造 impl。
+pub async fn provider_for_project(
+    state: &AppState,
+    project_id: i32,
+) -> Result<Box<dyn StreamChatProvider>, AppError> {
+    // 复用 llm.rs 取配置——不重复查表
+    let config = crate::services::llm::get_llm_config(&state.db, project_id).await?;
+
+    // 解密 key（&state.config 经 deref coercion 转为 &AppConfig）
+    let api_key = crate::services::llm::decrypt_api_key(&config.api_key, &state.config)?;
+
+    let timeout = config.timeout_secs;            // 来自 get_llm_config，当前恒 None（DB 无列）
+    let base = config.base_url.as_deref().unwrap_or("");
+
+    match config.provider_type.as_str() {
+        "openai" => {
+            let endpoint = if base.is_empty() {
+                "https://api.openai.com/v1/chat/completions".to_string()
+            } else {
+                format!("{}/chat/completions", base.trim_end_matches('/'))
+            };
+            Ok(Box::new(OpenAiProvider::new(
+                endpoint, api_key, config.model, timeout,
+            )))
+        }
+        "anthropic" => {
+            let endpoint = if base.is_empty() {
+                "https://api.anthropic.com/v1/messages".to_string()
+            } else {
+                format!("{}/messages", base.trim_end_matches('/'))
+            };
+            Ok(Box::new(AnthropicProvider::new(
+                endpoint, api_key, config.model, timeout,
+            )))
+        }
+        other => Err(AppError::ValidationError(
+            format!("Unsupported provider type: {:?}", other)
+        )),
+    }
 }
 
 #[cfg(test)]
