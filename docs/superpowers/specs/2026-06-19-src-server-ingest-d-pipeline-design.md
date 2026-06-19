@@ -101,6 +101,14 @@ pub async fn run_ingest_job(
         Err(e) => result.warnings.push(format!("reserved pages: {}", e)),
     }
 
+    // 全部 source_paths 都失败 → Err（让 worker 调 mark_job_failed）
+    // 至少 1 个成功 → Ok(result) (warnings 收集部分失败)
+    if result.new_pages.is_empty() && result.updated_reserved.is_empty() {
+        return Err(AppError::LlmApiError(
+            format!("all source_paths failed: {}", result.warnings.join("; "))
+        ));
+    }
+
     Ok(result)
 }
 ```
@@ -108,6 +116,17 @@ pub async fn run_ingest_job(
 ---
 
 ## 4. process_source_path — 单文件全流程
+
+```
+读文件 → A::parse_bytes → ③ 存图片到 storage/media/{pid}/ → ③' 替换 text 图片引用路径
+       (page3_image1.png → media/{pid}/page3_image1.png，LLM 可见)
+  → ④ 内容去重:查 ingested_files 表比对 content_hash+file_size → 无变化跳过
+  → ⑤ 查 step1 缓存(redis ingest:cache:{sha256}) → 命中复用分析 JSON
+  → [未命中] ⑥ 长文档分块 → ⑦ Step1 分析(B) → ⑧ global digest 合并 → ⑨ 缓存 result
+  → ⑩ Step2 生成(B) → ⑪ parseFileBlocks → ⑫ 逐页 upsert_wiki_page
+```
+
+图片路径替换：parser 产出 `text` 里含原始相对路径(`page3_image1.png`)→ 替换成 `media/{project_id}/page3_image1.png`（worker 已把图存到 `storage/media/{pid}/`）。
 
 ```rust
 struct WikiPageInsert {
