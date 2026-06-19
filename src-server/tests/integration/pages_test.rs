@@ -189,3 +189,26 @@ async fn crud_create_update_delete_page() {
 
     let _ = state; // 抑制 unused（本测试主要走 API）
 }
+
+#[tokio::test]
+async fn update_page_rejects_path_rename() {
+    let (server, _state, pid, token) = setup_project("page").await;
+    let auth = format!("Bearer {}", token);
+
+    // 先建一条
+    let r = server.post(&format!("/api/v1/projects/{}/pages", pid))
+        .add_header("authorization", auth.clone())
+        .content_type("application/json")
+        .json(&serde_json::json!({"path":"concepts/x.md","title":"X"})).await;
+    assert_eq!(r.status_code(), 201);
+    let created: serde_json::Value = r.json();
+    let updated_at = created["updated_at"].as_str().unwrap().to_string();
+
+    // PUT 时 body.path 与 ?path= 不一致 → 400
+    let r = server.put(&format!("/api/v1/projects/{}/page?path=concepts/x.md", pid))
+        .add_header("authorization", auth.clone())
+        .add_header("if-match", &updated_at)
+        .content_type("application/json")
+        .json(&serde_json::json!({"path":"concepts/renamed.md","title":"X2"})).await;
+    assert_eq!(r.status_code(), 400);
+}

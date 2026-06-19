@@ -168,6 +168,14 @@ pub async fn update_page(
 ) -> Result<Json<WikiPage>, AppError> {
     check_project_access(&state, &headers, project_id).await?;
 
+    // MVP：不支持 path 重命名（rename 是独立功能，需级联处理引用/索引）。
+    // PUT 到 ?path=X 的资源，body.path 必须与之一致。
+    if req.path != pq.path {
+        return Err(AppError::ValidationError(
+            "body path must match query path (rename not supported)".to_string(),
+        ));
+    }
+
     // If-Match → DateTime<Utc>（headers 同时供 check_project_access 和此处读取，共用一个 HeaderMap 提取器）
     let if_match_str = headers
         .get("if-match")
