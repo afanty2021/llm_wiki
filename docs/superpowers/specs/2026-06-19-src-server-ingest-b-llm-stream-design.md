@@ -182,11 +182,14 @@ impl OpenAiProvider {
      stream_options: {include_usage: true}  // 最后一帧包 usage
    }
 ② POST endpoint → reqwest::Response → .bytes_stream() → Bytes 流
-③ SSE 解析：
+③ 行缓冲：Bytes chunk 边界不对齐 SSE 行边界——需 `line_buf: Vec<u8>` 累积字节，
+   遇到 `\n` 才弹出一行（两个 impl 共用同样需求，可抽 `fn split_sse_lines(stream) -> LineStream`）
+④ SSE 解析：
    每行 "data: [DONE]" → TokenDelta.Done
-   每行 "data: {...}" → serde_json::from_str → 取 choices[0].delta.content → TokenDelta.Text
-    若 choices[0].finish_reason 非 null → 最后一帧前包 Usage(来自 usage 字段)
-④ stream.map(|bytes| parse_sse_line(bytes) -> TokenDelta).boxed()
+   每行 "data: {...}" → JSON 解析 → choices[0].delta.content → TokenDelta.Text
+   末尾 chunk(stream_options: {include_usage: true} 后) choices 为空数组、
+     usage 字段有值 → TokenDelta::Usage
+⑤ stream.map(|bytes| parse_sse_line(bytes) -> TokenDelta).boxed()
 ```
 
 ### SSE 解析器
@@ -264,21 +267,30 @@ data: {"type":"message_stop"}
 
 **System prompt 差异（关键）**：Anthropic 的 `system` 是顶层字段（非 role:system message）。`stream_chat` 内部需：取 `opts.system_prompt` → 放入 JSON body 的 `system` 字段；`messages` 数组不含 `role:"system"` 条目（Anthropic API 拒绝这种 message）。
 
-### 状态机设计
+### 状态机设计（简化版）
+
+MVP 假定单 content_block（index=0，text-only），**不追踪 block index，不维护 HashMap**。后续加工具调用时加回 `Option<u32>` cur_index 字段即可。
 
 ```
-状态枚举：
-  WaitingMessageStart ← 初始
-  InContentBlock { current_index, blocks: HashMap<index, block_state> }
-  MessageComplete     ← 收到 message_stop，发 Usage + Done
+逐行读 stream，维护 current_event: Option<String> + line_buf: Vec<u8>
+event: 行 → 设 current_event
+data: 行 → 按 current_event match:
 
-event: 驱动的转换：
-  message_start      → 记录 usage hint，转 WaitingContent
-  content_block_start(index=i) → blocks[i] = { state: Open, buffer: "" }
-  content_block_delta(index=i, text=t) → emit TokenDelta::Text(t)，累加 blocks[i].buffer
-  content_block_stop(index=i) → blocks[i].state = Closed
-  message_delta      → 记录 stop_reason + usage(为后续 Usage 事件)
-  message_stop       → emit Usage(如果有) → emit Done → 转换 MessageComplete
+  "message_start"        → 缓存 input_tokens (message.usage.input_tokens)
+                            （不 emit）
+  "content_block_delta"  → 取 delta.text → emit TokenDelta::Text(t)
+  "message_delta"        → 提取 usage.output_tokens + stop_reason
+                            （不 emit，暂存）
+  "message_stop"         → 用缓存的 input_tokens + 暂存的 output_tokens
+                            → emit TokenDelta::Usage
+                            → emit TokenDelta::Done
+  "ping"                 → 忽略
+  其他                    → 忽略
+
+**Usage 来源**：两个事件拼出来——
+  - message_start.message.usage.input_tokens  → prompt_tokens
+  - message_delta.usage.output_tokens          → completion_tokens
+  - message_stop 无 usage，仅结束信号
 ```
 
 ```rust
@@ -290,10 +302,11 @@ struct AnthropicProvider {
     api_version: String,    // "2023-06-01"
 }
 
-#[derive(Default)]
+/// 简化版状态：MVP 单 content_block，不追踪 index/HashMap。
 struct AnthropicStreamState {
-    events: VecDeque<TokenDelta>,   // 待发送的 delta(先入先出)
-    usage: Option<(u32, u32)>,      // 从 message_start/message_delta 收集
+    events: VecDeque<TokenDelta>,     // 待 emit 的 delta(先入先出)
+    input_tokens: Option<u32>,        // 从 message_start 缓存
+    output_tokens: Option<u32>,       // 从 message_delta 暂存
     done: bool,
 }
 
@@ -306,11 +319,8 @@ impl AnthropicProvider {
 
         match event_type {
             "message_start" => {
-                if let Some(u) = v["message"]["usage"].as_object() {
-                    state.usage = Some((
-                        u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                        u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                    ));
+                if let Some(i) = v["message"]["usage"]["input_tokens"].as_u64() {
+                    state.input_tokens = Some(i as u32);
                 }
             }
             "content_block_delta" => {
@@ -325,23 +335,20 @@ impl AnthropicProvider {
                 // 其他 delta_type (input_json_delta 等)忽略(MVP)
             }
             "message_delta" => {
-                // 更新 usage（output_tokens 在消息结束时最终确定）
-                if let Some(u) = v["usage"].as_object() {
-                    state.usage = Some((
-                        state.usage.map(|(p,_)| p).unwrap_or(0),
-                        u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                    ));
+                // output_tokens 在 message_delta 最终确定
+                if let Some(o) = v["usage"]["output_tokens"].as_u64() {
+                    state.output_tokens = Some(o as u32);
                 }
             }
             "message_stop" => {
-                // 先发 Usage 再 Done
-                if let Some((prompt, completion)) = state.usage.take() {
-                    state.events.push_back(TokenDelta::Usage { prompt_tokens: prompt, completion_tokens: completion });
-                }
+                // 先发 Usage(从两个事件拼) 再 Done
+                let prompt = state.input_tokens.unwrap_or(0);
+                let completion = state.output_tokens.unwrap_or(0);
+                state.events.push_back(TokenDelta::Usage { prompt_tokens: prompt, completion_tokens: completion });
                 state.events.push_back(TokenDelta::Done);
                 state.done = true;
             }
-            _ => {} // content_block_start / content_block_stop / ping — 无需 emit
+            _ => {} // content_block_start/stop/ping — 无需 emit
         }
         Ok(())
     }
