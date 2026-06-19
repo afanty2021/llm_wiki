@@ -15,6 +15,7 @@ pub const ERR_DATABASE_ERROR: &str = "DATABASE_ERROR";
 pub const ERR_FILE_UPLOAD_FAILED: &str = "FILE_UPLOAD_FAILED";
 pub const ERR_LLM_API_ERROR: &str = "LLM_API_ERROR";
 pub const ERR_INTERNAL_ERROR: &str = "INTERNAL_ERROR";
+pub const ERR_CONFLICT: &str = "CONFLICT";
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -59,6 +60,9 @@ pub enum AppError {
 
     #[error("LLM API error: {0}")]
     LlmApiError(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
 }
 
 impl IntoResponse for AppError {
@@ -134,6 +138,7 @@ impl IntoResponse for AppError {
                 ERR_LLM_API_ERROR,
                 msg.clone(),
             ),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, ERR_CONFLICT, msg.clone()),
         };
 
         let body = Json(json!({
