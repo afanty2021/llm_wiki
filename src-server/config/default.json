@@ -18,5 +18,6 @@
   },
   "cors": {
     "allowed_origins": ["http://localhost:1420", "http://localhost:5173"]
-  }
+  },
+  "llm_timeout_secs": 120
 }

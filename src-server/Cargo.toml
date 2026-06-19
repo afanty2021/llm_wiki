@@ -60,6 +60,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 # 流处理
 futures = "0.3"
 tokio-stream = "0.1"
+async-stream = "0.3"
 
 # 正则解析 wikilinks
 regex-lite = "0.1"

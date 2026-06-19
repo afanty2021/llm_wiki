@@ -9,6 +9,7 @@ pub struct LlmConfig {
     pub base_url: Option<String>,
     pub model: String,
     pub context_size: i32,
+    pub timeout_secs: Option<u64>,      // 新增。从 config 读取，默认 120s
 }
 
 #[derive(sqlx::FromRow)]
@@ -28,6 +29,7 @@ impl Default for LlmConfig {
             base_url: Some("https://api.openai.com/v1".into()),
             model: "gpt-4o".into(),
             context_size: 128000,
+            timeout_secs: Some(120),    // 新增
         }
     }
 }
@@ -52,6 +54,7 @@ pub async fn get_llm_config(pool: &PgPool, project_id: i32) -> Result<LlmConfig,
             base_url: r.base_url,
             model: r.model,
             context_size: r.context_size,
+            timeout_secs: None,
         }),
         None => Err(AppError::BadRequest(
             "No LLM provider configured for this project".into(),
