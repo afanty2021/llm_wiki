@@ -286,8 +286,8 @@ pub async fn run_ingest_job(
 
     let total = job.source_paths.len();
     for (i, sp) in job.source_paths.iter().enumerate() {
-        ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
-            .await?;
+        let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
+            .await;
 
         match process_source_path(state, job.project_id, team_id, sp).await {
             Ok(pages) => {
@@ -301,17 +301,17 @@ pub async fn run_ingest_job(
             Err(e) => result.warnings.push(format!("process {}: {}", sp, e)),
         }
 
-        ingest_queue::update_job_stage(
+        let _ = ingest_queue::update_job_stage(
             state,
             job.id,
             "generating",
             ((i + 1) * 100 / total.max(1)) as i32,
         )
-        .await?;
+        .await;
     }
 
     // reserved 重建
-    ingest_queue::update_job_stage(state, job.id, "building_index", 100).await?;
+    let _ = ingest_queue::update_job_stage(state, job.id, "building_index", 100).await;
     match rebuild_reserved_pages(state, job.project_id).await {
         Ok(reserved) => result.updated_reserved = reserved,
         Err(e) => result.warnings.push(format!("reserved pages: {}", e)),
@@ -322,7 +322,7 @@ pub async fn run_ingest_job(
         && result.updated_reserved.is_empty()
         && !result.warnings.is_empty()
     {
-        return Err(AppError::LlmApiError(format!(
+        return Err(AppError::InternalError(format!(
             "all source_paths failed: {}",
             result.warnings.join("; ")
         )));
