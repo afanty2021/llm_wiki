@@ -672,3 +672,67 @@ Plan complete and saved to `docs/superpowers/plans/2026-06-19-src-server-wiki-da
 **2. Inline Execution** — 本会话批量执行 + checkpoint
 
 Which approach?
+
+---
+
+## 执行订正记录（2026-06-19，Subagent-Driven 实施后回填）
+
+> 本计划经 Subagent-Driven 流程实施完毕（9 commits，分支 `feat/src-server-wiki-data-layer`）。实施中对原文 6 处代码示例做了订正——原文示例为设计草稿，实际实现按代码库现状调整。**下方代码示例（Task 2-5 各 Step）仍保留原始草稿，阅读时以本节为准。**
+
+### 订正 1：`AppError::NotFound` 不存在 → 用 `ResourceNotFound(String)`
+- **原文**：Task 4 `get_page`/`delete_page` 用 `AppError::NotFound("page")`（line 374、511）。
+- **实际**：`AppError` enum 无 `NotFound` variant，只有 `ResourceNotFound(String)`（→ 404）。统一改用 `ResourceNotFound`。
+- **commit**：b730eb3（Task 4）。
+
+### 订正 2：路由语法 `/:pid` → `:pid`（axum 0.7 / matchit 0.7.3）
+- **原文**：多处用 `/:pid/pages`、`/:pid/page`（line 9、258、381-382、516-517）。
+- **实际**：本 crate axum=0.7.9 + matchit=0.7.3，路径参数语法是 **`:pid`（冒号）**，**不是** `/:pid` 也**不是** `/{pid}`（花括号是 axum 0.8+ / matchit 0.8 才支持）。matchit 0.7 只识别 `:` 和 `*`，`{pid}` 会被当字面量 → 路由永不匹配（404）。pages 模块统一用 `:id`（与 files.rs 的 `:project_id` 一致）。
+- **commit**：53c195a（Task 3）。
+- **⚠️ 顺带发现的既存 bug（非本计划范围）**：`projects.rs`/`teams.rs`/`users.rs` 用了 `/{id}` 路由 → 在 axum 0.7 下 **get/update/delete 全部失效（一直 404）**。建议后续把 `{id}` 改 `:id`。
+
+### 订正 3：`check_project_access` 复用 middleware 既有版（不在 pages.rs 自造）
+- **原文**：Task 2 在 pages.rs 重新定义 `pub(crate) async fn check_project_access(state, project_id, user_id) -> Result<String, AppError>`（line 205）。
+- **实际**：代码库 `src/middleware/project_guard.rs` 已有同名函数，被 files/graph/chat/search 4 个模块使用（内部做 `require_auth`，非成员→`PermissionDenied` 403，返回 `(user_id, team_id)`）。pages 的 handler 不需要 role，直接复用 middleware 版（handler 加 `headers: HeaderMap` 形参，首行 `check_project_access(&state, &headers, project_id).await?`），删除了 pages.rs 的重复定义。
+- **commit**：0b167dd（Task 2 加重复版）+ aa10988（Task 2 review 后删除复用）。
+
+### 订正 4：If-Match 乐观锁用 `DateTime<Utc>`→timestamptz 直接比较（非 `to_char` 字符串比对）
+- **原文**：Task 4 `update_page` 用 `to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS+00:00')=$10` 做 WHERE 比较（line 492），需"If-Match 值与格式串精确匹配"。
+- **实际**：Rust 端把 If-Match 头用 `DateTime::parse_from_rfc3339(...).with_timezone(&Utc)` 解析成 `DateTime<Utc>`，作为 timestamptz 直接 `WHERE updated_at = $if_match` 比较。避开脆弱的字符串格式匹配（时区/精度/格式漂移），chrono RFC3339 往返保持同一 instant，一次通过。
+- **commit**：b730eb3（Task 4）。
+
+### 订正 5：测试基础设施重构（文档未覆盖）
+- **`Cargo.toml` 加 `[[test]] name="integration" path="tests/integration/mod.rs"`**：`tests/integration/` 用 `mod.rs` 入口（非 cargo 默认的 `tests/<name>.rs` 或 `tests/<name>/main.rs`），cargo 不会自动发现 → 不加此声明，`cargo test --test integration` 根本不编译该 target。Task 0 只跑 `cargo build` 没暴露，Task 1 才发现。
+- **`setup_test_app` 改 async**：原实现用 `tokio_test::block_on`，在 `#[tokio::test]` runtime 内会 panic（"Cannot start a runtime from within a runtime"）。既有 2 个测试一直 `#[ignore]` 没暴露。
+- **helper 抽公共**：`setup_test_app` + `register_user(server, username, email, password) -> token` 提到 `tests/integration/mod.rs` 作 `pub`，供 auth_test + pages_test 共享。
+- **测试用 `axum_test::TestServer`**（非 `TestClient`）：axum-test 15.7.4 无 `TestClient`，导出的是 `TestServer`（`TestServer::new(app)` + `server.get/post/put/delete(path).json(&body).add_header(k,v).await`）。
+- **测试不带 `#[ignore]`**：本项目无 CI 跑 src-server 测试（ci.yml/build.yml 只跑 vite build + src-tauri cargo build），本地 dev 的 DB/Redis 是 server 运行必备前置（docker-compose），故集成测试对 live DB 真跑。
+- **用户名唯一**：`std::process::id()` + `AtomicU64` 计数器，避免共享 live DB 二次运行/并行测试撞车。
+- **commit**：be2fdfe（Task 1）、53c195a（Task 3）。
+
+### 订正 6：导入脚本（Task 5）3 个 bug 修复 + 2 个增强
+- **Bug：frontmatter 列未 `JSON.stringify`**（原文 line 603-604 只 stringify sources/images）→ pg 不自动序列化 JS 对象到 JSONB，frontmatter 也必须 `JSON.stringify`。
+- **Bug：catch 用未定义变量 `${path}`**（原文 line 596）→ 只 import 了 `join/relative/sep`，应为 `${abs}`。
+- **Bug：BOM 去除用不可见字符** → 改 `﻿` 转义。
+- **增强：team backfill** —— 原文假设 USER_ID 已有 personal team；实际 3 个真实 user（Berton/Andrew/Carina，Task 1 前注册）都无 team。脚本改为：用户无 team 则建 owner team，让任意 user_id 可跑。
+- **增强：project 幂等** —— 原文总是 `INSERT INTO projects`，重跑撞 UNIQUE(team_id,name)；改为先查后插。
+- **Invest 路径**：wiki 在 `~/Documents/Invest/Invest/wiki`（双层嵌套），故 wiki_dir 传 `~/Documents/Invest/Invest`。
+- **3 个源文件** frontmatter title 含裸冒号致 YAML 解析失败，脚本降级为空 frontmatter 继续（页面仍导入，title 由正文 H1/文件名 fallback）。
+- **commit**：027ebf3（Task 5）。
+
+### 额外执行期决策
+- **Task 4 `update_page` 拒绝 path rename**：原实现 `WHERE path=$pq.path` + `SET path=$req.path` 隐含支持 rename，但 rename 冲撞 UNIQUE 会 500（非业务级 409），且未测试。review 后加校验 `req.path != pq.path → ValidationError(400)`（rename 是 wiki 独立功能，需级联引用/索引）。commit e88c438。
+- **导入选 Berton（id=3）**：真实 user，脚本 backfill 建 team 67（"Berton's team"），project English-Teaching(55, 586 页) + Invest(56, 221 页)。
+
+### 最终状态
+- 集成测试：**7 passed / 0 failed / 2 ignored**（2 ignored 是既有 auth_test 的 DB 依赖测试）。
+- 数据已进 DB：English-Teaching 586 + Invest 221 = 807 页 wiki_pages。
+- 编译：0 error，无新增 warning（2 个既有 warning 在 cors.rs/files.rs，非本计划引入）。
+- 分支 `feat/src-server-wiki-data-layer`（9 commits）已保留，未合 main。
+
+### 建议的 follow-up（均非阻塞）
+1. `projects.rs`/`teams.rs`/`users.rs` 的 `/{id}` → `:id`（既存失效 bug）。
+2. register 的 user INSERT 与 team/team_members 同事务化（避免 orphan user）。
+3. 导入脚本连接串走 env（当前硬编码 test123）。
+4. 3 个 wiki 源文件 frontmatter 裸冒号 YAML 修正（或脚本加 quote 预处理）。
+5. `ListQuery.q` 搜索逻辑实现（当前字段保留未用）。
+
