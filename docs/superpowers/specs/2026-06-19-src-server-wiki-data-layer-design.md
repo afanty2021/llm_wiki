@@ -47,9 +47,9 @@ POST   /projects/:pid/pages              {path, title, content, frontmatter} →
 PUT    /projects/:pid/page?path=xxx      替换语义（整体替换）+ 乐观锁（If-Match: <updated_at>，冲突 409）
 DELETE /projects/:pid/page?path=xxx      删除
 ```
-- path 查询/更新/删除按 `?path=`（含 `/`，query param 无需 encode）。
+- path 查询/更新/删除按 `?path=`：`/` 在 query string 合法无需 encode；path 值（`concepts/foo.md`）不含 `?&#=` 等特殊字符故无需编解码。若未来 path 含特殊字符，前后端 `encodeURIComponent`。
 - POST/PUT：`UNIQUE(project_id, path)` 冲突 → 409。
-- **PUT 替换语义**（非合并）；乐观锁防并发覆盖（单用户 MVP 够用，合并编辑后续）。
+- **PUT 替换语义**（非合并）；乐观锁防并发覆盖：`If-Match: <updated_at>` 用 **RFC 3339**（ISO 8601 子集），服务端取 DB `updated_at`（TIMESTAMPTZ）格式化为 RFC 3339 做字符串精确比对（避免时区/精度差异）。单用户 MVP 够用，合并编辑后续。
 
 ### 3.3 path 语义
 
@@ -64,7 +64,8 @@ DELETE /projects/:pid/page?path=xxx      删除
 { "type": "concept", "title": "Foo", "sources": [...], "related": [...], "tags": [...], "timestamp": "2026-05-19", "created": "...", "updated": "..." }
 ```
 - `title` 冗余到 `title` 列（列表查询/排序）。
-- **`sources`/`images` 列同步**：migration 003 给 wiki_pages 加了 `sources`/`images` JSONB 列。frontmatter JSONB 存完整解析结果；`sources`/`images` 列作规范化列，**写入（POST/PUT/ingest/导入）时从 frontmatter 同步填充**——单一写入路径负责保持一致，避免冗余漂移。
+- **`sources`/`images` 列同步**：migration 003 加了 `sources`/`images` JSONB 列。frontmatter JSONB 存完整解析结果；`sources`/`images` 列作规范化列，**写入（POST/PUT/ingest/导入）时从 frontmatter 同步填充**；**读取（GET/列表）统一从分列取**（不查 frontmatter JSONB）——这正是分列的意义（查询/过滤用规范化列）。
+- **`page_type` 列同步**：migration 003 加了 `page_type VARCHAR(50)`。写入时从 `frontmatter.type` 同步填充；GET `?type=concept` 查询用 `page_type` 列过滤。
 - 丢失原始格式（注释/顺序/空行）——权衡：查询便利 > 格式保真（wiki_pages 是结构化存储，非文件镜像）。
 
 ---
@@ -78,7 +79,10 @@ DELETE /projects/:pid/page?path=xxx      删除
 ② POST /projects/:pid/ingest {source_paths[]} → 入 redis 队列，返回 {job_id}
 ③ Worker（Rust 后台 task，消费 redis 队列）：
    - 读 storage 源文档（source_paths）
-   - 解析（pdf/docx/xlsx → 文本；抽桌面 src-tauri 解析逻辑成 crate 复用）
+   - 解析（**pdf/docx/xlsx/pptx → 文本**，覆盖主流格式，对齐 §4.3；抽桌面 src-tauri 解析逻辑成 crate 复用；.doc/odt/ods 按需后续）
+   - **图片提取（MVP）**：PDF → 提取图片存 storage/media/（对齐桌面 `extractAndSaveSourceImages`）；多模态 caption（image-caption-pipeline）后续补
+   - **缓存**：源文档分析结果按 content hash 缓存（可跨 project 复用，避免重复 LLM 烧 token，对齐桌面 `ingest-cache`）
+   - **长文档分块**：> context budget 时拆 chunk 分批分析 → global digest → 合并（对齐桌面 ingest；具体 prompt 见实施 plan）
    - LLM 两步（调 llm_providers 配置的 provider；Rust HTTP+SSE，等价桌面 streamChat）
      · Step 1 分析：源 → 结构化分析（实体/概念/连接/矛盾）
      · Step 2 生成：分析 → wiki 页面（concept/entity + frontmatter）
@@ -103,7 +107,7 @@ DELETE /projects/:pid/page?path=xxx      删除
 ### 4.4 产出
 
 - 新 wiki_pages（concept/entity，path=`concepts/foo.md`/`entities/bar.md`）。
-- 更新 reserved pages：`index.md`（目录）、`log.md`（摄取日志）、`overview.md`（总览）——也作 wiki_pages（path=`index.md` 等）。
+- 更新 reserved pages：`index.md`（目录）、`log.md`（摄取日志）、`overview.md`（总览）——也作 wiki_pages（path=`index.md` 等）。**从 scratch 重建**（对齐桌面 `updateReservedPages`）：index.md 遍历 wiki_pages 生成目录、log.md 追加摄取条目、overview.md 重建总览。reserved pages per-project（`UNIQUE(project_id, path)` 隐含），不同 project 互不影响。
 - **reserved pages 并发锁**：多用户/多 worker 并发 ingest 更新同一 log.md/index.md 竞态 → 写入用 `SELECT ... FOR UPDATE` 行锁（即使 MVP 单 worker 也应加，为多 worker 预留）。
 
 ### 4.5 异步队列
