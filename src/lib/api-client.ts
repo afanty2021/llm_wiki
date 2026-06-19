@@ -84,6 +84,10 @@ class ApiClient {
       "POST",
       "/api/v1/auth/refresh",
       { refresh_token: this.refreshToken },
+      // isRetry=true：refresh 自身 401 时不再递归触发 refreshAccessToken，否则
+      // getMe 401 → refresh → 401 → refresh → ... 无限递归，loadSession 永久卡死（"加载中"）。
+      // refresh 失败应直接 throw → 上层 request 的 catch → clearTokens + "Session expired"。
+      true,
     )
     this.accessToken = data.access_token
     if (typeof localStorage !== "undefined") {

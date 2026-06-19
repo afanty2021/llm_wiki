@@ -32,23 +32,6 @@ function App() {
     loadSession()
   }, [])
 
-  // Show loading while checking session
-  if (authLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <p className="text-gray-500">加载中...</p>
-      </div>
-    )
-  }
-
-  // Auth gate — redirect to login/register when not authenticated
-  if (!isAuthenticated) {
-    if (authPage === "register") {
-      return <RegisterPage onNavigate={setAuthPage} />
-    }
-    return <LoginPage onNavigate={setAuthPage} />
-  }
-
   const project = useWikiStore((s) => s.project)
   const setProject = useWikiStore((s) => s.setProject)
   const setFileTree = useWikiStore((s) => s.setFileTree)
@@ -311,6 +294,23 @@ function App() {
     }
     init()
   }, [])
+
+  // Auth gates — 必须在所有 hooks 之后（React hooks 规则：条件 return 不能早于 hooks，
+  // 否则认证状态变化会改变 hooks 数量 → "Rendered more hooks than during the previous
+  // render" 崩溃白屏）。注册/登录成功 isAuthenticated false→true 时尤其会触发。
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <p className="text-gray-500">加载中...</p>
+      </div>
+    )
+  }
+  if (!isAuthenticated) {
+    if (authPage === "register") {
+      return <RegisterPage onNavigate={setAuthPage} />
+    }
+    return <LoginPage onNavigate={setAuthPage} />
+  }
 
   async function handleProjectOpened(proj: WikiProject) {
     // Clear all per-project state BEFORE loading new project data

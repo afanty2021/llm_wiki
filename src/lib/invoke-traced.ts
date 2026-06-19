@@ -20,6 +20,9 @@ export async function invokeTraced<T>(
 ): Promise<T> {
   // 用 || 而非 ??：空字符串 "" 是 falsy，会触发自动生成，避免透传无效 trace_id。
   // trace_id 为 string 类型时，"" 是唯一需要防御的 falsy 值（不会出现 0/false）。
-  const trace_id = (args?.trace_id as string) || crypto.randomUUID();
-  return invoke<T>(cmd, { ...args, trace_id });
+  // ⚠️ 传给 invoke 的 key 必须是 camelCase `traceId`：Tauri v2 把 Rust snake_case 参数
+  // （trace_id）绑定为前端 camelCase（traceId）。若传 snake_case `trace_id`，Tauri 找不到
+  // `traceId` → "missing required key traceId" → command 失败（如 list_directory 打不开项目）。
+  const traceId = (args?.trace_id as string) || crypto.randomUUID();
+  return invoke<T>(cmd, { ...args, traceId });
 }
