@@ -10,7 +10,7 @@
 
 **B 做什么**：
 - 提供统一 `StreamChatProvider` trait，屏蔽 OpenAI/Anthropic SSE 格式差异
-- 从 `llm_providers` 表读 per-project 配置（endpoint/model/api_key_encrypted）→ 工厂函数 `provider_for_project(pool, project_id)` 返 `Box<dyn StreamChatProvider>`
+- 从 `llm_providers` 表读 per-project 配置（base_url/model/api_key_encrypted）→ 复用 `get_llm_config(pool, project_id)` 取 `LlmConfig`，工厂函数 `provider_for_project(state, project_id)` 内部解密 key + 拼接各 provider 专属路径，返 `Box<dyn StreamChatProvider>`
 - key 解密复用 `services/llm.rs` 的 `get_llm_config` + `decrypt_api_key`
 
 **B 不做什么**：
@@ -37,7 +37,7 @@ src-server/src/services/llm_stream.rs         (~550 行)
  │    AnthropicProvider { client, endpoint, api_key, model }
  │    impl StreamChatProvider → event: 状态机 + token 重建
  │
- ├── pub fn provider_for_project(pool, pid)         (~50 行)
+ ├── pub fn provider_for_project(state, pid)         (~50 行)
  │    读 llm_providers 表 → 匹配 provider_type → 解密 key → 构造 impl
  │
  └── #[cfg(test)] mod tests                        (~100 行)
@@ -371,42 +371,45 @@ impl AnthropicProvider {
 
 ```rust
 /// 从 llm_providers 表为指定 project 构造 StreamChatProvider。
-/// 读 provider_type、endpoint、model、api_key_encrypted → 解密 key → 构造。
+/// 复用 get_llm_config(pool, pid) → LlmConfig(含 provider_type/base_url/加密 api_key)
+/// → decrypt_api_key(&config.api_key, &state.config) → 拼接各 provider 专属路径。
 pub async fn provider_for_project(
-    pool: &PgPool,
+    state: &AppState,
     project_id: i32,
 ) -> Result<Box<dyn StreamChatProvider>, AppError> {
-    // llm_providers 表有 project_id → 可配置每个 project 用哪个 provider
-    let row = sqlx::query!(
-        "SELECT provider_type, endpoint, model, api_key_encrypted
-         FROM llm_providers WHERE project_id = $1 LIMIT 1",
-        project_id
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::ResourceNotFound("LLM provider not configured for this project".into()))?;
+    let config = crate::services::llm::get_llm_config(&state.db, project_id).await?;
+    let api_key = crate::services::llm::decrypt_api_key(&config.api_key, &state.config)?;
+    let timeout = config.timeout_secs;            // 来自 DB/默认 120
+    let base = config.base_url.as_deref().unwrap_or("");
 
-    let config = crate::services::llm::get_llm_config(pool, project_id).await?;
-    let api_key = crate::services::llm::decrypt_api_key(
-        &row.api_key_encrypted,
-        config.jwt_secret,
-    ).map_err(|e| AppError::InternalError(e.to_string()))?;
-
-    match row.provider_type.as_deref() {
-        Some("openai") => Ok(Box::new(OpenAiProvider::new(
-            row.endpoint, api_key, row.model,
-            config.timeout_secs,  // 从 config 读（新增字段）
-        ))),
-        Some("anthropic") => Ok(Box::new(AnthropicProvider::new(
-            row.endpoint, api_key, row.model,
-            config.timeout_secs,
-        ))),
+    match config.provider_type.as_str() {
+        "openai" => {
+            let endpoint = if base.is_empty() {
+                "https://api.openai.com/v1/chat/completions".to_string()
+            } else {
+                format!("{}/chat/completions", base.trim_end_matches('/'))
+            };
+            Ok(Box::new(OpenAiProvider::new(endpoint, api_key, config.model, timeout)))
+        }
+        "anthropic" => {
+            let endpoint = if base.is_empty() {
+                "https://api.anthropic.com/v1/messages".to_string()
+            } else {
+                format!("{}/messages", base.trim_end_matches('/'))
+            };
+            Ok(Box::new(AnthropicProvider::new(endpoint, api_key, config.model, timeout)))
+        }
         other => Err(AppError::ValidationError(
             format!("Unsupported provider type: {:?}", other)
         )),
     }
 }
 ```
+
+设计要点：
+- **不重复查表**：`get_llm_config` 已查 `llm_providers` 表（provider_type / api_key / base_url / model / context_size），工厂**直接复用**而非再 `SELECT *`。
+- **base_url 拼接**：`LlmConfig.base_url` 存的是 provider 根 URL（如 `https://api.openai.com/v1`），工厂内部追加 `/chat/completions` 或 `/messages` 得到端点——避免数据库中存完整端点引入后续版本变更负担。
+- **decrypt_api_key 参数**：第二个参数是 `&AppConfig`，不是 `LlmConfig`（与 `llm.rs` 签名一致）。工厂需 `&AppState` 而非 `&PgPool` 以便拿到 `state.config`。
 
 ---
 
