@@ -191,9 +191,9 @@ async fn process_source_path(
             }
             analyses
         };
-        // global digest → 合并成统一分析 JSON
+        // global digest → 合并成统一分析 JSON（全 docs 合并为一个；键用 sha256(text)，不用 per-chunk 哈希）
         let merged = merge_analyses(&analyses);
-        // 缓存
+        // 缓存全文档分析结果
         cache_step1_result(state, &content_hash, &merged).await?;
         merged
     };
@@ -222,12 +222,12 @@ async fn process_source_path(
 /// 估算 token 数（粗糙：字符数 / 4，对齐桌面端 simple token estimator）。
 fn estimate_tokens(text: &str) -> usize { text.chars().count() / 4 }
 
-const MAX_CONTEXT_TOKENS: usize = 100_000;   // 对齐主流 LLM 上下文窗口
-
-/// 长文档分块：按段落边界（`\n\n`）拆，每 chunk ≤ MAX_CONTEXT_TOKENS。
-/// 若某段落 > MAX_CONTEXT_TOKENS，按句子边界（。.）硬拆。
-fn chunk_document(text: &str, max_tokens: usize) -> Vec<String> {
-    if estimate_tokens(text) <= max_tokens {
+/// 长文档分块：按段落边界（`\n\n`）拆，每 chunk ≤ context_budget。
+/// context_budget = LlmConfig.context_size - 8000（预留 8k tokens 给 prompt 开销），
+/// 由 run_ingest_job 从 get_llm_config 取出传入——不同 project/模型 chunk 比例自动调。
+/// 若某段落 > context_budget，按句子边界（。.）硬拆。
+fn chunk_document(text: &str, context_budget: usize) -> Vec<String> {
+    if estimate_tokens(text) <= context_budget {
         return vec![text.to_string()];
     }
     let paragraphs: Vec<&str> = text.split("\n\n").collect();
@@ -377,6 +377,8 @@ fn parse_single_block(path: &str, content: &str) -> ParsedBlock {
     ParsedBlock { path: path.into(), title, content: body, frontmatter, page_type, sources, images }
 }
 ```
+
+> **CommonMark code fence 感知**：桌面版 parseFileBlocks 处理了 FILE block 内部的 ``` 和 ~~~ 代码围栏——在代码块内时不会把 `---END FILE---` 误认为闭块符。Rust 移植时必须保留此逻辑，否则任何在 FILE block 内展示了 `---END FILE---` 字面值的输出都会被截断。
 
 > **差异 vs 桌面**：桌面版 parseFileBlocks 额外处理了 CommonMark 代码围栏兼容性（---END FILE--- 被围栏包裹时不关闭块）。MVP 移植时将对应逻辑也搬过来（约 30 行），但为精简设计不在此全写。
 
@@ -541,11 +543,13 @@ async fn rebuild_reserved_pages(state: &AppState, project_id: i32) -> Result<Vec
 
 ---
 
-## 11. 合并分析（多 chunk 场景）
+## 11. 多 chunk 合并分析（merge_analyses）
 
 ```rust
-/// 多 chunk 分析合并为统一 JSON。
-/// 策略：取第一个分析的 keys，merge 所有分析的实体/概念列表
+/// 多 chunk 的分析合并为一个 JSON。
+/// entities: 按 name 去重合并（同名 entity 只保留一个）
+/// connections: 合并且按 (from, to, relation) 去重
+/// contradictions: 直接 concat
 fn merge_analyses(analyses: &[serde_json::Value]) -> serde_json::Value {
     if analyses.len() == 1 { return analyses[0].clone(); }
     let mut merged = analyses[0].clone();
@@ -584,11 +588,15 @@ fn merge_analyses(analyses: &[serde_json::Value]) -> serde_json::Value {
 | `sha2` | ✅ (0.10) | content-hash 计算 |
 | `serde_yaml` | ❌ **需加** | FILE block 内的 frontmatter 解析（block content 是 Markdown + YAML header） |
 | `serde_json` | ✅ | 分析 JSON 构造/解析 |
+| `serde_yaml` | ❌ **需加** (0.9) | FILE block 内的 frontmatter 解析 |
 | `tokio` | ✅ | 文件异步读写 |
 | `sqlx` | ✅ | wiki_pages 写入 + ingested_files 查/写 |
 | `redis` | ✅ | 缓存 SET/GET |
+| `sha2` | ✅ (0.10) | content-hash 计算 |
 | `llm-wiki-parser`(A) | ❌ **A 未实现** | 解析调用——A 未就绪时留 stub |
 | `llm_stream`(B) | ❌ **B 未实现** | LLM 调用——B 未就绪时留 stub |
+
+> **include_str! 路径**：prompt 文件 `src-server/src/services/prompts/step1_analyze.txt` 和 `step2_generate.txt`，`include_str!("prompts/...")` 相对 `ingest_pipeline.rs` 所在目录（`src-server/src/services/`）。
 
 ### A/B stub 策略（同 C 的 D stub）
 
