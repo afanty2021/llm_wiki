@@ -1,5 +1,10 @@
 // services/ingest_pipeline.rs — ingest 编排 pipeline
 
+// ── Task 2 主流程 imports ──
+use crate::{AppError, AppState};
+use crate::services::ingest_queue::{self, IngestJob, IngestJobResult};
+use sqlx::Row;
+
 // ── 共用模型 ──
 
 #[derive(Debug, Clone)]
@@ -9,7 +14,6 @@ struct ParsedBlock {
     sources: serde_json::Value, images: serde_json::Value,
 }
 
-#[allow(dead_code)] // Task 2 才用此 struct
 #[derive(Debug, Clone)]
 struct WikiPageInsert {
     path: String, title: Option<String>, content: String,
@@ -165,6 +169,329 @@ fn replace_image_paths(text: &str, project_id: i32, images: &[(String, Vec<u8>)]
         result = result.replace(&old, &new);
     }
     result
+}
+
+// ── 缓存层（redis step1 结果缓存 + PG ingested_files 内容 hash 去重）──
+
+const CACHE_TTL: u64 = 7 * 24 * 3600;   // 7 天
+
+/// 命中缓存返回 step1 分析 JSON；miss / redis 故障 → None（容错，不致命）。
+async fn check_step1_cache(state: &AppState, content_hash: &str) -> Option<serde_json::Value> {
+    let mut redis = state.redis.get().await.ok()?;
+    let key = format!("ingest:cache:{}", content_hash);
+    let cached: Option<String> = redis::cmd("GET")
+        .arg(&key)
+        .query_async(&mut *redis)
+        .await
+        .ok()?;
+    cached.and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// 把 step1 分析结果序列化后写 redis，TTL 7 天。
+/// 注意：AppError 无 From<serde_json::Error>，必须 map_err；
+/// AppError 无 From<redis::RedisError>（只有 From<deadpool_redis::PoolError>），
+/// query_async 错误也必须 map_err 到 InternalError。
+async fn cache_step1_result(
+    state: &AppState,
+    content_hash: &str,
+    result: &serde_json::Value,
+) -> Result<(), AppError> {
+    let mut redis = state.redis.get().await.map_err(AppError::from)?;
+    let key = format!("ingest:cache:{}", content_hash);
+    let json = serde_json::to_string(result)
+        .map_err(|e| AppError::InternalError(format!("serialize cache: {}", e)))?;
+    let _: () = redis::cmd("SET")
+        .arg(&key)
+        .arg(&json)
+        .arg("EX")
+        .arg(CACHE_TTL)
+        .query_async(&mut *redis)
+        .await
+        .map_err(|e| AppError::InternalError(format!("redis SET: {}", e)))?;
+    Ok(())
+}
+
+struct IngestedFileStatus {
+    content_hash: String,
+    file_size: i64,
+}
+
+/// 查询文件是否已摄入。返回 None 表示未摄入或 DB 错误（容错，按未摄入处理）。
+async fn check_ingested_file(
+    state: &AppState,
+    project_id: i32,
+    original_path: &str,
+    _content_hash: &str,
+    _file_size: i64,
+) -> Option<IngestedFileStatus> {
+    let row = sqlx::query(
+        "SELECT content_hash, file_size FROM ingested_files \
+         WHERE project_id = $1 AND original_path = $2",
+    )
+    .bind(project_id)
+    .bind(original_path)
+    .fetch_optional(&state.db)
+    .await
+    .ok()??;
+    Some(IngestedFileStatus {
+        content_hash: row.get("content_hash"),
+        file_size: row.get("file_size"),
+    })
+}
+
+/// upsert ingested_files 记录（UNIQUE(project_id, original_path)）。
+async fn mark_file_ingested(
+    state: &AppState,
+    project_id: i32,
+    original_path: &str,
+    content_hash: &str,
+    file_size: i64,
+    file_type: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO ingested_files (project_id, original_path, content_hash, file_type, file_size) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (project_id, original_path) DO UPDATE SET \
+           content_hash = EXCLUDED.content_hash, file_type = EXCLUDED.file_type, \
+           file_size = EXCLUDED.file_size, ingested_at = NOW()",
+    )
+    .bind(project_id)
+    .bind(original_path)
+    .bind(content_hash)
+    .bind(file_type)
+    .bind(file_size)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+// ── 主流程（A/B stub 版）──
+
+/// ingest job 核心入口。A/B 未就绪前处理 .md 文件为纯文本（无 LLM）。
+pub async fn run_ingest_job(
+    state: &AppState,
+    job: &IngestJob,
+) -> Result<IngestJobResult, AppError> {
+    let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id = $1")
+        .bind(job.project_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::ResourceNotFound("project not found".into()))?;
+
+    let mut result = IngestJobResult {
+        new_pages: vec![],
+        updated_reserved: vec![],
+        warnings: vec![],
+    };
+
+    let total = job.source_paths.len();
+    for (i, sp) in job.source_paths.iter().enumerate() {
+        ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
+            .await?;
+
+        match process_source_path(state, job.project_id, team_id, sp).await {
+            Ok(pages) => {
+                for page in &pages {
+                    match upsert_wiki_page(state, job.project_id, page).await {
+                        Ok(path) => result.new_pages.push(path),
+                        Err(e) => result.warnings.push(format!("upsert {}: {}", sp, e)),
+                    }
+                }
+            }
+            Err(e) => result.warnings.push(format!("process {}: {}", sp, e)),
+        }
+
+        ingest_queue::update_job_stage(
+            state,
+            job.id,
+            "generating",
+            ((i + 1) * 100 / total.max(1)) as i32,
+        )
+        .await?;
+    }
+
+    // reserved 重建
+    ingest_queue::update_job_stage(state, job.id, "building_index", 100).await?;
+    match rebuild_reserved_pages(state, job.project_id).await {
+        Ok(reserved) => result.updated_reserved = reserved,
+        Err(e) => result.warnings.push(format!("reserved pages: {}", e)),
+    }
+
+    // 全部失败 → Err
+    if result.new_pages.is_empty()
+        && result.updated_reserved.is_empty()
+        && !result.warnings.is_empty()
+    {
+        return Err(AppError::LlmApiError(format!(
+            "all source_paths failed: {}",
+            result.warnings.join("; ")
+        )));
+    }
+
+    Ok(result)
+}
+
+/// 单 source_path 处理（A/B stub 版——.md 纯文本直接当 page 写）。
+async fn process_source_path(
+    state: &AppState,
+    project_id: i32,
+    team_id: i32,
+    source_path: &str,
+) -> Result<Vec<WikiPageInsert>, AppError> {
+    let storage_base = state.config.storage_path();
+    let full_path = crate::services::storage::project_base(storage_base, team_id, project_id)
+        .join(source_path);
+    let bytes = tokio::fs::read(&full_path).await.map_err(AppError::IoError)?;
+
+    // —— A stub: 当 .md 文件为纯文本 ——
+    // TODO: A 就绪后替换为 llm_wiki_parser::parse_bytes(source_path, &bytes)
+    let text = String::from_utf8(bytes)
+        .map_err(|e| AppError::IoError(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+
+    // 内容 hash 去重
+    use sha2::{Digest, Sha256};
+    let content_hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+    let file_size = text.len() as i64;
+    if let Some(existing) =
+        check_ingested_file(state, project_id, source_path, &content_hash, file_size).await
+    {
+        if existing.content_hash == content_hash && existing.file_size == file_size {
+            return Ok(vec![]); // 已摄入且内容未变，跳过
+        }
+    }
+
+    // —— B stub: 直接当纯文本 page，不做 LLM ——
+    // TODO: B 就绪后替换为 step1_cache → step1_analyze → step2_generate → parse_file_blocks
+    let title = text
+        .lines()
+        .next()
+        .and_then(|l| l.strip_prefix("# ").map(String::from));
+    let path = if source_path.ends_with(".md") {
+        source_path.to_string()
+    } else {
+        format!("{}.md", source_path)
+    };
+    let page = WikiPageInsert {
+        path,
+        title,
+        content: text,
+        frontmatter: serde_json::json!({}),
+        page_type: "concept".into(),
+        sources: serde_json::json!([]),
+        images: serde_json::json!([]),
+    };
+
+    mark_file_ingested(state, project_id, source_path, &content_hash, file_size, "md").await?;
+    Ok(vec![page])
+}
+
+/// upsert wiki_pages 记录（UNIQUE(project_id, path)）。
+async fn upsert_wiki_page(
+    state: &AppState,
+    project_id: i32,
+    page: &WikiPageInsert,
+) -> Result<String, AppError> {
+    sqlx::query(
+        "INSERT INTO wiki_pages (project_id, path, title, content, frontmatter, page_type, sources, images) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         ON CONFLICT (project_id, path) DO UPDATE SET \
+           title = EXCLUDED.title, content = EXCLUDED.content, \
+           frontmatter = EXCLUDED.frontmatter, page_type = EXCLUDED.page_type, \
+           sources = EXCLUDED.sources, images = EXCLUDED.images, updated_at = NOW()",
+    )
+    .bind(project_id)
+    .bind(&page.path)
+    .bind(&page.title)
+    .bind(&page.content)
+    .bind(&page.frontmatter)
+    .bind(&page.page_type)
+    .bind(&page.sources)
+    .bind(&page.images)
+    .execute(&state.db)
+    .await?;
+    Ok(page.path.clone())
+}
+
+/// 事务内全量重建 wiki/index.md / wiki/log.md / wiki/overview.md（路径必须带 wiki/ 前缀）。
+/// MVP: log.md 取最近 100 条。
+async fn rebuild_reserved_pages(
+    state: &AppState,
+    project_id: i32,
+) -> Result<Vec<String>, AppError> {
+    let mut tx = state.db.begin().await?;
+
+    // index.md——列出所有非 reserved 页面
+    let pages: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT path, title FROM wiki_pages WHERE project_id = $1 \
+         AND path NOT IN ('wiki/index.md','wiki/log.md','wiki/overview.md') ORDER BY path",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut index = "# Project Index\n\n".to_string();
+    for (path, title) in &pages {
+        let name = title.as_deref().unwrap_or(path);
+        index.push_str(&format!("- [{}]({})\n", name, path));
+    }
+
+    // log.md——最近 100 条摄入记录
+    let log_rows: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT original_path, ingested_at FROM ingested_files WHERE project_id = $1 \
+         ORDER BY ingested_at DESC LIMIT 100",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut log = "# Ingestion Log\n\n".to_string();
+    for (path, ts) in &log_rows {
+        log.push_str(&format!("- {}: {}\n", ts.format("%Y-%m-%d %H:%M"), path));
+    }
+
+    // overview.md——统计页数与类型分布
+    let page_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM wiki_pages WHERE project_id = $1 \
+         AND path NOT IN ('wiki/index.md','wiki/log.md','wiki/overview.md')",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let type_counts: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT page_type, count(*) AS cnt FROM wiki_pages WHERE project_id = $1 \
+         AND path NOT IN ('wiki/index.md','wiki/log.md','wiki/overview.md') GROUP BY page_type",
+    )
+    .bind(project_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut overview = format!("# Overview\n\n**Total pages:** {}\n\n", page_count);
+    for (t, c) in &type_counts {
+        overview.push_str(&format!("- {}: {}\n", t, c));
+    }
+
+    // Upsert 三条 reserved
+    for (path, content) in [
+        ("wiki/index.md", index),
+        ("wiki/log.md", log),
+        ("wiki/overview.md", overview),
+    ] {
+        sqlx::query(
+            "INSERT INTO wiki_pages (project_id, path, title, content, page_type) \
+             VALUES ($1, $2, $3, $4, 'system') \
+             ON CONFLICT (project_id, path) DO UPDATE SET title=$3, content=$4, updated_at=NOW()",
+        )
+        .bind(project_id)
+        .bind(path)
+        .bind(path)
+        .bind(content)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(vec![
+        "wiki/index.md".into(),
+        "wiki/log.md".into(),
+        "wiki/overview.md".into(),
+    ])
 }
 
 // ── 测试 ──
