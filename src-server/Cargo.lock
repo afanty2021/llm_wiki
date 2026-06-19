@@ -1551,6 +1551,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "async-stream",
+ "async-trait",
  "axum",
  "axum-test",
  "bcrypt",
