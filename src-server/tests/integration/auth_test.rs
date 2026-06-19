@@ -77,23 +77,20 @@ mod tests {
     #[tokio::test]
     async fn register_creates_personal_team_with_owner_membership() {
         let (app, state) = setup_test_app().await;
-        // 用唯一用户名保证可重复运行（测试共享 live DB，硬编码会二次冲突）
+        let server = axum_test::TestServer::new(app).unwrap();
+
+        // 唯一用户名保证可重复运行（测试共享 live DB）
         let username = format!("teamtest_{}", std::process::id());
         let body = serde_json::json!({
             "username": username,
             "email": format!("{}@t.com", username),
             "password": "password123"
         });
-        let response = app
-            .oneshot(Request::builder()
-                .method("POST")
-                .uri("/api/v1/auth/register")
-                .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap()))
-                .unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
+        let resp = server.post("/api/v1/auth/register")
+            .content_type("application/json")
+            .json(&body)
+            .await;
+        assert_eq!(resp.status_code(), axum::http::StatusCode::CREATED);
 
         // 查 teams：应有 1 行 created_by = 新用户
         let team: Option<(i32, String)> = sqlx::query_as(
