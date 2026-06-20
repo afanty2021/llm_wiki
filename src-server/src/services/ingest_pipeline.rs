@@ -21,6 +21,16 @@ struct WikiPageInsert {
     sources: serde_json::Value, images: serde_json::Value,
 }
 
+/// process_source_path 的产出：解析出的 pages + 用于 mark_file_ingested 的元数据。
+/// 元数据上浮到 run_ingest_job，确保只在 wiki_pages 成功落库后才标记文件已摄入
+/// （避免 mark 成功但 upsert 失败 → 下次因 hash 命中被永久跳过的漏页问题）。
+struct ProcessedSource {
+    pages: Vec<WikiPageInsert>,
+    content_hash: String,
+    file_size: i64,
+    file_type: String,
+}
+
 // ── 纯函数 ──
 
 /// 估算 token 数（粗糙：字符数 / 4，对齐桌面端 simple token estimator）。
@@ -356,11 +366,32 @@ pub async fn run_ingest_job(
             .await;
 
         match process_source_path(state, job.project_id, team_id, sp).await {
-            Ok(pages) => {
-                for page in &pages {
+            Ok(None) => {} // 内容未变，已跳过
+            Ok(Some(processed)) => {
+                let mut all_upserted = true;
+                for page in &processed.pages {
                     match upsert_wiki_page(state, job.project_id, page).await {
                         Ok(path) => result.new_pages.push(path),
-                        Err(e) => result.warnings.push(format!("upsert {}: {}", sp, e)),
+                        Err(e) => {
+                            result.warnings.push(format!("upsert {}: {}", sp, e));
+                            all_upserted = false;
+                        }
+                    }
+                }
+                // 仅在 wiki_pages 全部成功落库后才 mark_file_ingested（修复漏页问题：
+                // 若先 mark 后 upsert 失败，下次因 hash 命中会跳过，造成永久漏页）。
+                if all_upserted {
+                    if let Err(e) = mark_file_ingested(
+                        state,
+                        job.project_id,
+                        sp,
+                        &processed.content_hash,
+                        processed.file_size,
+                        &processed.file_type,
+                    )
+                    .await
+                    {
+                        result.warnings.push(format!("mark ingested {}: {}", sp, e));
                     }
                 }
             }
@@ -397,13 +428,14 @@ pub async fn run_ingest_job(
     Ok(result)
 }
 
-/// 单 source_path 处理（A/B stub 版——.md 纯文本直接当 page 写）。
+/// 单 source_path 处理：A（llm-wiki-parser 全格式解析）+ B（两步 LLM 生成 wiki pages）。
+/// 返回 Some(ProcessedSource) 表示需落库；返回 None 表示内容未变已跳过（不再重复 mark）。
 async fn process_source_path(
     state: &AppState,
     project_id: i32,
     team_id: i32,
     source_path: &str,
-) -> Result<Vec<WikiPageInsert>, AppError> {
+) -> Result<Option<ProcessedSource>, AppError> {
     let storage_base = state.config.storage_path();
     let full_path = crate::services::storage::project_base(storage_base, team_id, project_id)
         .join(source_path);
@@ -412,6 +444,7 @@ async fn process_source_path(
     // —— A: 用 llm-wiki-parser 解析文档（按扩展名 dispatch pdf/docx/xlsx/pptx/.md）——
     let parsed = llm_wiki_parser::parse_bytes(source_path, &bytes)
         .map_err(|e| AppError::InternalError(format!("parse {}: {}", source_path, e)))?;
+    let file_type = parsed.meta.file_type.clone();
     let text = parsed.text;
     // parsed.images 暂不处理（保留后续扩展）
 
@@ -423,7 +456,7 @@ async fn process_source_path(
         check_ingested_file(state, project_id, source_path, &content_hash, file_size).await
     {
         if existing.content_hash == content_hash && existing.file_size == file_size {
-            return Ok(vec![]); // 已摄入且内容未变，跳过
+            return Ok(None); // 已摄入且内容未变，跳过（不再重复 mark）
         }
     }
 
@@ -465,8 +498,9 @@ async fn process_source_path(
         })
         .collect();
 
-    mark_file_ingested(state, project_id, source_path, &content_hash, file_size, "md").await?;
-    Ok(pages)
+    // 不在此 mark_file_ingested：content_hash/file_size/file_type 上浮给 run_ingest_job，
+    // 待 wiki_pages 成功落库后再 mark（避免 mark 成功但 upsert 失败 → 下次因 hash 命中被永久跳过的漏页问题）。
+    Ok(Some(ProcessedSource { pages, content_hash, file_size, file_type }))
 }
 
 /// upsert wiki_pages 记录（UNIQUE(project_id, path)）。

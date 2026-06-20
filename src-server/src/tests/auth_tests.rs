@@ -272,8 +272,14 @@ mod auth_tests {
         let password = "my_secret";
         let hash = hash_password(password).unwrap();
 
-        // Corrupt the hash by changing some characters
-        let tampered = hash.replace("a", "b");
+        // Corrupt the hash deterministically. 不可用 `hash.replace("a","b")`——
+        // bcrypt 哈希是随机盐的 base64 串，约 39% 概率不含 'a'，此时 replace 是 no-op，
+        // 哈希未变 → verify 返回 Ok(true) → 断言偶发失败（flaky）。
+        // 改为翻转末位 hash 字符到保证不同的 bcrypt-base64 字符。
+        let mut bytes = hash.into_bytes();
+        let last = bytes.len() - 1;
+        bytes[last] = if bytes[last] == b'a' { b'b' } else { b'a' };
+        let tampered = String::from_utf8(bytes).unwrap();
         let result = verify_password(password, &tampered);
         match result {
             Ok(verified) => assert!(!verified, "Tampered hash should not verify as true"),
