@@ -19,5 +19,11 @@
   "cors": {
     "allowed_origins": ["http://localhost:1420", "http://localhost:5173"]
   },
+  "embedding": {
+    "base_url": "http://localhost:8001/v1",
+    "model": "bge-m3-mlx-fp16",
+    "dim": 1024,
+    "timeout_secs": 60
+  },
   "llm_timeout_secs": 120
 }

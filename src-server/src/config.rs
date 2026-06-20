@@ -53,6 +53,14 @@ pub struct CorsConfig {
     pub allowed_origins: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingConfig {
+    pub base_url: String,
+    pub model: String,
+    pub dim: usize,
+    pub timeout_secs: u64,
+}
+
 fn default_allowed_origins() -> Vec<String> {
     vec!["http://localhost:1420".to_string()]
 }
@@ -65,6 +73,7 @@ pub struct AppConfig {
     pub jwt: JwtConfig,
     pub storage: StorageConfig,
     pub cors: CorsConfig,
+    pub embedding: Option<EmbeddingConfig>,
 }
 
 impl AppConfig {
@@ -171,5 +180,29 @@ mod tests {
         let origins = default_allowed_origins();
         assert_eq!(origins.len(), 1);
         assert_eq!(origins[0], "http://localhost:1420");
+    }
+
+    #[test]
+    fn test_embedding_config_loaded() {
+        // config/default.json 含 embedding 段；cargo test cwd = src-server
+        let cfg = AppConfig::from_env().expect("from_env");
+        let emb = cfg.embedding.expect("embedding should be configured in default.json");
+        assert_eq!(emb.model, "bge-m3-mlx-fp16");
+        assert_eq!(emb.dim, 1024);
+    }
+
+    #[test]
+    fn test_embedding_config_optional_when_absent() {
+        // 构造无 embedding 段的最小 JSON，确认 Option → None（serde 默认行为）
+        let json = r#"{
+            "server": {"host": "0.0.0.0", "port": 8080},
+            "database": {"url": "postgres://x", "max_connections": 1},
+            "redis_url": "redis://x",
+            "jwt": {"secret": "test_secret_for_development_32bytes!"},
+            "storage": {"path": "/tmp/x"},
+            "cors": {"allowed_origins": ["http://localhost"]}
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.embedding.is_none());
     }
 }
