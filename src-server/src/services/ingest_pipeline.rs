@@ -409,10 +409,11 @@ async fn process_source_path(
         .join(source_path);
     let bytes = tokio::fs::read(&full_path).await.map_err(AppError::IoError)?;
 
-    // —— A stub: 当 .md 文件为纯文本 ——
-    // TODO: A 就绪后替换为 llm_wiki_parser::parse_bytes(source_path, &bytes)
-    let text = String::from_utf8(bytes)
-        .map_err(|e| AppError::IoError(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+    // —— A: 用 llm-wiki-parser 解析文档（按扩展名 dispatch pdf/docx/xlsx/pptx/.md）——
+    let parsed = llm_wiki_parser::parse_bytes(source_path, &bytes)
+        .map_err(|e| AppError::InternalError(format!("parse {}: {}", source_path, e)))?;
+    let text = parsed.text;
+    // parsed.images 暂不处理（保留后续扩展）
 
     // 内容 hash 去重
     use sha2::{Digest, Sha256};
