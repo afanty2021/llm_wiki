@@ -2,7 +2,8 @@
 // 纯函数接口：parse_bytes(filename, &[u8]) → ParsedDoc。
 // 零文件系统依赖、零 Tauri 绑定。
 
-mod parser;  // mod image_utils; 在 Task 4 添加
+mod parser;
+mod image_utils;
 
 pub use parser::ParsedDoc;
 pub use parser::ParseError;
