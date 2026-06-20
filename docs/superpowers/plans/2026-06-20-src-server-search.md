@@ -14,7 +14,7 @@
 
 ## 前置条件
 
-- **2a（embedding 管线）已实现**：`embedding::embed_query(cfg, client, text)`、`embedding::vector_search(pool, project_id, qvec, limit) -> Vec<VectorSearchResult{path,title,snippet,score}>`、`AppState.http: reqwest::Client`、`AppConfig.embedding: Option<EmbeddingConfig>` 均就绪。本 plan 引用这些，若 2a 未完成则 Task 7 编译失败。
+- **2a（embedding 管线）须先完成**（当前仅 spec+plan、**未实现**）。2a 完成后将提供：`embedding::embed_query(cfg, client, text)`、`embedding::vector_search(pool, project_id, qvec, limit) -> Vec<VectorSearchResult{path,title,snippet,score}>`、`AppState.http: reqwest::Client`、`AppConfig.embedding: Option<EmbeddingConfig>`。本 plan 引用这些接口，**2a 未完成则 Task 6/7/8 无法编译**——执行顺序：先 2a 实现计划（`docs/superpowers/plans/2026-06-20-src-server-embedding-pipeline.md`），再本 plan。
 - PG（docker `src-server-postgres-1` @ 5433）、omlx（@ 8001 bge-m3）在跑。
 - 集成测试需 `#[ignore]` + `cargo test -- --ignored`（沿用 2a 模式）。
 - 现状：`services/search.rs` 有 `search_wiki`（keyword ILIKE）+ 旧 `SearchResult`；`routes/search.rs` 有 `search_handler` + `vector_search_handler`（`/search` + `/search/vector`）。本 plan 重写两者。
@@ -414,6 +414,18 @@ Expected: 编译失败（`score_page` 未定义）。
 在 `build_snippet` 之后追加：
 
 ```rust
+/// snippet 锚点选择（score_page 与 vector-only 物化共用，保证一致）：
+/// 短语命中→query_phrase；否则首个出现在 content 的 token；否则 query_phrase 回退。
+fn pick_snippet_anchor(content: &str, tokens: &[String], query_phrase: &str) -> String {
+    let content_lower = content.to_lowercase();
+    if !query_phrase.is_empty() && content_lower.contains(query_phrase) {
+        query_phrase.to_string()
+    } else {
+        tokens.iter().find(|t| content_lower.contains(t.as_str())).cloned()
+            .unwrap_or_else(|| query_phrase.to_string())
+    }
+}
+
 /// 关键词打分（移植桌面 score_file，服务端：stem 来自 path、title 来自参数）。
 /// 五信号全 0 → None（不进 token_rank，避免稀释 RRF）。
 fn score_page(
@@ -447,14 +459,7 @@ fn score_page(
         + title_token_score as f64 * TITLE_TOKEN_WEIGHT
         + content_token_score as f64 * CONTENT_TOKEN_WEIGHT;
 
-    // snippet anchor：短语命中→query_phrase；否则首个出现在 content 的 token；否则 query_phrase 回退
-    let anchor = if content_phrase_occ > 0 {
-        query_phrase.to_string()
-    } else {
-        tokens.iter().find(|t| content_lower.contains(t.as_str())).cloned()
-            .unwrap_or_else(|| query_phrase.to_string())
-    };
-    let snippet = build_snippet(content, &anchor);
+    let snippet = build_snippet(content, &pick_snippet_anchor(content, tokens, query_phrase));
     let images = extract_image_refs(content);
 
     Some(ScoredPage {
@@ -788,7 +793,7 @@ pub async fn hybrid_search(
                     for vr in &vres {
                         if known.contains(&vr.path) { continue; }
                         if let Some((title, content)) = fetch_page_title_content(pool, project_id, &vr.path).await? {
-                            let anchor = if query_phrase.is_empty() { query.to_string() } else { query_phrase.clone() };
+                            let anchor = pick_snippet_anchor(&content, &effective_tokens, &query_phrase);
                             results.push(SearchResult {
                                 path: vr.path.clone(), title, snippet: build_snippet(&content, &anchor),
                                 title_match: false, score: 0.0, vector_score: Some(vr.score as f64),
