@@ -98,7 +98,8 @@ pub struct EmbeddingConfig {
     pub timeout_secs: u64,  // 60
 }
 // AppConfig 增加：pub embedding: Option<EmbeddingConfig>
-// None → embed_and_store / embed_page / delete_embedding 全部 no-op（启动时 log 一次 "embedding disabled"）
+// None → embed_and_store / embed_page no-op（启动时 log 一次 "embedding disabled"）
+// delete_embedding 始终生效（纯幂等 SQL DELETE，与 embedding 配置无关，需能清理旧向量）
 ```
 
 `config/default.json` 仍写入 embedding 段（dev 默认启用）；生产/CI 若不配则自动禁用。
@@ -129,6 +130,7 @@ pub async fn embed_page(
 ) -> Result<(), AppError>;
 
 /// 删页向量（pages CRUD 的 delete 用；update 时 content 变 None 也用）。
+/// 不接收 cfg——纯幂等 SQL DELETE，与 embedding 配置无关、始终生效（便于清理积攒的旧向量）。
 pub async fn delete_embedding(pool: &PgPool, project_id: i32, path: &str)
     -> Result<(), AppError>;
 ```
@@ -145,11 +147,11 @@ ON CONFLICT (project_id, wiki_page_id) DO UPDATE SET content = EXCLUDED.content;
 
 ### 5.3 `services/ingest_pipeline.rs`
 
-在 `run_ingest_job` 中：upsert 循环收集 source 页的 `(path, content)`；`rebuild_reserved_pages` 执行后，把 reserved 页（index/log/overview，取其落库后的 content）也并入；最后**统一一次** `embed_and_store`：
+在 `run_ingest_job` 中：upsert 循环收集 source 页的 `(path, content)`；`rebuild_reserved_pages` 改为返回 `Vec<(path, content)>`（reserved 内容本就在函数体内逐条构造，带上零额外成本，避免 rebuild 后再回查 DB），其结果直接并入 `collected`；最后**统一一次** `embed_and_store`：
 
 ```rust
-// rebuild_reserved 之后
-collected.extend(reserved_pages_with_content);  // reserved 也纳入
+// rebuild_reserved 之后（rebuild_reserved_pages 现返回 Vec<(path, content)>）
+collected.extend(reserved_pages);  // reserved 也纳入
 if !collected.is_empty() {
     if let Err(e) = embedding::embed_and_store(
         &state.db, state.config.embedding.as_ref(), &state.http, job.project_id, &collected,
@@ -188,7 +190,7 @@ embedding 失败**只 log warning，不阻断页面写入**（页面是真源、
 
 ## 6. 错误处理与幂等
 
-- **配置缺失**：`AppConfig.embedding == None` → 所有 embed 调用 no-op（启动时 log 一次 "embedding disabled"）。server 正常起、wiki 正常写，仅无向量搜索。
+- **配置缺失**：`AppConfig.embedding == None` → 嵌入调用（`embed_and_store`/`embed_page`）no-op（启动时 log 一次 "embedding disabled"）；`delete_embedding` 仍生效（与配置无关）。server 正常起、wiki 正常写，仅无向量搜索。
 - **非致命**：embedding 失败（omlx 挂、超时、返回异常、维度不符）→
   - ingest：`result.warnings.push`，job 仍 `succeeded`。
   - pages：log warning，页面写入成功。
@@ -207,7 +209,7 @@ embedding 失败**只 log warning，不阻断页面写入**（页面是真源、
   - `embed_batch`：mock `/v1/embeddings` 响应，断言返回 `texts.len()` 条、每条 `dim` 维；返回维度不符时报错。
   - bulk upsert：`embed_and_store` 两次同一批 → 行数不翻倍（ON CONFLICT）。
   - 配置缺失：`cfg=None` → no-op，不发起 HTTP。
-- **集成**（**`#[ignore]`，需 omlx bge-m3 本地运行**，复用 pdfium 测试的既有 `--ignored` 模式）：
+- **集成**（**`#[ignore]`，需 omlx bge-m3 本地运行**——首次在 src-server 引入 `#[ignore]`；pdfium 的 `--ignored` 先例在 src-tauri 桌面端、不跨 crate 复用，但同模式）：
   - ingest 一个文档 → 断言 `embeddings` 表按页填充（source 页 + reserved 页，每页一行、`vector_dims(content)=1024`）。
   - `vector_search("Alice 在哪工作")` 召回 `entities/alice.md`。
 - **pages 维护**（单元 + 集成）：create(有content)→embedding 出现；update content→None→embedding 消失；delete→embedding 消失。
@@ -255,4 +257,12 @@ embedding 失败**只 log warning，不阻断页面写入**（页面是真源、
 | 4 | bulk upsert 需 pgvector::Vector 包装 | §5.2 补实现说明 |
 | 5 | reqwest::Client 每次 new | 共享 Client 注入 AppState（§5.1/§5.2/§5.3） |
 | 6 | wiki_page_id 列名存 path | 不重命名，注释说明（§8） |
-| 7 | 集成测试依赖 omlx | `#[ignore]` + pdfium 既有模式（§7） |
+| 7 | 集成测试依赖 omlx | `#[ignore]`（§7） |
+
+### 复查 round 2（2026-06-20）
+
+| # | 复查问题 | 落实 |
+|---|---------|------|
+| 8 | delete_embedding 不该 no-op（签名无 cfg） | no-op 仅限 embed_and_store/embed_page；delete 始终生效（§5.1/§5.2/§6） |
+| 9 | rebuild_reserved_pages 返回 Vec<String> 不含 content | 改返回 `Vec<(path, content)>`，零额外成本（§5.3） |
+| 10 | `#[ignore]` src-server 无先例 | 措辞改为"首次引入"，不谎称复用（§7） |
