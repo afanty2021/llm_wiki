@@ -233,6 +233,39 @@ fn score_page(
     })
 }
 
+/// RRF 融合：rrf = Σ 1/(RRF_K + rank)。token_rank/vector_rank 的 key 均为**全路径**，
+/// rank **1-indexed**（最高分 rank=1）。保留 vector_score。
+fn apply_rrf(
+    results: &mut [SearchResult],
+    token_rank: &HashMap<String, usize>,
+    vector_rank: &HashMap<String, usize>,
+    vector_score: &HashMap<String, f64>,
+) {
+    for r in results.iter_mut() {
+        let mut rrf = 0.0;
+        if let Some(rank) = token_rank.get(&r.path).copied() {
+            rrf += 1.0 / (RRF_K + rank as f64);
+        }
+        if let Some(rank) = vector_rank.get(&r.path).copied() {
+            rrf += 1.0 / (RRF_K + rank as f64);
+        }
+        if let Some(s) = vector_score.get(&r.path).copied() {
+            r.vector_score = Some(s);
+        }
+        r.score = rrf;
+    }
+}
+
+fn search_mode(token_rank_empty: bool, vector_hits: usize) -> &'static str {
+    if vector_hits == 0 {
+        "keyword"
+    } else if token_rank_empty {
+        "vector"
+    } else {
+        "hybrid"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +372,43 @@ mod tests {
     #[test]
     fn score_page_no_signal_returns_none() {
         assert!(score_page("wiki/x.md", "X", "nothing relevant", &["zzz".into()], "zzz").is_none());
+    }
+
+    #[test]
+    fn apply_rrf_uses_full_path_keys_and_1_indexed_rank() {
+        let mut results = vec![
+            SearchResult { path: "wiki/both.md".into(), title: "B".into(), snippet: "".into(), title_match: false, score: 0.0, vector_score: None, images: vec![] },
+            SearchResult { path: "wiki/token-only.md".into(), title: "T".into(), snippet: "".into(), title_match: false, score: 0.0, vector_score: None, images: vec![] },
+            SearchResult { path: "wiki/vector-only.md".into(), title: "V".into(), snippet: "".into(), title_match: false, score: 0.0, vector_score: None, images: vec![] },
+        ];
+        let token_rank = HashMap::from([
+            ("wiki/both.md".to_string(), 1),
+            ("wiki/token-only.md".to_string(), 2),
+        ]);
+        // 全路径 key（不是 stem）——关键差异点
+        let vector_rank = HashMap::from([
+            ("wiki/both.md".to_string(), 1),
+            ("wiki/vector-only.md".to_string(), 2),
+        ]);
+        let vector_score = HashMap::from([
+            ("wiki/both.md".to_string(), 0.95),
+            ("wiki/vector-only.md".to_string(), 0.8),
+        ]);
+        apply_rrf(&mut results, &token_rank, &vector_rank, &vector_score);
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        // both 双命中 → 最高；rrf = 1/61 + 1/61
+        assert_eq!(results[0].path, "wiki/both.md");
+        assert!((results[0].score - (1.0 / 61.0 + 1.0 / 61.0)).abs() < 1e-6, "got {}", results[0].score);
+        assert_eq!(results[0].vector_score, Some(0.95));
+        // token-only / vector-only 各单命中 rank=2 → 1/62
+        assert!((results[1].score - 1.0 / 62.0).abs() < 1e-6);
+        assert!((results[2].score - 1.0 / 62.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn search_mode_three_states() {
+        assert_eq!(search_mode(false, 0), "keyword");
+        assert_eq!(search_mode(true, 3), "vector");
+        assert_eq!(search_mode(false, 3), "hybrid");
     }
 }
