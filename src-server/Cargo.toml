@@ -70,6 +70,7 @@ regex-lite = "0.1"
 # 文档解析（复用 Tauri 后端 crate）
 docx-rs = "0.4"
 calamine = "0.35"
+llm-wiki-parser = { path = "../crates/llm-wiki-parser" }
 
 [dev-dependencies]
 axum-test = "15"
