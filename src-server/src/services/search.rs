@@ -266,6 +266,78 @@ fn search_mode(token_rank_empty: bool, vector_hits: usize) -> &'static str {
     }
 }
 
+/// SQL ILIKE 候选拉取：title/content 命中任一 token；phrase 非空时额外 OR content ILIKE phrase。
+/// phrase 为空时不追加（防 ILIKE '%%' 全表扫描）。
+async fn fetch_keyword_candidates(
+    pool: &PgPool,
+    project_id: i32,
+    tokens: &[String],
+    phrase: &str,
+) -> Result<Vec<Candidate>, AppError> {
+    use sqlx::Row;
+    if tokens.is_empty() && phrase.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conditions: Vec<String> = Vec::new();
+    for (i, _) in tokens.iter().enumerate() {
+        let idx = i + 2; // $1 = project_id, $2.. = tokens
+        conditions.push(format!(
+            "(title ILIKE '%' || ${idx} || '%' OR content ILIKE '%' || ${idx} || '%')"
+        ));
+    }
+    let mut next_idx = tokens.len() + 2;
+    if !phrase.is_empty() {
+        conditions.push(format!("(content ILIKE '%' || ${next_idx} || '%')"));
+        next_idx += 1;
+    }
+    let _ = next_idx; // 占位，防 unused（phrase 分支用完）
+    let where_clause = conditions.join(" OR ");
+    let sql = format!(
+        "SELECT path, COALESCE(title,'') AS title, COALESCE(content,'') AS content \
+         FROM wiki_pages WHERE project_id = $1 AND ({where_clause}) LIMIT 500",
+        where_clause = where_clause,
+    );
+    let mut q = sqlx::query(&sql).bind(project_id);
+    for t in tokens {
+        q = q.bind(t);
+    }
+    if !phrase.is_empty() {
+        q = q.bind(phrase);
+    }
+    let rows = q
+        .fetch_all(pool)
+        .await
+        .map_err(AppError::DatabaseError)?;
+    let out = rows
+        .into_iter()
+        .map(|r| Candidate {
+            path: r.get("path"),
+            title: r.get("title"),
+            content: r.get("content"),
+        })
+        .collect();
+    Ok(out)
+}
+
+/// vector-only 物化：按 path 查 title + content（images 由调用方 extract_image_refs 解析）。
+async fn fetch_page_title_content(
+    pool: &PgPool,
+    project_id: i32,
+    path: &str,
+) -> Result<Option<(String, String)>, AppError> {
+    use sqlx::Row;
+    let row = sqlx::query(
+        "SELECT COALESCE(title,'') AS title, COALESCE(content,'') AS content \
+         FROM wiki_pages WHERE project_id = $1 AND path = $2",
+    )
+    .bind(project_id)
+    .bind(path)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::DatabaseError)?;
+    Ok(row.map(|r| (r.get("title"), r.get("content"))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
