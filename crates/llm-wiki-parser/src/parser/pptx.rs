@@ -21,7 +21,8 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedDoc, ParseError> {
                 f.read_to_string(&mut xml)
                     .map_err(|e| ParseError::Io(e.to_string()))?;
 
-                let slide_started = !text.is_empty();
+                // 每 slide 独立 flag：不依赖全局 text 状态，避免 slide 2..N 标题丢失。
+                let mut slide_title_written = false;
                 for seg in xml.split("<a:p>") {
                     let mut line = String::new();
                     for part in seg.split("<a:t>") {
@@ -30,14 +31,15 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedDoc, ParseError> {
                         }
                     }
                     if !line.is_empty() {
-                        if !slide_started && text.is_empty() {
+                        if !slide_title_written {
                             text.push_str(&format!("# Slide {}\n\n", i));
+                            slide_title_written = true;
                         }
                         text.push_str(&line);
                         text.push('\n');
                     }
                 }
-                if !text.is_empty() {
+                if slide_title_written {
                     text.push('\n');
                 }
             }
@@ -86,5 +88,39 @@ mod tests {
             "expected empty text for empty pptx, got {:?}",
             doc.text
         );
+    }
+
+    #[test]
+    fn pptx_multi_slides_each_gets_title() {
+        // 锁固 Fix 1：slide 2..N 标题不应丢失。每个 slide 都应有 `# Slide N`。
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        // slide1
+        zip.start_file("ppt/slides/slide1.xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?>
+<p:sld xmlns:a="a"><p:sp><a:t>Slide One</a:t></p:sp></p:sld>"#)
+            .unwrap();
+        // slide2
+        zip.start_file("ppt/slides/slide2.xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?>
+<p:sld xmlns:a="a"><p:sp><a:t>Slide Two</a:t></p:sp></p:sld>"#)
+            .unwrap();
+        let cursor = zip.finish().unwrap();
+        let bytes = cursor.into_inner();
+
+        let doc = parse(&bytes).unwrap();
+        assert!(
+            doc.text.contains("# Slide 1"),
+            "slide 1 title missing: {}",
+            doc.text
+        );
+        assert!(
+            doc.text.contains("# Slide 2"),
+            "slide 2 title missing: {}",
+            doc.text
+        );
+        assert!(doc.text.contains("Slide One"));
+        assert!(doc.text.contains("Slide Two"));
     }
 }

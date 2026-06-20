@@ -23,10 +23,18 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedDoc, ParseError> {
             Ok(r) => r,
             Err(_) => continue,
         };
+        // 空 sheet 跳过：避免产生孤立的 `# SheetName` 标题无表格。
+        if range.is_empty() {
+            continue;
+        }
         text.push_str(&format!("# {}\n\n", sheet_name));
         for (ri, row) in range.rows().enumerate() {
             // calamine Data impl Display（Empty variant 输出空串），直接 to_string。
-            let cells: Vec<String> = row.iter().map(|c| c.to_string()).collect();
+            // 转义 `|` 防止破坏 Markdown 表格列数；换行替换为空格防止断行。
+            let cells: Vec<String> = row
+                .iter()
+                .map(|c| c.to_string().replace('|', "\\|").replace('\n', " "))
+                .collect();
             text.push_str(&format!("| {} |\n", cells.join(" | ")));
             if ri == 0 {
                 let sep: Vec<&str> = cells.iter().map(|_| "---").collect();
