@@ -86,6 +86,44 @@ pub async fn embed_and_store(
     Ok(rows as usize)
 }
 
+/// 单页嵌入（pages CRUD create/update 用，content 非空时）。
+pub async fn embed_page(
+    pool: &sqlx::PgPool,
+    cfg: Option<&EmbeddingConfig>,
+    client: &reqwest::Client,
+    project_id: i32,
+    path: &str,
+    text: &str,
+) -> Result<(), AppError> {
+    embed_and_store(pool, cfg, client, project_id, &[(path.to_string(), text.to_string())])
+        .await
+        .map(|_| ())
+}
+
+/// 单条文本嵌入（/search/vector 查询侧用）。返回 dim 维向量。
+pub async fn embed_query(
+    cfg: &EmbeddingConfig,
+    client: &reqwest::Client,
+    text: &str,
+) -> Result<Vec<f32>, AppError> {
+    let mut vecs = embed_batch(cfg, client, &[text.to_string()]).await?;
+    vecs.pop().ok_or_else(|| AppError::LlmApiError("embed_query: empty response".into()))
+}
+
+/// 删页向量。不接收 cfg——纯幂等 SQL DELETE，与 embedding 配置无关、始终生效。
+pub async fn delete_embedding(
+    pool: &sqlx::PgPool,
+    project_id: i32,
+    path: &str,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
+        .bind(project_id)
+        .bind(path)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct VectorSearchResult {
     pub path: String,

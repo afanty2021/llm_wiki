@@ -50,3 +50,24 @@ async fn embed_and_store_noop_when_cfg_none() {
     let n = embedding::embed_and_store(&pool, None, &client, 249, &[("x.md".into(), "x".into())]).await.unwrap();
     assert_eq!(n, 0);
 }
+
+#[tokio::test]
+#[ignore = "requires PG + omlx"]
+async fn embed_page_then_delete() {
+    let (pool, cfg, client) = setup().await;
+    let emb_cfg = cfg.embedding.as_ref().unwrap();
+    let pid = 249i32;
+    let path = "wiki/test-single.md";
+    sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
+        .bind(pid).bind(path).execute(&pool).await.unwrap();
+
+    embedding::embed_page(&pool, Some(emb_cfg), &client, pid, path, "single page text").await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
+        .bind(pid).bind(path).fetch_one(&pool).await.unwrap();
+    assert_eq!(count, 1);
+
+    embedding::delete_embedding(&pool, pid, path).await.unwrap();
+    let count2: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
+        .bind(pid).bind(path).fetch_one(&pool).await.unwrap();
+    assert_eq!(count2, 0);
+}
