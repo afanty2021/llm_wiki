@@ -175,6 +175,64 @@ pub fn build_snippet(content: &str, query: &str) -> String {
     snippet
 }
 
+/// snippet 锚点选择（score_page 与 vector-only 物化共用，保证一致）：
+/// 短语命中→query_phrase；否则首个出现在 content 的 token；否则 query_phrase 回退。
+fn pick_snippet_anchor(content: &str, tokens: &[String], query_phrase: &str) -> String {
+    let content_lower = content.to_lowercase();
+    if !query_phrase.is_empty() && content_lower.contains(query_phrase) {
+        query_phrase.to_string()
+    } else {
+        tokens.iter().find(|t| content_lower.contains(t.as_str())).cloned()
+            .unwrap_or_else(|| query_phrase.to_string())
+    }
+}
+
+/// 关键词打分（移植桌面 score_file，服务端：stem 来自 path、title 来自参数）。
+/// 五信号全 0 → None（不进 token_rank，避免稀释 RRF）。
+fn score_page(
+    path: &str,
+    title: &str,
+    content: &str,
+    tokens: &[String],
+    query_phrase: &str,
+) -> Option<ScoredPage> {
+    let last_segment = path.rsplit('/').next().unwrap_or(path); // e.g. "attention.md"
+    let stem = last_segment.trim_end_matches(".md").to_lowercase();
+    let title_text = format!("{title} {last_segment}");
+    let title_lower = title_text.to_lowercase();
+    let content_lower = content.to_lowercase();
+
+    let filename_exact = !query_phrase.is_empty() && stem == query_phrase;
+    let title_has_phrase = !query_phrase.is_empty() && title_lower.contains(query_phrase);
+    let content_phrase_occ = count_occurrences(&content_lower, query_phrase).min(MAX_PHRASE_OCC_COUNTED);
+    let title_token_score = token_match_score(&title_text, tokens);
+    let content_token_score = token_match_score(content, tokens);
+
+    if !filename_exact && !title_has_phrase && content_phrase_occ == 0
+        && title_token_score == 0 && content_token_score == 0
+    {
+        return None;
+    }
+
+    let score = (if filename_exact { FILENAME_EXACT_BONUS } else { 0.0 })
+        + (if title_has_phrase { PHRASE_IN_TITLE_BONUS } else { 0.0 })
+        + content_phrase_occ as f64 * PHRASE_IN_CONTENT_PER_OCC
+        + title_token_score as f64 * TITLE_TOKEN_WEIGHT
+        + content_token_score as f64 * CONTENT_TOKEN_WEIGHT;
+
+    let snippet = build_snippet(content, &pick_snippet_anchor(content, tokens, query_phrase));
+    let images = extract_image_refs(content);
+
+    Some(ScoredPage {
+        path: path.to_string(),
+        title: title.to_string(),
+        snippet,
+        score,
+        title_match: title_token_score > 0 || title_has_phrase,
+        images,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +314,30 @@ mod tests {
         let content = format!("{}query{}", "中".repeat(100), "中".repeat(100));
         let s = build_snippet(&content, "query");
         assert!(s.contains("query"), "snippet 应含 query: {}", s);
+    }
+
+    #[test]
+    fn score_page_filename_exact_beats_content_only() {
+        let tokens = vec!["attention".to_string()];
+        let phrase = "attention";
+        let exact = score_page("wiki/concepts/attention.md", "Attention", "body about attention", &tokens, phrase).unwrap();
+        let content_only = score_page("wiki/concepts/random.md", "Random", "attention is mentioned briefly", &tokens, phrase).unwrap();
+        assert!(exact.score > content_only.score, "exact {} should > content-only {}", exact.score, content_only.score);
+        assert!(exact.score >= FILENAME_EXACT_BONUS);
+        assert!(exact.title_match);
+    }
+
+    #[test]
+    fn score_page_phrase_in_content_beats_scattered_tokens() {
+        let tokens = vec!["vector".to_string(), "database".to_string()];
+        let phrase = "vector database";
+        let together = score_page("wiki/p/phrase.md", "Phrase", "The phrase vector database appears together.", &tokens, phrase).unwrap();
+        let scattered = score_page("wiki/p/scattered.md", "Scattered", "vector appears here. database appears later.", &tokens, phrase).unwrap();
+        assert!(together.score > scattered.score);
+    }
+
+    #[test]
+    fn score_page_no_signal_returns_none() {
+        assert!(score_page("wiki/x.md", "X", "nothing relevant", &["zzz".into()], "zzz").is_none());
     }
 }
