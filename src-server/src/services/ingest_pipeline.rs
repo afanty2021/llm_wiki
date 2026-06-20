@@ -240,7 +240,7 @@ async fn step1_analyze(
     let opts = ChatOpts {
         model: provider.model_name().into(),
         temperature: 0.3,
-        max_tokens: 4000,
+        max_tokens: 12000,
         system_prompt: Some(system.into()),
         timeout_secs: None,
     };

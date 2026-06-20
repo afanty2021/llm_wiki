@@ -1,6 +1,6 @@
 // services/ingest_worker.rs
 // ingest worker 调度层——redis 触发队列消费 + 同进程 tokio task + 重启恢复。
-// D (ingest_pipeline) 就绪前 worker_loop 留 stub：job 取到后标记 running 即停止——编译通过。
+// D (ingest_pipeline) 已就绪：worker_loop 取到 job → run_ingest_job → 按结果标记 succeeded/failed。
 
 use uuid::Uuid;
 use crate::{AppError, AppState};
@@ -86,17 +86,25 @@ async fn worker_loop(state: AppState) {
         .execute(&state.db)
         .await;
 
-        // —— D stub（D 就绪后解注释下方代码 + 删 tracing::info）——
-        tracing::info!("job {} staged (D not yet wired). source_paths={:?}", job_id, job.source_paths);
-        // TODO: wire up D when ready
-        // match crate::services::ingest_pipeline::run_ingest_job(&state, &job).await {
-        //     Ok(result) => {
-        //         let _ = crate::services::ingest_queue::mark_job_succeeded(&state, job_id, &result).await;
-        //     }
-        //     Err(e) => {
-        //         let _ = crate::services::ingest_queue::mark_job_failed(&state, job_id, &e.to_string()).await;
-        //     }
-        // }
+        // D (ingest_pipeline) 已就绪：执行 job，按结果标记 succeeded/failed。
+        match crate::services::ingest_pipeline::run_ingest_job(&state, &job).await {
+            Ok(result) => {
+                tracing::info!(
+                    "job {} done: {} new pages, {} reserved, {} warnings",
+                    job_id,
+                    result.new_pages.len(),
+                    result.updated_reserved.len(),
+                    result.warnings.len()
+                );
+                let _ = crate::services::ingest_queue::mark_job_succeeded(&state, job_id, &result)
+                    .await;
+            }
+            Err(e) => {
+                tracing::error!("job {} failed: {}", job_id, e);
+                let _ = crate::services::ingest_queue::mark_job_failed(&state, job_id, &e.to_string())
+                    .await;
+            }
+        }
     }
 }
 
