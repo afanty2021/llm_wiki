@@ -13,7 +13,7 @@
 - **惊喜连接**：4 信号打分——跨社区/跨类型/边缘↔枢纽/弱边——揭露"不该连却连了"的有趣边
 - **知识缺口**：3 类——孤立节点/稀疏社区/桥节点——指出知识图谱的结构薄弱点
 
-src-server 的 `/insights` 端点目前只返回 `{node_count, edge_count, density}` 统计（占位）。本层替换为真正的 insights。
+src-server 的 `/api/v1/graph/:pid/insights` 端点已在 `routes/graph.rs::get_insights` 注册并返回 `{node_count, edge_count, density}` 统计占位（2c 产物）。本层把 handler 替换为真正的 insights。
 
 ### 桌面参考（已查证）
 
@@ -61,7 +61,9 @@ src-server 的 `/insights` 端点目前只返回 `{node_count, edge_count, densi
 | **sparse-community** | `cohesion < 0.15` 且 `nodeCount ≥ 3` | 每社区 1 条（"Sparse cluster: {topNodes[0]}"）| "该知识区内部交叉引用薄弱" |
 | **bridge-node** | 邻居跨越 **≥ 3** 个不同社区 | 按跨社区数 desc，top 3 各 1 条（"Key bridge: {label}"）| "该页桥接多个知识集群，确保维护好" |
 
-按 `limit`（默认 8）截断；bridge 排前面（本身 limit≤3）、isolated 1 条、sparse 补充。
+按**桌面顺序** isolated → sparse-community → bridge 拼接，最后整体 `.slice(0, limit)`（默认 8）。
+
+> 桌面 detectKnowledgeGaps 输出序为 isolated→sparse→bridge→truncate；本 spec 保持一致（非 bridge 优先——已修正）。
 
 ---
 
@@ -171,3 +173,10 @@ pub fn detect_knowledge_gaps(graph: &WikiGraph, limit: usize) -> Vec<KnowledgeGa
 |---|------------|------|
 | 1 | 信号 3 数学速记缺 hub-degree 条件（`maxDeg ≥ maxDegree*0.5`），实施者会误以为只需 `min degree ≤ 2` → 假阳性 | §3 信号 3 补全双条件：`min≤2 且 max≥maxDegree×0.5`（与桌面逐字一致）|
 | 2 | §6 测试列表不完整、"di弱边"缩写不清 | §7 重写为完整四信号列表（跨社区+3 / distant-pair+2 & 其它异类+1 / 边缘枢纽+2 / 弱边+1）；加阈值 `score=2 不入选` 测试 |
+
+### round 2（2026-06-20）
+
+| # | 复查问题 | 落实 |
+|---|---------|------|
+| 3 | gaps 排序 bridge-first ≠ 桌面 isolated→sparse→bridge 序 | §4 改对齐桌面序（isolated→sparse→bridge→slice），加注释标注修正 |
+| 4 | 声称 /insights 端点未实现（实际已在 routes/graph.rs 注册）| §1 加精确引用 `routes/graph.rs::get_insights`，保留"替换 stats 占位"措辞 |
