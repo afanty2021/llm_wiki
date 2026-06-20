@@ -169,7 +169,7 @@ Expected: `separates_two_clusters` 等 FAIL（当前返回空 Vec）。
 use petgraph::graph::Graph;
 use petgraph::visit::EdgeRef;
 use petgraph::Undirected;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 type Adj = Vec<HashMap<usize, f64>>;
 
@@ -235,8 +235,9 @@ fn one_level(adj: &Adj, resolution: f64) -> Vec<usize> {
         for i in 0..n {
             let ci = comm[i];
             let ki = degree(adj, i);
-            // i 到各邻居社区的权重和
-            let mut neighbor_comm: HashMap<usize, f64> = HashMap::new();
+            // i 到各邻居社区的权重和。用 BTreeMap（确定性序）——gain tie 时按社区 id
+            // 升序取首个，保证 louvain 输出确定（满足 deterministic 测试）。
+            let mut neighbor_comm: BTreeMap<usize, f64> = BTreeMap::new();
             for (&j, &w) in &adj[i] {
                 if j == i {
                     continue;
@@ -404,8 +405,8 @@ impl RetrievalGraph {
 /// 四信号相关性（移植 calculateRelevance）。
 pub(crate) fn calculate_relevance(a: &RetrievalNode, b: &RetrievalNode, g: &RetrievalGraph) -> f64 {
     if a.id == b.id { return 0.0; }
-    // 1. directLink
-    let direct = ((a.out_links.contains(&b.id) || b.out_links.contains(&a.id)) as i32 as f64) * W_DIRECT_LINK;
+    // 1. directLink：求和两方向（移植桌面 forwardLinks + backwardLinks；双向 = 6.0，非 OR 的 3.0）
+    let direct = ((a.out_links.contains(&b.id) as i32) + (b.out_links.contains(&a.id) as i32)) as f64 * W_DIRECT_LINK;
     // 2. sourceOverlap
     let shared = a.sources.intersection(&b.sources).count() as f64 * W_SOURCE_OVERLAP;
     // 3. commonNeighbor (Adamic-Adar)
@@ -436,13 +437,14 @@ mod tests {
     }
 
     #[test]
-    fn direct_link_signal() {
+    fn direct_link_signal_sums_both_directions() {
+        // 双向 a↔b：forward(a→b)+backward(b→a)=2×3.0=6.0（移植桌面求和，非 OR 的 3.0）
         let a = node("a", "entity", &[], &["b"], &[]);
-        let b = node("b", "entity", &[], &[], &["a"]);
+        let b = node("b", "entity", &[], &["a"], &[]);
         let g = RetrievalGraph { nodes: [("a".to_string(), a.clone()), ("b".to_string(), b.clone())].into_iter().collect() };
         let r = calculate_relevance(&a, &b, &g);
-        // direct 3.0 + typeAffinity(entity,entity)=0.8*1.0=0.8；无 source/neighbor
-        assert!((r - (3.0 + 0.8)).abs() < 1e-9, "got {}", r);
+        // direct 6.0 + typeAffinity(entity,entity)=0.8
+        assert!((r - (6.0 + 0.8)).abs() < 1e-9, "got {} (双向应 6.0)", r);
     }
 
     #[test]
