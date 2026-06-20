@@ -113,7 +113,6 @@ fn is_stop_word(token: &str) -> bool {
     )
 }
 
-#[allow(dead_code)]
 fn trim_query_punctuation(value: &str) -> String {
     value.trim_matches(is_query_separator).to_string()
 }
@@ -336,6 +335,126 @@ async fn fetch_page_title_content(
     .await
     .map_err(AppError::DatabaseError)?;
     Ok(row.map(|r| (r.get("title"), r.get("content"))))
+}
+
+/// 单入口 hybrid 搜索（keyword + vector + RRF）。
+/// embedding 未配/失败 → 退化为 keyword。返回 camelCase SearchResponse。
+pub async fn hybrid_search(
+    pool: &PgPool,
+    emb_cfg: Option<&EmbeddingConfig>,
+    client: &reqwest::Client,
+    project_id: i32,
+    query: &str,
+    limit: usize,
+) -> Result<SearchResponse, AppError> {
+    let limit = limit.clamp(1, MAX_RESULTS);
+    let tokens = tokenize_query(query);
+    let effective_tokens = if tokens.is_empty() {
+        vec![query.trim().to_lowercase()]
+    } else {
+        tokens
+    };
+    let query_phrase = trim_query_punctuation(&query.to_lowercase());
+
+    // 1. keyword：候选 → 打分 → token_rank(1-indexed) → 转 SearchResult(vector_score=None)
+    let candidates = fetch_keyword_candidates(pool, project_id, &effective_tokens, &query_phrase).await?;
+    let mut scored: Vec<ScoredPage> = candidates
+        .iter()
+        .filter_map(|c| score_page(&c.path, &c.title, &c.content, &effective_tokens, &query_phrase))
+        .collect();
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    let token_rank: HashMap<String, usize> = scored
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.path.clone(), i + 1))
+        .collect();
+    let mut results: Vec<SearchResult> = scored
+        .into_iter()
+        .map(|s| SearchResult {
+            path: s.path,
+            title: s.title,
+            snippet: s.snippet,
+            title_match: s.title_match,
+            score: s.score,
+            vector_score: None,
+            images: s.images,
+        })
+        .collect();
+    let token_hits = token_rank.len();
+
+    // 2. vector：embed_query → vector_search → vector_rank(全路径, 1-indexed) + 物化 vector-only
+    let mut vector_rank: HashMap<String, usize> = HashMap::new();
+    let mut vector_score_map: HashMap<String, f64> = HashMap::new();
+    let mut vector_hits = 0usize;
+    if let Some(cfg) = emb_cfg {
+        let qvec = match embedding::embed_query(cfg, client, query).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("hybrid_search embed_query failed: {}", e);
+                Vec::new()
+            }
+        };
+        if !qvec.is_empty() {
+            match embedding::vector_search(pool, project_id, qvec, (limit.max(10)) as i32).await {
+                Ok(vres) => {
+                    vector_hits = vres.len();
+                    for (i, vr) in vres.iter().enumerate() {
+                        vector_rank.insert(vr.path.clone(), i + 1);
+                        vector_score_map.insert(vr.path.clone(), vr.score as f64);
+                    }
+                    // vector-only 物化：重取全量 content（vector_search 的 snippet 是前 200 字符截断、
+                    // 不含锚点上下文），用 pick_snippet_anchor + build_snippet 产出对齐 keyword 侧的片段。
+                    let known: HashSet<String> = results.iter().map(|r| r.path.clone()).collect();
+                    for vr in &vres {
+                        if known.contains(&vr.path) {
+                            continue;
+                        }
+                        if let Some((title, content)) =
+                            fetch_page_title_content(pool, project_id, &vr.path).await?
+                        {
+                            let anchor =
+                                pick_snippet_anchor(&content, &effective_tokens, &query_phrase);
+                            results.push(SearchResult {
+                                path: vr.path.clone(),
+                                title,
+                                snippet: build_snippet(&content, &anchor),
+                                title_match: false,
+                                score: 0.0,
+                                vector_score: Some(vr.score as f64),
+                                images: extract_image_refs(&content),
+                            });
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("hybrid_search vector_search failed: {}", e),
+            }
+        }
+    }
+
+    // 3. RRF + mode + sort + truncate（snippet 不重建）
+    if vector_hits > 0 {
+        apply_rrf(&mut results, &token_rank, &vector_rank, &vector_score_map);
+    }
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    results.truncate(limit);
+    let mode = search_mode(token_rank.is_empty(), vector_hits);
+
+    Ok(SearchResponse {
+        mode: mode.to_string(),
+        results,
+        token_hits,
+        vector_hits,
+    })
 }
 
 #[cfg(test)]
