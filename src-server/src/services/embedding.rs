@@ -46,6 +46,46 @@ pub async fn embed_batch(
     parse_embedding_response(&body, cfg.dim)
 }
 
+/// 批量嵌入 + bulk upsert（ingest 用）。pages: (wiki_page_path, text)。
+/// cfg=None → no-op 返回 Ok(0)。
+pub async fn embed_and_store(
+    pool: &sqlx::PgPool,
+    cfg: Option<&EmbeddingConfig>,
+    client: &reqwest::Client,
+    project_id: i32,
+    pages: &[(String, String)],
+) -> Result<usize, AppError> {
+    let cfg = match cfg {
+        Some(c) => c,
+        None => return Ok(0),
+    };
+    if pages.is_empty() {
+        return Ok(0);
+    }
+    let texts: Vec<String> = pages.iter().map(|(_, t)| t.clone()).collect();
+    let vectors = embed_batch(cfg, client, &texts).await?;
+
+    let mut qb = sqlx::QueryBuilder::new(
+        "INSERT INTO embeddings (project_id, wiki_page_id, content) VALUES ",
+    );
+    for (i, ((path, _), vec)) in pages.iter().zip(vectors.iter()).enumerate() {
+        if i > 0 {
+            qb.push(",");
+        }
+        qb.push("(")
+            .push_bind(project_id)
+            .push(", ")
+            .push_bind(path.clone())
+            .push(", ")
+            .push_bind(pgvector::Vector::from(vec.clone()))
+            .push(")");
+    }
+    qb.push(" ON CONFLICT (project_id, wiki_page_id) DO UPDATE SET content = EXCLUDED.content");
+
+    let rows = qb.build().execute(pool).await?.rows_affected();
+    Ok(rows as usize)
+}
+
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct VectorSearchResult {
     pub path: String,
