@@ -270,11 +270,21 @@ git commit -m "feat(src-server): tokenize_query(CJK bigram+单字+全词) + 停�
 
 ```rust
     #[test]
-    fn extract_image_refs_dedups_and_parses() {
-        let refs = extract_image_refs("![a](wiki/media/x.png)\n![b](wiki/media/x.png)\n![](empty.png)");
-        assert_eq!(refs.len(), 1, "dedup by url + skip empty alt: {:?}", refs);
+    fn extract_image_refs_dedups_by_url() {
+        // 与桌面行为一致：仅按 url 去重（桌面 extract_image_refs 同此）
+        let refs = extract_image_refs("![a](wiki/media/x.png)\n![b](wiki/media/x.png)");
+        assert_eq!(refs.len(), 1, "dedup by url: {:?}", refs);
         assert_eq!(refs[0].alt, "a");
         assert_eq!(refs[0].url, "wiki/media/x.png");
+    }
+
+    #[test]
+    fn extract_image_refs_keeps_empty_alt_when_url_valid() {
+        // 桌面对齐：空 alt 但 url 有效 → 仍纳入（桌面不过滤 alt）。锁住此行为防后续误改。
+        let refs = extract_image_refs("![](valid.png)");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].alt, "");
+        assert_eq!(refs[0].url, "valid.png");
     }
 
     #[test]
