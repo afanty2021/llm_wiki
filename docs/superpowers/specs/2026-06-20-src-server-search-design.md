@@ -92,7 +92,7 @@ GET /api/v1/search?project_id=&query=&limit=
   5. [若 vector] materialize_vector_only：vector-only 页查 wiki_pages 补全 title/content/images
   6. apply_rrf(results, token_rank, vector_rank, vector_score)    RRF k=60，key 均为全路径
   7. search_mode(token_rank.is_empty(), vector_hits)              → "keyword"|"vector"|"hybrid"
-  8. 排序(rrf score desc) + truncate(limit) + build_snippet
+  8. 排序(rrf score desc) + truncate(limit)        （snippet 各结果物化时已有，此步不重建）
   → SearchResponse { mode, results: Vec<SearchResult>, token_hits, vector_hits }
 ```
 
@@ -134,8 +134,8 @@ fn token_match_score(text: &str, tokens: &[String]) -> usize;
 struct Candidate {                          // SQL 候选拉取产出
     path: String, title: String, content: String,
 }
-struct ScoredPage {                         // score_page 产出（保留 content 供 build_snippet）
-    path: String, title: String, content: String,
+struct ScoredPage {                         // score_page 产出（snippet 内部算好，不存 content）
+    path: String, title: String, snippet: String,
     score: f64, title_match: bool, images: Vec<ImageRef>,
 }
 
@@ -170,7 +170,7 @@ pub async fn hybrid_search(
 
 **hybrid_search 实现要点**（对应 §4 数据流 8 步）：
 - 候选 SQL：`WHERE project_id=$1 AND ((title ILIKE '%' || tok || '%' OR content ILIKE '%' || tok || '%') ... )`（每 token 一组 OR）；**仅当 `phrase` 非空时**才追加 `OR content ILIKE '%' || phrase || '%'`——phrase 为空时 `ILIKE '%%'` 会匹配全表（纯标点查询场景），必须 guard。返回 `(path, title, content)`。
-- 关键词打分后构建 `token_rank: HashMap<String, usize>`，key=全 path。
+- 关键词打分后构建 `token_rank: HashMap<String, usize>`（key=全 path），并把每个 `ScoredPage` **转换成 `SearchResult`**（`vector_score = None`，由 RRF 回填）→ 合并进 `results: Vec<SearchResult>`。
 - 向量分支调用 `embedding::embed_query` + `embedding::vector_search` → 构建 `vector_rank: HashMap<String, usize>` + `vector_score: HashMap<String, f64>`，**key 均为全 path**（`VectorSearchResult.path`）。
 - **vector-only 物化**：对 `vector_rank.keys()` 不在 keyword 结果 path 集中的条目 → `SELECT title, content FROM wiki_pages WHERE project_id=$1 AND path=$2` → 构建结果项 push（初始 score=0、RRF 后更新）。**images 用 `extract_image_refs(&content)` 运行时解析**（**不用** `wiki_pages.images` 列——那是 ingest 写入的 frontmatter images，语义不同；与桌面"从正文实时解析"一致）。**snippet 用 smart anchor**（见下）调 `build_snippet`。
 - **snippet 锚点选择（移植桌面，关键）**：keyword 结果的 snippet 由 `score_page` 内部产出——anchor = `query_phrase`（content 短语命中时）/ 第一个出现在 content 的 token / raw query（回退），再 `build_snippet(content, anchor)`。vector-only 结果用同一 anchor 逻辑。**不要直接拿 raw query 当 anchor**——多 token 查询若 content 只含部分词，`build_snippet` 搜不到→回退位置 0→片段恒为开头。**apply_rrf 之后不再重建 snippet**，各结果物化时已有。
@@ -322,3 +322,11 @@ pub struct SearchResponse {
 | 14 | title_has_phrase 大小写未声明 | §5.1 公式显式 `.to_lowercase()` + 注明 query_phrase 预小写 |
 | 15 | token_rank 0 vs 1-indexed 未提 | §5.1 apply_rrf 注明 **1-indexed**（对齐桌面单测精确数值）|
 | 16 | vector-only images 来源未明（column vs 解析）| §5.1 明确 keyword+vector-only 均 `extract_image_refs(content)` 运行时解析，不用 `wiki_pages.images` 列 |
+
+### round 4（2026-06-20）
+
+| # | 复查问题 | 落实 |
+|---|---------|------|
+| 17 | ScoredPage 缺 snippet 字段（score_page 产 snippet 却无处放）| §5.1 ScoredPage 改 `{path,title,snippet,score,title_match,images}`（去 content）|
+| 18 | §4 step 8 build_snippet 与 §5.1"不重建 snippet"矛盾 | §4 step 8 删 build_snippet |
+| 19 | ScoredPage→SearchResult 转换步骤缺失 | §5.1 keyword 要点补转换（vector_score=None，RRF 回填）|
