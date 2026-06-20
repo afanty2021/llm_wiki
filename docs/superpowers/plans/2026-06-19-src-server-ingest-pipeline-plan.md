@@ -882,3 +882,36 @@ Plan complete and saved to `docs/superpowers/plans/2026-06-19-src-server-ingest-
 **2. Inline Execution** — 本会话批量执行 + checkpoint
 
 Which approach?
+
+
+---
+
+## Post-Implementation Revisions
+
+> 以下修订记录实施过程中发现的 plan 错误，已在实际代码中修正。
+
+### R1: `serde_json::to_string` / `to_string_pretty` 的 `?` 无法编译
+
+**位置**: Task 2 `cache_step1_result`、Task 3 `step2_generate`
+
+**问题**: plan 中 `serde_json::to_string(result)?` 和 `serde_json::to_string_pretty(step1_json)?` 使用 `?` 传播错误，但 `AppError` 未实现 `From<serde_json::Error>`，编译失败。
+
+**修正**: 改为 `map_err(|e| AppError::InternalError(format!("...", e)))?`，并添加注释说明原因：
+
+```rust
+// 【编译陷阱】AppError 无 From<serde_json::Error>，必须 map_err。
+let analysis = serde_json::to_string_pretty(step1_json)
+    .map_err(|e| AppError::InternalError(format!("serialize step1: {}", e)))?;
+```
+
+### R2: `replace_image_paths` 测试断言逻辑矛盾
+
+**位置**: Task 1 测试 `replace_image_paths_basic`
+
+**问题**: plan 的测试用 `assert!(!result.contains("page3_image1.png"))` 断言替换后不包含原始文件名，但新路径 `media/42/page3_image1.png` 中 `page3_image1.png` 作为子串必然存在，断言永远失败。
+
+**修正**: 改为检查原始带括号的 markdown 图片语法 `(page3_image1.png)` 是否被替换（这才是替换函数的目标格式）：
+```rust
+assert!(!result.contains("(page3_image1.png)"));
+assert!(!result.contains("(image2.jpg)"));
+```

@@ -92,6 +92,11 @@ pub fn parse_bytes(filename: &str, bytes: &[u8]) -> Result<ParsedDoc, ParseError
 ```rust
 use futures::stream::BoxStream;
 
+// 行缓冲: bytes_stream() chunk 边界不对齐 SSE 行边界，两个 impl 各自在
+// stream_chat 内部维护 line_buf: Vec<u8> 拼接不完整的行，遇 \n 弹出一行处理。
+// 不引入 sse crate 以减少依赖。
+// system_prompt: OpenAI 拼成 {role:"system",content:...} 放 messages[0]；
+//   Anthropic 拼到 body 顶层 system 字段（不接受 role=system message）。
 #[derive(Debug, Clone)]
 pub struct ChatMessage { pub role: String, pub content: String }
 
@@ -127,18 +132,44 @@ pub async fn provider_for_project(
 ```
 
 ### impl 要点
-- **OpenAI**：`POST /v1/chat/completions` SSE，`data:` 行逐 token 标准格式(`data: {"choices":[{"delta":{"content":"hi"}}]}`)。直读现成 impl(标准 SSE 解析)。
-- **Anthropic**：`POST /v1/messages`，`event:` 分隔 `message_start` / `content_block_delta` / `message_delta`。**content_block_delta** 需** state machine** 重建 token(`delta.type == "text_delta" → delta.text`，按 `index` 重组多 content_block)。非标准 SSE(无 `data:` 前缀)。
+- **OpenAI**：`POST /v1/chat/completions` SSE，`data:` 行逐 token 标准格式(`data: {"choices":[{"delta":{"content":"hi"}}]}`)。
+  - 需在请求 body 显式加 `"stream_options": {"include_usage": true}`，否则不返回 usage。
+    加了之后 [DONE] 前的最后一个 chunk 含 `usage:{prompt_tokens,completion_tokens}`(choices 为空数组)→ emit `TokenDelta::Usage`。
+  - 逐行 "data: ..." 解析：
+    `data: {"choices":[{"delta":{"content":"hi"}}]}` → `TokenDelta::Text("hi")`
+    `data: [DONE]`                                     → `TokenDelta::Done`
+
+- **Anthropic**：`POST /v1/messages`，`event:` 分隔事件，非标准 SSE(无 `data:` 前缀)。
+  - usage 来源：`message_start.message.usage.input_tokens` + `message_delta.usage.output_tokens`(非 message_stop)。
+  - content_block_delta 可能有多个 index 并发，但 MVP 单 worker 串行 + text-only response，实际只出现 index=0 一个 text block。
+    状态机 MVP 不追踪 index（改为 `current_event: Option<String>` 逐行配对 event:data:），后续加工具调用时补 index 追踪（改动一个 match arm + `Option<u32>`）。
+  - 事件流程：
+    ```
+    event: message_start           → 缓存 input_tokens(usage 半片)
+    event: content_block_delta     → data: {delta:{text_delta:"Hello"}}
+                                     → TokenDelta::Text("Hello")
+    event: content_block_delta     → data: {delta:{text_delta:" world"}}
+                                     → TokenDelta::Text(" world")
+    event: message_delta           → 提取 output_tokens(usage 另一半)
+    event: message_stop            → emit Usage(prompt, completion) → emit Done
+    event: ping                    → 忽略
+    ```
+  - 行解析：逐行读 bytes_stream → 维护当前 event → 遇到 event: 更新，遇到 data: 按当前 event 分发处理。
+
 - **key 解密**：复用 `src-server/src/services/llm.rs` 的 `get_llm_config(pool, project_id)`→`decrypt_api_key(config.api_key_encrypted, config.jwt_secret)`。
 - **同步**：复用 `reqwest` crate(需加到 src-server/Cargo.toml，当前未包含)→ 流式 `reqwest::Response::bytes_stream`。LLM 调用密集于网络 IO，tokio 调度已够，不引入单独 HTTP 线程池。
 
 ### 错误处理
-```rust
-pub enum LlmError {
-    ProviderNotFound, RateLimited, AuthFailed, ConnectionFailed(String), Timeout,
-    ApiError { status: u16, body: String }, InvalidSse(String), StreamEnded,
-}
-```
+
+**错误映射**（两个 impl 一致）：
+| HTTP 状态 | 映射 | 说明 |
+|-----------|------|------|
+| 401       | `AuthFailed` | API key 无效 |
+| 429       | `RateLimited` | 频控 |
+| 4xx/5xx   | `ApiError { status, body }` | 其他 API 错误 |
+| timeout   | `Timeout` | reqwest 超时(由 ChatOpts.timeout_secs 控制) |
+| SSE 格式异常 | `InvalidSse(String)` | 行解析失败 |
+| 流提前结束 | `StreamEnded` | EOF 前未收到 Done 信号 |
 
 ---
 

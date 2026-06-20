@@ -808,3 +808,97 @@ Plan complete and saved to `docs/superpowers/plans/2026-06-19-src-server-llm-wik
 **2. Inline Execution** — 本会话批量执行 + checkpoint
 
 Which approach?
+
+
+---
+
+## Post-Implementation Revisions
+
+> 以下修订记录实施过程中发现的 plan 错误与改进，已在实际代码中修正。
+
+### R1: `get_pdfium()` 锁持有策略——MutexGuard 过早释放
+
+**位置**: Task 4 `pdf.rs`
+
+**问题**: plan 的 `get_pdfium()` 返回 `Result<Pdfium, ParseError>`，函数返回时 `MutexGuard` 即释放。后续 `parse()` 中遍历 page 对象时 pdfium 不受串行化保护，并发场景下不安全。
+
+**修正**: 改为 `with_pdfium<F>(f: impl FnOnce(&Pdfium) -> Result<R, ParseError>)` 闭包模式——整个解析期间持有 `MutexGuard`，解析完成后释放：
+
+```rust
+fn with_pdfium<R>(f: impl FnOnce(&Pdfium) -> Result<R, ParseError>) -> Result<R, ParseError> {
+    let mut guard = PDFIUM.lock().map_err(...)?;
+    if guard.is_none() {
+        *guard = Some(Pdfium::new(bindings));
+    }
+    f(guard.as_ref().expect("pdfium just initialized"))
+}
+```
+
+### R2: PPTX 多 slide 标题——全局 text 状态判断导致 slide 2..N 标题丢失
+
+**位置**: Task 3 `pptx.rs`
+
+**问题**: plan 用 `let slide_started = !text.is_empty()` 判断是否已写标题，但 slide 1 处理后 `text` 非空，slide 2..N 的 `# Slide N` 标题全部丢失。
+
+**修正**: 改为 `slide_title_written: bool` 每 slide 独立 flag，且只在首个非空段落前写入标题：
+
+```rust
+let mut slide_title_written = false;
+for seg in xml.split("<a:p>") {
+    // ...
+    if !line.is_empty() {
+        if !slide_title_written {
+            text.push_str(&format!("# Slide {}\n\n", i));
+            slide_title_written = true;
+        }
+        // ...
+    }
+}
+```
+
+追加测试 `pptx_multi_slides_each_gets_title` 锁固行为。
+
+### R3: XLSX 单元格转义——`|` 和 `\n` 破坏 Markdown 表格
+
+**位置**: Task 3 `xlsx.rs`
+
+**问题**: plan 直接 `c.to_string()` 拼接 Markdown 表格行，单元格内含 `|` 会破坏列数对齐，含 `\n` 会断行。
+
+**修正**: 在 `to_string()` 后追加 `.replace('|', "\\|").replace('\n', " ")` 转义，并跳过空 sheet（避免孤悬 `# SheetName` 标题）：
+
+```rust
+let cells: Vec<String> = row.iter()
+    .map(|c| c.to_string().replace('|', "\\|").replace('\n', " "))
+    .collect();
+```
+
+### R4: workspace `exclude`——防止 cargo 误建 src-tauri / src-server
+
+**位置**: Task 0 根 `Cargo.toml`
+
+**问题**: plan 只写了 `members`，未写 `exclude`。不加 `exclude` 时 cargo 会将 `src-tauri` 和 `src-server` 当作 workspace member 处理，导致编译错误。
+
+**修正**: 根 `Cargo.toml` 加 `exclude` 节：
+
+```toml
+exclude = [
+    "src-tauri",
+    "src-server",
+]
+```
+
+### R5: zip 2.x API——`FileOptions` → `SimpleFileOptions`
+
+**位置**: Task 2 `docx.rs` / Task 3 `pptx.rs`
+
+**问题**: plan 用 `zip::write::FileOptions::default()`，但 zip crate 2.x 中 `FileOptions` 需要显式生命周期泛型参数。测试构造 zip 时编译失败。
+
+**修正**: 改用 `zip::write::SimpleFileOptions::default()`。
+
+### R6: calamine 0.35 API——`open_workbook_auto` → `open_workbook_auto_from_rs`
+
+**位置**: Task 3 `xlsx.rs`
+
+**问题**: plan 用 `calamine::open_workbook_auto(cursor)` 从 `Cursor<Vec<u8>>` 打开 workbook，但 calamine 0.35 的 `open_workbook_auto` 需要 `AsRef<Path>`。`Cursor` 不满足此约束，编译失败。
+
+**修正**: 改用 reader-based API `calamine::open_workbook_auto_from_rs(cursor)`，并显式 `use calamine::Reader;` 导入所需 trait。
