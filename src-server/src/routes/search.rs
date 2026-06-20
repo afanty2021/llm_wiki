@@ -27,20 +27,13 @@ pub async fn search_handler(
     Query(params): Query<SearchQueryParams>,
 ) -> Result<impl IntoResponse, AppError> {
     let _user_id = check_project_access(&state, &headers, params.project_id).await?.0;
-    let limit = params.limit.unwrap_or(20).min(100);
-
-    let results = crate::services::search::search_wiki(
-        &state.db,
-        params.project_id,
-        &params.query,
-        limit,
-    )
-    .await?;
-
+    // TRANSIENT STUB: search_wiki 已移除（2b 重写 services/search.rs）。
+    // hybrid_search 在 Task 7 实现、Task 8 把此 stub 替换为 search::hybrid_search 调用。
+    // 期间 /search 返回空结果（不重启 server，无影响）。
     Ok(Json(serde_json::json!({
-        "results": results,
+        "results": [],
         "query": params.query,
-        "total": results.len(),
+        "total": 0,
     })))
 }
 
