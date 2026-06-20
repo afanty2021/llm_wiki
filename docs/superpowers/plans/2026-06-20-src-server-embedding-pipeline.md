@@ -624,7 +624,9 @@ Expected: `Finished`，无 error（确认无别处再调 get_embeddings / LlmCon
 
 ```bash
 # 前提：Task 8/9 后 project 249 已有向量；此处先确认端点不报 ada-002 相关错
-TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login -H "Content-Type: application/json" -d '{"username":"<e2e_user>","password":"Pass1234!"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+# 用 Layer 1 E2E 验证时建的用户（记录在 /tmp/e2e_user，密码 Pass1234!）；
+# 或任一能访问 project 249（team 281 成员）的用户。不知道用户名就先 register 一个 + 加入 team 281。
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login -H "Content-Type: application/json" -d '{"username":"<你的 e2e 用户名>","password":"Pass1234!"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
 curl -s "http://localhost:8080/api/v1/search/vector?project_id=249&query=Alice&limit=5" -H "Authorization: Bearer $TOKEN" | head -c 300
 ```
 Expected: 200 + `{"results":[...]}`（向量搜索工作）。若 embedding 未配 → 400 `"embedding not configured"`。
@@ -811,11 +813,23 @@ git commit -m "feat(src-server): ingest 接入批量嵌入(rebuild_reserved 后,
 
 - [ ] **Step 1: create_page / update_page 末尾按 content 分流嵌入**
 
-`src/routes/pages.rs` 的 `create_page`，在 `Ok((StatusCode::CREATED, Json(page)))` 之前加：
+⚠️ **关键**：`req.content` 在 SQL `.bind(req.content)` 处被 move，而 embedding 块在 SQL **之后**——必须**在 bind 之前克隆** content，否则编译报 `use of moved value: req.content`。
+
+**create_page**：
+
+(1) 在 `.bind(req.content)` 这行**之前**插入克隆：
+
+```rust
+    let content_for_embed = req.content.clone();
+```
+
+（SQL 里继续 `.bind(req.content)` move 原值；`&req.path` 是借用、未 move，后续仍可用。）
+
+(2) 在 `Ok((StatusCode::CREATED, Json(page)))` **之前**加嵌入块（用克隆值）：
 
 ```rust
     // 维护 embedding（非致命：失败只 log，不影响页面写入）
-    match req.content.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    match content_for_embed.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(text) => {
             if let Err(e) = crate::services::embedding::embed_page(
                 &state.db, state.config.embedding.as_ref(), &state.http,
@@ -830,9 +844,7 @@ git commit -m "feat(src-server): ingest 接入批量嵌入(rebuild_reserved 后,
     }
 ```
 
-`update_page`：在最终 `Ok(Json(page))` 之前加同样的分流块（用 `pq.path` 或 `req.path`，二者已被校验相等）。
-
-> `create_page` 的 `req.content` 是 `Option<String>`；若 `req` 已被 move 进 SQL，提前 `let content_for_embed = req.content.clone();` 在 bind 之前。
+**update_page**：同样在 `.bind(req.content)` 之前加 `let content_for_embed = req.content.clone();`；在 `Ok(Json(page))` 之前加同样的分流块，路径用 `&pq.path`（query 参数、未 move；`pq.path == req.path` 已校验）。
 
 - [ ] **Step 2: delete_page 删向量**
 
@@ -889,7 +901,12 @@ async fn e2e_vector_search_recalls() {
     let emb_cfg = cfg.embedding.as_ref().unwrap();
     let pid = 249i32;
 
-    // 前提：project 249 已 ingest（Task 8 验证时产生向量）。这里只验召回。
+    // 前置断言：project 249 必须已有向量（Task 8 Step 4 手动 ingest 产生）。
+    // 独立跑（clean DB）时这里清晰失败，提示先 ingest。
+    let cnt: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1")
+        .bind(pid).fetch_one(&pool).await.unwrap();
+    assert!(cnt > 0, "project 249 无向量——先跑 Task 8 Step 4 (POST /projects/249/ingest sources/test.md) 产生向量再测");
+
     let qvec = embedding::embed_query(emb_cfg, &client, "Alice 在哪里工作").await.unwrap();
     let results = embedding::vector_search(&pool, pid, qvec, 5).await.unwrap();
     assert!(!results.is_empty(), "vector_search should return results");
