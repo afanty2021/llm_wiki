@@ -130,6 +130,29 @@ fn trim_query_punctuation(value: &str) -> String;
 fn count_occurrences(haystack: &str, needle: &str) -> usize;
 fn token_match_score(text: &str, tokens: &[String]) -> usize;
 
+// ── 中间类型 ──
+struct Candidate {                          // SQL 候选拉取产出
+    path: String, title: String, content: String,
+}
+struct ScoredPage {                         // score_page 产出（保留 content 供 build_snippet）
+    path: String, title: String, content: String,
+    score: f64, title_match: bool, images: Vec<ImageRef>,
+}
+
+// ── score_page 打分公式（与桌面逐字一致）──
+//   stem            = path 最后一个 '/' 之后、".md" 之前，小写
+//   filename_exact  = !query_phrase.is_empty() && stem == query_phrase
+//   title_has_phrase= query_phrase ⊂ format!("{title} {last_path_segment}")
+//   content_phrase_occ = count_occurrences(content_lower, query_phrase).min(MAX_PHRASE_OCC_COUNTED=10)
+//   title_token_match  = token_match_score("{title} {last_path_segment}", tokens)
+//   content_token_match= token_match_score(content, tokens)
+//   score = (filename_exact? FILENAME_EXACT_BONUS : 0)
+//         + (title_has_phrase? PHRASE_IN_TITLE_BONUS : 0)
+//         + content_phrase_occ as f64 * PHRASE_IN_CONTENT_PER_OCC
+//         + title_token_match as f64 * TITLE_TOKEN_WEIGHT
+//         + content_token_match as f64 * CONTENT_TOKEN_WEIGHT
+//   **五信号全 0 → 返回 None**：该页不进 token_rank，避免零分页稀释 RRF。
+
 // ── DB 编排 ──
 pub async fn hybrid_search(
     pool: &PgPool,
@@ -142,7 +165,7 @@ pub async fn hybrid_search(
 ```
 
 **hybrid_search 实现要点**（对应 §4 数据流 8 步）：
-- 候选 SQL：`WHERE project_id=$1 AND ((title ILIKE '%' || tok || '%' OR content ILIKE '%' || tok || '%') ... OR content ILIKE '%' || phrase || '%')`，返回 `(path, title, content)`。
+- 候选 SQL：`WHERE project_id=$1 AND ((title ILIKE '%' || tok || '%' OR content ILIKE '%' || tok || '%') ... )`（每 token 一组 OR）；**仅当 `phrase` 非空时**才追加 `OR content ILIKE '%' || phrase || '%'`——phrase 为空时 `ILIKE '%%'` 会匹配全表（纯标点查询场景），必须 guard。返回 `(path, title, content)`。
 - 关键词打分后构建 `token_rank: HashMap<String, usize>`，key=全 path。
 - 向量分支调用 `embedding::embed_query` + `embedding::vector_search` → 构建 `vector_rank: HashMap<String, usize>` + `vector_score: HashMap<String, f64>`，**key 均为全 path**（`VectorSearchResult.path`）。
 - **vector-only 物化**：对 `vector_rank.keys()` 不在 keyword 结果 path 集中的条目 → `SELECT title, content, images FROM wiki_pages WHERE project_id=$1 AND path=$2` → 用 content 生成 snippet → 构建结果项 push 进 results（初始 score=0，RRF 后更新）。
@@ -229,7 +252,7 @@ pub struct SearchResponse {
 
 ## 9. 验收标准
 
-- [ ] `tokenize_query("默会知识")` 返回 `["默会","会知","知识","默","会","知"]`（含 bigram + 单字）
+- [ ] `tokenize_query("默会知识")` 产出 **8 个**去重 token：bigram {默会,会知,知识} + 单字 {默,会,知,识} + 全词 {默会知识}（与桌面 `tokenizes_cjk_bigrams_and_chars` 一致；**不是 6 个**——漏 `识`/`默会知识` 会让移植单测挂）
 - [ ] query="attention" → `attention.md` 的 score > `random.md` 的 score（文件名精确 > 内容命中）
 - [ ] RRF 融合后 `both.md`（双命中）rank > 单命中页
 - [ ] 向量未配/失败 → 返回 `mode=keyword`，200 OK，非 500
@@ -276,3 +299,12 @@ pub struct SearchResponse {
 | Q | /search/vector 删还是保留？ | 删除（§5.2）|
 | Q | 常量值沿用？ | 全部沿用（§2、§5.1）|
 | Q | §7 加限制？ | 加第 5 条 title 来源简化 + 图片限制（§8 #4/#5）|
+
+### round 2（2026-06-20）
+
+| # | 复查问题 | 落实 |
+|---|---------|------|
+| 9 | tokenize_query("默会知识") 预期写 6 个，桌面实际 8 个 | §9 更正为 8 个（补 `识` + 全词 `默会知识`）|
+| 10 | score_page 公式 + "五信号全零→None"未写 | §5.1 补完整公式与 None 条件（防零分页稀释 RRF）|
+| 11 | `phrase` 为空时 `ILIKE '%%'` 匹配全表 | §5.1 候选 SQL 加 "phrase 非空才追加 OR" guard |
+| 12 | ScoredPage / Candidate 字段未定义 | §5.1 补中间类型定义（ScoredPage 含 content 供 snippet）|
