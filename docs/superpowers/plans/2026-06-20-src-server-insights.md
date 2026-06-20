@@ -121,13 +121,17 @@ git commit -m "feat(src-server): insights 类型定义(SurprisingConnection/Know
     #[test]
     fn surprising_cross_community_gives_3() {
         let g = WikiGraph {
-            nodes: vec![mk_node("a","A","entity",2,0), mk_node("b","B","concept",3,1)],
-            edges: vec![mk_edge("a","b",5.0)],
+            nodes: vec![
+                mk_node("a","A","entity",2,0),
+                mk_node("b","B","entity",3,1),        // same type → no signal2
+                mk_node("big","Big","entity",10,2),    // maxDegree=10 → threshold=5, no signal3
+            ],
+            edges: vec![mk_edge("a","b",5.0)],         // weight ≥2 → no signal4
             communities: vec![],
         };
         let s = find_surprising_connections(&g, 5);
-        assert_eq!(s.len(), 1, "cross-community edge should be surprising (score≥3)");
-        assert_eq!(s[0].score, 3);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].score, 3, "only cross-community: {:?}", s[0].reasons);
         assert!(s[0].reasons.iter().any(|r| r.contains("community")));
     }
 
@@ -164,14 +168,18 @@ git commit -m "feat(src-server): insights 类型定义(SurprisingConnection/Know
     fn surprising_peripheral_to_peripheral_not_surprising_on_signal3() {
         // both deg≤2 but no hub → signal 3 should NOT fire
         let g = WikiGraph {
-            nodes: vec![mk_node("p1","P1","entity",2,0), mk_node("p2","P2","concept",1,1)],
+            nodes: vec![
+                mk_node("p1","P1","entity",2,0),
+                mk_node("p2","P2","concept",1,1),
+                mk_node("big","Big","entity",10,2),  // maxDegree=10 → threshold=5, no signal3
+            ],
             edges: vec![mk_edge("p1","p2",5.0)],
             communities: vec![],
         };
         let s = find_surprising_connections(&g, 5);
-        // cross-community(+3) only, no peripheral-hub signal
-        assert_eq!(s[0].score, 3, "should only be 3 (cross-community), not 5: {:?}", s[0].reasons);
-        assert!(!s[0].reasons.iter().any(|r| r.contains("peripheral")));
+        // cross-community+different-types, but NO peripheral-hub
+        assert!(!s.is_empty());
+        assert!(!s[0].reasons.iter().any(|r| r.contains("peripheral")), "should be no peripheral: {:?}", s[0].reasons);
     }
 
     #[test]
@@ -284,7 +292,7 @@ pub fn find_surprising_connections(graph: &WikiGraph, limit: usize) -> Vec<Surpr
         }
 
         if score >= 3 && !reasons.is_empty() {
-            let mut ids = [source.id.clone(), target.id.clone()];
+            let mut ids = [source.path.clone(), target.path.clone()];
             ids.sort();
             let key = ids.join(":::");
             scored.push(SurprisingConnection {
@@ -444,7 +452,7 @@ pub fn detect_knowledge_gaps(graph: &WikiGraph, limit: usize) -> Vec<KnowledgeGa
             r#type: "isolated-node".into(),
             title: format!("{} isolated page{}", isolated.len(), if isolated.len() > 1 { "s" } else { "" }),
             description: desc,
-            nodeIds: isolated.iter().map(|n| n.id.clone()).collect(),
+            nodeIds: isolated.iter().map(|n| n.path.clone()).collect(),
             suggestion: "These pages have few or no connections. Consider adding [[wikilinks]] to related pages, or research to expand their content.".into(),
         });
     }
@@ -464,7 +472,7 @@ pub fn detect_knowledge_gaps(graph: &WikiGraph, limit: usize) -> Vec<KnowledgeGa
                 r#type: "sparse-community".into(),
                 title: format!("Sparse cluster: {}", first),
                 description: format!("{} pages with cohesion {:.2} — internal connections are weak.", c.node_count, c.cohesion),
-                nodeIds: comm_nodes.get(&c.id).map(|ns| ns.iter().map(|n| n.id.clone()).collect()).unwrap_or_default(),
+                nodeIds: comm_nodes.get(&c.id).map(|ns| ns.iter().map(|n| n.path.clone()).collect()).unwrap_or_default(),
                 suggestion: "This knowledge area lacks internal cross-references. Consider adding links between these pages or researching to fill gaps.".into(),
             });
         }
@@ -493,7 +501,7 @@ pub fn detect_knowledge_gaps(graph: &WikiGraph, limit: usize) -> Vec<KnowledgeGa
             r#type: "bridge-node".into(),
             title: format!("Key bridge: {}", bridge.label),
             description: format!("Connects {} different knowledge clusters. This is a critical junction in your wiki.", count),
-            nodeIds: vec![bridge.id.clone()],
+            nodeIds: vec![bridge.path.clone()],
             suggestion: "This page bridges multiple knowledge areas. Ensure it's well-maintained — if it's thin, expanding it will strengthen your entire wiki.".into(),
         });
     }
