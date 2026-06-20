@@ -53,9 +53,10 @@ pub async fn vector_search_handler(
     let _user_id = check_project_access(&state, &headers, params.project_id).await?.0;
     let limit = params.limit.unwrap_or(10).min(50);
 
-    let llm_cfg = crate::services::llm::get_llm_config(&state.db, params.project_id).await?;
-
-    let embedding = crate::services::embedding::get_embeddings(&params.query, &llm_cfg).await?;
+    let emb_cfg = state.config.embedding.as_ref().ok_or_else(|| {
+        AppError::BadRequest("embedding not configured (vector search disabled)".into())
+    })?;
+    let embedding = crate::services::embedding::embed_query(emb_cfg, &state.http, &params.query).await?;
 
     let results = crate::services::embedding::vector_search(
         &state.db,

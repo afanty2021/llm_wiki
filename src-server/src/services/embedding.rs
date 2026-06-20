@@ -1,7 +1,6 @@
 use sqlx::PgPool;
 use crate::AppError;
 use crate::config::EmbeddingConfig;
-use crate::services::llm::LlmConfig;
 
 /// 解析 omlx /v1/embeddings 响应。纯函数，便于单测。
 /// 校验每条维度 == expected_dim，不符报错（防模型/配置错配）。
@@ -161,38 +160,6 @@ pub async fn vector_search(
     .map_err(|e| AppError::DatabaseError(e))?;
 
     Ok(results)
-}
-
-/// 获取文本的向量嵌入
-/// 使用解密后的 LlmConfig（不是 env var!）
-pub async fn get_embeddings(
-    text: &str,
-    llm: &LlmConfig,
-) -> Result<Vec<f32>, AppError> {
-    let base_url = llm.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
-    let client = reqwest::Client::new();
-
-    let response = client
-        .post(format!("{}/embeddings", base_url))
-        .header("Authorization", format!("Bearer {}", llm.api_key))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": "text-embedding-ada-002",
-            "input": text,
-        }))
-        .send()
-        .await?;  // 使用 From<reqwest::Error> 自动转换
-
-    let body: serde_json::Value = response.json().await?;
-
-    let embedding = body["data"][0]["embedding"]
-        .as_array()
-        .ok_or_else(|| AppError::LlmApiError("Invalid embedding response".into()))?
-        .iter()
-        .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-        .collect();
-
-    Ok(embedding)
 }
 
 #[cfg(test)]
