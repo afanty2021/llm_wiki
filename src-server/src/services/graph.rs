@@ -228,13 +228,18 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
             adj_out[si].insert(tgt.clone());
         }
     }
-    // 一次 O(E) 预算：in_links_map（path → 入边来源集合）+ in_degree（path → 入度），
-    // 替代下方 O(pages×edges) 嵌套循环。
+    // 一次 O(E) 预算：in_links_map（path → 入边来源集合，保留 HashMap：下方按 path 反填
+    // RetrievalNode.in_links 需 path 查）+ in_degree（Vec 下标=pages 序 → 入度），
+    // 替代下方 O(pages×edges) 嵌套循环。in_degree 用 Vec 而非 HashMap：查询处（communities/nodes
+    // 循环）用 pages 下标 i 直接索引，省掉循环内逐 path 的 String hash。
     let mut in_links_map: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut in_degree: HashMap<String, i32> = HashMap::new();
+    let mut in_degree: Vec<i32> = vec![0; pages.len()];
     for (s, t) in &placeholder_edges {
         in_links_map.entry(t.clone()).or_default().insert(s.clone());
-        *in_degree.entry(t.clone()).or_insert(0) += 1;
+        // 不变式护栏：t 必属 pages（resolve_wikilink 只返回 stem_to_path 的 value）。
+        // 防 placeholder_edges 未来引入非 wikilink 边时 path_index 缺 key 而静默 panic。
+        debug_assert!(path_index.contains_key(t), "edge target {t} 不在 pages 内");
+        in_degree[path_index[t]] += 1;
     }
     // 3b. 反填 inLinks → 完成 RetrievalGraph
     let mut rnodes: HashMap<String, RetrievalNode> = HashMap::new();
@@ -299,9 +304,8 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
         }
         let cohesion = intra as f64 / possible as f64;
         let mut lc: Vec<(usize, i32)> = members.iter().map(|&i| {
-            let p = &pages[i];
-            let deg = adj_out[path_index[&p.path]].len() as i32
-                + *in_degree.get(&p.path).unwrap_or(&0);
+            // i 即 pages 下标（== path_index[&pages[i].path]），直接索引省 hash
+            let deg = adj_out[i].len() as i32 + in_degree[i];
             (i, deg)
         }).collect();
         lc.sort_by(|a, b| b.1.cmp(&a.1));
@@ -310,7 +314,7 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
     }
 
     let mut nodes: Vec<GraphNode> = pages.iter().enumerate().map(|(i, p)| {
-        let deg = adj_out[i].len() as i32 + *in_degree.get(&p.path).unwrap_or(&0);
+        let deg = adj_out[i].len() as i32 + in_degree[i];
         // 【M3 适配】node_type 也 lowercase（与 RetrievalNode.type 一致）
         let ty = p.page_type.clone().unwrap_or_else(|| "other".into()).to_lowercase();
         GraphNode {
