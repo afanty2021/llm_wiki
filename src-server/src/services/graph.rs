@@ -9,21 +9,27 @@ const W_SOURCE_OVERLAP: f64 = 4.0;
 const W_COMMON_NEIGHBOR: f64 = 1.5;
 const W_TYPE_AFFINITY: f64 = 1.0;
 
-/// 类型亲和度矩阵（照搬桌面 graph-relevance.ts；新 type 走 default 0.5）。
+/// 类型亲和度矩阵（桌面 graph-relevance.ts 5 类型原值 + 服务端扩展 4 类型）。
 ///
-/// 【fidelity 注释】矩阵键仅覆盖桌面 canonical 分类法（entity/concept/source/query/synthesis）。
-/// 真实 ingest 数据的 page_type 是 LLM 的 NER 式分类（Person/Organization/Project/System 等），
-/// 多数落 default 0.5——type 信号偏弱。根因在 ingest LLM 分类法与桌面 graph 分类法不同
-/// （非本函数 bug）；其余三信号（directLink/sourceOverlap/commonNeighbor）仍正常承载相关性。
+/// 【fidelity】桌面原矩阵覆盖 5 canonical 类型（entity/concept/source/query/synthesis）。
+/// ingest LLM 的 GENERATION_WIKI_TYPES 多产 4 类（comparison/thesis/methodology/finding），
+/// 桌面矩阵不覆盖 → 原 default 0.5 致 type 信号对这些类型偏弱。服务端扩展补全 9×9 对称矩阵
+/// （type_affinity_extended_types_hit_and_symmetric 锁对称），让 type 信号对所有 canonical
+/// 类型生效。reserved pages（index/log/overview）page_type='system' 仍落 default 0.5（同语义）。
 fn type_affinity(a: &str, b: &str) -> f64 {
     let m = |t: &str| -> std::collections::HashMap<&str, f64> {
         let mut h = std::collections::HashMap::new();
         match t {
-            "entity" => { h.insert("concept",1.2); h.insert("entity",0.8); h.insert("source",1.0); h.insert("synthesis",1.0); h.insert("query",0.8); }
-            "concept" => { h.insert("entity",1.2); h.insert("concept",0.8); h.insert("source",1.0); h.insert("synthesis",1.2); h.insert("query",1.0); }
-            "source" => { h.insert("entity",1.0); h.insert("concept",1.0); h.insert("source",0.5); h.insert("query",0.8); h.insert("synthesis",1.0); }
-            "query" => { h.insert("concept",1.0); h.insert("entity",0.8); h.insert("synthesis",1.0); h.insert("source",0.8); h.insert("query",0.5); }
-            "synthesis" => { h.insert("concept",1.2); h.insert("entity",1.0); h.insert("source",1.0); h.insert("query",1.0); h.insert("synthesis",0.8); }
+            "entity" => { h.insert("concept",1.2); h.insert("entity",0.8); h.insert("source",1.0); h.insert("synthesis",1.0); h.insert("query",0.8); h.insert("comparison",1.2); h.insert("thesis",1.0); h.insert("methodology",0.8); h.insert("finding",1.0); }
+            "concept" => { h.insert("entity",1.2); h.insert("concept",0.8); h.insert("source",1.0); h.insert("synthesis",1.2); h.insert("query",1.0); h.insert("comparison",1.2); h.insert("thesis",1.2); h.insert("methodology",1.0); h.insert("finding",1.0); }
+            "source" => { h.insert("entity",1.0); h.insert("concept",1.0); h.insert("source",0.5); h.insert("query",0.8); h.insert("synthesis",1.0); h.insert("comparison",1.0); h.insert("thesis",0.8); h.insert("methodology",1.0); h.insert("finding",1.2); }
+            "query" => { h.insert("concept",1.0); h.insert("entity",0.8); h.insert("synthesis",1.0); h.insert("source",0.8); h.insert("query",0.5); h.insert("comparison",0.8); h.insert("thesis",0.8); h.insert("methodology",1.0); h.insert("finding",0.8); }
+            "synthesis" => { h.insert("concept",1.2); h.insert("entity",1.0); h.insert("source",1.0); h.insert("query",1.0); h.insert("synthesis",0.8); h.insert("comparison",1.2); h.insert("thesis",1.2); h.insert("methodology",1.0); h.insert("finding",1.2); }
+            // 以下 4 行为服务端扩展（桌面矩阵不覆盖；对称补全见下方测试）
+            "comparison" => { h.insert("concept",1.2); h.insert("entity",1.2); h.insert("source",1.0); h.insert("query",0.8); h.insert("synthesis",1.2); h.insert("comparison",0.5); h.insert("thesis",1.0); h.insert("methodology",0.8); h.insert("finding",1.0); }
+            "thesis" => { h.insert("concept",1.2); h.insert("entity",1.0); h.insert("source",0.8); h.insert("query",0.8); h.insert("synthesis",1.2); h.insert("comparison",1.0); h.insert("thesis",0.5); h.insert("methodology",0.8); h.insert("finding",1.2); }
+            "methodology" => { h.insert("concept",1.0); h.insert("entity",0.8); h.insert("source",1.0); h.insert("query",1.0); h.insert("synthesis",1.0); h.insert("comparison",0.8); h.insert("thesis",0.8); h.insert("finding",1.2); h.insert("methodology",0.5); }
+            "finding" => { h.insert("concept",1.0); h.insert("entity",1.0); h.insert("source",1.2); h.insert("query",0.8); h.insert("synthesis",1.2); h.insert("comparison",1.0); h.insert("thesis",1.2); h.insert("methodology",1.2); h.insert("finding",0.8); }
             _ => {}
         }
         h
@@ -576,6 +582,28 @@ mod tests {
         assert!((type_affinity("entity","concept") - 1.2).abs() < 1e-9);
         assert!((type_affinity("source","source") - 0.5).abs() < 1e-9);
         assert!((type_affinity("unknowntype","entity") - 0.5).abs() < 1e-9); // default
+    }
+
+    #[test]
+    fn type_affinity_extended_types_hit_and_symmetric() {
+        // 新增 4 类型命中矩阵（非 default 0.5）
+        assert!((type_affinity("comparison", "concept") - 1.2).abs() < 1e-9);
+        assert!((type_affinity("thesis", "finding") - 1.2).abs() < 1e-9);
+        assert!((type_affinity("methodology", "finding") - 1.2).abs() < 1e-9);
+        assert!((type_affinity("finding", "source") - 1.2).abs() < 1e-9);
+        // system（reserved pages）仍落 default 0.5
+        assert!((type_affinity("system", "entity") - 0.5).abs() < 1e-9);
+        // 全 9 类型两两对称：type_affinity(a,b) == type_affinity(b,a)
+        let types = ["entity","concept","source","query","synthesis",
+                     "comparison","thesis","methodology","finding"];
+        for &a in &types {
+            for &b in &types {
+                assert!(
+                    (type_affinity(a, b) - type_affinity(b, a)).abs() < 1e-9,
+                    "不对称: {a}↔{b} ({} vs {})", type_affinity(a, b), type_affinity(b, a)
+                );
+            }
+        }
     }
 
     #[test]
