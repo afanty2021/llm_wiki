@@ -76,6 +76,36 @@ pub(crate) fn calculate_relevance(a: &RetrievalNode, b: &RetrievalNode, g: &Retr
     direct + shared + common + ta
 }
 
+/// 归一化 stem/raw：小写 + 空格→连字符。
+fn normalize_stem(s: &str) -> String {
+    s.to_lowercase().replace(' ', "-")
+}
+
+/// 从 path 提取 stem：最后一个 '/' 之后、".md" 之前。
+fn path_stem(path: &str) -> &str {
+    let last = path.rsplit('/').next().unwrap_or(path);
+    last.trim_end_matches(".md")
+}
+
+/// 构造 stem_to_path：归一化 stem → path；重复 stem 取首个（§11 #6）。
+pub(crate) fn build_stem_to_path(paths: &[String]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for p in paths {
+        let key = normalize_stem(path_stem(p));
+        if map.contains_key(&key) {
+            tracing::warn!("dup stem {} (keep first: {:?}, dropped: {})", key, map.get(&key), p);
+        } else {
+            map.insert(key, p.clone());
+        }
+    }
+    map
+}
+
+/// [[X]] → path：归一化 raw 后查 stem_to_path。
+pub(crate) fn resolve_wikilink(raw: &str, stem_to_path: &HashMap<String, String>) -> Option<String> {
+    stem_to_path.get(&normalize_stem(raw.trim())).cloned()
+}
+
 // TRANSIENT NOTE: 旧 build_graph + GraphNode/GraphEdge/CommunityInfo/WikiGraph/GRAPH_CACHE 已删，
 // 在 2c Task5 重建（真 Louvain + relevance 边权）。期间 routes/graph.rs 走 transient stub。
 // `use sqlx::PgPool;` 暂未消费（Task5 build_graph 才用），unused warning 无害。
@@ -146,5 +176,27 @@ mod tests {
         let r = calculate_relevance(&a, &b, &g);
         let expect = (1.0 / 4f64.ln()) * 1.5 + 0.8; // aa*W_COMMON_NEIGHBOR + typeAffinity(entity,entity)=0.8
         assert!((r - expect).abs() < 1e-9, "got {} expect {} (degree 不去重 deg=4)", r, expect);
+    }
+
+    #[test]
+    fn resolve_wikilink_fuzzy_to_path() {
+        // stem_to_path: 归一化 stem(lowercase+空格→连字符) → path
+        let mut s2p = std::collections::HashMap::new();
+        s2p.insert("alice".into(), "entities/alice.md".into());
+        s2p.insert("project-phoenix".into(), "entities/project-phoenix.md".into());
+        // 大小写
+        assert_eq!(resolve_wikilink("Alice", &s2p), Some("entities/alice.md".into()));
+        // 空格↔连字符
+        assert_eq!(resolve_wikilink("Project Phoenix", &s2p), Some("entities/project-phoenix.md".into()));
+        // 未命中
+        assert_eq!(resolve_wikilink("nonexistent", &s2p), None);
+    }
+
+    #[test]
+    fn build_stem_to_path_dedup_first() {
+        // 重复 stem 取首个（path 不同但 stem 同）
+        let paths = vec!["entities/alice.md".to_string(), "concepts/alice.md".to_string()];
+        let s2p = build_stem_to_path(&paths);
+        assert_eq!(s2p.get("alice"), Some(&"entities/alice.md".to_string()));
     }
 }
