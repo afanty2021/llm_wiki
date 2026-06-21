@@ -321,6 +321,23 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
     Ok(graph)
 }
 
+/// 相关节点：path 的邻边按 weight desc 取 top-N。需 title，从 nodes 查。
+pub fn related_nodes(graph: &WikiGraph, path: &str, limit: usize) -> Vec<RelatedNode> {
+    let title_of: HashMap<&str, &str> = graph.nodes.iter().map(|n| (n.id.as_str(), n.label.as_str())).collect();
+    let mut hits: Vec<(String, f64)> = graph.edges.iter()
+        .filter_map(|e| {
+            if e.source == path { Some((e.target.clone(), e.weight)) }
+            else if e.target == path { Some((e.source.clone(), e.weight)) }
+            else { None }
+        })
+        .collect();
+    hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    hits.into_iter().take(limit).map(|(p, w)| RelatedNode {
+        title: title_of.get(p.as_str()).map(|s| s.to_string()).unwrap_or_else(|| p.clone()),
+        path: p, relevance: w,
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,5 +426,25 @@ mod tests {
         let paths = vec!["entities/alice.md".to_string(), "concepts/alice.md".to_string()];
         let s2p = build_stem_to_path(&paths);
         assert_eq!(s2p.get("alice"), Some(&"entities/alice.md".to_string()));
+    }
+
+    #[test]
+    fn related_nodes_sorted_by_weight_topn() {
+        let g = WikiGraph {
+            nodes: vec![
+                GraphNode { id: "a".into(), label: "A".into(), node_type: "entity".into(), path: "a".into(), link_count: 0, community: 0 },
+            ],
+            edges: vec![
+                GraphEdge { source: "a".into(), target: "b".into(), weight: 0.5 },
+                GraphEdge { source: "c".into(), target: "a".into(), weight: 3.0 },
+                GraphEdge { source: "a".into(), target: "d".into(), weight: 1.2 },
+                GraphEdge { source: "x".into(), target: "y".into(), weight: 9.0 }, // 无关
+            ],
+            communities: vec![],
+        };
+        let r = related_nodes(&g, "a", 2);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].path, "c"); // weight 3.0 最高
+        assert_eq!(r[1].path, "d"); // 1.2 次之
     }
 }
