@@ -489,8 +489,8 @@ pub fn detect_knowledge_gaps(graph: &WikiGraph, limit: usize) -> Vec<KnowledgeGa
     let node_map: HashMap<&str, &GraphNode> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     for e in &graph.edges {
         if let (Some(s), Some(t)) = (node_map.get(e.source.as_str()), node_map.get(e.target.as_str())) {
-            comm_neighbors.get_mut(e.source.as_str()).map(|cs| { cs.insert(t.community); });
-            comm_neighbors.get_mut(e.target.as_str()).map(|cs| { cs.insert(s.community); });
+            if let Some(cs) = comm_neighbors.get_mut(e.source.as_str()) { cs.insert(t.community); }
+            if let Some(cs) = comm_neighbors.get_mut(e.target.as_str()) { cs.insert(s.community); }
         }
     }
     let mut bridges: Vec<(&GraphNode, usize)> = graph.nodes.iter()

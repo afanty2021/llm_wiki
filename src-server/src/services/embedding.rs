@@ -99,7 +99,7 @@ pub async fn embed_page(
         .map(|_| ())
 }
 
-/// 单条文本嵌入（/search/vector 查询侧用）。返回 dim 维向量。
+/// 单条文本嵌入（hybrid_search 查询侧用）。返回 dim 维向量。
 pub async fn embed_query(
     cfg: &EmbeddingConfig,
     client: &reqwest::Client,
