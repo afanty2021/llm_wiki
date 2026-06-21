@@ -29,15 +29,12 @@ pub async fn get_insights(
     Path(project_id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, _team_id) = check_project_access(&state, &headers, project_id).await?;
-    let graph_data = crate::services::graph::build_graph(&state.db, project_id).await?;
+    let graph = crate::services::graph::build_graph(&state.db, project_id).await?;
+    let surprising = crate::services::graph::find_surprising_connections(&graph, 5);
+    let gaps = crate::services::graph::detect_knowledge_gaps(&graph, 8);
     Ok(Json(serde_json::json!({
-        "node_count": graph_data.nodes.len(),
-        "edge_count": graph_data.edges.len(),
-        "density": if graph_data.nodes.len() > 1 {
-            let max_edges = graph_data.nodes.len() * (graph_data.nodes.len() - 1) / 2;
-            graph_data.edges.len() as f64 / max_edges as f64
-        } else { 0.0 },
-        "communities": graph_data.communities,
+        "surprisingConnections": surprising,
+        "knowledgeGaps": gaps,
     })))
 }
 
