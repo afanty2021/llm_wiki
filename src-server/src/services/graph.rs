@@ -437,8 +437,82 @@ pub fn find_surprising_connections(graph: &WikiGraph, limit: usize) -> Vec<Surpr
     scored
 }
 
-pub fn detect_knowledge_gaps(_graph: &WikiGraph, _limit: usize) -> Vec<KnowledgeGap> {
-    Vec::new() // Task 3 实现
+pub fn detect_knowledge_gaps(graph: &WikiGraph, limit: usize) -> Vec<KnowledgeGap> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut gaps: Vec<KnowledgeGap> = Vec::new();
+
+    // 1. isolated nodes (degree ≤ 1, exclude system)
+    let isolated: Vec<&GraphNode> = graph.nodes.iter()
+        .filter(|n| n.link_count <= 1 && n.node_type.to_lowercase() != "system")
+        .collect();
+    if !isolated.is_empty() {
+        let top5: Vec<String> = isolated.iter().take(5).map(|n| n.label.clone()).collect();
+        let desc = if isolated.len() > 5 {
+            format!("{}, ... and {} more", top5.join(", "), isolated.len() - 5)
+        } else {
+            top5.join(", ")
+        };
+        gaps.push(KnowledgeGap {
+            r#type: "isolated-node".into(),
+            title: format!("{} isolated page{}", isolated.len(), if isolated.len() > 1 { "s" } else { "" }),
+            description: desc,
+            node_ids: isolated.iter().map(|n| n.path.clone()).collect(),
+            suggestion: "These pages have few or no connections. Consider adding [[wikilinks]] to related pages, or research to expand their content.".into(),
+        });
+    }
+
+    // 2. sparse communities (cohesion < 0.15, ≥ 3 nodes)
+    let comm_nodes: HashMap<usize, Vec<&GraphNode>> = {
+        let mut m: HashMap<usize, Vec<&GraphNode>> = HashMap::new();
+        for n in &graph.nodes {
+            m.entry(n.community).or_default().push(n);
+        }
+        m
+    };
+    for c in &graph.communities {
+        if c.cohesion < 0.15 && c.node_count >= 3 {
+            let first = c.top_nodes.first().cloned().unwrap_or_else(|| format!("Community {}", c.id));
+            gaps.push(KnowledgeGap {
+                r#type: "sparse-community".into(),
+                title: format!("Sparse cluster: {}", first),
+                description: format!("{} pages with cohesion {:.2} — internal connections are weak.", c.node_count, c.cohesion),
+                node_ids: comm_nodes.get(&c.id).map(|ns| ns.iter().map(|n| n.path.clone()).collect()).unwrap_or_default(),
+                suggestion: "This knowledge area lacks internal cross-references. Consider adding links between these pages or researching to fill gaps.".into(),
+            });
+        }
+    }
+
+    // 3. bridge nodes (neighbors span ≥ 3 communities, exclude system)
+    let mut comm_neighbors: HashMap<&str, HashSet<usize>> = graph.nodes.iter()
+        .map(|n| (n.id.as_str(), HashSet::new())).collect();
+    let node_map: HashMap<&str, &GraphNode> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    for e in &graph.edges {
+        if let (Some(s), Some(t)) = (node_map.get(e.source.as_str()), node_map.get(e.target.as_str())) {
+            comm_neighbors.get_mut(e.source.as_str()).map(|cs| { cs.insert(t.community); });
+            comm_neighbors.get_mut(e.target.as_str()).map(|cs| { cs.insert(s.community); });
+        }
+    }
+    let mut bridges: Vec<(&GraphNode, usize)> = graph.nodes.iter()
+        .filter(|n| {
+            if n.node_type.to_lowercase() == "system" { return false; }
+            comm_neighbors.get(n.id.as_str()).map(|c| c.len() >= 3).unwrap_or(false)
+        })
+        .map(|n| (n, comm_neighbors.get(n.id.as_str()).map(|c| c.len()).unwrap_or(0)))
+        .collect();
+    bridges.sort_by(|a, b| b.1.cmp(&a.1)); // desc by community count
+    for (bridge, count) in bridges.iter().take(3) {
+        gaps.push(KnowledgeGap {
+            r#type: "bridge-node".into(),
+            title: format!("Key bridge: {}", bridge.label),
+            description: format!("Connects {} different knowledge clusters. This is a critical junction in your wiki.", count),
+            node_ids: vec![bridge.path.clone()],
+            suggestion: "This page bridges multiple knowledge areas. Ensure it's well-maintained — if it's thin, expanding it will strengthen your entire wiki.".into(),
+        });
+    }
+
+    gaps.truncate(limit); // 桌面 overall slice
+    gaps
 }
 
 #[cfg(test)]
@@ -663,5 +737,88 @@ mod tests {
         };
         let s = find_surprising_connections(&g, 5);
         assert!(s.is_empty(), "edges involving system nodes should be excluded");
+    }
+
+    #[test]
+    fn gaps_isolated_nodes() {
+        let g = WikiGraph {
+            nodes: vec![mk_node("orphan","Orphan","entity",0,0), mk_node("conn","Connected","concept",5,0)],
+            edges: vec![mk_edge("conn","orphan",5.0)], // only one edge — orphan degree via edge
+            communities: vec![],
+        };
+        let gaps = detect_knowledge_gaps(&g, 8);
+        assert!(gaps.iter().any(|g| g.r#type == "isolated-node"));
+    }
+
+    #[test]
+    fn gaps_sparse_community() {
+        let g = WikiGraph {
+            nodes: vec![
+                mk_node("a","A","concept",2,0), mk_node("b","B","concept",2,0), mk_node("c","C","concept",1,0),
+            ],
+            edges: vec![mk_edge("a","b",5.0)], // only one edge — cohesion=1/3≈0.33... wait need cohesion<0.15
+            communities: vec![CommunityInfo{id:0,node_count:3,cohesion:0.10,top_nodes:vec!["A".into()]}],
+        };
+        let gaps = detect_knowledge_gaps(&g, 8);
+        assert!(gaps.iter().any(|g| g.r#type == "sparse-community"));
+    }
+
+    #[test]
+    fn gaps_bridge_nodes() {
+        // node a connects to b(comm0), c(comm1), d(comm2) → 3 communities
+        let g = WikiGraph {
+            nodes: vec![
+                mk_node("bridge","Bridge","concept",3,0),
+                mk_node("b","B","concept",1,1),
+                mk_node("c","C","concept",1,2),
+                mk_node("d","D","concept",1,3),
+            ],
+            edges: vec![mk_edge("bridge","b",5.0),mk_edge("bridge","c",5.0),mk_edge("bridge","d",5.0)],
+            communities: vec![],
+        };
+        let gaps = detect_knowledge_gaps(&g, 8);
+        assert!(gaps.iter().any(|g| g.r#type == "bridge-node"));
+    }
+
+    #[test]
+    fn gaps_desktop_order_isolated_sparse_bridge() {
+        // 三类 gap 同时存在
+        let g = WikiGraph {
+            nodes: vec![
+                mk_node("orphan","O","entity",0,0),
+                mk_node("a","A","concept",2,0), mk_node("b","B","concept",2,0), mk_node("c","C","concept",1,0),
+                mk_node("bridge","Br","concept",3,0),
+                mk_node("x","X","concept",1,1), mk_node("y","Y","concept",1,2), mk_node("z","Z","concept",1,3),
+            ],
+            edges: vec![
+                mk_edge("a","b",5.0),
+                mk_edge("orphan","bridge",5.0),
+                mk_edge("bridge","x",5.0), mk_edge("bridge","y",5.0), mk_edge("bridge","z",5.0),
+            ],
+            communities: vec![CommunityInfo{id:0,node_count:3,cohesion:0.10,top_nodes:vec!["A".into()]}],
+        };
+        let gaps = detect_knowledge_gaps(&g, 8);
+        let types: Vec<&str> = gaps.iter().map(|g| g.r#type.as_str()).collect();
+        // 桌面序：isolated → sparse → bridge
+        let iso = types.iter().position(|t| *t == "isolated-node");
+        let spa = types.iter().position(|t| *t == "sparse-community");
+        let bri = types.iter().position(|t| *t == "bridge-node");
+        assert!(iso < spa, "desktop order: isolated before sparse, got {:?}", types);
+        assert!(spa < bri, "desktop order: sparse before bridge, got {:?}", types);
+    }
+
+    #[test]
+    fn gaps_exclude_system_nodes() {
+        let g = WikiGraph {
+            nodes: vec![mk_node("sys","Idx","system",0,0),
+                        mk_node("orphan","O","entity",0,1)],
+            edges: vec![],
+            communities: vec![],
+        };
+        let gaps = detect_knowledge_gaps(&g, 8);
+        // system node should NOT be isolated; only orphan counts
+        let iso = gaps.iter().find(|g| g.r#type == "isolated-node");
+        assert!(iso.is_some());
+        assert!(!iso.unwrap().node_ids.contains(&"sys".to_string()));
     }
 }
