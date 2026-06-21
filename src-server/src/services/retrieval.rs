@@ -249,18 +249,21 @@ pub async fn retrieve_context(
         })
         .collect();
 
-    // P3 overview fallback (one synthesis/overview page, if not already a candidate)
-    let overview: Option<PageRow> = sqlx::query_as::<_, PageRow>(
-        "SELECT path, title, content, page_type FROM wiki_pages \
-         WHERE project_id = $1 \
-           AND (page_type IN ('synthesis','overview') OR path ILIKE '%overview%') \
-         ORDER BY updated_at DESC LIMIT 1",
-    )
-    .bind(project_id)
-    .fetch_optional(&state.db)
-    .await?;
-    if let Some(o) = overview {
-        if !path_priority.contains_key(&o.path) {
+    // P3 overview fallback: ONLY when no relevant pages were found — a last-resort
+    // "兜底" so the model has something to ground on. Matches desktop chat-panel
+    // semantics (don't pad good matches with the synthesis page). Query is skipped
+    // entirely when candidates already exist.
+    if candidates.is_empty() {
+        let overview: Option<PageRow> = sqlx::query_as::<_, PageRow>(
+            "SELECT path, title, content, page_type FROM wiki_pages \
+             WHERE project_id = $1 \
+               AND (page_type IN ('synthesis','overview') OR path ILIKE '%overview%') \
+             ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(project_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(o) = overview {
             candidates.push(Candidate {
                 title: o.title.unwrap_or_default(),
                 content: o.content.unwrap_or_default(),
