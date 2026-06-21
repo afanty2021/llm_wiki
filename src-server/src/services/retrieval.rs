@@ -59,6 +59,258 @@ pub fn compute_context_budget(context_size: i32) -> ContextBudget {
     }
 }
 
+// ============ candidate / result types ============
+
+/// A wiki page candidate for context, with its fill priority.
+/// 0 = title match, 1 = content match, 2 = graph expansion, 3 = overview fallback.
+#[derive(Clone)]
+pub struct Candidate {
+    pub path: String,
+    pub title: String,
+    pub content: String,
+    pub priority: u8,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievedPage {
+    pub number: i32,
+    pub path: String,
+    pub title: String,
+    pub content: String,
+    pub priority: u8,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalResult {
+    pub pages: Vec<RetrievedPage>,
+    pub assembled_context: String,
+    pub index_snippet: String,
+    pub ref_map: HashMap<i32, MessageReference>,
+}
+
+/// Pure: order candidates by priority, dedupe by path, truncate each page to
+/// `max_page_size`, greedily fill until `page_budget` is exhausted (a page that
+/// does not fit is skipped, matching desktop `tryAddPage`), number them, and
+/// assemble the `### [n] Title\nPath: ..\n\n{content}` blocks.
+pub fn select_and_assemble(
+    candidates: Vec<Candidate>,
+    index_snippet: String,
+    budget: &ContextBudget,
+) -> RetrievalResult {
+    let mut sorted = candidates;
+    sorted.sort_by_key(|c| c.priority);
+
+    let mut pages: Vec<RetrievedPage> = Vec::new();
+    let mut ref_map: HashMap<i32, MessageReference> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut used: usize = 0;
+    let mut number: i32 = 1;
+
+    for c in sorted {
+        if used >= budget.page_budget {
+            break;
+        }
+        if !seen.insert(c.path.clone()) {
+            continue;
+        }
+        let content: String = if c.content.chars().count() > budget.max_page_size {
+            c.content.chars().take(budget.max_page_size).collect()
+        } else {
+            c.content.clone()
+        };
+        let added = content.chars().count();
+        if used + added > budget.page_budget {
+            continue; // doesn't fit; skip (desktop tryAddPage semantics)
+        }
+        ref_map.insert(
+            number,
+            MessageReference {
+                title: c.title.clone(),
+                path: Some(c.path.clone()),
+                kind: RefKind::Wiki,
+                url: None,
+                snippet: None,
+            },
+        );
+        pages.push(RetrievedPage {
+            number,
+            path: c.path.clone(),
+            title: c.title.clone(),
+            content: content.clone(),
+            priority: c.priority,
+        });
+        used += added;
+        number += 1;
+    }
+
+    let assembled_context = pages
+        .iter()
+        .map(|p| format!("### [{}] {}\nPath: {}\n\n{}", p.number, p.title, p.path, p.content))
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n");
+
+    RetrievalResult {
+        pages,
+        assembled_context,
+        index_snippet,
+        ref_map,
+    }
+}
+
+// ============ FromRow structs for retrieve_context ============
+
+#[derive(sqlx::FromRow)]
+struct PageRow {
+    path: String,
+    title: Option<String>,
+    content: Option<String>,
+    // Selected so the FromRow column set matches the SQL projection, but
+    // not consumed by the assembler.
+    #[allow(dead_code)]
+    page_type: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct IndexRow {
+    path: String,
+    title: Option<String>,
+    page_type: Option<String>,
+}
+
+/// Phase 1 (hybrid search) → Phase 2 (graph expansion) → fetch content →
+/// Phase 3/4 (budget fill + numbered assembly). Returns the assembled context,
+/// the wiki index snippet, and a number→reference map for citation resolution.
+pub async fn retrieve_context(
+    state: &AppState,
+    project_id: i32,
+    query: &str,
+    context_size: i32,
+) -> Result<RetrievalResult, AppError> {
+    let budget = compute_context_budget(context_size);
+
+    // Phase 1: keyword/vector hybrid search
+    let search = crate::services::search::hybrid_search(
+        &state.db,
+        state.config.embedding.as_ref(),
+        &state.http,
+        project_id,
+        query,
+        SEARCH_LIMIT,
+    )
+    .await?;
+
+    // Phase 2: graph expansion (2-hop related nodes above relevance threshold)
+    let graph = crate::services::graph::build_graph(&state.db, project_id).await?;
+    let mut graph_paths: HashSet<String> = HashSet::new();
+    for r in &search.results {
+        for rn in crate::services::graph::related_nodes(&graph, &r.path, GRAPH_EXPAND_LIMIT) {
+            if rn.relevance >= GRAPH_RELEVANCE_THRESHOLD {
+                graph_paths.insert(rn.path);
+            }
+        }
+    }
+
+    // priority per path: title match (0) < content match (1) < graph (2)
+    let mut path_priority: HashMap<String, u8> = HashMap::new();
+    for r in &search.results {
+        let pri = if r.title_match { 0u8 } else { 1u8 };
+        path_priority
+            .entry(r.path.clone())
+            .and_modify(|p| *p = (*p).min(pri))
+            .or_insert(pri);
+    }
+    for p in &graph_paths {
+        path_priority.entry(p.clone()).or_insert(2u8);
+    }
+
+    // fetch content for all candidate paths in one query
+    let paths: Vec<String> = path_priority.keys().cloned().collect();
+    let rows: Vec<PageRow> = if paths.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as::<_, PageRow>(
+            "SELECT path, title, content, page_type FROM wiki_pages \
+             WHERE project_id = $1 AND path = ANY($2)",
+        )
+        .bind(project_id)
+        .bind(&paths)
+        .fetch_all(&state.db)
+        .await?
+    };
+    let mut candidates: Vec<Candidate> = rows
+        .into_iter()
+        .map(|r| Candidate {
+            title: r.title.clone().unwrap_or_else(|| r.path.clone()),
+            content: r.content.unwrap_or_default(),
+            priority: path_priority.get(&r.path).copied().unwrap_or(9),
+            path: r.path,
+        })
+        .collect();
+
+    // P3 overview fallback (one synthesis/overview page, if not already a candidate)
+    let overview: Option<PageRow> = sqlx::query_as::<_, PageRow>(
+        "SELECT path, title, content, page_type FROM wiki_pages \
+         WHERE project_id = $1 \
+           AND (page_type IN ('synthesis','overview') OR path ILIKE '%overview%') \
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(o) = overview {
+        if !path_priority.contains_key(&o.path) {
+            candidates.push(Candidate {
+                title: o.title.unwrap_or_default(),
+                content: o.content.unwrap_or_default(),
+                priority: 3,
+                path: o.path,
+            });
+        }
+    }
+
+    // wiki index snippet (all page titles), trimmed to index_budget chars
+    let index_rows: Vec<IndexRow> = sqlx::query_as::<_, IndexRow>(
+        "SELECT path, title, page_type FROM wiki_pages WHERE project_id = $1 ORDER BY title",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db)
+    .await?;
+    let mut index_snippet = index_rows
+        .into_iter()
+        .map(|r| {
+            format!(
+                "- {} ({}) [{}]",
+                r.title.unwrap_or_else(|| r.path.clone()),
+                r.page_type.unwrap_or_else(|| "page".into()),
+                r.path
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if index_snippet.chars().count() > budget.index_budget {
+        index_snippet = index_snippet.chars().take(budget.index_budget).collect();
+    }
+
+    Ok(select_and_assemble(candidates, index_snippet, &budget))
+}
+
+/// Build the system prompt embedding the index + numbered pages + citation rules.
+pub fn build_system_prompt(retrieval: &RetrievalResult) -> String {
+    format!(
+"You are a knowledgeable assistant answering questions about a wiki. Use ONLY the wiki pages provided below. When you use information from a page, cite it as [1], [2], etc. matching the page numbers in the headers. If the answer is not in the pages, say you don't know. After your answer, on a new line, append exactly one comment listing every page number you cited, in this format: <!-- cited: n, m --> Answer in the same language as the user's question.
+
+== Wiki Index ==
+{index}
+
+== Wiki Pages ==
+{pages}",
+        index = retrieval.index_snippet,
+        pages = retrieval.assembled_context,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +339,65 @@ mod tests {
         let b = compute_context_budget(2_000);
         assert_eq!(b.page_budget, 1_000);
         assert_eq!(b.max_page_size, 1_000); // min(page_budget=1000, max(5000, 300)) = 1000
+    }
+
+    fn budget_for(ctx: i32) -> ContextBudget {
+        compute_context_budget(ctx)
+    }
+
+    fn cand(path: &str, content: &str, priority: u8) -> Candidate {
+        Candidate {
+            path: path.into(),
+            title: format!("Title {}", path),
+            content: content.into(),
+            priority,
+        }
+    }
+
+    #[test]
+    fn assembles_in_priority_order_with_numbers() {
+        let b = budget_for(100_000); // page_budget 50000, max_page 15000
+        let cands = vec![
+            cand("graph.md", "g", 2),
+            cand("title.md", "t", 0),
+            cand("content.md", "c", 1),
+        ];
+        let r = select_and_assemble(cands, "idx".into(), &b);
+        assert_eq!(r.pages.len(), 3);
+        // priority order: title(0), content(1), graph(2)
+        assert_eq!(r.pages[0].path, "title.md");
+        assert_eq!(r.pages[0].number, 1);
+        assert_eq!(r.pages[1].path, "content.md");
+        assert_eq!(r.pages[1].number, 2);
+        assert_eq!(r.pages[2].path, "graph.md");
+        assert_eq!(r.pages[2].number, 3);
+        assert!(r.assembled_context.contains("### [1] Title title.md"));
+        assert!(r.assembled_context.contains("### [3] Title graph.md"));
+        assert_eq!(r.ref_map.get(&2).unwrap().path.as_deref(), Some("content.md"));
+    }
+
+    #[test]
+    fn dedupes_same_path_keeping_highest_priority() {
+        let b = budget_for(100_000);
+        let cands = vec![
+            cand("dup.md", "first", 1),
+            cand("dup.md", "second", 0),
+        ];
+        let r = select_and_assemble(cands, "idx".into(), &b);
+        assert_eq!(r.pages.len(), 1);
+        // priority 0 sorts first, so "second" wins
+        assert_eq!(r.pages[0].content, "second");
+    }
+
+    #[test]
+    fn skips_page_that_exceeds_remaining_budget() {
+        let b = budget_for(10_000); // page_budget 5000, max_page 5000
+        let big = "x".repeat(6000); // > max_page_size -> truncated to 5000
+        let cands = vec![cand("big.md", &big, 0), cand("small.md", "s", 1)];
+        let r = select_and_assemble(cands, "idx".into(), &b);
+        // big fills 5000 == page_budget -> used==budget, small skipped
+        assert_eq!(r.pages.len(), 1);
+        assert_eq!(r.pages[0].path, "big.md");
+        assert_eq!(r.pages[0].content.chars().count(), 5000);
     }
 }
