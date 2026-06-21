@@ -1,5 +1,6 @@
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
+use serde::Serialize;
 use crate::AppError;
 
 // ── 四信号权重（桌面 graph-relevance.ts 原值）──
@@ -106,9 +107,219 @@ pub(crate) fn resolve_wikilink(raw: &str, stem_to_path: &HashMap<String, String>
     stem_to_path.get(&normalize_stem(raw.trim())).cloned()
 }
 
-// TRANSIENT NOTE: 旧 build_graph + GraphNode/GraphEdge/CommunityInfo/WikiGraph/GRAPH_CACHE 已删，
-// 在 2c Task5 重建（真 Louvain + relevance 边权）。期间 routes/graph.rs 走 transient stub。
-// `use sqlx::PgPool;` 暂未消费（Task5 build_graph 才用），unused warning 无害。
+// ── build_graph 输出类型 ──
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNode {
+    pub id: String,        // path
+    pub label: String,
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub path: String,
+    #[serde(rename = "linkCount")]
+    pub link_count: i32,
+    pub community: usize,
+}
+
+#[derive(Serialize, Clone)]
+pub struct GraphEdge {
+    pub source: String,    // path
+    pub target: String,    // path
+    pub weight: f64,       // relevance
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityInfo {
+    pub id: usize,
+    pub node_count: usize,
+    pub cohesion: f64,
+    pub top_nodes: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct WikiGraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub communities: Vec<CommunityInfo>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedNode {
+    pub path: String,
+    pub title: String,
+    pub relevance: f64,
+}
+
+/// 项目级缓存：(project_id, max_updated_at) → WikiGraph
+static GRAPH_CACHE: std::sync::LazyLock<std::sync::Mutex<HashMap<(i32, i64), WikiGraph>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+#[derive(sqlx::FromRow)]
+struct WikiPageRow {
+    path: String,
+    title: String,
+    page_type: Option<String>,
+    content: Option<String>,
+    sources: Option<serde_json::Value>,
+}
+
+/// [[X]] 提取（移植桌面 regex，target 不 resolve）。
+fn extract_wikilinks(content: &str) -> Vec<String> {
+    let re = regex_lite::Regex::new(r"\[\[([^\]|\n]+?)(?:\|[^\]]+)?\]\]").unwrap();
+    re.captures_iter(content).map(|c| c.get(1).unwrap().as_str().trim().to_string()).collect()
+}
+
+fn sources_from_json(v: &Option<serde_json::Value>) -> HashSet<String> {
+    v.as_ref().and_then(|x| x.as_array()).map(|arr| {
+        arr.iter().filter_map(|s| s.as_str().map(String::from)).collect()
+    }).unwrap_or_default()
+}
+
+/// 主入口：从 wiki_pages 构建图谱（真 Louvain + relevance 边权 + node id=path + 过滤 query）。
+pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, AppError> {
+    // 缓存键 = max(updated_at)
+    let max_ts: Option<i64> = sqlx::query_scalar(
+        "SELECT EXTRACT(EPOCH FROM COALESCE(MAX(updated_at), TIMESTAMPTZ '1970-01-01'))::BIGINT \
+         FROM wiki_pages WHERE project_id = $1"
+    ).bind(project_id).fetch_optional(pool).await.map_err(AppError::DatabaseError)?.flatten();
+    let cache_ts = max_ts.unwrap_or(0);
+    if let Ok(cache) = GRAPH_CACHE.lock() {
+        if let Some(g) = cache.get(&(project_id, cache_ts)) {
+            return Ok(g.clone());
+        }
+    }
+
+    let pages: Vec<WikiPageRow> = sqlx::query_as::<_, WikiPageRow>(
+        "SELECT path, COALESCE(title,'') AS title, page_type, content, sources \
+         FROM wiki_pages WHERE project_id = $1 AND COALESCE(page_type,'') != 'query'"
+    ).bind(project_id).fetch_all(pool).await.map_err(AppError::DatabaseError)?;
+
+    if pages.is_empty() {
+        let empty = WikiGraph { nodes: vec![], edges: vec![], communities: vec![] };
+        return Ok(empty);
+    }
+
+    let paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
+    let stem_to_path = build_stem_to_path(&paths);
+    let path_index: HashMap<String, usize> = paths.iter().enumerate().map(|(i,p)| (p.clone(), i)).collect();
+
+    // 3a. 占位无向边（weight=1.0）+ wikilinks
+    let mut adj_out: Vec<HashSet<String>> = pages.iter().map(|_| HashSet::new()).collect();
+    let mut placeholder_edges: Vec<(String, String)> = Vec::new();
+    let mut seen_edges: HashSet<(String, String)> = HashSet::new();
+    for p in &pages {
+        let content = p.content.as_deref().unwrap_or("");
+        for raw in extract_wikilinks(content) {
+            let tgt = match resolve_wikilink(&raw, &stem_to_path) { Some(t) => t, None => continue };
+            if tgt == p.path { continue; }
+            let key = if &p.path < &tgt { (p.path.clone(), tgt.clone()) } else { (tgt.clone(), p.path.clone()) };
+            if seen_edges.contains(&key) { continue; }
+            seen_edges.insert(key);
+            placeholder_edges.push((p.path.clone(), tgt.clone()));
+            let si = path_index[&p.path];
+            adj_out[si].insert(tgt.clone());
+        }
+    }
+    // 3b. 反填 inLinks → 完成 RetrievalGraph
+    let mut rnodes: HashMap<String, RetrievalNode> = HashMap::new();
+    for p in &pages {
+        let i = path_index[&p.path];
+        let mut in_links: HashSet<String> = HashSet::new();
+        for (s, t) in &placeholder_edges {
+            if t == &p.path { in_links.insert(s.clone()); }
+        }
+        // 【M3 适配】page_type lowercase 填 type（对齐桌面 graph-relevance.ts 的 toLowerCase，
+        // 使 type_affinity 矩阵正确匹配 + 2d insights 的 system 排除一致）
+        let ty = p.page_type.clone().unwrap_or_else(|| "other".into()).to_lowercase();
+        rnodes.insert(p.path.clone(), RetrievalNode {
+            id: p.path.clone(), title: p.title.clone(),
+            r#type: ty,
+            sources: sources_from_json(&p.sources),
+            out_links: adj_out[i].clone(),
+            in_links,
+        });
+    }
+    let rgraph = RetrievalGraph { nodes: rnodes };
+
+    // 4. 算 relevance 替换 weight
+    let mut edges: Vec<GraphEdge> = placeholder_edges.iter().map(|(s, t)| {
+        let a = rgraph.nodes.get(s).unwrap();
+        let b = rgraph.nodes.get(t).unwrap();
+        GraphEdge { source: s.clone(), target: t.clone(), weight: calculate_relevance(a, b, &rgraph) }
+    }).collect();
+
+    // 6. petgraph + Louvain
+    let mut pg = petgraph::graph::Graph::<(), f64, petgraph::Undirected>::new_undirected();
+    let pg_nodes: Vec<_> = (0..pages.len()).map(|_| pg.add_node(())).collect();
+    let pi = |path: &str| pg_nodes[path_index[path]];
+    for e in &edges {
+        pg.add_edge(pi(&e.source), pi(&e.target), e.weight);
+    }
+    let comm = crate::services::louvain::louvain(&pg, 1.0); // 按 pg 节点序
+
+    // 7. 社区 info + 重编号。按社区大小降序处理，保证 communities[k] 与 id_remap 对齐
+    let mut groups_vec: Vec<(usize, Vec<usize>)> = {
+        let mut m: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (i, &c) in comm.iter().enumerate() { m.entry(c).or_default().push(i); }
+        m.into_iter().collect()
+    };
+    // 按社区大小降序；同 size 时按最小成员节点索引升序 tie-break，锁死跨运行确定性
+    // （避免 HashMap 迭代序致同 size 社区的 id 分配漂移）。
+    groups_vec.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.1[0].cmp(&b.1[0])));
+    let edge_pair: HashSet<(String, String)> = edges.iter().map(|e| {
+        if e.source < e.target { (e.source.clone(), e.target.clone()) } else { (e.target.clone(), e.source.clone()) }
+    }).collect();
+    let mut communities: Vec<CommunityInfo> = Vec::new();
+    let mut id_remap: HashMap<usize, usize> = HashMap::new();
+    for (new_id, (old_label, members)) in groups_vec.iter().enumerate() {
+        id_remap.insert(*old_label, new_id);
+        let n = members.len();
+        let possible = if n > 1 { n * (n - 1) / 2 } else { 1 }; // n=1 → cohesion=0 防 NaN
+        let mut intra = 0;
+        for a in 0..n {
+            for b in (a + 1)..n {
+                let pa = &pages[members[a]].path;
+                let pb = &pages[members[b]].path;
+                let key = if pa < pb { (pa.clone(), pb.clone()) } else { (pb.clone(), pa.clone()) };
+                if edge_pair.contains(&key) { intra += 1; }
+            }
+        }
+        let cohesion = intra as f64 / possible as f64;
+        let mut lc: Vec<(usize, i32)> = members.iter().map(|&i| {
+            let p = &pages[i];
+            let deg = adj_out[path_index[&p.path]].len() as i32
+                + edges.iter().filter(|e| e.target == p.path).count() as i32;
+            (i, deg)
+        }).collect();
+        lc.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_nodes: Vec<String> = lc.iter().take(5).map(|(i, _)| pages[*i].title.clone()).collect();
+        communities.push(CommunityInfo { id: new_id, node_count: n, cohesion, top_nodes });
+    }
+
+    let mut nodes: Vec<GraphNode> = pages.iter().enumerate().map(|(i, p)| {
+        let deg = adj_out[i].len() as i32 + edges.iter().filter(|e| e.target == p.path).count() as i32;
+        // 【M3 适配】node_type 也 lowercase（与 RetrievalNode.type 一致）
+        let ty = p.page_type.clone().unwrap_or_else(|| "other".into()).to_lowercase();
+        GraphNode {
+            id: p.path.clone(), label: p.title.clone(),
+            node_type: ty,
+            path: p.path.clone(), link_count: deg,
+            community: id_remap[&comm[i]],
+        }
+    }).collect();
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    edges.sort_by(|a, b| (&a.source, &a.target).cmp(&(&b.source, &b.target)));
+
+    let graph = WikiGraph { nodes, edges, communities };
+    if let Ok(mut cache) = GRAPH_CACHE.lock() {
+        cache.retain(|&(pid, _), _| pid != project_id);
+        cache.insert((project_id, cache_ts), graph.clone());
+    }
+    Ok(graph)
+}
 
 #[cfg(test)]
 mod tests {
