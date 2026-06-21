@@ -1,198 +1,150 @@
 use sqlx::PgPool;
-use crate::AppError;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use crate::AppError;
 
-#[derive(serde::Serialize, Clone)]
-pub struct GraphNode {
-    pub id: String,
-    pub label: String,
-    #[serde(rename = "type")]
-    pub node_type: String,
-    pub path: String,
-    #[serde(rename = "linkCount")]
-    pub link_count: i32,
-    pub community: i32,
+// ── 四信号权重（桌面 graph-relevance.ts 原值）──
+const W_DIRECT_LINK: f64 = 3.0;
+const W_SOURCE_OVERLAP: f64 = 4.0;
+const W_COMMON_NEIGHBOR: f64 = 1.5;
+const W_TYPE_AFFINITY: f64 = 1.0;
+
+/// 类型亲和度矩阵（照搬桌面；新 type 走 default 0.5）。
+fn type_affinity(a: &str, b: &str) -> f64 {
+    let m = |t: &str| -> std::collections::HashMap<&str, f64> {
+        let mut h = std::collections::HashMap::new();
+        match t {
+            "entity" => { h.insert("concept",1.2); h.insert("entity",0.8); h.insert("source",1.0); h.insert("synthesis",1.0); h.insert("query",0.8); }
+            "concept" => { h.insert("entity",1.2); h.insert("concept",0.8); h.insert("source",1.0); h.insert("synthesis",1.2); h.insert("query",1.0); }
+            "source" => { h.insert("entity",1.0); h.insert("concept",1.0); h.insert("source",0.5); h.insert("query",0.8); h.insert("synthesis",1.0); }
+            "query" => { h.insert("concept",1.0); h.insert("entity",0.8); h.insert("synthesis",1.0); h.insert("source",0.8); h.insert("query",0.5); }
+            "synthesis" => { h.insert("concept",1.2); h.insert("entity",1.0); h.insert("source",1.0); h.insert("query",1.0); h.insert("synthesis",0.8); }
+            _ => {}
+        }
+        h
+    };
+    *m(a).get(b).unwrap_or(&0.5)
 }
 
-#[derive(serde::Serialize, Clone)]
-pub struct GraphEdge {
-    pub source: String,
-    pub target: String,
-    pub weight: f64,
+#[derive(Clone, Default)]
+pub(crate) struct RetrievalNode {
+    pub id: String,        // path
+    pub title: String,
+    pub r#type: String,
+    pub sources: HashSet<String>,
+    pub out_links: HashSet<String>,
+    pub in_links: HashSet<String>,
 }
 
-#[derive(serde::Serialize, Clone)]
-pub struct CommunityInfo {
-    pub id: i32,
-    #[serde(rename = "nodeCount")]
-    pub node_count: i64,
-    pub cohesion: f64,
-    #[serde(rename = "topNodes")]
-    pub top_nodes: Vec<String>,
+pub(crate) struct RetrievalGraph {
+    pub nodes: HashMap<String, RetrievalNode>,
 }
 
-#[derive(serde::Serialize, Clone)]
-pub struct WikiGraph {
-    pub nodes: Vec<GraphNode>,
-    pub edges: Vec<GraphEdge>,
-    pub communities: Vec<CommunityInfo>,
+impl RetrievalGraph {
+    fn neighbors(&self, id: &str) -> HashSet<String> {
+        let mut s = HashSet::new();
+        if let Some(n) = self.nodes.get(id) {
+            for x in &n.out_links { s.insert(x.clone()); }
+            for x in &n.in_links { s.insert(x.clone()); }
+        }
+        s
+    }
+    /// 节点度数（对齐桌面 getNodeDegree = outLinks.size + inLinks.size，不去重：
+    /// 双向邻居计两次）。neighbors()（Adamic-Adar 交集用）仍是去重并集，两者语义不同。
+    fn degree(&self, id: &str) -> usize {
+        self.nodes.get(id).map(|n| n.out_links.len() + n.in_links.len()).unwrap_or(0)
+    }
 }
 
-/// 基本内存缓存：key = (project_id, max_updated_at_timestamp)
-static GRAPH_CACHE: std::sync::LazyLock<Mutex<HashMap<(i32, i64), WikiGraph>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// 四信号相关性（移植 calculateRelevance）。
+pub(crate) fn calculate_relevance(a: &RetrievalNode, b: &RetrievalNode, g: &RetrievalGraph) -> f64 {
+    if a.id == b.id { return 0.0; }
+    // 1. directLink：求和两方向（移植桌面 forwardLinks + backwardLinks；双向 = 6.0，非 OR 的 3.0）
+    let direct = ((a.out_links.contains(&b.id) as i32) + (b.out_links.contains(&a.id) as i32)) as f64 * W_DIRECT_LINK;
+    // 2. sourceOverlap
+    let shared = a.sources.intersection(&b.sources).count() as f64 * W_SOURCE_OVERLAP;
+    // 3. commonNeighbor (Adamic-Adar)
+    let na = g.neighbors(&a.id);
+    let nb = g.neighbors(&b.id);
+    let mut aa = 0.0;
+    for c in na.intersection(&nb) {
+        let deg = g.degree(c).max(2) as f64;
+        aa += 1.0 / deg.ln();
+    }
+    let common = aa * W_COMMON_NEIGHBOR;
+    // 4. typeAffinity
+    let ta = type_affinity(&a.r#type, &b.r#type) * W_TYPE_AFFINITY;
+    direct + shared + common + ta
+}
 
-/// 从 wiki_pages 表构建知识图谱
-/// 链接通过 [[wikilink]] 引用解析得出
-/// 使用项目级内存缓存 — 通过 MAX(updated_at) 时间戳验证新鲜度
-pub async fn build_graph(
-    pool: &PgPool,
-    project_id: i32,
-) -> Result<WikiGraph, AppError> {
-    // 0. 获取 wiki_pages 的最新 updated_at 时间戳作为缓存键
-    let max_ts: Option<i64> = sqlx::query_scalar(
-        "SELECT EXTRACT(EPOCH FROM COALESCE(MAX(updated_at), TIMESTAMPTZ '1970-01-01'))::BIGINT \
-         FROM wiki_pages WHERE project_id = $1"
-    )
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| AppError::DatabaseError(e))?
-    .flatten();
+// TRANSIENT NOTE: 旧 build_graph + GraphNode/GraphEdge/CommunityInfo/WikiGraph/GRAPH_CACHE 已删，
+// 在 2c Task5 重建（真 Louvain + relevance 边权）。期间 routes/graph.rs 走 transient stub。
+// `use sqlx::PgPool;` 暂未消费（Task5 build_graph 才用），unused warning 无害。
 
-    let cache_ts = max_ts.unwrap_or(0);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // 1. 检查缓存 — 使用 (project_id, timestamp) 精确匹配
-    if let Ok(cache) = GRAPH_CACHE.lock() {
-        if let Some(graph) = cache.get(&(project_id, cache_ts)) {
-            return Ok(WikiGraph {
-                nodes: graph.nodes.clone(),
-                edges: graph.edges.clone(),
-                communities: graph.communities.clone(),
-            });
+    fn node(id: &str, t: &str, sources: &[&str], out: &[&str], inl: &[&str]) -> RetrievalNode {
+        RetrievalNode {
+            id: id.into(), title: id.into(), r#type: t.into(),
+            sources: sources.iter().map(|s| s.to_string()).collect(),
+            out_links: out.iter().map(|s| s.to_string()).collect(),
+            in_links: inl.iter().map(|s| s.to_string()).collect(),
         }
     }
 
-    // 1. 获取所有 wiki 页面
-    let pages = sqlx::query_as::<_, WikiPageRow>(
-        "SELECT path, title, content, page_type FROM wiki_pages WHERE project_id = $1"
-    )
-    .bind(project_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| AppError::DatabaseError(e))?;
-
-    // 2. 提取 [[wikilinks]]
-    let mut links: HashMap<String, HashSet<String>> = HashMap::new();
-    let link_pattern = regex_lite::Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
-
-    for page in &pages {
-        let mut targets = HashSet::new();
-        if let Some(ref content) = page.content {
-            for cap in link_pattern.captures_iter(content) {
-                let link_target = cap.get(1).unwrap().as_str().to_string();
-                let clean_target = link_target.split('#').next()
-                    .unwrap_or(&link_target).to_string();
-                targets.insert(clean_target);
-            }
-        }
-        links.insert(page.path.clone(), targets);
+    #[test]
+    fn direct_link_signal_sums_both_directions() {
+        let a = node("a", "entity", &[], &["b"], &[]);
+        let b = node("b", "entity", &[], &["a"], &[]);
+        let g = RetrievalGraph { nodes: [("a".to_string(), a.clone()), ("b".to_string(), b.clone())].into_iter().collect() };
+        let r = calculate_relevance(&a, &b, &g);
+        assert!((r - (6.0 + 0.8)).abs() < 1e-9, "got {} (双向应 6.0)", r);
     }
 
-    // 3. 构建节点
-    let nodes: Vec<GraphNode> = pages.iter().enumerate().map(|(i, p)| {
-        let link_count = links.get(&p.path).map(|t| t.len() as i32).unwrap_or(0)
-            + links.values().filter(|t| t.contains(&p.path)).count() as i32;
-        GraphNode {
-            id: format!("node_{}", i),
-            label: p.title.clone(),
-            node_type: p.page_type.clone().unwrap_or_else(|| "concept".into()),
-            path: p.path.clone(),
-            link_count,
-            community: 0,
-        }
-    }).collect();
+    #[test]
+    fn source_overlap_signal() {
+        let a = node("a", "entity", &["s1","s2"], &[], &[]);
+        let b = node("b", "concept", &["s2","s3"], &[], &[]);
+        let g = RetrievalGraph { nodes: [("a".to_string(), a.clone()), ("b".to_string(), b.clone())].into_iter().collect() };
+        let r = calculate_relevance(&a, &b, &g);
+        assert!((r - (4.0 + 1.2)).abs() < 1e-9, "got {}", r);
+    }
 
-    // 4. 构建边
-    let path_to_id: HashMap<&str, &str> = nodes.iter()
-        .map(|n| (n.path.as_str(), n.id.as_str()))
-        .collect();
+    #[test]
+    fn common_neighbor_adamic_adar() {
+        let a = node("a", "entity", &[], &["c"], &[]);
+        let b = node("b", "entity", &[], &["c"], &[]);
+        let c = node("c", "entity", &[], &[], &["a","b"]);
+        let g = RetrievalGraph { nodes: [("a".into(),a.clone()),("b".into(),b.clone()),("c".into(),c)].into_iter().collect() };
+        let r = calculate_relevance(&a, &b, &g);
+        let expect = (1.0 / 2f64.ln()) * 1.5 + 0.8;
+        assert!((r - expect).abs() < 1e-9, "got {} expect {}", r, expect);
+    }
 
-    let mut edges: Vec<GraphEdge> = Vec::new();
-    let mut seen_edges: HashSet<(String, String)> = HashSet::new();
+    #[test]
+    fn type_affinity_matrix_values() {
+        assert!((type_affinity("entity","concept") - 1.2).abs() < 1e-9);
+        assert!((type_affinity("source","source") - 0.5).abs() < 1e-9);
+        assert!((type_affinity("unknowntype","entity") - 0.5).abs() < 1e-9); // default
+    }
 
-    for (source_path, targets) in &links {
-        let source_id = match path_to_id.get(source_path.as_str()) {
-            Some(id) => id.to_string(),
-            None => continue,
+    #[test]
+    fn common_neighbor_degree_not_dedup_bidirectional() {
+        // c 与 a、b 双向相连：out={a,b}, in={a,b}。
+        // 桌面 degree(c) = out.size(2) + in.size(2) = 4（不去重），非去重的 2。
+        // Adamic-Adar 用 1/ln(4)；锁住 degree 不去重语义。
+        let a = node("a", "entity", &[], &["c"], &[]);
+        let b = node("b", "entity", &[], &["c"], &[]);
+        let c = node("c", "entity", &[], &["a", "b"], &["a", "b"]);
+        let g = RetrievalGraph {
+            nodes: [("a".into(), a.clone()), ("b".into(), b.clone()), ("c".into(), c)].into_iter().collect(),
         };
-        for target_path in targets {
-            let target_id = match path_to_id.get(target_path.as_str()) {
-                Some(id) => id.to_string(),
-                None => continue,
-            };
-            if source_id == target_id { continue; }
-            let edge_key = if source_id < target_id {
-                (source_id.clone(), target_id.clone())
-            } else {
-                (target_id.clone(), source_id.clone())
-            };
-            if seen_edges.contains(&edge_key) { continue; }
-            seen_edges.insert(edge_key);
-            edges.push(GraphEdge {
-                source: source_id.clone(),
-                target: target_id.clone(),
-                weight: 1.0,
-            });
-        }
+        // 先直接验 degree(c)=4（不去重）
+        assert_eq!(g.degree("c"), 4, "degree 应不去重（out+in 计两次），双向 c 应=4");
+        // 再验 relevance：common neighbor c，deg=4 → 1/ln(4)
+        let r = calculate_relevance(&a, &b, &g);
+        let expect = (1.0 / 4f64.ln()) * 1.5 + 0.8; // aa*W_COMMON_NEIGHBOR + typeAffinity(entity,entity)=0.8
+        assert!((r - expect).abs() < 1e-9, "got {} expect {} (degree 不去重 deg=4)", r, expect);
     }
-
-    // 5. 简化社区检测 — 按 page_type 分组作为初始社区
-    let mut community_map: HashMap<String, i32> = HashMap::new();
-    let mut next_community = 1;
-    let mut communities: Vec<CommunityInfo> = Vec::new();
-
-    let mut type_groups: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, node) in nodes.iter().enumerate() {
-        type_groups.entry(node.node_type.clone())
-            .or_default()
-            .push(i);
-    }
-
-    for (node_type, indices) in &type_groups {
-        let community_id = *community_map.entry(node_type.clone())
-            .or_insert_with(|| { let c = next_community; next_community += 1; c });
-        communities.push(CommunityInfo {
-            id: community_id,
-            node_count: indices.len() as i64,
-            cohesion: 1.0 / (indices.len() as f64).max(1.0),
-            top_nodes: indices.iter().take(5)
-                .map(|&i| nodes[i].label.clone())
-                .collect(),
-        });
-    }
-
-    let graph = WikiGraph { nodes, edges, communities };
-
-    // 6. 写入缓存 — 以真实 MAX(updated_at) 时间戳为键，后续更新自动失效
-    if let Ok(mut cache) = GRAPH_CACHE.lock() {
-        // 清理同一项目的旧缓存条目（timestamp 不匹配的）
-        cache.retain(|&(pid, _ts), _| pid != project_id);
-        cache.insert((project_id, cache_ts), WikiGraph {
-            nodes: graph.nodes.clone(),
-            edges: graph.edges.clone(),
-            communities: graph.communities.clone(),
-        });
-    }
-
-    Ok(graph)
-}
-
-#[derive(sqlx::FromRow)]
-struct WikiPageRow {
-    path: String,
-    title: String,
-    content: Option<String>,
-    page_type: Option<String>,
 }

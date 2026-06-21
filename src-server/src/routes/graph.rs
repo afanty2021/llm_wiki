@@ -18,8 +18,9 @@ pub async fn get_graph(
     Path(project_id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, _team_id) = check_project_access(&state, &headers, project_id).await?;
-    let graph_data = crate::services::graph::build_graph(&state.db, project_id).await?;
-    Ok(Json(graph_data))
+    // TRANSIENT STUB: build_graph 在 2c Task5 重建（真 Louvain + relevance 边权）。
+    // 期间 /graph 返回空；Task5 恢复 crate::services::graph::build_graph 调用。
+    Ok(Json(serde_json::json!({ "nodes": [], "edges": [], "communities": [] })))
 }
 
 pub async fn get_insights(
@@ -28,16 +29,6 @@ pub async fn get_insights(
     Path(project_id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, _team_id) = check_project_access(&state, &headers, project_id).await?;
-    let graph_data = crate::services::graph::build_graph(&state.db, project_id).await?;
-    Ok(Json(serde_json::json!({
-        "node_count": graph_data.nodes.len(),
-        "edge_count": graph_data.edges.len(),
-        "density": if graph_data.nodes.len() > 1 {
-            let max_edges = graph_data.nodes.len() * (graph_data.nodes.len() - 1) / 2;
-            graph_data.edges.len() as f64 / max_edges as f64
-        } else {
-            0.0
-        },
-        "communities": graph_data.communities,
-    })))
+    // TRANSIENT STUB：build_graph 在 Task5 重建，insights 在 2d 重写。期间返回空 stats。
+    Ok(Json(serde_json::json!({ "node_count": 0, "edge_count": 0, "density": 0.0, "communities": [] })))
 }
