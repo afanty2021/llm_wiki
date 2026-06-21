@@ -28,6 +28,7 @@ pub struct AppState {
     pub db: DbPool,
     pub redis: RedisPool,
     pub config: Arc<AppConfig>,
+    pub http: reqwest::Client,
 }
 
 pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
@@ -37,10 +38,16 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
     // 初始化 Redis 连接池
     let redis = db::create_redis_pool(config.redis_url()).await?;
 
+    // 共享 HTTP client（连接池复用）。无全局 timeout——LLM 长请求/嵌入各设各自超时。
+    let http = reqwest::Client::builder()
+        .build()
+        .expect("failed to build reqwest Client");
+
     let state = AppState {
         db,
         redis,
         config: Arc::new(config),
+        http,
     };
 
     // 构建 CORS 中间件层

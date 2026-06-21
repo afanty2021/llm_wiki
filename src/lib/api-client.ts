@@ -1,6 +1,6 @@
 import type {
   ApiError, LoginRequest, RegisterRequest, AuthResponse,
-  UserResponse, TeamResponse, ProjectResponse, SearchResult, GraphData,
+  UserResponse, TeamResponse, ProjectResponse, SearchResponse, GraphData,
 } from "./api-types"
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080"
@@ -145,7 +145,7 @@ class ApiClient {
   }
 
   // === Search ===
-  async search(projectId: number, query: string): Promise<{ results: SearchResult[]; total: number }> {
+  async search(projectId: number, query: string): Promise<SearchResponse> {
     const params = new URLSearchParams({ project_id: String(projectId), query })
     return this.request("GET", `/api/v1/search?${params}`)
   }

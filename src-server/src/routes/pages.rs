@@ -134,6 +134,8 @@ pub async fn create_page(
 ) -> Result<(StatusCode, Json<WikiPage>), AppError> {
     check_project_access(&state, &headers, project_id).await?;
     let (title, page_type, sources, images) = denormalize(&req.frontmatter, &req.title);
+    // content 在 SQL .bind 处被 move，嵌入块在 SQL 之后——bind 前克隆供后续嵌入使用。
+    let content_for_embed = req.content.clone();
     let page: Option<WikiPage> = sqlx::query_as::<_, WikiPage>(
         "INSERT INTO wiki_pages (project_id, path, title, content, frontmatter, page_type, sources, images)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -153,6 +155,20 @@ pub async fn create_page(
     let page = page.ok_or_else(|| {
         AppError::Conflict("path already exists in this project".to_string())
     })?;
+    // 维护 embedding（非致命：失败只 log，不影响页面写入）
+    match content_for_embed.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(text) => {
+            if let Err(e) = crate::services::embedding::embed_page(
+                &state.db, state.config.embedding.as_ref(), &state.http,
+                project_id, &req.path, text,
+            ).await {
+                tracing::warn!("embed page {} failed (search degraded): {}", req.path, e);
+            }
+        }
+        None => {
+            let _ = crate::services::embedding::delete_embedding(&state.db, project_id, &req.path).await;
+        }
+    }
     Ok((StatusCode::CREATED, Json(page)))
 }
 
@@ -190,6 +206,8 @@ pub async fn update_page(
         .with_timezone(&Utc);
 
     let (title, page_type, sources, images) = denormalize(&req.frontmatter, &req.title);
+    // content 在 SQL .bind 处被 move，嵌入块在 SQL 之后——bind 前克隆供后续嵌入使用。
+    let content_for_embed = req.content.clone();
     // 乐观锁：updated_at = $if_match（timestamptz 精确比较，冲突或 not found 都返回 0 行 → 409）
     let page: Option<WikiPage> = sqlx::query_as::<_, WikiPage>(
         "UPDATE wiki_pages SET title=$1, content=$2, frontmatter=$3, page_type=$4, sources=$5, images=$6,
@@ -214,6 +232,21 @@ pub async fn update_page(
             "updated_at mismatch (stale write or page not found)".to_string(),
         )
     })?;
+    // 维护 embedding（非致命：失败只 log，不影响页面写入）
+    // 嵌入块在乐观锁 409 检查之后——stale/not-found 走 409 不维护向量。
+    match content_for_embed.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(text) => {
+            if let Err(e) = crate::services::embedding::embed_page(
+                &state.db, state.config.embedding.as_ref(), &state.http,
+                project_id, &pq.path, text,
+            ).await {
+                tracing::warn!("embed page {} failed (search degraded): {}", pq.path, e);
+            }
+        }
+        None => {
+            let _ = crate::services::embedding::delete_embedding(&state.db, project_id, &pq.path).await;
+        }
+    }
     Ok(Json(page))
 }
 
@@ -234,6 +267,8 @@ pub async fn delete_page(
     if n.rows_affected() == 0 {
         return Err(AppError::ResourceNotFound("page".to_string()));
     }
+    // 页已删才清向量（404 不维护）。失败忽略（best-effort）。
+    let _ = crate::services::embedding::delete_embedding(&state.db, project_id, &pq.path).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

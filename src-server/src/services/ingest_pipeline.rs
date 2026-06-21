@@ -360,6 +360,9 @@ pub async fn run_ingest_job(
         warnings: vec![],
     };
 
+    // 收集所有成功落库页的 (path, content) 供批量嵌入（覆盖 source 页 + reserved 页）。
+    let mut collected: Vec<(String, String)> = Vec::new();
+
     let total = job.source_paths.len();
     for (i, sp) in job.source_paths.iter().enumerate() {
         let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
@@ -371,7 +374,12 @@ pub async fn run_ingest_job(
                 let mut all_upserted = true;
                 for page in &processed.pages {
                     match upsert_wiki_page(state, job.project_id, page).await {
-                        Ok(path) => result.new_pages.push(path),
+                        Ok(path) => {
+                            result.new_pages.push(path.clone());
+                            if let Some(text) = page_content_for_embed(page) {
+                                collected.push((path, text));
+                            }
+                        }
                         Err(e) => {
                             result.warnings.push(format!("upsert {}: {}", sp, e));
                             all_upserted = false;
@@ -410,8 +418,26 @@ pub async fn run_ingest_job(
     // reserved 重建
     let _ = ingest_queue::update_job_stage(state, job.id, "building_index", 100).await;
     match rebuild_reserved_pages(state, job.project_id).await {
-        Ok(reserved) => result.updated_reserved = reserved,
+        Ok(reserved) => {
+            result.updated_reserved = reserved.iter().map(|(p, _)| p.clone()).collect();
+            collected.extend(reserved);  // reserved 页也纳入嵌入
+        }
         Err(e) => result.warnings.push(format!("reserved pages: {}", e)),
+    }
+
+    // 批量嵌入（rebuild 之后，覆盖 source + reserved）
+    if !collected.is_empty() {
+        if let Err(e) = crate::services::embedding::embed_and_store(
+            &state.db,
+            state.config.embedding.as_ref(),
+            &state.http,
+            job.project_id,
+            &collected,
+        )
+        .await
+        {
+            result.warnings.push(format!("embed batch: {}", e));
+        }
     }
 
     // 全部失败 → Err
@@ -503,6 +529,12 @@ async fn process_source_path(
     Ok(Some(ProcessedSource { pages, content_hash, file_size, file_type }))
 }
 
+/// 取页面用于嵌入的文本（content 非空时）；None 表示不适合嵌入。
+fn page_content_for_embed(page: &WikiPageInsert) -> Option<String> {
+    let t = page.content.trim();
+    if t.is_empty() { None } else { Some(t.to_string()) }
+}
+
 /// upsert wiki_pages 记录（UNIQUE(project_id, path)）。
 async fn upsert_wiki_page(
     state: &AppState,
@@ -532,10 +564,11 @@ async fn upsert_wiki_page(
 
 /// 事务内全量重建 wiki/index.md / wiki/log.md / wiki/overview.md（路径必须带 wiki/ 前缀）。
 /// MVP: log.md 取最近 100 条。
+/// 返回 (path, content) 元组，供调用方批量嵌入（内容本就在函数体内构造，零额外查询）。
 async fn rebuild_reserved_pages(
     state: &AppState,
     project_id: i32,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Vec<(String, String)>, AppError> {
     let mut tx = state.db.begin().await?;
 
     // index.md——列出所有非 reserved 页面
@@ -585,12 +618,14 @@ async fn rebuild_reserved_pages(
         overview.push_str(&format!("- {}: {}\n", t, c));
     }
 
-    // Upsert 三条 reserved
-    for (path, content) in [
-        ("wiki/index.md", index),
-        ("wiki/log.md", log),
-        ("wiki/overview.md", overview),
-    ] {
+    // 组装 reserved（path, content）——内容本就在函数体内构造，零额外查询
+    let reserved: Vec<(String, String)> = vec![
+        ("wiki/index.md".to_string(), index),
+        ("wiki/log.md".to_string(), log),
+        ("wiki/overview.md".to_string(), overview),
+    ];
+    // Upsert 三条 reserved（按引用，保留 reserved 供返回）
+    for (path, content) in &reserved {
         sqlx::query(
             "INSERT INTO wiki_pages (project_id, path, title, content, page_type) \
              VALUES ($1, $2, $3, $4, 'system') \
@@ -605,11 +640,7 @@ async fn rebuild_reserved_pages(
     }
 
     tx.commit().await?;
-    Ok(vec![
-        "wiki/index.md".into(),
-        "wiki/log.md".into(),
-        "wiki/overview.md".into(),
-    ])
+    Ok(reserved)
 }
 
 // ── 测试 ──

@@ -72,6 +72,9 @@ docx-rs = "0.4"
 calamine = "0.35"
 llm-wiki-parser = { path = "../crates/llm-wiki-parser" }
 
+# 图算法（Louvain 社区检测）
+petgraph = "0.7"
+
 [dev-dependencies]
 axum-test = "15"
 
