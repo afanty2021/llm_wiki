@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:15
+    # pgvector 官方镜像（内置 vector 扩展），migration 005 的 CREATE EXTENSION vector
+    # 在干净容器也能跑。原 postgres:15 默认不带 pgvector，需手动 apt 装（重建会丢）。
+    image: pgvector/pgvector:pg15
     environment:
       POSTGRES_DB: llmwiki
       POSTGRES_USER: llmwiki
