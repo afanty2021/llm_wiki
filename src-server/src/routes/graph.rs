@@ -10,6 +10,7 @@ pub fn graph_routes() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/:project_id", axum::routing::get(get_graph))
         .route("/:project_id/insights", axum::routing::get(get_insights))
+        .route("/:project_id/related", axum::routing::get(get_related))
 }
 
 pub async fn get_graph(
@@ -38,4 +39,25 @@ pub async fn get_insights(
         } else { 0.0 },
         "communities": graph_data.communities,
     })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct RelatedQuery {
+    pub path: String,
+    pub limit: Option<usize>,
+}
+
+pub async fn get_related(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(project_id): Path<i32>,
+    axum::extract::Query(q): axum::extract::Query<RelatedQuery>,
+) -> Result<Json<Vec<crate::services::graph::RelatedNode>>, AppError> {
+    let (_user_id, _team_id) = check_project_access(&state, &headers, project_id).await?;
+    let g = crate::services::graph::build_graph(&state.db, project_id).await?;
+    if !g.nodes.iter().any(|n| n.id == q.path) {
+        return Err(AppError::ResourceNotFound("page not in graph".into()));
+    }
+    let limit = q.limit.unwrap_or(10).min(50);
+    Ok(Json(crate::services::graph::related_nodes(&g, &q.path, limit)))
 }
