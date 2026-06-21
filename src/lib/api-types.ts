@@ -63,7 +63,7 @@ export interface SearchResult {
 }
 
 export interface SearchResponse {
-  mode: string                 // "keyword" | "vector" | "hybrid"
+  mode: "keyword" | "vector" | "hybrid"
   results: SearchResult[]
   tokenHits: number
   vectorHits: number

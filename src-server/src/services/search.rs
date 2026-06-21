@@ -35,10 +35,19 @@ pub struct SearchResult {
     pub images: Vec<ImageRef>,
 }
 
+/// 搜索模式（序列化为 lowercase 字符串："keyword" | "vector" | "hybrid"）。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchMode {
+    Keyword,
+    Vector,
+    Hybrid,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
-    pub mode: String,
+    pub mode: SearchMode,
     pub results: Vec<SearchResult>,
     pub token_hits: usize,
     pub vector_hits: usize,
@@ -255,13 +264,13 @@ fn apply_rrf(
     }
 }
 
-fn search_mode(token_rank_empty: bool, vector_hits: usize) -> &'static str {
+fn search_mode(token_rank_empty: bool, vector_hits: usize) -> SearchMode {
     if vector_hits == 0 {
-        "keyword"
+        SearchMode::Keyword
     } else if token_rank_empty {
-        "vector"
+        SearchMode::Vector
     } else {
-        "hybrid"
+        SearchMode::Hybrid
     }
 }
 
@@ -447,10 +456,9 @@ pub async fn hybrid_search(
             .then_with(|| a.path.cmp(&b.path))
     });
     results.truncate(limit);
-    let mode = search_mode(token_rank.is_empty(), vector_hits);
 
     Ok(SearchResponse {
-        mode: mode.to_string(),
+        mode: search_mode(token_rank.is_empty(), vector_hits),
         results,
         token_hits,
         vector_hits,
@@ -464,7 +472,7 @@ mod tests {
     #[test]
     fn search_response_serializes_camel_case() {
         let resp = SearchResponse {
-            mode: "hybrid".into(),
+            mode: SearchMode::Hybrid,
             results: vec![SearchResult {
                 path: "entities/alice.md".into(),
                 title: "Alice".into(),
@@ -598,8 +606,8 @@ mod tests {
 
     #[test]
     fn search_mode_three_states() {
-        assert_eq!(search_mode(false, 0), "keyword");
-        assert_eq!(search_mode(true, 3), "vector");
-        assert_eq!(search_mode(false, 3), "hybrid");
+        assert_eq!(search_mode(false, 0), SearchMode::Keyword);
+        assert_eq!(search_mode(true, 3), SearchMode::Vector);
+        assert_eq!(search_mode(false, 3), SearchMode::Hybrid);
     }
 }
