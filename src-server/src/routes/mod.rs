@@ -9,6 +9,7 @@ mod chat;
 mod graph;
 mod pages;
 mod ingest;
+pub mod chat_sessions;
 
 pub use pages::WikiPage;
 

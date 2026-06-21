@@ -2,6 +2,7 @@ pub mod auth_test;
 pub mod ingest_queue_test;
 pub mod ingest_test;
 pub mod pages_test;
+mod chat_sessions_test;
 
 use axum::Router;
 use llm_wiki_server::AppState;
