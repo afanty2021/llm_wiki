@@ -109,7 +109,7 @@ pub(crate) fn resolve_wikilink(raw: &str, stem_to_path: &HashMap<String, String>
 
 // ── build_graph 输出类型 ──
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphNode {
     pub id: String,        // path
@@ -122,7 +122,7 @@ pub struct GraphNode {
     pub community: usize,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct GraphEdge {
     pub source: String,    // path
     pub target: String,    // path
@@ -338,7 +338,7 @@ pub fn related_nodes(graph: &WikiGraph, path: &str, limit: usize) -> Vec<Related
     }).collect()
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SurprisingConnection {
     pub source: GraphNode,
@@ -359,8 +359,82 @@ pub struct KnowledgeGap {
     pub suggestion: String,
 }
 
-pub fn find_surprising_connections(_graph: &WikiGraph, _limit: usize) -> Vec<SurprisingConnection> {
-    Vec::new() // Task 2 实现
+pub fn find_surprising_connections(graph: &WikiGraph, limit: usize) -> Vec<SurprisingConnection> {
+    use std::collections::HashMap;
+
+    let node_map: HashMap<&str, &GraphNode> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let degree_map: HashMap<&str, i32> = graph.nodes.iter().map(|n| (n.id.as_str(), n.link_count)).collect();
+    let max_degree = graph.nodes.iter().map(|n| n.link_count).max().unwrap_or(1).max(1);
+
+    // 桌面 distant-pairs（source-concept / source-synthesis / query-entity 及反向）
+    let is_distant_pair = |a: &str, b: &str| -> bool {
+        matches!(
+            (a, b),
+            ("source", "concept") | ("concept", "source")
+                | ("source", "synthesis") | ("synthesis", "source")
+                | ("query", "entity") | ("entity", "query")
+        )
+    };
+
+    let mut scored: Vec<SurprisingConnection> = Vec::new();
+    for e in &graph.edges {
+        let source = match node_map.get(e.source.as_str()) { Some(n) => *n, None => continue };
+        let target = match node_map.get(e.target.as_str()) { Some(n) => *n, None => continue };
+        // 排除 structural 节点（system 类型，case-insensitive）
+        if source.node_type.to_lowercase() == "system" || target.node_type.to_lowercase() == "system" {
+            continue;
+        }
+
+        let mut score = 0i32;
+        let mut reasons: Vec<String> = Vec::new();
+
+        // Signal 1: 跨社区 (+3)
+        if source.community != target.community {
+            score += 3;
+            reasons.push("crosses community boundary".into());
+        }
+
+        // Signal 2: 跨类型（distant-pair +2，其它异类型 +1）
+        if source.node_type != target.node_type {
+            if is_distant_pair(&source.node_type, &target.node_type) {
+                score += 2;
+                reasons.push(format!("connects {} to {}", source.node_type, target.node_type));
+            } else {
+                score += 1;
+                reasons.push("different types".into());
+            }
+        }
+
+        // Signal 3: 边缘↔枢纽耦合。双条件：min deg ≤ 2 且 max deg ≥ 0.5 × maxDegree
+        let sd = degree_map.get(e.source.as_str()).copied().unwrap_or(0);
+        let td = degree_map.get(e.target.as_str()).copied().unwrap_or(0);
+        if sd.min(td) <= 2 && sd.max(td) as f64 >= max_degree as f64 * 0.5 {
+            score += 2;
+            reasons.push("peripheral node links to hub".into());
+        }
+
+        // Signal 4: 弱边（0 < weight < 2）+1
+        if e.weight > 0.0 && e.weight < 2.0 {
+            score += 1;
+            reasons.push("weak but present connection".into());
+        }
+
+        if score >= 3 && !reasons.is_empty() {
+            let mut ids = [source.path.clone(), target.path.clone()];
+            ids.sort();
+            let key = ids.join(":::");
+            scored.push(SurprisingConnection {
+                source: source.clone(),
+                target: target.clone(),
+                score,
+                reasons,
+                key,
+            });
+        }
+    }
+    scored.sort_by(|a, b| b.score.cmp(&a.score));
+    scored.truncate(limit);
+    scored
 }
 
 pub fn detect_knowledge_gaps(_graph: &WikiGraph, _limit: usize) -> Vec<KnowledgeGap> {
@@ -482,5 +556,112 @@ mod tests {
         let g = WikiGraph { nodes: vec![], edges: vec![], communities: vec![] };
         assert!(find_surprising_connections(&g, 5).is_empty());
         assert!(detect_knowledge_gaps(&g, 8).is_empty());
+    }
+
+    fn mk_node(id: &str, label: &str, ty: &str, deg: i32, comm: usize) -> GraphNode {
+        GraphNode { id: id.into(), label: label.into(), node_type: ty.into(), path: id.into(), link_count: deg, community: comm }
+    }
+    fn mk_edge(src: &str, tgt: &str, w: f64) -> GraphEdge {
+        GraphEdge { source: src.into(), target: tgt.into(), weight: w }
+    }
+
+    #[test]
+    fn surprising_cross_community_gives_3() {
+        let g = WikiGraph {
+            nodes: vec![
+                mk_node("a","A","entity",2,0),
+                mk_node("b","B","entity",3,1),        // same type → no signal2
+                mk_node("big","Big","entity",10,2),    // maxDegree=10 → threshold=5, no signal3
+            ],
+            edges: vec![mk_edge("a","b",5.0)],         // weight ≥2 → no signal4
+            communities: vec![],
+        };
+        let s = find_surprising_connections(&g, 5);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].score, 3, "only cross-community: {:?}", s[0].reasons);
+        assert!(s[0].reasons.iter().any(|r| r.contains("community")));
+    }
+
+    #[test]
+    fn surprising_distant_pair_gives_2() {
+        let g = WikiGraph {
+            nodes: vec![mk_node("a","A","source",2,1), mk_node("b","B","concept",2,0)],
+            edges: vec![mk_edge("a","b",5.0)],
+            communities: vec![],
+        };
+        let s = find_surprising_connections(&g, 5);
+        assert!(s[0].score >= 5, "cross-community(+3) + distant-pair(+2) = 5, got {}", s[0].score);
+        assert!(s[0].reasons.iter().any(|r| r.contains("connects")));
+    }
+
+    #[test]
+    fn surprising_peripheral_to_hub_needs_both_conditions() {
+        // min deg ≤2 AND max deg ≥ 0.5 × maxDegree (global max=10)
+        let g = WikiGraph {
+            nodes: vec![
+                mk_node("peri","P","entity",2,0),
+                mk_node("hub","H","concept",6,1),  // 6 ≥ 10*0.5 → hub
+                mk_node("ref","R","entity",10,1),   // maxDegree=10
+            ],
+            edges: vec![mk_edge("peri","hub",5.0)],
+            communities: vec![],
+        };
+        let s = find_surprising_connections(&g, 5);
+        assert!(!s.is_empty(), "peri-hub should be surprising: {:?}", s);
+        assert!(s[0].reasons.iter().any(|r| r.contains("peripheral")));
+    }
+
+    #[test]
+    fn surprising_peripheral_to_peripheral_not_surprising_on_signal3() {
+        // both deg≤2 but no hub → signal 3 should NOT fire
+        let g = WikiGraph {
+            nodes: vec![
+                mk_node("p1","P1","entity",2,0),
+                mk_node("p2","P2","concept",1,1),
+                mk_node("big","Big","entity",10,2),  // maxDegree=10 → threshold=5, no signal3
+            ],
+            edges: vec![mk_edge("p1","p2",5.0)],
+            communities: vec![],
+        };
+        let s = find_surprising_connections(&g, 5);
+        // cross-community+different-types, but NO peripheral-hub
+        assert!(!s.is_empty());
+        assert!(!s[0].reasons.iter().any(|r| r.contains("peripheral")), "should be no peripheral: {:?}", s[0].reasons);
+    }
+
+    #[test]
+    fn surprising_weak_edge_gives_1() {
+        let g = WikiGraph {
+            nodes: vec![mk_node("a","A","entity",2,0), mk_node("b","B","concept",3,1)],
+            edges: vec![mk_edge("a","b",1.5)],
+            communities: vec![],
+        };
+        let s = find_surprising_connections(&g, 5);
+        // cross-community(+3) + weak-edge(+1) = 4
+        assert!(s[0].score >= 4);
+        assert!(s[0].reasons.iter().any(|r| r.contains("weak")));
+    }
+
+    #[test]
+    fn surprising_score_2_not_included() {
+        // same community (=0), same type (=0), not peripheral-hub, weak edge (+1) → 1 → excluded
+        let g = WikiGraph {
+            nodes: vec![mk_node("a","A","entity",5,0), mk_node("b","B","entity",5,0)],
+            edges: vec![mk_edge("a","b",1.5)],
+            communities: vec![],
+        };
+        let s = find_surprising_connections(&g, 5);
+        assert!(s.is_empty(), "score<3 should not be included: {:?}", s);
+    }
+
+    #[test]
+    fn surprising_excludes_system_nodes() {
+        let g = WikiGraph {
+            nodes: vec![mk_node("a","A","entity",2,0), mk_node("sys","Index","system",2,1)],
+            edges: vec![mk_edge("a","sys",5.0)],
+            communities: vec![],
+        };
+        let s = find_surprising_connections(&g, 5);
+        assert!(s.is_empty(), "edges involving system nodes should be excluded");
     }
 }
