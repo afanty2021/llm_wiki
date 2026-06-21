@@ -189,11 +189,51 @@ fn sources_from_json(v: &Option<serde_json::Value>) -> HashSet<String> {
     }).unwrap_or_default()
 }
 
+/// 从 pages 的 wikilinks 构建有向邻接（out_links/in_links）+ 无向边集（对齐桌面 buildRetrievalGraph）。
+///
+/// 桌面对每个 resolved wikilink 记录 outLinks[src].add(tgt) 与 inLinks[tgt].add(src)（Set 去重
+/// 同向/同源），不去重 per-wikilink。本函数照此：adj_out/in_links_map 按 wikilink 有向填充；
+/// 无向边集 placeholder_edges 单独去重（给 petgraph 无向图，每对一次防重复 add_edge）。
+///
+/// 【fidelity 修复】此前 seen_edges 去重误伤有向记录——双向 wikilink（a→b 且 b→a）的第二方向
+/// 被 continue 跳过，致 adj_out/in_links 缺反向、directLink 减半(6.0→3.0)、link_count 偏小
+/// 误判 isolated-node。抽成纯函数便于单测锁定有向语义。
+fn build_adjacency(
+    pages: &[WikiPageRow],
+    stem_to_path: &HashMap<String, String>,
+    path_index: &HashMap<String, usize>,
+) -> (Vec<HashSet<String>>, HashMap<String, HashSet<String>>, Vec<(String, String)>) {
+    let mut adj_out: Vec<HashSet<String>> = pages.iter().map(|_| HashSet::new()).collect();
+    let mut in_links_map: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut placeholder_edges: Vec<(String, String)> = Vec::new();
+    let mut seen_edges: HashSet<(String, String)> = HashSet::new();
+    for p in pages {
+        let content = p.content.as_deref().unwrap_or("");
+        let si = path_index[&p.path];
+        for raw in extract_wikilinks(content) {
+            let Some(tgt) = resolve_wikilink(&raw, stem_to_path) else { continue };
+            if tgt == p.path { continue; }
+            // 不变式护栏：tgt 必属 pages（resolve_wikilink 只返回 stem_to_path 的 value）
+            debug_assert!(path_index.contains_key(&tgt), "wikilink target {tgt} 不在 pages 内");
+            // 有向 out/in（每 wikilink 一条；HashSet 同向/同源去重）
+            adj_out[si].insert(tgt.clone());
+            in_links_map.entry(tgt.clone()).or_default().insert(p.path.clone());
+            // 无向边去重 → placeholder_edges（petgraph 无向图，每对一次）
+            let key = if &p.path < &tgt { (p.path.clone(), tgt.clone()) } else { (tgt.clone(), p.path.clone()) };
+            if seen_edges.insert(key) {
+                placeholder_edges.push((p.path.clone(), tgt.clone()));
+            }
+        }
+    }
+    (adj_out, in_links_map, placeholder_edges)
+}
+
 /// 主入口：从 wiki_pages 构建图谱（真 Louvain + relevance 边权 + node id=path + 过滤 query）。
 pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, AppError> {
-    // 缓存键 = max(updated_at)
+    // 缓存键 = max(updated_at) 的 epoch 微秒（亚秒精度）。整秒 BIGINT 丢微秒精度，致同秒内多次
+    // 写入（API 快速 create/edit）cache_ts 不变 → 返回 stale graph，漏掉新页/改动。
     let max_ts: Option<i64> = sqlx::query_scalar(
-        "SELECT EXTRACT(EPOCH FROM COALESCE(MAX(updated_at), TIMESTAMPTZ '1970-01-01'))::BIGINT \
+        "SELECT (EXTRACT(EPOCH FROM COALESCE(MAX(updated_at), TIMESTAMPTZ '1970-01-01')) * 1000000)::BIGINT \
          FROM wiki_pages WHERE project_id = $1"
     ).bind(project_id).fetch_optional(pool).await.map_err(AppError::DatabaseError)?.flatten();
     let cache_ts = max_ts.unwrap_or(0);
@@ -217,36 +257,12 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
     let stem_to_path = build_stem_to_path(&paths);
     let path_index: HashMap<String, usize> = paths.iter().enumerate().map(|(i,p)| (p.clone(), i)).collect();
 
-    // 3a. 占位无向边（weight=1.0）+ wikilinks
-    let mut adj_out: Vec<HashSet<String>> = pages.iter().map(|_| HashSet::new()).collect();
-    let mut placeholder_edges: Vec<(String, String)> = Vec::new();
-    let mut seen_edges: HashSet<(String, String)> = HashSet::new();
-    for p in &pages {
-        let content = p.content.as_deref().unwrap_or("");
-        for raw in extract_wikilinks(content) {
-            let tgt = match resolve_wikilink(&raw, &stem_to_path) { Some(t) => t, None => continue };
-            if tgt == p.path { continue; }
-            let key = if &p.path < &tgt { (p.path.clone(), tgt.clone()) } else { (tgt.clone(), p.path.clone()) };
-            if seen_edges.contains(&key) { continue; }
-            seen_edges.insert(key);
-            placeholder_edges.push((p.path.clone(), tgt.clone()));
-            let si = path_index[&p.path];
-            adj_out[si].insert(tgt.clone());
-        }
-    }
-    // 一次 O(E) 预算：in_links_map（path → 入边来源集合，保留 HashMap：下方按 path 反填
-    // RetrievalNode.in_links 需 path 查）+ in_degree（Vec 下标=pages 序 → 入度），
-    // 替代下方 O(pages×edges) 嵌套循环。in_degree 用 Vec 而非 HashMap：查询处（communities/nodes
-    // 循环）用 pages 下标 i 直接索引，省掉循环内逐 path 的 String hash。
-    let mut in_links_map: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut in_degree: Vec<i32> = vec![0; pages.len()];
-    for (s, t) in &placeholder_edges {
-        in_links_map.entry(t.clone()).or_default().insert(s.clone());
-        // 不变式护栏：t 必属 pages（resolve_wikilink 只返回 stem_to_path 的 value）。
-        // 防 placeholder_edges 未来引入非 wikilink 边时 path_index 缺 key 而静默 panic。
-        debug_assert!(path_index.contains_key(t), "edge target {t} 不在 pages 内");
-        in_degree[path_index[t]] += 1;
-    }
+    // 3a. 有向邻接 + 无向边集（build_adjacency 纯函数，对齐桌面 buildRetrievalGraph 有向记录）
+    let (adj_out, mut in_links_map, placeholder_edges) = build_adjacency(&pages, &stem_to_path, &path_index);
+    // in_degree = in_links 的 source 集大小（入度，按 source 去重；Vec 下标=pages 序，查询处用 i 省hash）
+    let in_degree: Vec<i32> = pages.iter().map(|p|
+        in_links_map.get(&p.path).map(|s| s.len() as i32).unwrap_or(0)
+    ).collect();
     // 3b. 反填 inLinks → 完成 RetrievalGraph
     let mut rnodes: HashMap<String, RetrievalNode> = HashMap::new();
     for p in &pages {
@@ -645,6 +661,31 @@ mod tests {
         let paths = vec!["entities/alice.md".to_string(), "concepts/alice.md".to_string()];
         let s2p = build_stem_to_path(&paths);
         assert_eq!(s2p.get("alice"), Some(&"entities/alice.md".to_string()));
+    }
+
+    #[test]
+    fn build_adjacency_records_bidirectional_wikilinks() {
+        // 双向 wikilink（a→b 且 b→a）：有向 out/in 应双向记录；无向边集去重为 1 条。
+        // 【回归护栏】修复前 seen_edges 去重误伤反向 adj_out/in_links → directLink 6→3、
+        // link_count 偏小误判 isolated。本测试锁住有向语义。
+        let pages = vec![
+            WikiPageRow { path: "a.md".into(), title: "A".into(), page_type: Some("entity".into()),
+                          content: Some("[[b]]".into()), sources: None },
+            WikiPageRow { path: "b.md".into(), title: "B".into(), page_type: Some("entity".into()),
+                          content: Some("[[a]]".into()), sources: None },
+        ];
+        let paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
+        let stem_to_path = build_stem_to_path(&paths);
+        let path_index: HashMap<String, usize> = paths.iter().enumerate().map(|(i, p)| (p.clone(), i)).collect();
+        let (adj_out, in_links_map, placeholder_edges) = build_adjacency(&pages, &stem_to_path, &path_index);
+        // 有向 out 双向（修复前 b→a 被 seen_edges 去重跳过）
+        assert!(adj_out[0].contains("b.md"), "a→b 应记录");
+        assert!(adj_out[1].contains("a.md"), "b→a 应记录");
+        // 有向 in 双向
+        assert!(in_links_map.get("a.md").map(|s| s.contains("b.md")).unwrap_or(false), "in_links[a] 应含 b");
+        assert!(in_links_map.get("b.md").map(|s| s.contains("a.md")).unwrap_or(false), "in_links[b] 应含 a");
+        // 无向边集去重为 1 条（petgraph 无向图，每对一次）
+        assert_eq!(placeholder_edges.len(), 1, "双向 pair 无向边应去重为 1 条");
     }
 
     #[test]
