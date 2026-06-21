@@ -9,7 +9,12 @@ const W_SOURCE_OVERLAP: f64 = 4.0;
 const W_COMMON_NEIGHBOR: f64 = 1.5;
 const W_TYPE_AFFINITY: f64 = 1.0;
 
-/// 类型亲和度矩阵（照搬桌面；新 type 走 default 0.5）。
+/// 类型亲和度矩阵（照搬桌面 graph-relevance.ts；新 type 走 default 0.5）。
+///
+/// 【fidelity 注释】矩阵键仅覆盖桌面 canonical 分类法（entity/concept/source/query/synthesis）。
+/// 真实 ingest 数据的 page_type 是 LLM 的 NER 式分类（Person/Organization/Project/System 等），
+/// 多数落 default 0.5——type 信号偏弱。根因在 ingest LLM 分类法与桌面 graph 分类法不同
+/// （非本函数 bug）；其余三信号（directLink/sourceOverlap/commonNeighbor）仍正常承载相关性。
 fn type_affinity(a: &str, b: &str) -> f64 {
     let m = |t: &str| -> std::collections::HashMap<&str, f64> {
         let mut h = std::collections::HashMap::new();
@@ -223,14 +228,19 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
             adj_out[si].insert(tgt.clone());
         }
     }
+    // 一次 O(E) 预算：in_links_map（path → 入边来源集合）+ in_degree（path → 入度），
+    // 替代下方 O(pages×edges) 嵌套循环。
+    let mut in_links_map: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut in_degree: HashMap<String, i32> = HashMap::new();
+    for (s, t) in &placeholder_edges {
+        in_links_map.entry(t.clone()).or_default().insert(s.clone());
+        *in_degree.entry(t.clone()).or_insert(0) += 1;
+    }
     // 3b. 反填 inLinks → 完成 RetrievalGraph
     let mut rnodes: HashMap<String, RetrievalNode> = HashMap::new();
     for p in &pages {
         let i = path_index[&p.path];
-        let mut in_links: HashSet<String> = HashSet::new();
-        for (s, t) in &placeholder_edges {
-            if t == &p.path { in_links.insert(s.clone()); }
-        }
+        let in_links = in_links_map.remove(&p.path).unwrap_or_default();
         // 【M3 适配】page_type lowercase 填 type（对齐桌面 graph-relevance.ts 的 toLowerCase，
         // 使 type_affinity 矩阵正确匹配 + 2d insights 的 system 排除一致）
         let ty = p.page_type.clone().unwrap_or_else(|| "other".into()).to_lowercase();
@@ -291,7 +301,7 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
         let mut lc: Vec<(usize, i32)> = members.iter().map(|&i| {
             let p = &pages[i];
             let deg = adj_out[path_index[&p.path]].len() as i32
-                + edges.iter().filter(|e| e.target == p.path).count() as i32;
+                + *in_degree.get(&p.path).unwrap_or(&0);
             (i, deg)
         }).collect();
         lc.sort_by(|a, b| b.1.cmp(&a.1));
@@ -300,7 +310,7 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
     }
 
     let mut nodes: Vec<GraphNode> = pages.iter().enumerate().map(|(i, p)| {
-        let deg = adj_out[i].len() as i32 + edges.iter().filter(|e| e.target == p.path).count() as i32;
+        let deg = adj_out[i].len() as i32 + *in_degree.get(&p.path).unwrap_or(&0);
         // 【M3 适配】node_type 也 lowercase（与 RetrievalNode.type 一致）
         let ty = p.page_type.clone().unwrap_or_else(|| "other".into()).to_lowercase();
         GraphNode {
