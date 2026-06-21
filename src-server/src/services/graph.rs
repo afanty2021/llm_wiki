@@ -338,6 +338,35 @@ pub fn related_nodes(graph: &WikiGraph, path: &str, limit: usize) -> Vec<Related
     }).collect()
 }
 
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SurprisingConnection {
+    pub source: GraphNode,
+    pub target: GraphNode,
+    pub score: i32,
+    pub reasons: Vec<String>,
+    pub key: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeGap {
+    #[serde(rename = "type")]
+    pub r#type: String, // "isolated-node" | "sparse-community" | "bridge-node"
+    pub title: String,
+    pub description: String,
+    pub node_ids: Vec<String>, // 序列化为 nodeIds
+    pub suggestion: String,
+}
+
+pub fn find_surprising_connections(_graph: &WikiGraph, _limit: usize) -> Vec<SurprisingConnection> {
+    Vec::new() // Task 2 实现
+}
+
+pub fn detect_knowledge_gaps(_graph: &WikiGraph, _limit: usize) -> Vec<KnowledgeGap> {
+    Vec::new() // Task 3 实现
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +475,12 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].path, "c"); // weight 3.0 最高
         assert_eq!(r[1].path, "d"); // 1.2 次之
+    }
+
+    #[test]
+    fn empty_graph_gives_empty_insights() {
+        let g = WikiGraph { nodes: vec![], edges: vec![], communities: vec![] };
+        assert!(find_surprising_connections(&g, 5).is_empty());
+        assert!(detect_knowledge_gaps(&g, 8).is_empty());
     }
 }
