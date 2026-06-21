@@ -56,10 +56,17 @@ export interface SearchResult {
   path: string
   title: string
   snippet: string
-  title_match: boolean
+  titleMatch: boolean
   score: number
-  vector_score?: number
+  vectorScore?: number
   images: Array<{ url: string; alt: string }>
+}
+
+export interface SearchResponse {
+  mode: string                 // "keyword" | "vector" | "hybrid"
+  results: SearchResult[]
+  tokenHits: number
+  vectorHits: number
 }
 
 export interface GraphData {
