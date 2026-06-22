@@ -58,7 +58,12 @@ pub fn parse_review_blocks(text: &str, source_path: &str) -> Vec<ParsedReview> {
         }
         if !in_fence {
             if let Some(rest) = trimmed.strip_prefix("---REVIEW:") {
-                if let Some(hdr) = rest.strip_suffix("---") {
+                // 闭合 `---` 容忍前置空格：LLM 可能把同模板 FILE 块的
+                // `---FILE: path ---`（带空格）约定带到 REVIEW，输出
+                // `---REVIEW: type | title ---`。strip_suffix("---") 是精确匹配，
+                // 遇尾空格会 None → 整块静默丢弃。先 trim_end 再剥，与 FILE 解析器
+                // （strip_suffix(" ---")）同款容忍。
+                if let Some(hdr) = rest.trim_end().strip_suffix("---") {
                     if in_block {
                         out.push(build_review(&cur_type, &cur_title, &cur_body, source_path));
                         cur_body.clear();
@@ -202,6 +207,11 @@ pub fn count_file_blocks(text: &str) -> usize {
 /// 守 deferred-write 不变量：只由 run_ingest_job 在 `if all_upserted` 块内、
 /// mark_file_ingested 之后调用（页 upsert 全成功 → 文件 mark 成功 → 再插 review，
 /// 保证失败时不留孤儿 review、不重复）。
+///
+/// Re-ingest 去重：插入前先删除该 (project_id, source_path) 下**仍 open** 的旧 review。
+/// wiki_pages 靠 UNIQUE(project_id, path) upsert 去重，review_items 是 append-only 无等价键，
+/// 故 re-ingest 同源（内容变化 → check_ingested_file 不跳过 → 重算 review）会累积重复 open 项。
+/// 只删 open（已 resolved/dismissed 是用户决策历史，保留）；以本次 LLM 输出为该源的新真相。
 pub async fn insert_review_items(
     state: &AppState,
     project_id: i32,
@@ -209,6 +219,23 @@ pub async fn insert_review_items(
 ) -> Result<usize, AppError> {
     if items.is_empty() {
         return Ok(0);
+    }
+    // 收集本批涉及的 source_path，删除其 open 旧项（re-ingest 去重）。
+    let source_paths: Vec<&str> = items
+        .iter()
+        .filter_map(|r| r.source_path.as_deref())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    if !source_paths.is_empty() {
+        sqlx::query(
+            "DELETE FROM review_items \
+             WHERE project_id = $1 AND status = 'open' AND source_path = ANY($2)",
+        )
+        .bind(project_id)
+        .bind(&source_paths)
+        .execute(&state.db)
+        .await?;
     }
     let mut count = 0usize;
     for r in items {
@@ -586,6 +613,18 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].title, "A");
         assert_eq!(r[1].review_type, "missing-page");
+    }
+
+    #[test]
+    fn tolerates_space_before_closing_marker() {
+        // LLM 可能把同模板 FILE 块（`---FILE: path ---`，带空格）的约定带到 REVIEW，
+        // 输出 `---REVIEW: type | Title ---`（闭合 --- 前有空格）。精确 strip_suffix
+        // 会丢块；trim_end 后剥 --- 应正常解析。
+        let text = "---REVIEW: suggestion | Spaced Title ---\nbody\nOPTIONS: Create Page | Skip\n---END REVIEW---";
+        let r = parse_review_blocks(text, "src.md");
+        assert_eq!(r.len(), 1, "trailing-space header must not be dropped");
+        assert_eq!(r[0].review_type, "suggestion");
+        assert_eq!(r[0].title, "Spaced Title");
     }
 
     #[test]

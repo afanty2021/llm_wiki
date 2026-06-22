@@ -50,6 +50,54 @@ async fn insert_review_items_stores_rows() {
 }
 
 #[tokio::test]
+async fn insert_review_items_dedupes_open_on_reingest() {
+    // P2 回归：re-ingest 同源（内容变化 → 重算 review）不应累积重复 open 项。
+    // insert_review_items 插入前应删除该 (project_id, source_path) 的 open 旧项。
+    let (_server, state, pid, _token) = setup_project("rev-reingest").await;
+
+    // 首次摄取：1 条 open review
+    let first = parse_review_blocks(
+        "---REVIEW: suggestion | Add X---\nbody\nOPTIONS: Create Page | Skip\n---END REVIEW---",
+        "sources/doc.md",
+    );
+    assert_eq!(insert_review_items(&state, pid, &first).await.unwrap(), 1);
+
+    // re-ingest：LLM 再次产出同一 (type,title) review（典型重处理场景）
+    let again = parse_review_blocks(
+        "---REVIEW: suggestion | Add X---\nbody updated\nOPTIONS: Create Page | Skip\n---END REVIEW---",
+        "sources/doc.md",
+    );
+    assert_eq!(insert_review_items(&state, pid, &again).await.unwrap(), 1);
+
+    // 该源仍只 1 条 open（旧项被删，新项插入），无重复累积
+    let open_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM review_items WHERE project_id=$1 AND source_path='sources/doc.md' AND status='open'",
+    )
+    .bind(pid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(open_count, 1, "re-ingest must not accumulate duplicate open reviews");
+
+    // 已 resolved 的旧项不删（用户决策历史保留）
+    let resolved = parse_review_blocks(
+        "---REVIEW: contradiction | Keep History---\nbody\n---END REVIEW---",
+        "sources/doc.md",
+    );
+    insert_review_items(&state, pid, &resolved).await.unwrap();
+    sqlx::query("UPDATE review_items SET status='resolved' WHERE project_id=$1 AND title='Keep History'")
+        .bind(pid).execute(&state.db).await.unwrap();
+    // 再次 re-ingest 同源
+    let third = parse_review_blocks(
+        "---REVIEW: suggestion | Add X---\nbody again\n---END REVIEW---",
+        "sources/doc.md",
+    );
+    insert_review_items(&state, pid, &third).await.unwrap();
+    let kept: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM review_items WHERE project_id=$1 AND title='Keep History' AND status='resolved'",
+    )
+    .bind(pid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(kept, 1, "resolved items must survive re-ingest (history preserved)");
+}
+
+#[tokio::test]
 async fn parse_handles_realistic_step2_output() {
     // step2 output with FILE blocks + a trailing REVIEW block
     let out = "---FILE: concepts/foo.md ---\n---\ntitle: Foo\ntype: concept\n---\n# Foo\nbody\n---END FILE---\n---REVIEW: missing-page | Add Bar---\nBar referenced but missing.\nOPTIONS: Create Page | Skip\nPAGES: wiki/concepts/bar.md\n---END REVIEW---";
@@ -111,9 +159,12 @@ async fn dedicated_stage_skips_below_threshold() {
 
 /// Insert one open review item directly and return its id.
 async fn seed_review(state: &llm_wiki_server::AppState, pid: i32, title: &str, rtype: &str, affected: Option<&[&str]>) -> i64 {
+    // 每个 seed 用 title 派生唯一 source_path：insert_review_items 会删同 source_path
+    // 的 open 旧项（re-ingest 去重，P2），逐条 seed 若共用 "src.md" 会互相删除。
+    let src = format!("src/{}.md", title);
     let mut p = parse_review_blocks(
         &format!("---REVIEW: {} | {}---\nBody.\nOPTIONS: Create Page | Skip\n---END REVIEW---", rtype, title),
-        "src.md",
+        &src,
     );
     if let Some(pages) = affected {
         p[0].affected_pages = Some(pages.iter().map(|s| s.to_string()).collect());
