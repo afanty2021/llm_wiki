@@ -9,6 +9,7 @@ mod chat;
 mod graph;
 mod pages;
 mod ingest;
+mod llm_providers;
 pub mod chat_sessions;
 pub mod reviews;
 
@@ -29,5 +30,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/chat", chat::chat_routes())
         .nest("/api/v1/graph", graph::graph_routes())
         .merge(ingest::global_ingest_routes())
+        .merge(llm_providers::llm_provider_routes())
         .with_state(state)
 }

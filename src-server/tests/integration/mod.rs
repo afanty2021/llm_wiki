@@ -4,6 +4,7 @@ pub mod ingest_test;
 pub mod pages_test;
 mod chat_sessions_test;
 mod reviews_test;
+mod permissions_test;
 
 use axum::Router;
 use llm_wiki_server::AppState;
