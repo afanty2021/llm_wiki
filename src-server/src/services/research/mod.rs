@@ -1,5 +1,5 @@
 // src/services/research/mod.rs — Research 类型 + 纯函数 + 入队。
-// pub mod synthesize;  // Task 5 启用
+pub mod synthesize;
 // pub mod worker;      // Task 6 启用
 
 use crate::{AppError, AppState};
