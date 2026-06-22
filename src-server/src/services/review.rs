@@ -5,6 +5,7 @@
 //! 计算，run_ingest_job 落库（守 deferred-write 不变量）。
 
 use serde::{Deserialize, Serialize};
+use crate::{AppState, AppError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,6 +195,43 @@ pub fn slugify(title: &str) -> String {
 /// Count FILE blocks (by `---END FILE---` markers).
 pub fn count_file_blocks(text: &str) -> usize {
     text.lines().filter(|l| l.trim() == "---END FILE---").count()
+}
+
+/// Bulk-insert parsed reviews for a project. Returns count inserted.
+///
+/// 守 deferred-write 不变量：只由 run_ingest_job 在 `if all_upserted` 块内、
+/// mark_file_ingested 之后调用（页 upsert 全成功 → 文件 mark 成功 → 再插 review，
+/// 保证失败时不留孤儿 review、不重复）。
+pub async fn insert_review_items(
+    state: &AppState,
+    project_id: i32,
+    items: &[ParsedReview],
+) -> Result<usize, AppError> {
+    if items.is_empty() {
+        return Ok(0);
+    }
+    let mut count = 0usize;
+    for r in items {
+        let options_json = serde_json::to_value(&r.options).unwrap_or(serde_json::json!([]));
+        sqlx::query(
+            "INSERT INTO review_items \
+             (uuid, project_id, source_path, review_type, title, description, affected_pages, search_queries, options) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(project_id)
+        .bind(r.source_path.as_deref())
+        .bind(&r.review_type)
+        .bind(&r.title)
+        .bind(&r.description)
+        .bind(r.affected_pages.as_deref())
+        .bind(r.search_queries.as_deref())
+        .bind(options_json)
+        .execute(&state.db)
+        .await?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 #[cfg(test)]

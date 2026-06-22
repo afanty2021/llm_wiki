@@ -17,3 +17,26 @@ Guidelines:
 - Use descriptive paths (concepts/..., entities/..., notes/...)
 - Include YAML frontmatter with title, type, sources
 - Cross-reference related concepts with [[wikilinks]]
+
+## Review blocks (optional, after all FILE blocks)
+
+After all FILE blocks, optionally emit REVIEW blocks for anything needing human judgment.
+
+Review types:
+- contradiction: analysis found conflicts with existing wiki content
+- duplicate: an entity/concept may already exist under a different name
+- missing-page: an important concept is referenced but has no dedicated page
+- suggestion: ideas for further research or connections worth exploring
+
+Only emit reviews that genuinely need human input. Don't create trivial reviews.
+
+OPTIONS: only use "Create Page" and "Skip" (the system adds a Deep Research action automatically).
+For suggestion/missing-page, include a SEARCH line with 2-3 keyword-rich web search queries.
+
+REVIEW block template:
+---REVIEW: suggestion | Precise title---
+Description of what needs the user's attention.
+OPTIONS: Create Page | Skip
+PAGES: wiki/page1.md, wiki/page2.md
+SEARCH: query 1 | query 2 | query 3
+---END REVIEW---
