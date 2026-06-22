@@ -193,3 +193,30 @@ async fn run_research_job_synth_fail_is_error() {
             .unwrap();
     assert!(has_web, "web_results must persist before synthesis stage");
 }
+
+#[tokio::test]
+async fn run_research_job_empty_synthesis_is_error() {
+    let (_server, state, pid, _token) = setup_project("res-empty").await;
+    let task = seed_task(&state, pid, "topic-e", None).await;
+    let web = FakeWeb {
+        results: vec![WebSearchResult {
+            title: "T".into(),
+            url: "u".into(),
+            snippet: "s".into(),
+            source: "t".into(),
+        }],
+    };
+    // LLM 只输出 think 块,strip_thinking 后为空
+    let llm = FakeLlm {
+        reply: "<think>only thinking</think>".into(),
+        fail: false,
+    };
+    let err = run_research_job(&state, &task, "2026-06-22", 8000, &web, &llm)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{}", err).contains("empty synthesis"),
+        "got: {}",
+        err
+    );
+}

@@ -130,7 +130,7 @@ pub async fn run_research_job(
                 system_prompt: Some(
                     "You synthesize a research brief for a personal wiki. Output a single markdown document.".into(),
                 ),
-                timeout_secs: None,
+                timeout_secs: Some(120),
             },
         )
         .await
