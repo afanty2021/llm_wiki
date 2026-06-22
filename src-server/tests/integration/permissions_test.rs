@@ -156,3 +156,22 @@ async fn role_matrix_provider_write() {
         .json(&serde_json::json!({"provider_type":"openai","api_key":"k"})).await;
     assert_eq!(m.status_code(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn team_scope_provider_shared_across_projects() {
+    let (server, state, team_id, _owner, admin_token, _member) = setup_team_with_roles("perm-shared").await;
+    // admin 给 team 配一个 provider
+    let r = server.post(&format!("/api/v1/teams/{}/llm-providers", team_id))
+        .add_header("authorization", auth(&admin_token))
+        .json(&serde_json::json!({"provider_type":"openai","api_key":"team-key","model":"gpt-4o"})).await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    // 该 team 下建两个 project(seed_project_in_team 已在 Task 5 加进本文件)
+    let pid1 = seed_project_in_team(&state, team_id).await;
+    let pid2 = seed_project_in_team(&state, team_id).await;
+    // 直调 get_llm_config:两 project 都应取到(team 维度共用,worker 同款路径)
+    let cfg1 = llm_wiki_server::services::llm::get_llm_config(&state.db, pid1).await.unwrap();
+    let cfg2 = llm_wiki_server::services::llm::get_llm_config(&state.db, pid2).await.unwrap();
+    assert_eq!(cfg1.provider_type, "openai");
+    assert_eq!(cfg2.provider_type, "openai");
+    assert_eq!(llm_wiki_server::services::llm::decrypt_api_key(&cfg1.api_key, &state.config).unwrap(), "team-key");
+}
