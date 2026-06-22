@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
     Json,
@@ -249,6 +249,7 @@ struct HistRow {
 /// retrieves context, builds messages, persists the user message, streams
 /// tokens from the injected `provider`, parses citations, persists the
 /// assistant message, and emits a final `Done`.
+#[allow(clippy::too_many_arguments)] // natural state/identity/provider/opts split
 pub async fn stream_conversation_turn(
     state: AppState,
     project_id: i32,
@@ -373,7 +374,7 @@ pub async fn stream_conversation_turn(
             .iter()
             .filter_map(|n| ref_map.get(n).cloned())
             .collect();
-        let _ = persist_assistant(
+        if let Err(e) = persist_assistant(
             &state_for_stream,
             conv_id,
             &full,
@@ -381,7 +382,10 @@ pub async fn stream_conversation_turn(
             &cited_refs,
             &pages_for_persist,
         )
-        .await;
+        .await
+        {
+            tracing::warn!("persist_assistant failed for conv {}: {}", conv_id, e);
+        }
 
         yield ChatStreamEvent::Done {
             references: cited_refs,

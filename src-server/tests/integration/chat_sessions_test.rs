@@ -303,3 +303,59 @@ async fn stream_turn_emits_tokens_citations_and_persists() {
         .unwrap();
     assert_eq!(title, "What is rust ownership?");
 }
+
+#[tokio::test]
+async fn stream_endpoint_rejects_unauthenticated() {
+    let (server, _state, pid, token) = setup("conv-auth").await;
+    let c = create_conv(&server, pid, &token, None).await;
+    let cid = c["id"].as_i64().unwrap();
+    let r = server
+        .post(&format!(
+            "/api/v1/projects/{}/chat/conversations/{}/stream",
+            pid, cid
+        ))
+        .content_type("application/json")
+        .json(&serde_json::json!({"message":"hi"}))
+        .await;
+    // No Authorization header -> 401
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn stream_endpoint_403_for_non_member() {
+    let (server, _state, pid, token_a) = setup("conv-403").await;
+    let c = create_conv(&server, pid, &token_a, None).await;
+    let cid = c["id"].as_i64().unwrap();
+
+    // user B is NOT a project member -> check_project_access returns 403
+    // (fires before the ownership check).
+    let uname_b = unique_prefix("conv-403-b");
+    let user_b = crate::register_user(&server, &uname_b, &format!("{}@t.com", uname_b), "password123").await;
+    let r = server
+        .post(&format!(
+            "/api/v1/projects/{}/chat/conversations/{}/stream",
+            pid, cid
+        ))
+        .add_header("authorization", auth(&user_b))
+        .content_type("application/json")
+        .json(&serde_json::json!({"message":"hi"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn stream_endpoint_400_on_empty_message() {
+    let (server, _state, pid, token) = setup("conv-empty").await;
+    let c = create_conv(&server, pid, &token, None).await;
+    let cid = c["id"].as_i64().unwrap();
+    let r = server
+        .post(&format!(
+            "/api/v1/projects/{}/chat/conversations/{}/stream",
+            pid, cid
+        ))
+        .add_header("authorization", auth(&token))
+        .content_type("application/json")
+        .json(&serde_json::json!({"message":"   "}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+}
