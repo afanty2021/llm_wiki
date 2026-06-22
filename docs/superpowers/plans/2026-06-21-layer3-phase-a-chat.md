@@ -1043,8 +1043,9 @@ async fn conversations_are_private_per_user() {
     let cid = c["id"].as_i64().unwrap();
 
     // user B (new registration) is NOT a member of A's team/project -> 403 on project access.
-    // Register B in the same test server.
-    let user_b = crate::register_user(&server, "conv_iso_b", "conv_iso_b@t.com", "password123").await;
+    // Register B with a unique name (persistent test DB — avoid re-run username collision).
+    let uname_b = unique_prefix("conv-iso-b");
+    let user_b = crate::register_user(&server, &uname_b, &format!("{}@t.com", uname_b), "password123").await;
 
     // B cannot list A's conversations (no project membership) -> 403
     let r = server
@@ -1557,7 +1558,9 @@ Append to `src-server/tests/integration/chat_sessions_test.rs`:
 #[tokio::test]
 async fn stream_endpoint_rejects_unauthenticated() {
     let (server, _state, pid, _token) = setup("conv-auth").await;
-    let c = create_conv(&server, pid, &crate::register_user(&server, "conv_auth_u", "conv_auth_u@t.com", "password123").await, None).await;
+    let uname = unique_prefix("conv-auth-u");
+    let tok = crate::register_user(&server, &uname, &format!("{}@t.com", uname), "password123").await;
+    let c = create_conv(&server, pid, &tok, None).await;
     let cid = c["id"].as_i64().unwrap();
     let r = server
         .post(&format!(
@@ -1579,7 +1582,8 @@ async fn stream_endpoint_404_for_other_users_conversation() {
 
     // A different user who IS a team member (e.g. added by an admin) would get
     // 404 from the ownership check. Here, user B is not a project member -> 403.
-    let user_b = crate::register_user(&server, "conv_404_b", "conv_404_b@t.com", "password123").await;
+    let user_b_uname = unique_prefix("conv-404-b");
+    let user_b = crate::register_user(&server, &user_b_uname, &format!("{}@t.com", user_b_uname), "password123").await;
     let r = server
         .post(&format!(
             "/api/v1/projects/{}/chat/conversations/{}/stream",
