@@ -12,3 +12,4 @@ pub mod citations;
 pub mod retrieval;
 pub mod review;
 pub mod web_search;
+pub mod research;
