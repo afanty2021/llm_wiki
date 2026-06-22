@@ -102,6 +102,10 @@ pub fn select_and_assemble(
     let mut sorted = candidates;
     sorted.sort_by_key(|c| c.priority);
 
+    // 截断标记：长度计入预算（对齐桌面 chat-panel.tsx::tryAddPage —— 标记也占字符，避免
+    // 超预算后静默丢尾部内容而不告知模型）。
+    const TRUNCATION_MARKER: &str = "\n\n[...truncated...]";
+
     let mut pages: Vec<RetrievedPage> = Vec::new();
     let mut ref_map: HashMap<i32, MessageReference> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -116,7 +120,9 @@ pub fn select_and_assemble(
             continue;
         }
         let content: String = if c.content.chars().count() > budget.max_page_size {
-            c.content.chars().take(budget.max_page_size).collect()
+            // 截断到 max_page_size 字符并追加标记（标记长度计入 added/used 记账，与桌面一致）。
+            let head: String = c.content.chars().take(budget.max_page_size).collect();
+            format!("{head}{TRUNCATION_MARKER}")
         } else {
             c.content.clone()
         };
@@ -393,14 +399,34 @@ mod tests {
     }
 
     #[test]
+    fn truncates_long_page_and_appends_marker() {
+        // 对齐桌面 tryAddPage：超 max_page_size 的页被截断并追加 "[...truncated...]"，
+        // 标记长度计入预算记账（截断后 content = max_page_size + 标记字数）。
+        let b = budget_for(100_000); // page_budget 50000, max_page 15000
+        let long = "x".repeat(20_000); // > max_page_size 15000
+        let r = select_and_assemble(vec![cand("long.md", &long, 0)], "idx".into(), &b);
+        assert_eq!(r.pages.len(), 1);
+        let marker = "\n\n[...truncated...]";
+        assert_eq!(
+            r.pages[0].content.chars().count(),
+            15_000 + marker.chars().count()
+        );
+        assert!(
+            r.pages[0].content.ends_with("[...truncated...]"),
+            "truncated page must carry the marker"
+        );
+    }
+
+    #[test]
     fn skips_page_that_exceeds_remaining_budget() {
+        // 截断后的页（含标记）若超出剩余 page_budget 则跳过，给更小的页让位
+        // （对齐桌面 tryAddPage：usedChars + truncated.length > PAGE_BUDGET → 跳过）。
         let b = budget_for(10_000); // page_budget 5000, max_page 5000
-        let big = "x".repeat(6000); // > max_page_size -> truncated to 5000
+        let big = "x".repeat(6000); // 截断后 = 5000 + marker(19) = 5019 > page_budget 5000
         let cands = vec![cand("big.md", &big, 0), cand("small.md", "s", 1)];
         let r = select_and_assemble(cands, "idx".into(), &b);
-        // big fills 5000 == page_budget -> used==budget, small skipped
+        // big 截断后仍超预算被跳过；small 1 字符 fits
         assert_eq!(r.pages.len(), 1);
-        assert_eq!(r.pages[0].path, "big.md");
-        assert_eq!(r.pages[0].content.chars().count(), 5000);
+        assert_eq!(r.pages[0].path, "small.md");
     }
 }

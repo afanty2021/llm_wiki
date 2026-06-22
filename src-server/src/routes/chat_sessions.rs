@@ -288,12 +288,12 @@ pub async fn stream_conversation_turn(
     let retrieval = retrieve_context(&state, project_id, &user_msg, context_size).await?;
     let system_prompt = build_system_prompt(&retrieval);
 
-    // messages = [system, ...history, user]
-    let mut messages: Vec<ChatMessage> = Vec::with_capacity(2 + hist.len());
-    messages.push(ChatMessage {
-        role: "system".into(),
-        content: system_prompt,
-    });
+    // messages = [...history, user]. System prompt 通过 ChatOpts.system_prompt 传递，
+    // 而非作为 role:"system" 消息塞进数组 —— 两个 provider 都在 opts.system_prompt 里
+    // 接收它（OpenAI 前置一条 system 消息；Anthropic 填顶层 system 字段）。若塞进 messages，
+    // Anthropic Messages API 会因 messages 内出现 role:"system" 返回 HTTP 400，且顶层
+    // system 永不设置，导致 anthropic 项目每个 chat turn 都失败。
+    let mut messages: Vec<ChatMessage> = Vec::with_capacity(1 + hist.len());
     for h in hist {
         messages.push(ChatMessage {
             role: h.role,
@@ -343,7 +343,7 @@ pub async fn stream_conversation_turn(
             model: model.clone(),
             temperature: 0.3,
             max_tokens: 2048,
-            system_prompt: None, // system message already in `messages`
+            system_prompt: Some(system_prompt.clone()), // RAG 上下文走顶层 system
             timeout_secs: None,
         };
         let mut ts = match provider.stream_chat(messages, opts).await {
