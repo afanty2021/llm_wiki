@@ -126,3 +126,33 @@ async fn role_matrix_delete_project() {
         .add_header("authorization", auth(&owner_token)).await;
     assert_eq!(o.status_code(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn member_mgmt_owner_only() {
+    let (server, state, team_id, owner_token, admin_token, _member_token) = setup_team_with_roles("perm-mgmt").await;
+    // 注册一个新 user 作为待加入成员
+    let newu = unique_prefix("perm-mgmt-new");
+    let _ = crate::register_user(&server, &newu, &format!("{}@t.com", newu), "password123").await;
+    let new_id: i32 = sqlx::query_scalar("SELECT id FROM users WHERE username=$1")
+        .bind(&newu).fetch_one(&state.db).await.unwrap();
+    // admin add member → 403（收紧后 owner only）
+    let a = server.post(&format!("/api/v1/teams/{}/members", team_id))
+        .add_header("authorization", auth(&admin_token))
+        .json(&serde_json::json!({"user_id":new_id,"role":"member"})).await;
+    assert_eq!(a.status_code(), StatusCode::FORBIDDEN);
+    // owner add member → 201
+    let o = server.post(&format!("/api/v1/teams/{}/members", team_id))
+        .add_header("authorization", auth(&owner_token))
+        .json(&serde_json::json!({"user_id":new_id,"role":"member"})).await;
+    assert_eq!(o.status_code(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn role_matrix_provider_write() {
+    // member POST llm-providers → 403
+    let (server, _state, team_id, _owner, _admin, member_token) = setup_team_with_roles("perm-prov").await;
+    let m = server.post(&format!("/api/v1/teams/{}/llm-providers", team_id))
+        .add_header("authorization", auth(&member_token))
+        .json(&serde_json::json!({"provider_type":"openai","api_key":"k"})).await;
+    assert_eq!(m.status_code(), StatusCode::FORBIDDEN);
+}
