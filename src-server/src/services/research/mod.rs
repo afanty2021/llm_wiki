@@ -33,7 +33,7 @@ pub struct EnqueueBody {
     pub search_queries: Option<Vec<String>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ResearchOutcome {
     pub path: String,
