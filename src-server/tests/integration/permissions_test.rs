@@ -80,3 +80,49 @@ async fn llm_provider_update_changes_fields() {
         .add_header("authorization", auth(&admin_token)).await;
     assert_eq!(g.json::<serde_json::Value>()["model"], "gpt-4o-mini");
 }
+
+/// 在 team 下建一个 project（owner 直建），返回 project_id。
+async fn seed_project_in_team(state: &llm_wiki_server::AppState, team_id: i32) -> i32 {
+    let owner_id: i32 = sqlx::query_scalar("SELECT created_by FROM teams WHERE id=$1")
+        .bind(team_id).fetch_one(&state.db).await.unwrap();
+    let uid = uuid::Uuid::new_v4();
+    let row = sqlx::query(
+        "INSERT INTO projects (team_id, name, storage_path, created_by) VALUES ($1,$2,$3,$4) RETURNING id")
+        .bind(team_id).bind(format!("p-{}", uid))
+        .bind(format!("/tmp/{}", uid)).bind(owner_id)
+        .fetch_one(&state.db).await.unwrap();
+    sqlx::Row::get::<i32, _>(&row, "id")
+}
+
+#[tokio::test]
+async fn role_matrix_delete_page() {
+    let (server, state, team_id, _owner, admin_token, member_token) = setup_team_with_roles("perm-page").await;
+    let pid = seed_project_in_team(&state, team_id).await;
+    sqlx::query("INSERT INTO wiki_pages (project_id, path, title, content, page_type) VALUES ($1,'wiki/x.md','X','c','concept') ON CONFLICT DO NOTHING")
+        .bind(pid).execute(&state.db).await.unwrap();
+    // member 删页 → 403
+    let m = server.delete(&format!("/api/v1/projects/{}/page?path=wiki/x.md", pid))
+        .add_header("authorization", auth(&member_token)).await;
+    assert_eq!(m.status_code(), StatusCode::FORBIDDEN);
+    // admin 删页 → 204
+    let a = server.delete(&format!("/api/v1/projects/{}/page?path=wiki/x.md", pid))
+        .add_header("authorization", auth(&admin_token)).await;
+    assert_eq!(a.status_code(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn role_matrix_delete_project() {
+    let (server, state, team_id, owner_token, admin_token, member_token) = setup_team_with_roles("perm-delproj").await;
+    let pid_m = seed_project_in_team(&state, team_id).await;
+    let m = server.delete(&format!("/api/v1/projects/{}", pid_m))
+        .add_header("authorization", auth(&member_token)).await;
+    assert_eq!(m.status_code(), StatusCode::FORBIDDEN);
+    let pid_a = seed_project_in_team(&state, team_id).await;
+    let a = server.delete(&format!("/api/v1/projects/{}", pid_a))
+        .add_header("authorization", auth(&admin_token)).await;
+    assert_eq!(a.status_code(), StatusCode::FORBIDDEN);
+    let pid_o = seed_project_in_team(&state, team_id).await;
+    let o = server.delete(&format!("/api/v1/projects/{}", pid_o))
+        .add_header("authorization", auth(&owner_token)).await;
+    assert_eq!(o.status_code(), StatusCode::OK);
+}

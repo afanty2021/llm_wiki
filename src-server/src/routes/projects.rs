@@ -13,6 +13,7 @@ use crate::{
         CreateProjectRequest, ListProjectsQuery, Project, ProjectResponse,
         UpdateProjectRequest,
     },
+    middleware::project_guard::{check_project_access_with_role, RequiredRole},
 };
 use super::pages;
 use super::ingest;
@@ -47,9 +48,9 @@ pub fn project_routes() -> Router<AppState> {
     Router::new()
         .route("/", axum::routing::post(create_project))
         .route("/", axum::routing::get(list_projects))
-        .route("/{id}", axum::routing::get(get_project))
-        .route("/{id}", axum::routing::put(update_project))
-        .route("/{id}", axum::routing::delete(delete_project))
+        .route("/:id", axum::routing::get(get_project))
+        .route("/:id", axum::routing::put(update_project))
+        .route("/:id", axum::routing::delete(delete_project))
         .merge(pages::pages_routes())
         .merge(ingest::ingest_routes())
         .merge(chat_sessions::chat_session_routes())
@@ -337,21 +338,7 @@ async fn delete_project(
     headers: HeaderMap,
     Path(project_id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
-    let claims = require_auth(&state, &headers).await?;
-    let user_id: i32 = claims.sub.parse()?;
-
-    // Fetch project and verify team membership
-    let _project = sqlx::query_as::<_, Project>(
-        "SELECT p.id, p.team_id, p.name, p.storage_path, p.created_by, p.created_at \
-         FROM projects p \
-         INNER JOIN team_members tm ON p.team_id = tm.team_id \
-         WHERE p.id = $1 AND tm.user_id = $2",
-    )
-    .bind(project_id)
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::ResourceNotFound("Project not found".to_string()))?;
+    check_project_access_with_role(&state, &headers, project_id, RequiredRole::Owner).await?;
 
     // Use a database transaction to clean up related data
     let mut tx = state.db.begin().await?;

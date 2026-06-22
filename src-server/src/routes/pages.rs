@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use crate::AppState;
 use crate::AppError;
-use crate::middleware::project_guard::check_project_access;
+use crate::middleware::project_guard::{check_project_access, check_project_access_with_role, RequiredRole};
 
 /// wiki_pages 表的 API 视图模型。
 /// created_at/updated_at 用 DateTime<Utc>（chrono serde 序列化为 RFC3339），
@@ -258,7 +258,7 @@ pub async fn delete_page(
     Query(pq): Query<PathQuery>,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
-    check_project_access(&state, &headers, project_id).await?;
+    check_project_access_with_role(&state, &headers, project_id, RequiredRole::Admin).await?;
     let n = sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2")
         .bind(project_id)
         .bind(&pq.path)
