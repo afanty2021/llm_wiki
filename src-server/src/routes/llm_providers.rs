@@ -1,18 +1,11 @@
 // routes/llm_providers.rs — team-scoped LLM provider CRUD（Admin 写 / Member 读，GET 不回传 key）。
 use crate::middleware::project_guard::{check_team_access_with_role, RequiredRole};
+use crate::services::llm::derive_key;
 use crate::{AppError, AppState};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-
-fn derive_key(config: &crate::AppConfig) -> [u8; 32] {
-    let secret = config.jwt_secret();
-    let mut key = [0u8; 32];
-    let len = secret.len().min(32);
-    key[..len].copy_from_slice(&secret.as_bytes()[..len]);
-    key
-}
 
 pub fn llm_provider_routes() -> axum::Router<AppState> {
     axum::Router::new()
@@ -96,32 +89,34 @@ pub async fn update_provider(
     State(state): State<AppState>, Path((team_id, sid)): Path<(i32, i32)>, headers: HeaderMap, Json(body): Json<UpdateBody>,
 ) -> Result<Json<ProviderResp>, AppError> {
     check_team_access_with_role(&state, &headers, team_id, RequiredRole::Admin).await?;
+    let mut tx = state.db.begin().await?;
     if let Some(plain) = body.api_key.as_deref() {
         let key = derive_key(&state.config);
         let enc = crate::utils::crypto::encrypt_api_key(plain, &key)?;
         sqlx::query("UPDATE llm_providers SET api_key_encrypted=$1 WHERE id=$2 AND team_id=$3")
-            .bind(&enc).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(&enc).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     if let Some(b) = body.base_url.as_deref() {
         sqlx::query("UPDATE llm_providers SET base_url=$1 WHERE id=$2 AND team_id=$3")
-            .bind(b).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(b).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     if let Some(m) = body.model.as_deref() {
         sqlx::query("UPDATE llm_providers SET model=$1 WHERE id=$2 AND team_id=$3")
-            .bind(m).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(m).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     if let Some(c) = body.context_size {
         sqlx::query("UPDATE llm_providers SET context_size=$1 WHERE id=$2 AND team_id=$3")
-            .bind(c).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(c).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     if let Some(e) = body.is_enabled {
         sqlx::query("UPDATE llm_providers SET is_enabled=$1 WHERE id=$2 AND team_id=$3")
-            .bind(e).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(e).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     let row: (i32, String, Option<String>, String, i32, bool) = sqlx::query_as(
         "SELECT id, provider_type, base_url, model, context_size, is_enabled FROM llm_providers WHERE id=$1 AND team_id=$2")
-        .bind(sid).bind(team_id).fetch_one(&state.db).await
+        .bind(sid).bind(team_id).fetch_one(&mut *tx).await
         .map_err(|_| AppError::ResourceNotFound("llm_provider".into()))?;
+    tx.commit().await?;
     Ok(Json(ProviderResp {
         id: row.0, provider_type: row.1, base_url: row.2, model: row.3,
         context_size: row.4, is_enabled: row.5, has_key: true,

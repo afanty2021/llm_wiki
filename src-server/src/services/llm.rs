@@ -63,18 +63,19 @@ pub async fn get_llm_config(pool: &PgPool, project_id: i32) -> Result<LlmConfig,
     }
 }
 
+/// 从 jwt_secret 派生 32 字节 key（前 32 字节，不足补零）。encrypt/decrypt 共用，防漂移。
+pub fn derive_key(config: &crate::AppConfig) -> [u8; 32] {
+    let secret = config.jwt_secret();
+    let mut key = [0u8; 32];
+    let len = secret.len().min(32);
+    key[..len].copy_from_slice(&secret.as_bytes()[..len]);
+    key
+}
+
 /// Decrypt the stored API key using a key derived from JWT secret.
-/// The key is first 32 bytes of config.jwt_secret().
 pub fn decrypt_api_key(
     encrypted: &str,
     config: &crate::AppConfig,
 ) -> Result<String, AppError> {
-    let key_bytes: [u8; 32] = {
-        let secret = config.jwt_secret();
-        let mut key = [0u8; 32];
-        let len = secret.len().min(32);
-        key[..len].copy_from_slice(&secret.as_bytes()[..len]);
-        key
-    };
-    crate::utils::decrypt_api_key(encrypted, &key_bytes)
+    crate::utils::decrypt_api_key(encrypted, &derive_key(config))
 }

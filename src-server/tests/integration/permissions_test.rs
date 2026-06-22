@@ -58,3 +58,25 @@ async fn llm_provider_crud_roundtrip() {
         .add_header("authorization", auth(&admin_token)).await;
     assert_eq!(d.status_code(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn llm_provider_update_changes_fields() {
+    let (server, _state, team_id, _owner, admin_token, _member_token) = setup_team_with_roles("prov-upd").await;
+    // 先 CREATE
+    let r = server.post(&format!("/api/v1/teams/{}/llm-providers", team_id))
+        .add_header("authorization", auth(&admin_token))
+        .json(&serde_json::json!({"provider_type":"openai","api_key":"k1","model":"gpt-4o"})).await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let sid = r.json::<serde_json::Value>()["id"].as_i64().unwrap() as i32;
+    // PUT 改 model + api_key
+    let u = server.put(&format!("/api/v1/teams/{}/llm-providers/{}", team_id, sid))
+        .add_header("authorization", auth(&admin_token))
+        .json(&serde_json::json!({"model":"gpt-4o-mini","api_key":"k2"})).await;
+    assert_eq!(u.status_code(), StatusCode::OK);
+    let body: serde_json::Value = u.json();
+    assert_eq!(body["model"], "gpt-4o-mini");
+    // GET 验证 model 持久化
+    let g = server.get(&format!("/api/v1/teams/{}/llm-providers", team_id))
+        .add_header("authorization", auth(&admin_token)).await;
+    assert_eq!(g.json::<serde_json::Value>()["model"], "gpt-4o-mini");
+}
