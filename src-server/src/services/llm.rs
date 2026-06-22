@@ -37,10 +37,11 @@ impl Default for LlmConfig {
 /// Fetch the first enabled LLM provider config for a project
 pub async fn get_llm_config(pool: &PgPool, project_id: i32) -> Result<LlmConfig, AppError> {
     let row = sqlx::query_as::<_, LlmProviderRow>(
-        "SELECT provider_type, api_key_encrypted, base_url, model, context_size
-         FROM llm_providers
-         WHERE project_id = $1 AND is_enabled = TRUE
-         ORDER BY id LIMIT 1",
+        "SELECT lp.provider_type, lp.api_key_encrypted, lp.base_url, lp.model, lp.context_size
+         FROM llm_providers lp
+         JOIN projects p ON lp.team_id = p.team_id
+         WHERE p.id = $1 AND lp.is_enabled = TRUE
+         ORDER BY lp.id LIMIT 1",
     )
     .bind(project_id)
     .fetch_optional(pool)
