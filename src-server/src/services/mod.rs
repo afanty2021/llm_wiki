@@ -11,3 +11,4 @@ pub mod louvain;
 pub mod citations;
 pub mod retrieval;
 pub mod review;
+pub mod web_search;
