@@ -237,3 +237,64 @@ async fn recover_pending_requeues_non_terminal_tasks() {
         .bind(pid).fetch_one(&state.db).await.unwrap();
     assert_eq!(n2, 1);
 }
+
+// --- Phase C Task 7: HTTP 端点测试 ---
+
+#[tokio::test]
+async fn enqueue_rejects_without_search_provider() {
+    let (server, _state, pid, token) = setup_project("res-noprovider").await;
+    let r = server
+        .post(&format!("/api/v1/projects/{}/research", pid))
+        .add_header("authorization", &auth(&token))
+        .json(&serde_json::json!({"topic":"x"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn enqueue_rejects_empty_topic() {
+    let (server, state, pid, token) = setup_project("res-emptytopic").await;
+    let key = derive_test_key();
+    let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id=$1")
+        .bind(pid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO search_providers (team_id, provider_type, api_key_encrypted) VALUES ($1,'tavily',$2)",
+    )
+    .bind(team_id)
+    .bind(key)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let r = server
+        .post(&format!("/api/v1/projects/{}/research", pid))
+        .add_header("authorization", &auth(&token))
+        .json(&serde_json::json!({"topic":"   "}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn team_visibility_forbidden() {
+    let (server, _state, pid, _token_a) = setup_project("res-vis").await;
+    let uname = unique_prefix("res-vis-b");
+    let user_b =
+        crate::register_user(&server, &uname, &format!("{}@t.com", uname), "password123").await;
+    let r = server
+        .post(&format!("/api/v1/projects/{}/research", pid))
+        .add_header("authorization", &auth(&user_b))
+        .json(&serde_json::json!({"topic":"x"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::FORBIDDEN);
+}
+
+fn derive_test_key() -> String {
+    let cfg = llm_wiki_server::AppConfig::from_env().expect("config");
+    let secret = cfg.jwt_secret();
+    let mut key = [0u8; 32];
+    let len = secret.len().min(32);
+    key[..len].copy_from_slice(&secret.as_bytes()[..len]);
+    llm_wiki_server::utils::crypto::encrypt_api_key("dummy-tavily-key", &key).unwrap()
+}

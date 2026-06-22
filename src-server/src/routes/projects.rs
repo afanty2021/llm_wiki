@@ -55,6 +55,7 @@ pub fn project_routes() -> Router<AppState> {
         .merge(ingest::ingest_routes())
         .merge(chat_sessions::chat_session_routes())
         .merge(reviews::reviews_routes())
+        .merge(crate::routes::research::research_project_routes())
 }
 
 // --- Permission helpers ---
