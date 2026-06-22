@@ -541,8 +541,30 @@ async fn process_source_path(
         })
         .collect();
 
-    // Phase B: 计算 review（compute-only，无 DB 写）。dedicated stage 由 Task 4 追加。
-    let reviews = crate::services::review::parse_review_blocks(&llm_output, source_path);
+    // Phase B: 计算 review（compute-only，无 DB 写）= step2 解析 + 3rd-call dedicated stage。
+    let mut reviews = crate::services::review::parse_review_blocks(&llm_output, source_path);
+    match crate::services::llm_stream::provider_for_project(state, project_id).await {
+        Ok(provider) => {
+            match crate::services::review::run_dedicated_review_stage(
+                state,
+                project_id,
+                source_path,
+                &text,
+                &step1_result,
+                &llm_output,
+                &*provider,
+            )
+            .await
+            {
+                Ok(ded) => reviews.extend(ded),
+                Err(e) => tracing::warn!("dedicated review stage failed for {}: {}", source_path, e),
+            }
+        }
+        Err(e) => tracing::warn!("provider for dedicated review stage ({}): {}", source_path, e),
+    }
+    // 批内按 (review_type, title) 去重，避免 step2 与 dedicated 重复
+    let mut seen = std::collections::HashSet::new();
+    reviews.retain(|r| seen.insert((r.review_type.clone(), r.title.clone())));
 
     // 不在此 mark_file_ingested / insert reviews：元数据 + reviews 上浮给 run_ingest_job，
     // 待 wiki_pages 成功落库后再 mark + insert（守 deferred-write 不变量：upsert 失败 →

@@ -58,3 +58,51 @@ async fn parse_handles_realistic_step2_output() {
     assert_eq!(r[0].review_type, "missing-page");
     assert_eq!(r[0].affected_pages.as_deref().unwrap(), &["wiki/concepts/bar.md"]);
 }
+
+use futures::stream::BoxStream;
+use llm_wiki_server::services::llm_stream::{ChatMessage, ChatOpts, LlmError, StreamChatProvider, TokenDelta};
+use llm_wiki_server::services::review::{run_dedicated_review_stage, should_run_dedicated_review_stage};
+
+struct FakeReviewProvider { reply: String }
+#[async_trait::async_trait]
+impl StreamChatProvider for FakeReviewProvider {
+    async fn stream_chat(
+        &self, _messages: Vec<ChatMessage>, _opts: ChatOpts,
+    ) -> Result<BoxStream<'static, Result<TokenDelta, LlmError>>, LlmError> {
+        let reply = self.reply.clone();
+        let s = async_stream::stream! {
+            yield Ok(TokenDelta::Text(reply));
+            yield Ok(TokenDelta::Done);
+        };
+        Ok(Box::pin(s))
+    }
+    fn provider_type(&self) -> &'static str { "fake" }
+    fn model_name(&self) -> &str { "fake" }
+}
+
+#[tokio::test]
+async fn dedicated_stage_parses_provider_output() {
+    let (_server, state, pid, _token) = setup_project("rev-dedicated").await;
+    // a step2 output long enough to trigger + containing a REVIEW marker
+    let step2 = format!("---REVIEW: suggestion | From Step2---\nx\n---END REVIEW---\n{}", "y".repeat(10_000));
+    assert!(should_run_dedicated_review_stage(&step2));
+
+    let provider = FakeReviewProvider {
+        reply: "---REVIEW: missing-page | From Dedicated---\nA gap.\nOPTIONS: Create Page | Skip\nSEARCH: gap query\n---END REVIEW---".into(),
+    };
+    let step1 = serde_json::json!({"entities":[],"connections":[],"contradictions":[]});
+    let out = run_dedicated_review_stage(&state, pid, "sources/doc.md", "source text", &step1, &step2, &provider).await.unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].review_type, "missing-page");
+    assert_eq!(out[0].title, "From Dedicated");
+}
+
+#[tokio::test]
+async fn dedicated_stage_skips_below_threshold() {
+    let (_server, state, pid, _token) = setup_project("rev-skip").await;
+    let step2 = "short output, no review"; // below all thresholds
+    let provider = FakeReviewProvider { reply: "---REVIEW: suggestion | Should Not Happen---\nx\n---END REVIEW---".into() };
+    let step1 = serde_json::json!({});
+    let out = run_dedicated_review_stage(&state, pid, "src.md", "t", &step1, step2, &provider).await.unwrap();
+    assert!(out.is_empty());
+}

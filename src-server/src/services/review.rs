@@ -234,6 +234,92 @@ pub async fn insert_review_items(
     Ok(count)
 }
 
+use crate::services::llm_stream::{ChatMessage, ChatOpts, StreamChatProvider};
+
+const REVIEW_STAGE_MIN_SIGNAL_CHARS: usize = 10_000;
+const REVIEW_STAGE_MIN_FILE_BLOCKS: usize = 4;
+
+pub fn should_run_dedicated_review_stage(generation: &str) -> bool {
+    generation.chars().count() >= REVIEW_STAGE_MIN_SIGNAL_CHARS
+        || count_file_blocks(generation) >= REVIEW_STAGE_MIN_FILE_BLOCKS
+        || generation.contains("---REVIEW:")
+}
+
+async fn fetch_overview(state: &AppState, project_id: i32) -> Option<String> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT content FROM wiki_pages WHERE project_id = $1 AND path = 'wiki/overview.md'",
+    )
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+async fn fetch_index_snippet(state: &AppState, project_id: i32) -> String {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT content FROM wiki_pages WHERE project_id = $1 AND path = 'wiki/index.md'",
+    )
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .unwrap_or_default()
+}
+
+fn trim_to(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        s.chars().take(max).collect()
+    } else {
+        s.to_string()
+    }
+}
+
+/// 3rd-call dedicated review stage. `provider` is injected so tests can use a fake.
+/// Returns empty vec if the trigger condition is not met.
+pub async fn run_dedicated_review_stage(
+    state: &AppState,
+    project_id: i32,
+    source_path: &str,
+    source_text: &str,
+    step1_json: &serde_json::Value,
+    step2_output: &str,
+    provider: &dyn StreamChatProvider,
+) -> Result<Vec<ParsedReview>, AppError> {
+    if !should_run_dedicated_review_stage(step2_output) {
+        return Ok(vec![]);
+    }
+    let purpose = fetch_overview(state, project_id).await.unwrap_or_default();
+    let index = fetch_index_snippet(state, project_id).await;
+    let prompt = include_str!("prompts/step3_review.txt");
+    let analysis = serde_json::to_string_pretty(step1_json).unwrap_or_default();
+    let user = format!(
+        "{prompt}\n\n## Wiki Purpose\n{purpose}\n\n## Current Wiki Index\n{index}\n\n## Source\n{src}\n\n## Stage 1 Analysis\n{a}\n\n## Source Context\n{ctx}\n\n## Generated Wiki Output\n{gen}",
+        src = source_path,
+        a = trim_to(&analysis, 6000),
+        ctx = trim_to(source_text, 6000),
+        gen = trim_to(step2_output, 6000),
+    );
+    let messages = vec![ChatMessage { role: "user".into(), content: user }];
+    let opts = ChatOpts {
+        model: provider.model_name().to_string(),
+        temperature: 0.4,
+        max_tokens: 8000,
+        system_prompt: Some(
+            "You identify high-value follow-up review items. Output REVIEW blocks only.".into(),
+        ),
+        timeout_secs: None,
+    };
+    let (out, _) = provider
+        .chat_to_string(messages, opts)
+        .await
+        .map_err(|e| AppError::LlmApiError(format!("dedicated review stage: {e}")))?;
+    Ok(parse_review_blocks(&out, source_path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +402,18 @@ mod tests {
     fn count_file_blocks_counts_end_markers() {
         assert_eq!(count_file_blocks("---FILE: a.md ---\nx\n---END FILE---\n---FILE: b.md ---\ny\n---END FILE---"), 2);
         assert_eq!(count_file_blocks("no blocks"), 0);
+    }
+
+    #[test]
+    fn dedicated_stage_trigger_thresholds() {
+        assert!(!should_run_dedicated_review_stage("short"));
+        // length threshold
+        let long = "x".repeat(10_000);
+        assert!(should_run_dedicated_review_stage(&long));
+        // file-block threshold
+        let many_blocks = "---END FILE---\n".repeat(4);
+        assert!(should_run_dedicated_review_stage(&many_blocks));
+        // explicit REVIEW marker
+        assert!(should_run_dedicated_review_stage("---REVIEW: suggestion | T---\nx\n---END REVIEW---"));
     }
 }
