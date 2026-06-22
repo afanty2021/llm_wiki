@@ -220,3 +220,20 @@ async fn run_research_job_empty_synthesis_is_error() {
         err
     );
 }
+
+#[tokio::test]
+async fn recover_pending_requeues_non_terminal_tasks() {
+    let (_server, state, pid, _token) = setup_project("res-recover").await;
+    use llm_wiki_server::services::research::enqueue_research_task;
+    let _a = enqueue_research_task(&state, pid, None, "t1", None, "manual").await.unwrap();
+    let _b = enqueue_research_task(&state, pid, None, "t2", None, "manual").await.unwrap();
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM research_tasks WHERE project_id=$1 AND status IN ('queued','searching','synthesizing','saving')")
+        .bind(pid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(n, 2);
+    sqlx::query("UPDATE research_tasks SET status='done' WHERE topic='t1'").execute(&state.db).await.unwrap();
+    let n2: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM research_tasks WHERE project_id=$1 AND status IN ('queued','searching','synthesizing','saving')")
+        .bind(pid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(n2, 1);
+}

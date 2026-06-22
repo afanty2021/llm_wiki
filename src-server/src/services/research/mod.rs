@@ -1,6 +1,6 @@
 // src/services/research/mod.rs — Research 类型 + 纯函数 + 入队。
 pub mod synthesize;
-// pub mod worker;      // Task 6 启用
+pub mod worker;
 
 use crate::{AppError, AppState};
 use chrono::{DateTime, Utc};
