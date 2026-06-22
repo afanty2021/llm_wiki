@@ -155,3 +155,151 @@ async fn list_messages_empty_for_new_conversation() {
     let msgs: Vec<Value> = r.json();
     assert!(msgs.is_empty());
 }
+
+// ---- Task 6: stream-turn test with injected FakeProvider ----
+
+use futures::stream::{BoxStream, StreamExt};
+use llm_wiki_server::routes::chat_sessions::{stream_conversation_turn, ChatStreamEvent};
+use llm_wiki_server::services::llm_stream::{
+    ChatMessage, ChatOpts, LlmError, StreamChatProvider, TokenDelta,
+};
+
+/// Fake provider emitting canned tokens (no real LLM).
+struct FakeProvider {
+    tokens: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl StreamChatProvider for FakeProvider {
+    async fn stream_chat(
+        &self,
+        _messages: Vec<ChatMessage>,
+        _opts: ChatOpts,
+    ) -> Result<BoxStream<'static, Result<TokenDelta, LlmError>>, LlmError> {
+        let tokens = self.tokens.clone();
+        let s = async_stream::stream! {
+            for t in tokens {
+                yield Ok(TokenDelta::Text(t));
+            }
+            yield Ok(TokenDelta::Done);
+        };
+        Ok(Box::pin(s))
+    }
+    fn provider_type(&self) -> &'static str {
+        "fake"
+    }
+    fn model_name(&self) -> &str {
+        "fake"
+    }
+}
+
+#[tokio::test]
+async fn stream_turn_emits_tokens_citations_and_persists() {
+    let (server, state, pid, token) = setup("conv-stream").await;
+
+    // insert a wiki page the query will match (keyword mode; embedding endpoint
+    // may be unreachable in the test env -> hybrid_search falls back to keyword)
+    sqlx::query(
+        "INSERT INTO wiki_pages (project_id, path, title, content, page_type) \
+         VALUES ($1, 'concepts/rust.md', 'Rust Ownership', 'Rust ownership is about memory safety.', 'concept') \
+         ON CONFLICT (project_id, path) DO NOTHING",
+    )
+    .bind(pid)
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    // create conversation via the API (real create path), then read its owner
+    let c = create_conv(&server, pid, &token, None).await;
+    let conv_id = c["id"].as_i64().unwrap();
+    let user_id: i32 = sqlx::query_scalar("SELECT user_id FROM chat_conversations WHERE id = $1")
+        .bind(conv_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+
+    // run the turn with a fake provider that emits a cited answer
+    let provider = Box::new(FakeProvider {
+        tokens: vec![
+            "Rust ownership ensures memory safety. ".into(),
+            "<!-- cited: 1 -->".into(),
+        ],
+    });
+    let mut turn = stream_conversation_turn(
+        state.clone(),
+        pid,
+        user_id,
+        conv_id,
+        "What is rust ownership?".into(),
+        provider,
+        "fake".into(),
+        100_000,
+    )
+    .await
+    .unwrap();
+
+    // collect structured events
+    let mut names: Vec<&'static str> = Vec::new();
+    let mut tokens = String::new();
+    let mut done = None;
+    while let Some(e) = turn.next().await {
+        match e {
+            ChatStreamEvent::Retrieval(_) => names.push("retrieval"),
+            ChatStreamEvent::Token(t) => {
+                names.push("token");
+                tokens.push_str(&t);
+            }
+            ChatStreamEvent::Done {
+                references,
+                citations,
+            } => {
+                names.push("done");
+                done = Some((references, citations));
+            }
+            ChatStreamEvent::Error(_) => names.push("error"),
+        }
+    }
+
+    assert!(names.contains(&"retrieval"), "events: {:?}", names);
+    assert!(names.contains(&"token"), "events: {:?}", names);
+    assert!(names.contains(&"done"), "events: {:?}", names);
+    assert!(!names.contains(&"error"), "unexpected error event");
+    assert_eq!(
+        tokens,
+        "Rust ownership ensures memory safety. <!-- cited: 1 -->"
+    );
+
+    let (refs, citations) = done.unwrap();
+    assert_eq!(citations, vec![1]);
+    assert_eq!(refs[0].path.as_deref(), Some("concepts/rust.md"));
+
+    // persisted messages (+ retrieval_ctx snapshot on assistant only)
+    let rows: Vec<(String, Option<Vec<i32>>, Option<serde_json::Value>)> = sqlx::query_as(
+        "SELECT role, citations, retrieval_ctx FROM chat_messages WHERE conversation_id = $1 ORDER BY created_at",
+    )
+    .bind(conv_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, "user");
+    assert!(rows[0].2.is_none(), "user message has no retrieval_ctx");
+    assert_eq!(rows[1].0, "assistant");
+    assert_eq!(rows[1].1.as_deref(), Some(&[1][..]));
+    let ctx = rows[1]
+        .2
+        .as_ref()
+        .expect("assistant retrieval_ctx must be persisted");
+    assert!(
+        ctx.to_string().contains("concepts/rust.md"),
+        "retrieval_ctx snapshot includes the cited page"
+    );
+
+    // auto-title set from first user message
+    let title: String = sqlx::query_scalar("SELECT title FROM chat_conversations WHERE id = $1")
+        .bind(conv_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(title, "What is rust ownership?");
+}
