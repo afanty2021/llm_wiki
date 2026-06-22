@@ -298,3 +298,60 @@ fn derive_test_key() -> String {
     key[..len].copy_from_slice(&secret.as_bytes()[..len]);
     llm_wiki_server::utils::crypto::encrypt_api_key("dummy-tavily-key", &key).unwrap()
 }
+
+// --- Phase C Task 8: search_provider team-scoped CRUD ---
+
+#[tokio::test]
+async fn search_provider_crud_and_key_roundtrip() {
+    let (server, state, pid, token) = setup_project("res-crud").await;
+    let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id=$1")
+        .bind(pid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    let r = server
+        .post(&format!("/api/v1/teams/{}/search-providers", team_id))
+        .add_header("authorization", &auth(&token))
+        .json(&serde_json::json!({"provider_type":"tavily","api_key":"secret-xyz"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let body: serde_json::Value = r.json();
+    assert_eq!(body["provider_type"], "tavily");
+    assert_eq!(body["has_key"], true);
+    assert!(
+        body.get("api_key").is_none(),
+        "GET 响应不得回传 api_key"
+    );
+    let sid = body["id"].as_i64().unwrap();
+    let g = server
+        .get(&format!("/api/v1/teams/{}/search-providers", team_id))
+        .add_header("authorization", &auth(&token))
+        .await;
+    let gb: serde_json::Value = g.json();
+    assert!(
+        gb.get("api_key").is_none() || gb["api_key"].is_null(),
+        "GET 响应不得回传 api_key"
+    );
+    let enc: String =
+        sqlx::query_scalar("SELECT api_key_encrypted FROM search_providers WHERE id=$1")
+            .bind(sid)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_ne!(enc, "secret-xyz", "DB 必须存密文");
+    let plain =
+        llm_wiki_server::services::llm::decrypt_api_key(&enc, &state.config).unwrap();
+    assert_eq!(plain, "secret-xyz");
+    let d = server
+        .delete(&format!("/api/v1/teams/{}/search-providers/{}", team_id, sid))
+        .add_header("authorization", &auth(&token))
+        .await;
+    assert_eq!(d.status_code(), StatusCode::OK);
+    let n: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM search_providers WHERE id=$1")
+            .bind(sid)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(n, 0);
+}
