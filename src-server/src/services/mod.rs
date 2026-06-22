@@ -10,3 +10,4 @@ pub mod ingest_pipeline;
 pub mod louvain;
 pub mod citations;
 pub mod retrieval;
+pub mod review;
