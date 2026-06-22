@@ -320,6 +320,223 @@ pub async fn run_dedicated_review_stage(
     Ok(parse_review_blocks(&out, source_path))
 }
 
+// ── resolve actions (Task 5) ──
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ResolveAction {
+    CreatePage,
+    Skip,
+    Delete { path: Option<String> },
+    Open { path: Option<String> },
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageSnippet {
+    pub path: String,
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum ResolveOutcome {
+    Resolved { resolved_action: String, created_path: Option<String> },
+    Opened { page: PageSnippet },
+}
+
+#[derive(sqlx::FromRow)]
+struct LoadedItem {
+    #[allow(dead_code)]
+    id: i64,
+    review_type: String,
+    title: String,
+    description: String,
+    affected_pages: Option<Vec<String>>,
+    #[allow(dead_code)]
+    search_queries: Option<Vec<String>>,
+    status: String,
+}
+
+async fn load_open_item(
+    state: &AppState,
+    project_id: i32,
+    item_id: i64,
+) -> Result<LoadedItem, AppError> {
+    let row: Option<LoadedItem> = sqlx::query_as(
+        "SELECT id, review_type, title, description, affected_pages, search_queries, status \
+         FROM review_items WHERE id = $1 AND project_id = $2",
+    )
+    .bind(item_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await?;
+    match row {
+        None => Err(AppError::ResourceNotFound("review item".into())),
+        Some(item) if item.status != "open" => Err(AppError::Conflict("review item not open".into())),
+        Some(item) => Ok(item),
+    }
+}
+
+async fn mark_resolved(
+    state: &AppState,
+    item_id: i64,
+    action: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    let n = sqlx::query(
+        "UPDATE review_items SET status='resolved', resolved_action=$1, resolved_by=$2, resolved_at=NOW() \
+         WHERE id=$3 AND status='open'",
+    )
+    .bind(action)
+    .bind(user_id)
+    .bind(item_id)
+    .execute(&state.db)
+    .await?;
+    if n.rows_affected() == 0 {
+        return Err(AppError::Conflict("review item not open (race)".into()));
+    }
+    Ok(())
+}
+
+async fn exec_create_page(
+    state: &AppState,
+    project_id: i32,
+    item: &LoadedItem,
+) -> Result<String, AppError> {
+    let pt = detect_page_type(&item.review_type);
+    let dir = page_type_to_dir(pt);
+    let slug = {
+        let s = slugify(&item.title);
+        if s.is_empty() { "untitled".to_string() } else { s }
+    };
+    // unique path (append -2, -3, ... on collision; avoid overwriting existing pages)
+    let mut path = format!("wiki/{}.md", trim_path(dir, &slug));
+    let mut n = 2;
+    loop {
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM wiki_pages WHERE project_id=$1 AND path=$2")
+                .bind(project_id)
+                .bind(&path)
+                .fetch_optional(&state.db)
+                .await?;
+        if exists.is_none() {
+            break;
+        }
+        path = format!("wiki/{}-{}.md", trim_path(dir, &slug), n);
+        n += 1;
+    }
+    let frontmatter = serde_json::json!({ "type": pt, "title": &item.title, "sources": [] });
+    let content = format!("# {}\n\n{}", item.title, item.description);
+    let page = crate::services::ingest_pipeline::WikiPageInsert {
+        path: path.clone(),
+        title: Some(item.title.clone()),
+        content,
+        frontmatter,
+        page_type: pt.to_string(),
+        sources: serde_json::json!([]),
+        images: serde_json::json!([]),
+    };
+    crate::services::ingest_pipeline::upsert_wiki_page(state, project_id, &page).await?;
+    // best-effort embedding (failure logged, does not block resolve)
+    if let Err(e) = crate::services::embedding::embed_page(
+        &state.db,
+        state.config.embedding.as_ref(),
+        &state.http,
+        project_id,
+        &path,
+        &page.content,
+    )
+    .await
+    {
+        tracing::warn!("embed review-created page {}: {}", path, e);
+    }
+    Ok(path)
+}
+
+fn trim_path(dir: &str, slug: &str) -> String {
+    format!("{}/{}", dir, slug)
+}
+
+async fn exec_delete_page(
+    state: &AppState,
+    project_id: i32,
+    path: &str,
+) -> Result<(), AppError> {
+    let n = sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2")
+        .bind(project_id)
+        .bind(path)
+        .execute(&state.db)
+        .await?;
+    if n.rows_affected() == 0 {
+        return Err(AppError::ResourceNotFound("page".into()));
+    }
+    let _ = crate::services::embedding::delete_embedding(&state.db, project_id, path).await;
+    // DELETE doesn't bump remaining rows' updated_at, so the (project_id, MAX(updated_at))
+    // graph cache key wouldn't refresh on its own — invalidate explicitly (Step 1b).
+    crate::services::graph::invalidate_project_cache(project_id);
+    Ok(())
+}
+
+async fn fetch_page(
+    state: &AppState,
+    project_id: i32,
+    path: &str,
+) -> Result<PageSnippet, AppError> {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT title, content FROM wiki_pages WHERE project_id=$1 AND path=$2",
+    )
+    .bind(project_id)
+    .bind(path)
+    .fetch_optional(&state.db)
+    .await?;
+    match row {
+        Some((title, content)) => Ok(PageSnippet {
+            path: path.to_string(),
+            title: title.unwrap_or_default(),
+            content: content.unwrap_or_default(),
+        }),
+        None => Err(AppError::ResourceNotFound("page".into())),
+    }
+}
+
+pub async fn resolve_review_item(
+    state: &AppState,
+    project_id: i32,
+    user_id: i32,
+    item_id: i64,
+    action: ResolveAction,
+) -> Result<ResolveOutcome, AppError> {
+    let item = load_open_item(state, project_id, item_id).await?;
+    match action {
+        ResolveAction::CreatePage => {
+            let path = exec_create_page(state, project_id, &item).await?;
+            mark_resolved(state, item_id, "create_page", user_id).await?;
+            Ok(ResolveOutcome::Resolved { resolved_action: "create_page".into(), created_path: Some(path) })
+        }
+        ResolveAction::Skip => {
+            mark_resolved(state, item_id, "skip", user_id).await?;
+            Ok(ResolveOutcome::Resolved { resolved_action: "skip".into(), created_path: None })
+        }
+        ResolveAction::Delete { path } => {
+            let p = path
+                .or_else(|| item.affected_pages.clone().and_then(|v| v.into_iter().next()))
+                .ok_or_else(|| AppError::ValidationError("delete needs a path".into()))?;
+            exec_delete_page(state, project_id, &p).await?;
+            mark_resolved(state, item_id, "delete", user_id).await?;
+            Ok(ResolveOutcome::Resolved { resolved_action: "delete".into(), created_path: None })
+        }
+        ResolveAction::Open { path } => {
+            let p = path
+                .or_else(|| item.affected_pages.clone().and_then(|v| v.into_iter().next()))
+                .ok_or_else(|| AppError::ValidationError("open needs a path".into()))?;
+            let page = fetch_page(state, project_id, &p).await?;
+            Ok(ResolveOutcome::Opened { page })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

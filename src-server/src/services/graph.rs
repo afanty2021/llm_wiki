@@ -357,6 +357,15 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
     Ok(graph)
 }
 
+/// Invalidate the in-memory graph cache for a project. Call after a page DELETE
+/// (which doesn't change remaining rows' updated_at, so the (project_id, MAX(updated_at))
+/// cache key wouldn't change on its own).
+pub fn invalidate_project_cache(project_id: i32) {
+    if let Ok(mut cache) = GRAPH_CACHE.lock() {
+        cache.retain(|&(pid, _), _| pid != project_id);
+    }
+}
+
 /// 相关节点：path 的邻边按 weight desc 取 top-N。需 title，从 nodes 查。
 pub fn related_nodes(graph: &WikiGraph, path: &str, limit: usize) -> Vec<RelatedNode> {
     let title_of: HashMap<&str, &str> = graph.nodes.iter().map(|n| (n.id.as_str(), n.label.as_str())).collect();

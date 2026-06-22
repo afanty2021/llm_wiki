@@ -106,3 +106,150 @@ async fn dedicated_stage_skips_below_threshold() {
     let out = run_dedicated_review_stage(&state, pid, "src.md", "t", &step1, step2, &provider).await.unwrap();
     assert!(out.is_empty());
 }
+
+// ── Task 5: resolve / dismiss / visibility / filter ──
+
+/// Insert one open review item directly and return its id.
+async fn seed_review(state: &llm_wiki_server::AppState, pid: i32, title: &str, rtype: &str, affected: Option<&[&str]>) -> i64 {
+    let mut p = parse_review_blocks(
+        &format!("---REVIEW: {} | {}---\nBody.\nOPTIONS: Create Page | Skip\n---END REVIEW---", rtype, title),
+        "src.md",
+    );
+    if let Some(pages) = affected {
+        p[0].affected_pages = Some(pages.iter().map(|s| s.to_string()).collect());
+    }
+    insert_review_items(state, pid, &p).await.unwrap();
+    sqlx::query_scalar("SELECT id FROM review_items WHERE project_id=$1 AND title=$2")
+        .bind(pid).bind(title).fetch_one(&state.db).await.unwrap()
+}
+
+#[tokio::test]
+async fn resolve_create_page_builds_and_resolves() {
+    let (server, state, pid, token) = setup_project("rev-create").await;
+    let iid = seed_review(&state, pid, "Add Foo", "missing-page", None).await;
+    let user_id: i32 = sqlx::query_scalar("SELECT created_by FROM projects WHERE id=$1")
+        .bind(pid).fetch_one(&state.db).await.unwrap();
+
+    let resp = server
+        .post(&format!("/api/v1/projects/{}/reviews/{}/resolve", pid, iid))
+        .add_header("authorization", auth(&token))
+        .content_type("application/json")
+        .json(&serde_json::json!({"kind":"create_page"}))
+        .await;
+    assert_eq!(resp.status_code(), axum::http::StatusCode::OK);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["kind"], "resolved");
+    assert_eq!(body["resolvedAction"], "create_page");
+    let created_path = body["createdPath"].as_str().unwrap();
+    assert!(created_path.starts_with("wiki/concepts/"));
+
+    let title: String = sqlx::query_scalar("SELECT title FROM wiki_pages WHERE project_id=$1 AND path=$2")
+        .bind(pid).bind(created_path).fetch_one(&state.db).await.unwrap();
+    assert_eq!(title, "Add Foo");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM review_items WHERE id=$1")
+        .bind(iid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(status, "resolved");
+    let resolved_by: i32 = sqlx::query_scalar("SELECT resolved_by FROM review_items WHERE id=$1")
+        .bind(iid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(resolved_by, user_id);
+}
+
+#[tokio::test]
+async fn resolve_delete_removes_page_and_resolves() {
+    let (server, state, pid, token) = setup_project("rev-delete").await;
+    sqlx::query("INSERT INTO wiki_pages (project_id, path, title, content, page_type) VALUES ($1,'wiki/concepts/doomed.md','Doomed','x','concept') ON CONFLICT DO NOTHING")
+        .bind(pid).execute(&state.db).await.unwrap();
+    let iid = seed_review(&state, pid, "Remove Doomed", "duplicate", Some(&["wiki/concepts/doomed.md"])).await;
+
+    let resp = server
+        .post(&format!("/api/v1/projects/{}/reviews/{}/resolve", pid, iid))
+        .add_header("authorization", auth(&token))
+        .content_type("application/json")
+        .json(&serde_json::json!({"kind":"delete"}))
+        .await;
+    assert_eq!(resp.status_code(), axum::http::StatusCode::OK);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["resolvedAction"], "delete");
+
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wiki_pages WHERE project_id=$1 AND path=$2")
+        .bind(pid).bind("wiki/concepts/doomed.md").fetch_one(&state.db).await.unwrap();
+    assert_eq!(exists, 0);
+}
+
+#[tokio::test]
+async fn resolve_open_returns_content_without_resolving() {
+    let (server, state, pid, token) = setup_project("rev-open").await;
+    sqlx::query("INSERT INTO wiki_pages (project_id, path, title, content, page_type) VALUES ($1,'wiki/concepts/peek.md','Peek','secret body','concept') ON CONFLICT DO NOTHING")
+        .bind(pid).execute(&state.db).await.unwrap();
+    let iid = seed_review(&state, pid, "Look at Peek", "confirm", Some(&["wiki/concepts/peek.md"])).await;
+
+    let resp = server
+        .post(&format!("/api/v1/projects/{}/reviews/{}/resolve", pid, iid))
+        .add_header("authorization", auth(&token))
+        .content_type("application/json")
+        .json(&serde_json::json!({"kind":"open"}))
+        .await;
+    assert_eq!(resp.status_code(), axum::http::StatusCode::OK);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["kind"], "opened");
+    assert_eq!(body["page"]["content"], "secret body");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM review_items WHERE id=$1")
+        .bind(iid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(status, "open");
+}
+
+#[tokio::test]
+async fn resolve_twice_returns_conflict() {
+    let (server, _state, pid, token) = setup_project("rev-conflict").await;
+    let iid = seed_review(&_state, pid, "Skip Me", "suggestion", None).await;
+    let r1 = server.post(&format!("/api/v1/projects/{}/reviews/{}/resolve", pid, iid))
+        .add_header("authorization", auth(&token)).content_type("application/json")
+        .json(&serde_json::json!({"kind":"skip"})).await;
+    assert_eq!(r1.status_code(), axum::http::StatusCode::OK);
+    let r2 = server.post(&format!("/api/v1/projects/{}/reviews/{}/resolve", pid, iid))
+        .add_header("authorization", auth(&token)).content_type("application/json")
+        .json(&serde_json::json!({"kind":"skip"})).await;
+    assert_eq!(r2.status_code(), axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn dismiss_marks_dismissed() {
+    let (server, state, pid, token) = setup_project("rev-dismiss").await;
+    let iid = seed_review(&state, pid, "Dismiss Me", "suggestion", None).await;
+    let resp = server.post(&format!("/api/v1/projects/{}/reviews/{}/dismiss", pid, iid))
+        .add_header("authorization", auth(&token)).await;
+    assert_eq!(resp.status_code(), axum::http::StatusCode::OK);
+    let status: String = sqlx::query_scalar("SELECT status FROM review_items WHERE id=$1")
+        .bind(iid).fetch_one(&state.db).await.unwrap();
+    assert_eq!(status, "dismissed");
+}
+
+#[tokio::test]
+async fn team_shared_visibility() {
+    // user A's project; user B is NOT a member -> 403 on list
+    let (server, _state, pid, _token_a) = setup_project("rev-vis").await;
+    let uname = unique_prefix("rev-vis-b");
+    let user_b = crate::register_user(&server, &uname, &format!("{}@t.com", uname), "password123").await;
+    let r = server.get(&format!("/api/v1/projects/{}/reviews", pid))
+        .add_header("authorization", auth(&user_b)).await;
+    assert_eq!(r.status_code(), axum::http::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn list_filters_by_status() {
+    let (server, state, pid, token) = setup_project("rev-list").await;
+    let _open1 = seed_review(&state, pid, "Open One", "suggestion", None).await;
+    let open2 = seed_review(&state, pid, "Open Two", "suggestion", None).await;
+    // dismiss Open Two
+    let _ = server.post(&format!("/api/v1/projects/{}/reviews/{}/dismiss", pid, open2))
+        .add_header("authorization", auth(&token)).await;
+
+    let r = server.get(&format!("/api/v1/projects/{}/reviews?status=open", pid))
+        .add_header("authorization", auth(&token)).await;
+    assert_eq!(r.status_code(), axum::http::StatusCode::OK);
+    let list: serde_json::Value = r.json();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["title"], "Open One");
+}

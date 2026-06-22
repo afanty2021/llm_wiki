@@ -10,6 +10,7 @@ mod graph;
 mod pages;
 mod ingest;
 pub mod chat_sessions;
+pub mod reviews;
 
 pub use pages::WikiPage;
 

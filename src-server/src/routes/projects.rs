@@ -17,6 +17,7 @@ use crate::{
 use super::pages;
 use super::ingest;
 use super::chat_sessions;
+use super::reviews;
 
 // --- Cursor helpers ---
 
@@ -52,6 +53,7 @@ pub fn project_routes() -> Router<AppState> {
         .merge(pages::pages_routes())
         .merge(ingest::ingest_routes())
         .merge(chat_sessions::chat_session_routes())
+        .merge(reviews::reviews_routes())
 }
 
 // --- Permission helpers ---
