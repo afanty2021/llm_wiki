@@ -8,3 +8,8 @@ pub mod ingest_queue;
 pub mod ingest_worker;
 pub mod ingest_pipeline;
 pub mod louvain;
+pub mod citations;
+pub mod retrieval;
+pub mod review;
+pub mod web_search;
+pub mod research;

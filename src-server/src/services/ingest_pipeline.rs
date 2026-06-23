@@ -15,10 +15,14 @@ struct ParsedBlock {
 }
 
 #[derive(Debug, Clone)]
-struct WikiPageInsert {
-    path: String, title: Option<String>, content: String,
-    frontmatter: serde_json::Value, page_type: String,
-    sources: serde_json::Value, images: serde_json::Value,
+pub(crate) struct WikiPageInsert {
+    pub(crate) path: String,
+    pub(crate) title: Option<String>,
+    pub(crate) content: String,
+    pub(crate) frontmatter: serde_json::Value,
+    pub(crate) page_type: String,
+    pub(crate) sources: serde_json::Value,
+    pub(crate) images: serde_json::Value,
 }
 
 /// process_source_path 的产出：解析出的 pages + 用于 mark_file_ingested 的元数据。
@@ -26,6 +30,7 @@ struct WikiPageInsert {
 /// （避免 mark 成功但 upsert 失败 → 下次因 hash 命中被永久跳过的漏页问题）。
 struct ProcessedSource {
     pages: Vec<WikiPageInsert>,
+    reviews: Vec<crate::services::review::ParsedReview>,
     content_hash: String,
     file_size: i64,
     file_type: String,
@@ -401,6 +406,18 @@ pub async fn run_ingest_job(
                     {
                         result.warnings.push(format!("mark ingested {}: {}", sp, e));
                     }
+                    // Phase B: 页落库 + mark 成功后才插 review（守 deferred-write 不变量）
+                    if !processed.reviews.is_empty() {
+                        if let Err(e) = crate::services::review::insert_review_items(
+                            state,
+                            job.project_id,
+                            &processed.reviews,
+                        )
+                        .await
+                        {
+                            result.warnings.push(format!("insert reviews for {}: {}", sp, e));
+                        }
+                    }
                 }
             }
             Err(e) => result.warnings.push(format!("process {}: {}", sp, e)),
@@ -524,9 +541,35 @@ async fn process_source_path(
         })
         .collect();
 
-    // 不在此 mark_file_ingested：content_hash/file_size/file_type 上浮给 run_ingest_job，
-    // 待 wiki_pages 成功落库后再 mark（避免 mark 成功但 upsert 失败 → 下次因 hash 命中被永久跳过的漏页问题）。
-    Ok(Some(ProcessedSource { pages, content_hash, file_size, file_type }))
+    // Phase B: 计算 review（compute-only，无 DB 写）= step2 解析 + 3rd-call dedicated stage。
+    let mut reviews = crate::services::review::parse_review_blocks(&llm_output, source_path);
+    match crate::services::llm_stream::provider_for_project(state, project_id).await {
+        Ok(provider) => {
+            match crate::services::review::run_dedicated_review_stage(
+                state,
+                project_id,
+                source_path,
+                &text,
+                &step1_result,
+                &llm_output,
+                &*provider,
+            )
+            .await
+            {
+                Ok(ded) => reviews.extend(ded),
+                Err(e) => tracing::warn!("dedicated review stage failed for {}: {}", source_path, e),
+            }
+        }
+        Err(e) => tracing::warn!("provider for dedicated review stage ({}): {}", source_path, e),
+    }
+    // 批内按 (review_type, title) 去重，避免 step2 与 dedicated 重复
+    let mut seen = std::collections::HashSet::new();
+    reviews.retain(|r| seen.insert((r.review_type.clone(), r.title.clone())));
+
+    // 不在此 mark_file_ingested / insert reviews：元数据 + reviews 上浮给 run_ingest_job，
+    // 待 wiki_pages 成功落库后再 mark + insert（守 deferred-write 不变量：upsert 失败 →
+    // 不 mark → 下次重处理；不插 review → 无孤儿/重复）。
+    Ok(Some(ProcessedSource { pages, reviews, content_hash, file_size, file_type }))
 }
 
 /// 取页面用于嵌入的文本（content 非空时）；None 表示不适合嵌入。
@@ -536,7 +579,7 @@ fn page_content_for_embed(page: &WikiPageInsert) -> Option<String> {
 }
 
 /// upsert wiki_pages 记录（UNIQUE(project_id, path)）。
-async fn upsert_wiki_page(
+pub(crate) async fn upsert_wiki_page(
     state: &AppState,
     project_id: i32,
     page: &WikiPageInsert,

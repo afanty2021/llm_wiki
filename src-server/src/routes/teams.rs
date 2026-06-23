@@ -9,7 +9,8 @@ use axum::{
 use serde::Deserialize;
 use sqlx::Row;
 use crate::{
-    middleware::require_auth, AppError, AppState,
+    middleware::{require_auth, project_guard::{check_team_access_with_role, RequiredRole}},
+    AppError, AppState,
     models::{
         AddMemberRequest, CreateTeamRequest, Team, TeamMemberResponse,
         TeamResponse, UpdateTeamRequest,
@@ -52,48 +53,16 @@ pub fn team_routes() -> Router<AppState> {
     Router::new()
         .route("/", post(create_team))
         .route("/", get(list_teams))
-        .route("/{id}", get(get_team))
-        .route("/{id}", put(update_team))
-        .route("/{id}", delete(delete_team))
-        .route("/{id}/members", post(add_member))
-        .route("/{id}/members", get(get_team_members))
-        .route("/{id}/members/{user_id}", delete(remove_member))
+        .route("/:id", get(get_team))
+        .route("/:id", put(update_team))
+        .route("/:id", delete(delete_team))
+        .route("/:id/members", post(add_member))
+        .route("/:id/members", get(get_team_members))
+        .route("/:id/members/:user_id", delete(remove_member))
 }
 
 // --- Permission helpers ---
-
-/// Check that the user is a member of the team and return their role.
-async fn check_membership(
-    state: &AppState,
-    team_id: i32,
-    user_id: i32,
-) -> Result<String, AppError> {
-    let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2",
-    )
-    .bind(team_id)
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?;
-
-    role.ok_or_else(|| AppError::ResourceNotFound("Team not found or you are not a member".to_string()))
-}
-
-/// Ensure the role is 'owner'.
-fn require_owner(role: &str) -> Result<(), AppError> {
-    if role != "owner" {
-        return Err(AppError::PermissionDenied);
-    }
-    Ok(())
-}
-
-/// Ensure the role is 'owner' or 'admin'.
-fn require_owner_or_admin(role: &str) -> Result<(), AppError> {
-    if role != "owner" && role != "admin" {
-        return Err(AppError::PermissionDenied);
-    }
-    Ok(())
-}
+// (moved to crate::middleware::project_guard::check_team_access_with_role)
 
 // --- Handlers ---
 
@@ -207,11 +176,7 @@ async fn get_team(
     headers: HeaderMap,
     Path(team_id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
-    let claims = require_auth(&state, &headers).await?;
-    let user_id: i32 = claims.sub.parse()?;
-
-    // Verify membership
-    check_membership(&state, team_id, user_id).await?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Member).await?;
 
     let row = sqlx::query(
         "SELECT t.id, t.name, t.description, t.created_by, t.created_at, \
@@ -245,12 +210,7 @@ async fn update_team(
     Path(team_id): Path<i32>,
     Json(req): Json<UpdateTeamRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let claims = require_auth(&state, &headers).await?;
-    let user_id: i32 = claims.sub.parse()?;
-
-    // Must be owner or admin
-    let role = check_membership(&state, team_id, user_id).await?;
-    require_owner_or_admin(&role)?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Admin).await?;
 
     // Fetch current values to merge
     let current = sqlx::query_as::<_, Team>(
@@ -306,12 +266,7 @@ async fn delete_team(
     headers: HeaderMap,
     Path(team_id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
-    let claims = require_auth(&state, &headers).await?;
-    let user_id: i32 = claims.sub.parse()?;
-
-    // Must be owner
-    let role = check_membership(&state, team_id, user_id).await?;
-    require_owner(&role)?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Owner).await?;
 
     let result = sqlx::query("DELETE FROM teams WHERE id = $1")
         .bind(team_id)
@@ -325,19 +280,14 @@ async fn delete_team(
     Ok(Json(serde_json::json!({"message": "Team deleted successfully"})))
 }
 
-/// POST /teams/:id/members — Add a member (owner/admin only)
+/// POST /teams/:id/members — Add a member (owner only)
 async fn add_member(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(team_id): Path<i32>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let claims = require_auth(&state, &headers).await?;
-    let user_id: i32 = claims.sub.parse()?;
-
-    // Must be owner or admin
-    let role = check_membership(&state, team_id, user_id).await?;
-    require_owner_or_admin(&role)?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Owner).await?;
 
     // Validate role against DB CHECK constraint
     if req.role != "owner" && req.role != "admin" && req.role != "member" {
@@ -387,18 +337,13 @@ async fn add_member(
     Ok((StatusCode::CREATED, Json(member)))
 }
 
-/// DELETE /teams/:id/members/:user_id — Remove a member (owner/admin only)
+/// DELETE /teams/:id/members/:user_id — Remove a member (owner only)
 async fn remove_member(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((team_id, target_user_id)): Path<(i32, i32)>,
 ) -> Result<impl IntoResponse, AppError> {
-    let claims = require_auth(&state, &headers).await?;
-    let user_id: i32 = claims.sub.parse()?;
-
-    // Must be owner or admin
-    let role = check_membership(&state, team_id, user_id).await?;
-    require_owner_or_admin(&role)?;
+    let (user_id, _) = check_team_access_with_role(&state, &headers, team_id, RequiredRole::Owner).await?;
 
     // Cannot remove self
     if target_user_id == user_id {
@@ -437,11 +382,7 @@ async fn get_team_members(
     headers: HeaderMap,
     Path(team_id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
-    let claims = require_auth(&state, &headers).await?;
-    let user_id: i32 = claims.sub.parse()?;
-
-    // Verify membership
-    check_membership(&state, team_id, user_id).await?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Member).await?;
 
     let members = sqlx::query_as::<_, TeamMemberResponse>(
         "SELECT tm.team_id, tm.user_id, u.username, tm.role, tm.joined_at \

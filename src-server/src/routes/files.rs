@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use crate::{
     AppState, AppError,
-    middleware::project_guard::check_project_access,
+    middleware::project_guard::{check_project_access, check_project_access_with_role, RequiredRole},
     services::storage,
 };
 use std::path::PathBuf;
@@ -243,7 +243,7 @@ pub async fn delete_file(
     headers: axum::http::HeaderMap,
     Path((project_id, path)): Path<(i32, String)>,
 ) -> Result<impl IntoResponse, AppError> {
-    let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
+    let (_user_id, team_id, _) = check_project_access_with_role(&state, &headers, project_id, RequiredRole::Admin).await?;
     let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
     let file_path = storage::safe_resolve(&base, &path)?;
 
