@@ -14,22 +14,27 @@ export function ProjectPicker({
   const [newName, setNewName] = useState("")
   const [err, setErr] = useState<string | null>(null)
 
-  // 首次加载 team 列表
+  // 首次加载 team 列表(cancelled guard 防卸载后 setState)
   useEffect(() => {
+    let cancelled = false
     apiClient
       .getUserTeams()
-      .then(setTeams)
-      .catch((e) => setErr(String(e)))
+      .then((ts) => { if (!cancelled) setTeams(ts) })
+      .catch((e) => { if (!cancelled) setErr(String(e)) })
+    return () => { cancelled = true }
   }, [])
 
-  // team 切换后加载 project 列表（listProjects 分页，解 .items）
+  // team 切换后加载 project 列表（listProjects 分页，解 .items）。
+  // cancelled guard 防快速切 team 时旧请求覆盖新 + 卸载后 setState。
   useEffect(() => {
     if (teamId == null) return
+    let cancelled = false
     setProjects([])
     apiClient
       .listProjects(teamId)
-      .then((r) => setProjects(r.items))
-      .catch((e) => setErr(String(e)))
+      .then((r) => { if (!cancelled) setProjects(r.items) })
+      .catch((e) => { if (!cancelled) setErr(String(e)) })
+    return () => { cancelled = true }
   }, [teamId])
 
   const create = async () => {
@@ -45,6 +50,9 @@ export function ProjectPicker({
     <div className="flex flex-col gap-4 p-6 max-w-md mx-auto">
       <h2 className="text-xl">选择工作空间</h2>
       {err && <p className="text-red-600 text-sm">{err}</p>}
+      {!teamId && teams.length === 0 && !err && (
+        <p className="text-gray-500 text-sm">加载中…</p>
+      )}
       {!teamId &&
         teams.map((t) => (
           <button

@@ -324,8 +324,9 @@ function App() {
     return (
       <ProjectPicker
         onPick={async (p) => {
+          // WikiProject.id 是 string（前端），ProjectResponse.id 是 number（后端），String 强转。
+          // __currentProjectId 由 handleProjectOpened 内部设（proj.id），此处不重复写。
           const proj = { id: String(p.id), path: "", name: p.name } as WikiProject
-          ;(window as any).__currentProjectId = p.id
           await handleProjectOpened(proj)
         }}
       />
