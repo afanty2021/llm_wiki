@@ -101,10 +101,10 @@ async fn raw_endpoint_rejects_path_traversal() {
         .add_header("authorization", format!("Bearer {}", token))
         .await;
     // 关键断言:路径遍历被拒绝(绝不返回 200/泄露 /etc/passwd)。
-    // 说明:safe_resolve 对「遍历后父目录不存在」的路径,canonicalize 失败走
-    // InternalError(500)而非 BadRequest(400)——这是 storage::safe_resolve 的既有限制,
-    // stat_file/read_file 同款(它们也无遍历测试)。此处不断言具体 4xx/5xx,
-    // 只断言未越权成功;如需 400 应统一在 safe_resolve 层修,非本 task 范围。
+    // 说明:safe_resolve 检测越界返回错误(具体 4xx/5xx 取决于越界路径 canonicalize 是否
+    // 成功,属 storage::safe_resolve 的既有行为,stat_file/read_file 同款)。此处不硬断
+    // 具体状态码,只断言未越权成功 + 不泄露文件内容;如需统一 400 应在 safe_resolve 层修,
+    // 非本 task 范围。
     assert_ne!(
         r.status_code(),
         StatusCode::OK,

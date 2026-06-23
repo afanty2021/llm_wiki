@@ -207,6 +207,11 @@ pub async fn raw_file(
 ) -> Result<axum::response::Response, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
     let base = storage::project_base(state.config.storage_path(), team_id, project_id);
+    // 全新项目 storage base 尚不存在 → 目标必然不存在,直接 404(避免 safe_resolve 对
+    // 不存在 base canonicalize 导致 500,与 stat_file 同款短路)。
+    if !base.exists() {
+        return Err(AppError::ResourceNotFound("file".into()));
+    }
     let full = storage::safe_resolve(&base, &path)?;
     let bytes = tokio::fs::read(&full)
         .await
@@ -218,6 +223,7 @@ pub async fn raw_file(
     Ok(axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("content-type", mime)
+        .header("x-content-type-options", "nosniff") // 防 MIME sniffing(服务用户上传字节)
         .header("cache-control", "private, max-age=3600")
         .body(axum::body::Body::from(bytes))
         .unwrap())
