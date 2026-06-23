@@ -24,6 +24,7 @@ use crate::AppState;
 pub fn create_router(state: AppState) -> Router {
     // Layer 5：ServeDir 同源托管前端 dist（SPA history mode fallback）。
     // API 路由在 Router::new() 内显式声明，优先于 fallback_service。
+    // 开发期 dist 可能不存在（未 npm run build）→ 前端路由 404 属正常；web 适配靠 build:web/CI 产出 dist。
     let dist_dir = state.config.dist_dir().to_string();
     let index_html = state.config.index_html().to_string();
     let spa = ServeDir::new(&dist_dir).fallback(ServeFile::new(&index_html));
