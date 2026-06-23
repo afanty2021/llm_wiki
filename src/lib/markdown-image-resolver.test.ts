@@ -6,7 +6,7 @@
  * Tauri-side URL shape (which differs across platforms — `asset://`
  * on macOS, `https://asset.localhost/` on Windows, etc.).
  */
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 
 // Hoisted mock — all calls to convertFileSrc return `tauri-asset:<path>`
 // so tests can assert the input path was assembled correctly without
@@ -14,6 +14,12 @@ import { describe, it, expect, vi } from "vitest"
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `tauri-asset:${path}`,
 }))
+
+// Layer 5:caps.platform 决定 resolvedToSrc 分流(桌面=convertFileSrc,web=project-rel)。
+// jsdom 环境下 detect() 天然判为 web(无 __TAURI_INTERNALS__),但绝大多数用例断言的是
+// 桌面行为(convertFileSrc URL),故顶层 mock 成 tauri 保护桌面用例零回归;
+// web 用例在独立 describe 里 doMock 覆盖。
+vi.mock("@/lib/capabilities", () => ({ caps: { platform: "tauri" } }))
 
 import { resolveMarkdownImageSrc } from "./markdown-image-resolver"
 
@@ -302,6 +308,45 @@ describe("resolveMarkdownImageSrc", () => {
       expect(
         resolveMarkdownImageSrc("/var/data/x.png", PROJECT, `${PROJECT}/raw/sources`),
       ).toBe("/var/data/x.png")
+    })
+  })
+
+  // === web 平台(Layer 5):resolver 必须返回 project-relative(非 convertFileSrc
+  // URL),供 WebImage 组件把该 path 交给后端 raw 端点拉 blob。桌面行为零变化。
+  describe("web platform (project-relative output)", () => {
+    beforeEach(() => {
+      vi.resetModules()
+      vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    })
+    afterEach(() => {
+      vi.doUnmock("@/lib/capabilities")
+      vi.resetModules()
+    })
+
+    it("web 平台 resolveMarkdownImageSrc 返回 project-relative(供 WebImage/raw,非 null)", async () => {
+      // 非 media/ 开头的相对 src,相对 currentFileDir 解析为绝对,再转 project-relative
+      // (给 raw 端点 path)。media/ 开头会走 wiki-root 约定分支(见下一用例)。
+      const { resolveMarkdownImageSrc: resolveWeb } = await import("./markdown-image-resolver")
+      const r = resolveWeb("assets/a/img.png", "/proj", "/proj/wiki/concepts")
+      expect(r).toBe("wiki/concepts/assets/a/img.png")
+      expect(r).not.toBeNull()
+    })
+
+    it("web 平台 wiki-root 相对 src 转 project-relative", async () => {
+      const { resolveMarkdownImageSrc: resolveWeb } = await import("./markdown-image-resolver")
+      // 无 currentFileDir,走 wiki-root fallback
+      expect(resolveWeb("media/slug/img.png", "/proj")).toBe("wiki/media/slug/img.png")
+    })
+
+    it("web 平台 project-external absolute src 原样透传(非 project-rel)", async () => {
+      const { resolveMarkdownImageSrc: resolveWeb } = await import("./markdown-image-resolver")
+      // isInsideProject=false → 原样 rawSrc 透传(raw 端点会 404,保留诊断)
+      expect(resolveWeb("/var/data/x.png", "/proj")).toBe("/var/data/x.png")
+    })
+
+    it("web 平台 http src 仍透传(PASSTHROUGH 不受平台影响)", async () => {
+      const { resolveMarkdownImageSrc: resolveWeb } = await import("./markdown-image-resolver")
+      expect(resolveWeb("https://example.com/x.png", "/proj")).toBe("https://example.com/x.png")
     })
   })
 })

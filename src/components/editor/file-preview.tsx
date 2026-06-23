@@ -29,6 +29,8 @@ import { parseFrontmatter } from "@/lib/frontmatter"
 import { FrontmatterPanel } from "@/components/editor/frontmatter-panel"
 import { useWikiStore } from "@/stores/wiki-store"
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
+import { caps } from "@/lib/capabilities"
+import { WebImage } from "@/components/web/web-image"
 
 interface FilePreviewProps {
   filePath: string
@@ -85,22 +87,49 @@ function extractedTextLabel(filePath: string): string {
 }
 
 function ImagePreview({ filePath, fileName }: { filePath: string; fileName: string }) {
-  const src = convertFileSrc(filePath)
+  const projectPath = useWikiStore((s) => s.project?.path ?? null)
+  // web 下 convertFileSrc(Tauri webview 协议)不可用,走 WebImage(raw→blob);
+  // 桌面保留 convertFileSrc 同步协议,行为零变化。
+  const webRelPath =
+    caps.platform === "web" && projectPath
+      ? resolveMarkdownImageSrc(filePath, projectPath)
+      : null
+  const src = !webRelPath ? convertFileSrc(filePath) : null
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 text-xs text-muted-foreground">{filePath}</div>
       <div className="flex flex-1 items-center justify-center overflow-auto rounded-lg bg-muted/30">
-        <img
-          src={src}
-          alt={fileName}
-          className="max-h-full max-w-full object-contain"
-        />
+        {webRelPath ? (
+          <WebImage
+            relPath={webRelPath}
+            alt={fileName}
+            className="max-h-full max-w-full object-contain"
+          />
+        ) : (
+          <img
+            src={src ?? undefined}
+            alt={fileName}
+            className="max-h-full max-w-full object-contain"
+          />
+        )}
       </div>
     </div>
   )
 }
 
 function VideoPreview({ filePath, fileName }: { filePath: string; fileName: string }) {
+  // web 下无法直接流式播放本地视频(raw 端点可拉但 <video> 需 range 支持),
+  // 降级显示占位;桌面保留 convertFileSrc。
+  if (caps.platform === "web") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+        <Film className="h-16 w-16 text-muted-foreground/50" />
+        <p className="text-sm font-medium">{fileName}</p>
+        <p className="text-xs text-muted-foreground">{filePath}</p>
+        <p className="text-sm text-muted-foreground">预览需下载</p>
+      </div>
+    )
+  }
   const src = convertFileSrc(filePath)
   return (
     <div className="flex h-full flex-col p-6">
@@ -119,6 +148,17 @@ function VideoPreview({ filePath, fileName }: { filePath: string; fileName: stri
 }
 
 function AudioPreview({ filePath, fileName }: { filePath: string; fileName: string }) {
+  // web 下音频预览降级同 VideoPreview。
+  if (caps.platform === "web") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+        <Music className="h-16 w-16 text-muted-foreground/50" />
+        <p className="text-sm font-medium">{fileName}</p>
+        <p className="text-xs text-muted-foreground">{filePath}</p>
+        <p className="text-sm text-muted-foreground">预览需下载</p>
+      </div>
+    )
+  }
   const src = convertFileSrc(filePath)
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
@@ -251,16 +291,29 @@ function TextPreview({ filePath, content, label }: { filePath: string; content: 
             // path can find the rendered <img> by its source-of-
             // truth identifier rather than the resolved tauri://
             // URL (which differs per platform).
-            img: ({ src, alt, ...props }) => (
-              <img
-                src={typeof src === "string" ? resolveMarkdownImageSrc(src, projectPath, currentFileDir) : undefined}
-                data-mdsrc={typeof src === "string" ? src : undefined}
-                alt={alt ?? ""}
-                className="max-w-full rounded border border-border/40 transition-all"
-                loading="lazy"
-                {...props}
-              />
-            ),
+            img: ({ src, alt, ...props }) => {
+              // web 下 convertFileSrc 不可用:resolver 返回 project-rel,
+              // 用 WebImage 异步拉 raw→blob;桌面保留原 convertFileSrc 同步逻辑。
+              if (caps.platform === "web" && typeof src === "string") {
+                return (
+                  <WebImage
+                    relPath={resolveMarkdownImageSrc(src, projectPath, currentFileDir)}
+                    alt={alt ?? ""}
+                    className="max-w-full rounded border border-border/40 transition-all"
+                  />
+                )
+              }
+              return (
+                <img
+                  src={typeof src === "string" ? resolveMarkdownImageSrc(src, projectPath, currentFileDir) : undefined}
+                  data-mdsrc={typeof src === "string" ? src : undefined}
+                  alt={alt ?? ""}
+                  className="max-w-full rounded border border-border/40 transition-all"
+                  loading="lazy"
+                  {...props}
+                />
+              )
+            },
             table: ({ children, ...props }) => (
               <div className="my-2 overflow-x-auto rounded border border-border">
                 <table className="w-full border-collapse text-xs" {...props}>{children}</table>
