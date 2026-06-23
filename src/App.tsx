@@ -45,7 +45,10 @@ function App() {
   // Set up auto-save and clip watcher once on mount
   useEffect(() => {
     setupAutoSave()
-    startClipWatcher()
+    // 桌面 only:clip-watcher 轮询本地 clip server,web 无此能力
+    if (caps.canWatchClipboard) {
+      startClipWatcher()
+    }
   }, [])
 
   // Dev-only helper for visually testing the update-banner UX.
@@ -265,15 +268,18 @@ function App() {
         } catch (err) {
           logger.warn("failed to hydrate close behavior", { error: String(err) })
         }
-        try {
-          const currentAutostart = await isAutostartEnabled()
-          if (savedGeneral.autostart && !currentAutostart) {
-            await enableAutostart()
-          } else if (!savedGeneral.autostart && currentAutostart) {
-            await disableAutostart()
+        // 桌面 only:开机自启同步,web 无此能力(canAutoStart=false 跳过)
+        if (caps.canAutoStart) {
+          try {
+            const currentAutostart = await isAutostartEnabled()
+            if (savedGeneral.autostart && !currentAutostart) {
+              await enableAutostart()
+            } else if (!savedGeneral.autostart && currentAutostart) {
+              await disableAutostart()
+            }
+          } catch (err) {
+            logger.warn("failed to sync autostart", { error: String(err) })
           }
-        } catch (err) {
-          logger.warn("failed to sync autostart", { error: String(err) })
         }
         const savedLang = await loadLanguage()
         if (savedLang) {
