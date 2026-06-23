@@ -9,6 +9,11 @@ vi.mock("./tauri-fetch", async () => {
   return { ...actual, getHttpFetch: () => Promise.resolve(mockHttpFetch) }
 })
 
+// Layer 5:caps.platform 决定 streamChat 分发。jsdom 环境下 detect() 天然判为
+// "web",会让下方桌面 abort 测试误走 streamViaServer 而超时。默认 mock 成 tauri
+// 保持桌面路径;web 分发测试用 vi.resetModules + vi.doMock 覆盖。
+vi.mock("@/lib/capabilities", () => ({ caps: { platform: "tauri" } }))
+
 import { isFetchNetworkError, streamChat } from "./llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
 
@@ -209,5 +214,55 @@ describe("streamChat — mid-stream abort mapping", () => {
       expect(onDone).toHaveBeenCalledTimes(1)
       expect(onError).not.toHaveBeenCalled()
     }
+  })
+})
+
+// ===== Layer 5: web 分发(streamChat → streamViaServer)=====
+// caps.platform==="web" 时走 fetch POST /api/v1/chat/stream + Authorization,
+// 服务器自取 team provider,前端不持 key。本组用 vi.resetModules + 动态 import
+// 让 caps/api-client mock 生效(顶层 vi.mock("./tauri-fetch") 对 web 路径无害)。
+describe("streamChat web 分发", () => {
+  it("web 走 streamViaServer(POST /chat/stream + Authorization)", async () => {
+    vi.resetModules()
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({
+      API_BASE: "",
+      apiClient: { isAuthenticated: true, authHeaders: () => ({ Authorization: "Bearer tok" }) },
+    }))
+
+    const encoder = new TextEncoder()
+    const sseBody = `data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n`
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(encoder.encode(sseBody), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    )
+    vi.stubGlobal("fetch", mockFetch)
+    vi.stubGlobal("window", { __currentProjectId: 9 })
+
+    const { streamChat: streamChatWeb } = await import("./llm-client")
+    const tokens: string[] = []
+    const cb = {
+      onToken: (t: string) => tokens.push(t),
+      onDone: () => {},
+      onError: (e: Error) => { throw e },
+    }
+    await streamChatWeb(
+      { provider: "openai", apiKey: "x", model: "gpt-4o" } as any,
+      [{ role: "user", content: "hi" }],
+      cb,
+    )
+
+    expect(mockFetch).toHaveBeenCalled()
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(url).toContain("/api/v1/chat/stream")
+    expect((init as RequestInit).method).toBe("POST")
+    expect(((init as RequestInit).headers as Record<string, string>)["Authorization"]).toBe("Bearer tok")
+    expect(tokens.join("")).toBe("Hi")
+
+    vi.unstubAllGlobals()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
   })
 })
