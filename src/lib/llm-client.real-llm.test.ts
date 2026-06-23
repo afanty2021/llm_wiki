@@ -35,6 +35,10 @@ import type { AddressInfo } from "node:net"
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
 }))
+// 本文件测桌面 streamChat 的 Ollama TCP 路径;jsdom 无 __TAURI_INTERNALS__ 会让
+// caps.detect() 判 web → streamChat 误走 streamViaServer(Task 7 web 分发)。
+// 固定 caps=tauri 走桌面通路,与该测试“bytes-on-wire 桌面 Origin”意图一致。
+vi.mock("@/lib/capabilities", () => ({ caps: { platform: "tauri" } }))
 vi.mock("@/commands/fs", () => ({
   readFile: vi.fn(),
   listDirectory: vi.fn(),

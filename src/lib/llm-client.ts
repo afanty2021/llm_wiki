@@ -350,7 +350,7 @@ async function streamViaServer(
   }
 
   // 逐行解析复用桌面版 OpenAI-compatible 通路 + reasoning 检测(DeepSeek-R1 等思考模型)。
-  const { getProviderConfig } = await import("./llm-providers")
+  // getProviderConfig 用顶层静态 import(测试不 mock ./llm-providers,无需动态隔离)。
   const providerConfig = getProviderConfig({
     provider: "openai",
     apiKey: "",
