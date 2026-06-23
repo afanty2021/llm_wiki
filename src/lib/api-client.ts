@@ -3,7 +3,12 @@ import type {
   UserResponse, TeamResponse, ProjectResponse, SearchResponse, GraphData,
 } from "./api-types"
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080"
+/** 解析 API base。?? 而非 ||:空串(web 同源)是合法值,|| 会 falsy 回退 localhost 破坏同源。
+ *  undefined(桌面无 env)→ 默认 localhost:8080(连 src-server);""(web 同源)→ 相对 fetch。 */
+export function resolveApiBase(envValue: string | undefined): string {
+  return envValue ?? "http://localhost:8080"
+}
+export const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE_URL)
 
 class ApiClient {
   private accessToken: string | null = null
