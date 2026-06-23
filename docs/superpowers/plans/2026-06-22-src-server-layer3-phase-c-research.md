@@ -42,7 +42,7 @@
 | 文件 | 职责 | 新/改 |
 |------|------|-------|
 | `migrations/008_research_tasks.sql` | research_tasks 表（UUID 主键，status+stage，web_results/synthesis/saved_path） | 新 |
-| `migrations/009_search_providers.sql` | search_providers 表（per-project，api_key_encrypted） | 新 |
+| `migrations/009_search_providers.sql` | search_providers 表（**team 维度**，api_key_encrypted；与 Layer 4 llm_providers 一致） | 新 |
 | `src/services/web_search.rs` | `WebSearchResult`/`WebSearchProvider` trait/`WebSearchError`/`TavilyProvider`/`provider_for_project`/`dedupe_results`(纯) | 新 |
 | `src/services/research/mod.rs` | `ResearchTask`/`EnqueueBody`/`ResearchOutcome` + `derive_queries`/`slugify_topic`(纯) + `enqueue_research_task` | 新 |
 | `src/services/research/synthesize.rs` | `assemble_research_prompt`/`strip_thinking`(纯) + `run_research_job`(状态机,参数注入) + `collect_sources` + `save_research_page` + `set_stage`/`persist_web_results` | 新 |
@@ -51,7 +51,7 @@
 | `src/routes/research.rs` | `enqueue_research`/`list_tasks`/`get_task`/`stream_task`(SSE) + `research_project_routes()`/`global_research_routes()` | 新 |
 | `src/routes/search_providers.rs` | search_provider CRUD（POST/GET/PUT/DELETE）+ `search_provider_routes()` | 新 |
 | `src/routes/mod.rs` | `mod research; mod search_providers;` + create_router 接 global 路由 | 改 |
-| `src/routes/projects.rs` | `project_routes()` merge `research::research_project_routes()` + `search_providers::search_provider_routes()` | 改 |
+| `src/routes/projects.rs` | `project_routes()` merge `research::research_project_routes()`（search-providers 是 team-scoped global 路由，挂 `create_router`） | 改 |
 | `src/services/review.rs` | `ResolveAction::DeepResearch` + `resolve_review_item` dispatch；`slugify` 提 `pub`（已是 pub，无需改） | 改 |
 | `src/main.rs` | `research::worker::spawn_worker(state.clone())` | 改 |
 | `tests/integration/research_test.rs` | happy/零源/综合失败保留 web_results/入队校验/review 接通/团队可见性/provider CRUD | 新 |
@@ -96,18 +96,18 @@ CREATE INDEX idx_research_running ON research_tasks(status) WHERE status IN ('qu
 
 `migrations/009_search_providers.sql`：
 ```sql
--- 009_search_providers.sql — Layer 3 Phase C: web-search provider 配置（per-project）
+-- 009_search_providers.sql — Layer 3 Phase C / Layer 4: web-search provider(team 维度,与 llm_providers 一致)
 CREATE TABLE search_providers (
     id                BIGSERIAL PRIMARY KEY,
-    project_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    team_id           INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     provider_type     VARCHAR(50) NOT NULL,   -- tavily(预留 serpapi/searxng/ollama)
     api_key_encrypted TEXT NOT NULL,          -- 复用 utils::crypto + llm key 派生(同 llm_providers 路径)
     base_url          TEXT,                   -- None 用 Tavily 默认 https://api.tavily.com/search
     is_enabled        BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT search_providers_team_type_unique UNIQUE(team_id, provider_type)
 );
-CREATE INDEX idx_search_providers_project ON search_providers(project_id);
-CREATE INDEX idx_search_providers_enabled ON search_providers(project_id) WHERE is_enabled = TRUE;
+CREATE INDEX idx_search_providers_enabled ON search_providers(team_id) WHERE is_enabled = TRUE;
 ```
 
 - [ ] **Step 3: 应用到测试 DB 并验证**
@@ -221,8 +221,9 @@ pub async fn provider_for_project(
     project_id: i32,
 ) -> Result<Box<dyn WebSearchProvider>, AppError> {
     let row: Option<(i64, String, Option<String>, String)> = sqlx::query_as(
-        "SELECT id, api_key_encrypted, base_url, provider_type FROM search_providers \
-         WHERE project_id=$1 AND is_enabled=TRUE ORDER BY id LIMIT 1")
+        "SELECT sp.id, sp.api_key_encrypted, sp.base_url, sp.provider_type FROM search_providers sp \
+         JOIN projects p ON sp.team_id = p.team_id \
+         WHERE p.id=$1 AND sp.is_enabled=TRUE ORDER BY sp.id LIMIT 1")
         .bind(project_id).fetch_optional(&state.db).await?;
     let (_, key_enc, base_url, ptype) = row
         .ok_or_else(|| AppError::BadRequest("no enabled search_provider for project".into()))?;
@@ -1077,8 +1078,10 @@ pub struct ListQuery {
 }
 
 async fn has_search_provider(state: &AppState, project_id: i32) -> bool {
+    // team 维度:project 所属 team 有无 enabled search_provider
     let n: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM search_providers WHERE project_id=$1 AND is_enabled=TRUE")
+        "SELECT COUNT(*) FROM search_providers sp JOIN projects p ON sp.team_id = p.team_id \
+         WHERE p.id=$1 AND sp.is_enabled=TRUE")
         .bind(project_id).fetch_one(&state.db).await.unwrap_or(0);
     n > 0
 }
@@ -1204,8 +1207,11 @@ async fn enqueue_rejects_empty_topic() {
     let (server, state, pid, token) = setup_project("res-emptytopic").await;
     // 先 seed 一个 search_provider（任意 key，本测不走真实 search）
     let key = derive_test_key();
-    sqlx::query("INSERT INTO search_providers (project_id, provider_type, api_key_encrypted) VALUES ($1,'tavily',$2)")
-        .bind(pid).bind(key).execute(&state.db).await.unwrap();
+    // team 维度:seed 到 project 所属 team
+    let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id=$1")
+        .bind(pid).fetch_one(&state.db).await.unwrap();
+    sqlx::query("INSERT INTO search_providers (team_id, provider_type, api_key_encrypted) VALUES ($1,'tavily',$2)")
+        .bind(team_id).bind(key).execute(&state.db).await.unwrap();
     let r = server.post(&format!("/api/v1/projects/{}/research", pid))
         .add_header("authorization", auth(&token))
         .json(&serde_json::json!({"topic":"   "})).await;
@@ -1261,14 +1267,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Files:**
 - Create: `src/routes/search_providers.rs`
 - Modify: `src/routes/mod.rs`（`mod search_providers;`）
-- Modify: `src/routes/projects.rs`（merge search_provider_routes）
+- Modify: `src/routes/mod.rs`（create_router `.merge(search_providers::search_provider_routes())`，team-scoped global 路由）
 
 - [ ] **Step 1: 写 routes/search_providers.rs**
 
 `src/routes/search_providers.rs`：
 ```rust
-// src/routes/search_providers.rs — search_provider CRUD（project-scoped）。GET 不回传 api_key。
-use crate::middleware::project_guard::check_project_access;
+// src/routes/search_providers.rs — search_provider CRUD（team-scoped,Layer 4 一致）。Admin 写/Member 读,GET 不回传 key。
+use crate::middleware::project_guard::{check_team_access_with_role, RequiredRole};
 use crate::{AppError, AppState};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -1285,10 +1291,10 @@ fn derive_key(config: &crate::AppConfig) -> [u8; 32] {
 
 pub fn search_provider_routes() -> axum::Router<AppState> {
     axum::Router::new()
-        .route("/:id/search-provider", axum::routing::post(create_provider))
-        .route("/:id/search-provider", axum::routing::get(get_provider))
-        .route("/:id/search-provider/:sid", axum::routing::put(update_provider))
-        .route("/:id/search-provider/:sid", axum::routing::delete(delete_provider))
+        .route("/api/v1/teams/:id/search-providers", axum::routing::post(create_provider))
+        .route("/api/v1/teams/:id/search-providers", axum::routing::get(get_provider))
+        .route("/api/v1/teams/:id/search-providers/:sid", axum::routing::put(update_provider))
+        .route("/api/v1/teams/:id/search-providers/:sid", axum::routing::delete(delete_provider))
 }
 
 #[derive(Deserialize)]
@@ -1299,7 +1305,7 @@ pub struct CreateBody {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]  // Phase C §8 契约 snake_case(与 CreateBody/项目惯例一致)
 pub struct ProviderResp {
     pub id: i64,
     pub provider_type: String,
@@ -1309,28 +1315,35 @@ pub struct ProviderResp {
 }
 
 pub async fn create_provider(
-    State(state): State<AppState>, Path(project_id): Path<i32>, headers: HeaderMap, Json(body): Json<CreateBody>,
+    State(state): State<AppState>, Path(team_id): Path<i32>, headers: HeaderMap, Json(body): Json<CreateBody>,
 ) -> Result<(StatusCode, Json<ProviderResp>), AppError> {
-    let (_, _) = check_project_access(&state, &headers, project_id).await?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Admin).await?;
     let key = derive_key(&state.config);
     let enc = crate::utils::crypto::encrypt_api_key(&body.api_key, &key)?;
-    let row: (i64,) = sqlx::query_as(
-        "INSERT INTO search_providers (project_id, provider_type, api_key_encrypted, base_url) VALUES ($1,$2,$3,$4) RETURNING id")
-        .bind(project_id).bind(&body.provider_type).bind(&enc).bind(&body.base_url)
-        .fetch_one(&state.db).await?;
+    let row: Result<(i64,), sqlx::Error> = sqlx::query_as(
+        "INSERT INTO search_providers (team_id, provider_type, api_key_encrypted, base_url) VALUES ($1,$2,$3,$4) RETURNING id")
+        .bind(team_id).bind(&body.provider_type).bind(&enc).bind(&body.base_url)
+        .fetch_one(&state.db).await;
+    let (id,) = match row {
+        Ok(r) => r,
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+            return Err(AppError::Conflict("provider_type already exists for team".into()));
+        }
+        Err(e) => return Err(AppError::DatabaseError(e)),
+    };
     Ok((StatusCode::CREATED, Json(ProviderResp {
-        id: row.0, provider_type: body.provider_type, base_url: body.base_url, is_enabled: true, has_key: true,
+        id, provider_type: body.provider_type, base_url: body.base_url, is_enabled: true, has_key: true,
     })))
 }
 
 pub async fn get_provider(
-    State(state): State<AppState>, Path(project_id): Path<i32>, headers: HeaderMap,
+    State(state): State<AppState>, Path(team_id): Path<i32>, headers: HeaderMap,
 ) -> Result<Json<Option<ProviderResp>>, AppError> {
-    check_project_access(&state, &headers, project_id).await?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Member).await?;
     let row: Option<(i64, String, Option<String>, bool)> = sqlx::query_as(
         "SELECT id, provider_type, base_url, is_enabled FROM search_providers \
-         WHERE project_id=$1 AND is_enabled=TRUE ORDER BY id LIMIT 1")
-        .bind(project_id).fetch_optional(&state.db).await?;
+         WHERE team_id=$1 AND is_enabled=TRUE ORDER BY id LIMIT 1")
+        .bind(team_id).fetch_optional(&state.db).await?;
     Ok(Json(row.map(|(id, t, b, e)| ProviderResp { id, provider_type: t, base_url: b, is_enabled: e, has_key: true })))
 }
 
@@ -1342,36 +1355,36 @@ pub struct UpdateBody {
 }
 
 pub async fn update_provider(
-    State(state): State<AppState>, Path((project_id, sid)): Path<(i32, i64)>, headers: HeaderMap, Json(body): Json<UpdateBody>,
+    State(state): State<AppState>, Path((team_id, sid)): Path<(i32, i64)>, headers: HeaderMap, Json(body): Json<UpdateBody>,
 ) -> Result<Json<ProviderResp>, AppError> {
-    let (_, _) = check_project_access(&state, &headers, project_id).await?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Admin).await?;
     if let Some(plain) = body.api_key.as_deref() {
         let key = derive_key(&state.config);
         let enc = crate::utils::crypto::encrypt_api_key(plain, &key)?;
-        sqlx::query("UPDATE search_providers SET api_key_encrypted=$1 WHERE id=$2 AND project_id=$3")
-            .bind(&enc).bind(sid).bind(project_id).execute(&state.db).await?;
+        sqlx::query("UPDATE search_providers SET api_key_encrypted=$1 WHERE id=$2 AND team_id=$3")
+            .bind(&enc).bind(sid).bind(team_id).execute(&state.db).await?;
     }
     if let Some(b) = body.base_url.as_deref() {
-        sqlx::query("UPDATE search_providers SET base_url=$1 WHERE id=$2 AND project_id=$3")
-            .bind(b).bind(sid).bind(project_id).execute(&state.db).await?;
+        sqlx::query("UPDATE search_providers SET base_url=$1 WHERE id=$2 AND team_id=$3")
+            .bind(b).bind(sid).bind(team_id).execute(&state.db).await?;
     }
     if let Some(e) = body.is_enabled {
-        sqlx::query("UPDATE search_providers SET is_enabled=$1 WHERE id=$2 AND project_id=$3")
-            .bind(e).bind(sid).bind(project_id).execute(&state.db).await?;
+        sqlx::query("UPDATE search_providers SET is_enabled=$1 WHERE id=$2 AND team_id=$3")
+            .bind(e).bind(sid).bind(team_id).execute(&state.db).await?;
     }
     let row: (i64, String, Option<String>, bool) = sqlx::query_as(
-        "SELECT id, provider_type, base_url, is_enabled FROM search_providers WHERE id=$1 AND project_id=$2")
-        .bind(sid).bind(project_id).fetch_one(&state.db).await
+        "SELECT id, provider_type, base_url, is_enabled FROM search_providers WHERE id=$1 AND team_id=$2")
+        .bind(sid).bind(team_id).fetch_one(&state.db).await
         .map_err(|_| AppError::ResourceNotFound("search_provider".into()))?;
     Ok(Json(ProviderResp { id: row.0, provider_type: row.1, base_url: row.2, is_enabled: row.3, has_key: true }))
 }
 
 pub async fn delete_provider(
-    State(state): State<AppState>, Path((project_id, sid)): Path<(i32, i64)>, headers: HeaderMap,
+    State(state): State<AppState>, Path((team_id, sid)): Path<(i32, i64)>, headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
-    let (_, _) = check_project_access(&state, &headers, project_id).await?;
-    let n = sqlx::query("DELETE FROM search_providers WHERE id=$1 AND project_id=$2")
-        .bind(sid).bind(project_id).execute(&state.db).await?;
+    check_team_access_with_role(&state, &headers, team_id, RequiredRole::Admin).await?;
+    let n = sqlx::query("DELETE FROM search_providers WHERE id=$1 AND team_id=$2")
+        .bind(sid).bind(team_id).execute(&state.db).await?;
     if n.rows_affected() == 0 {
         return Err(AppError::ResourceNotFound("search_provider".into()));
     }
@@ -1386,13 +1399,13 @@ pub async fn delete_provider(
 mod search_providers;
 ```
 
-- [ ] **Step 3: projects.rs merge search_provider_routes**
+- [ ] **Step 3: create_router merge search_provider_routes（global team-scoped）**
 
-`src/routes/projects.rs` 的 `project_routes()`，在 `.merge(research::research_project_routes())` **之后**加：
+`src/routes/mod.rs` 的 `create_router`，在 `.merge(research::global_research_routes())` **之后、`.with_state(state)` 之前**加：
 ```rust
         .merge(search_providers::search_provider_routes())
 ```
-（用全路径 `crate::routes::search_providers::search_provider_routes()` 避免 use 改动。）
+（search-providers 是 team-scoped global 路由 `/api/v1/teams/:id/...`，仿 `global_ingest_routes()` 挂法；不进 `project_routes()`。）
 
 - [ ] **Step 4: 写集成测试（CRUD + api_key 加密往返 + GET 不回传 key）**
 
@@ -1401,21 +1414,23 @@ mod search_providers;
 #[tokio::test]
 async fn search_provider_crud_and_key_roundtrip() {
     let (server, state, pid, token) = setup_project("res-crud").await;
-    // CREATE
-    let r = server.post(&format!("/api/v1/projects/{}/search-provider", pid))
+    let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id=$1")
+        .bind(pid).fetch_one(&state.db).await.unwrap();
+    // CREATE（token 是 project 的 team owner → Admin 放行）
+    let r = server.post(&format!("/api/v1/teams/{}/search-providers", team_id))
         .add_header("authorization", auth(&token))
-        .json(&serde_json::json!({"providerType":"tavily","apiKey":"secret-xyz"})).await;
+        .json(&serde_json::json!({"provider_type":"tavily","api_key":"secret-xyz"})).await;
     assert_eq!(r.status_code(), StatusCode::CREATED);
     let body: serde_json::Value = r.json();
-    assert_eq!(body["providerType"], "tavily");
-    assert_eq!(body["hasKey"], true);
-    assert!(body.get("apiKey").is_none(), "GET 响应不得回传 apiKey");
+    assert_eq!(body["provider_type"], "tavily");
+    assert_eq!(body["has_key"], true);
+    assert!(body.get("api_key").is_none(), "GET 响应不得回传 api_key");
     let sid = body["id"].as_i64().unwrap();
-    // GET 不回传 key
-    let g = server.get(&format!("/api/v1/projects/{}/search-provider", pid))
+    // GET 不回传 key（owner → Member 放行）
+    let g = server.get(&format!("/api/v1/teams/{}/search-providers", team_id))
         .add_header("authorization", auth(&token)).await;
     let gb: serde_json::Value = g.json();
-    assert!(gb.get("apiKey").is_none() || gb["apiKey"].is_null());
+    assert!(gb.get("api_key").is_none() || gb["api_key"].is_null());
     // 加密往返：DB 存的是密文，decrypt 能还原
     let enc: String = sqlx::query_scalar("SELECT api_key_encrypted FROM search_providers WHERE id=$1")
         .bind(sid).fetch_one(&state.db).await.unwrap();
@@ -1423,7 +1438,7 @@ async fn search_provider_crud_and_key_roundtrip() {
     let plain = llm_wiki_server::services::llm::decrypt_api_key(&enc, &state.config).unwrap();
     assert_eq!(plain, "secret-xyz");
     // DELETE
-    let d = server.delete(&format!("/api/v1/projects/{}/search-provider/{}", pid, sid))
+    let d = server.delete(&format!("/api/v1/teams/{}/search-providers/{}", team_id, sid))
         .add_header("authorization", auth(&token)).await;
     assert_eq!(d.status_code(), StatusCode::OK);
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM search_providers WHERE id=$1")
@@ -1443,7 +1458,7 @@ Expected: 1 passed。
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/routes/search_providers.rs src/routes/mod.rs src/routes/projects.rs tests/integration/research_test.rs
+git add src/routes/search_providers.rs src/routes/mod.rs tests/integration/research_test.rs
 git commit -m "feat(src-server): search_provider CRUD(加密往返,GET 不回传 key)
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
