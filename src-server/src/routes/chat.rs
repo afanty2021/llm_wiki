@@ -1,19 +1,11 @@
 use axum::{
     extract::State,
-    response::sse::{Event, Sse},
     response::IntoResponse,
     Json,
 };
-use futures::stream::{self, Stream, StreamExt};
 use serde::Deserialize;
-use std::convert::Infallible;
-use std::pin::Pin;
-use std::time::Duration;
 use crate::{AppState, AppError};
 use crate::middleware::project_guard::check_project_access;
-
-/// Type alias for a boxed stream of SSE events (type-erased).
-type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
 #[derive(Deserialize)]
 struct ChatMessage {
@@ -27,12 +19,15 @@ pub fn chat_routes() -> axum::Router<AppState> {
         .route("/message", axum::routing::post(chat_message))
 }
 
-/// POST /api/v1/chat/stream — server-sent events streaming chat
+/// POST /api/v1/chat/stream — 直通上游 LLM 原始 SSE 字节流。
+///
+/// 返回 `text/event-stream`，客户端收到标准单层 OpenAI SSE，
+/// 可复用桌面版 parseLines/parseStream 解析逻辑。
 pub async fn chat_stream(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(body): Json<serde_json::Value>,
-) -> Result<Sse<SseStream>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let project_id = body
         .get("project_id")
         .and_then(|v| v.as_i64())
@@ -48,7 +43,7 @@ pub async fn chat_stream(
         .get("model")
         .and_then(|m| m.as_str().map(String::from));
 
-    Ok(stream_chat_to_sse(&state, project_id, &messages, model_override).await)
+    stream_chat_raw(&state, project_id, &messages, model_override).await
 }
 
 /// POST /api/v1/chat/message — non-streaming single message
@@ -103,37 +98,21 @@ pub async fn chat_message(
     })))
 }
 
-/// Build an SSE stream that proxies LLM streaming responses.
-/// Uses `Pin<Box<dyn Stream>>` to type-erase the different branch return types.
-async fn stream_chat_to_sse(
+/// 直通：把 reqwest bytes_stream 作为响应 body，Content-Type text/event-stream。
+///
+/// 客户端收到标准单层 OpenAI SSE，可复用桌面版 parseLines/parseStream。
+/// 不再用 axum `Event::data`（它按 \n 拆行加 `data: ` 前缀，造成双层 `data: data:`）。
+///
+/// 错误用 `?` 传播（不再包成 SSE event 返回 200），使鉴权/配置错误能正确映射为 4xx/5xx。
+async fn stream_chat_raw(
     state: &AppState,
     project_id: i32,
     messages: &[ChatMessage],
     model_override: Option<String>,
-) -> Sse<SseStream> {
-    // Fetch LLM config from database
-    let llm_config = match crate::services::llm::get_llm_config(&state.db, project_id).await {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            let s: SseStream = Box::pin(stream::once(async move {
-                Ok(Event::default().data(format!("Error: {}", e)))
-            }));
-            return Sse::new(s);
-        }
-    };
-
-    // Decrypt API key
-    let api_key = match crate::services::llm::decrypt_api_key(&llm_config.api_key, &state.config)
-    {
-        Ok(k) => k,
-        Err(e) => {
-            let s: SseStream = Box::pin(stream::once(async move {
-                Ok(Event::default().data(format!("Decrypt error: {}", e)))
-            }));
-            return Sse::new(s);
-        }
-    };
-
+) -> Result<axum::response::Response, AppError> {
+    // 取 LLM 配置（无 provider 时报错 → 5xx）
+    let llm_config = crate::services::llm::get_llm_config(&state.db, project_id).await?;
+    let api_key = crate::services::llm::decrypt_api_key(&llm_config.api_key, &state.config)?;
     let base_url = llm_config
         .base_url
         .as_deref()
@@ -152,7 +131,7 @@ async fn stream_chat_to_sse(
     .collect();
 
     let client = reqwest::Client::new();
-    let response = match client
+    let upstream = client
         .post(format!("{}/chat/completions", base_url))
         .header("Authorization", format!("Bearer {}", api_key))
         .json(&serde_json::json!({
@@ -161,25 +140,23 @@ async fn stream_chat_to_sse(
             "stream": true,
         }))
         .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let s: SseStream = Box::pin(stream::once(async move {
-                Ok(Event::default().data(format!("LLM request error: {}", e)))
-            }));
-            return Sse::new(s);
-        }
-    };
+        .await?;
 
-    let byte_stream = response.bytes_stream().map(|result| match result {
-        Ok(bytes) => Ok(Event::default().data(String::from_utf8_lossy(&bytes).to_string())),
-        Err(e) => Ok(Event::default().data(format!("Stream error: {}", e))),
-    });
+    if !upstream.status().is_success() {
+        let status = upstream.status();
+        let text = upstream.text().await.unwrap_or_default();
+        return Err(AppError::InternalError(format!(
+            "LLM upstream {}: {}",
+            status, text
+        )));
+    }
 
-    Sse::new(Box::pin(byte_stream) as SseStream).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("ping"),
+    // 直通原始字节流；axum Body::from_stream 把 reqwest Stream 转为响应 body。
+    // 不再注入 keep-alive 心跳（部署层调大 proxy_read_timeout + proxy_buffering off 缓解）。
+    let stream = upstream.bytes_stream();
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+        axum::body::Body::from_stream(stream),
     )
+        .into_response())
 }

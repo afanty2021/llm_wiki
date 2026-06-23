@@ -3,6 +3,7 @@ pub mod ingest_queue_test;
 pub mod ingest_test;
 pub mod pages_test;
 pub mod files_stat_test;
+pub mod chat_stream_test;
 mod chat_sessions_test;
 mod reviews_test;
 mod permissions_test;
