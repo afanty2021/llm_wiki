@@ -19,6 +19,7 @@ import type { WikiProject } from "@/types/wiki"
 import { useAuthStore } from "@/stores/auth-store"
 import { LoginPage } from "@/components/auth/LoginPage"
 import { RegisterPage } from "@/components/auth/RegisterPage"
+import { ProjectPicker } from "@/components/web/project-picker"
 import { createLogger } from "@/lib/logger"
 import { caps } from "@/lib/capabilities"
 
@@ -315,6 +316,20 @@ function App() {
       return <RegisterPage onNavigate={setAuthPage} />
     }
     return <LoginPage onNavigate={setAuthPage} />
+  }
+
+  // web:登录后强制走 team→project 选择器（桌面走本地 openProject，零回归）。
+  // __currentProjectId 缺空时显示选择器；选中后立即写入并经 handleProjectOpened 加载。
+  if (caps.platform === "web" && (window as any).__currentProjectId == null) {
+    return (
+      <ProjectPicker
+        onPick={async (p) => {
+          const proj = { id: String(p.id), path: "", name: p.name } as WikiProject
+          ;(window as any).__currentProjectId = p.id
+          await handleProjectOpened(proj)
+        }}
+      />
+    )
   }
 
   async function handleProjectOpened(proj: WikiProject) {
