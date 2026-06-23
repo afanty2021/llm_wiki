@@ -25,5 +25,9 @@
     "dim": 1024,
     "timeout_secs": 60
   },
+  "frontend": {
+    "dist_dir": "../dist",
+    "index_html": "../dist/index.html"
+  },
   "llm_timeout_secs": 120
 }
