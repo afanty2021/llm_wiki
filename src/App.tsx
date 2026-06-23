@@ -20,6 +20,7 @@ import { useAuthStore } from "@/stores/auth-store"
 import { LoginPage } from "@/components/auth/LoginPage"
 import { RegisterPage } from "@/components/auth/RegisterPage"
 import { createLogger } from "@/lib/logger"
+import { caps } from "@/lib/capabilities"
 
 const logger = createLogger("app")
 
@@ -277,15 +278,19 @@ function App() {
         if (savedLang) {
           await i18n.changeLanguage(savedLang)
         }
-        const lastProject = await getLastProject()
-        if (lastProject) {
-          try {
-            const proj = await openProject(lastProject.path)
-            await handleProjectOpened(proj)
-          } catch {
-            // Last project no longer valid
+        if (caps.platform === "tauri") {
+          const lastProject = await getLastProject()
+          if (lastProject) {
+            try {
+              const proj = await openProject(lastProject.path)
+              await handleProjectOpened(proj)
+            } catch {
+              // Last project no longer valid
+            }
           }
         }
+        // web:auth 已由现有 isAuthenticated 门控(Login/Register 就绪);
+        // 项目选择 UI 留期2,期1 不自动 openProject(无本地路径)。
       } catch {
         // ignore init errors
       } finally {
@@ -320,6 +325,7 @@ function App() {
     const { resetProjectState } = await import("@/lib/reset-project-state")
     await resetProjectState()
 
+    ;(window as any).__currentProjectId = proj.id  // fs.ts HTTP 分支 + streamViaServer 依赖
     setProject(proj)
     const projectOutputLang = await loadOutputLanguage(proj.id)
     useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")
