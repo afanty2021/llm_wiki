@@ -355,3 +355,66 @@ async fn search_provider_crud_and_key_roundtrip() {
             .unwrap();
     assert_eq!(n, 0);
 }
+
+use llm_wiki_server::services::review::{insert_review_items, parse_review_blocks};
+
+async fn seed_review_with_queries(
+    state: &llm_wiki_server::AppState,
+    pid: i32,
+    title: &str,
+    queries: &[&str],
+) -> i64 {
+    let src = format!("src/{}.md", title);
+    let mut p = parse_review_blocks(
+        &format!(
+            "---REVIEW: missing-page | {}---\nBody.\nSEARCH: {}\nOPTIONS: Create Page | Skip\n---END REVIEW---",
+            title,
+            queries.join(" | ")
+        ),
+        &src,
+    );
+    if p[0].search_queries.is_none() {
+        p[0].search_queries = Some(queries.iter().map(|s| s.to_string()).collect());
+    }
+    insert_review_items(state, pid, &p).await.unwrap();
+    sqlx::query_scalar("SELECT id FROM review_items WHERE project_id=$1 AND title=$2")
+        .bind(pid)
+        .bind(title)
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn review_deep_research_dispatch_enqueues_and_resolves() {
+    let (server, state, pid, token) = setup_project("res-reviewdispatch").await;
+    let iid = seed_review_with_queries(&state, pid, "Missing Topic", &["alpha", "beta"]).await;
+    let r = server
+        .post(&format!(
+            "/api/v1/projects/{}/reviews/{}/resolve",
+            pid, iid
+        ))
+        .add_header("authorization", &auth(&token))
+        .json(&serde_json::json!({"kind":"deep_research"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let body: serde_json::Value = r.json();
+    assert_eq!(body["resolvedAction"], "deep_research");
+    let task_uuid =
+        uuid::Uuid::parse_str(body["createdPath"].as_str().unwrap()).unwrap();
+    let (sk, topic): (String, String) =
+        sqlx::query_as("SELECT source_kind, topic FROM research_tasks WHERE id=$1")
+            .bind(task_uuid)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(sk, "review");
+    assert_eq!(topic, "Missing Topic");
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM review_items WHERE id=$1")
+            .bind(iid)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "resolved");
+}

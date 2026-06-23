@@ -356,6 +356,7 @@ pub enum ResolveAction {
     Skip,
     Delete { path: Option<String> },
     Open { path: Option<String> },
+    DeepResearch,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -381,7 +382,6 @@ struct LoadedItem {
     title: String,
     description: String,
     affected_pages: Option<Vec<String>>,
-    #[allow(dead_code)]
     search_queries: Option<Vec<String>>,
     status: String,
 }
@@ -560,6 +560,20 @@ pub async fn resolve_review_item(
                 .ok_or_else(|| AppError::ValidationError("open needs a path".into()))?;
             let page = fetch_page(state, project_id, &p).await?;
             Ok(ResolveOutcome::Opened { page })
+        }
+        ResolveAction::DeepResearch => {
+            // 空/None search_queries 由 run_research_job 统一归一化（派生自 task.topic=item.title）；
+            // 此处原样传入,与 manual 入队一致。
+            let queries = item.search_queries.clone();
+            let task_uuid = crate::services::research::enqueue_research_task(
+                state, project_id, Some(user_id), &item.title, queries, "review").await?;
+            mark_resolved(state, item_id, "deep_research", user_id).await?;
+            Ok(ResolveOutcome::Resolved {
+                resolved_action: "deep_research".into(),
+                created_path: Some(task_uuid.to_string()),
+            })
+            // research 异步跑（worker 拾取），不阻塞 resolve 响应；
+            // 前端按 task_uuid 查进度（GET /api/v1/research/tasks/:uuid）。
         }
     }
 }
