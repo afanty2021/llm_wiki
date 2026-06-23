@@ -110,7 +110,7 @@ async fn stream_chat_raw(
     messages: &[ChatMessage],
     model_override: Option<String>,
 ) -> Result<axum::response::Response, AppError> {
-    // 取 LLM 配置（无 provider 时报错 → 5xx）
+    // 取 LLM 配置（无 provider 时报错 → 4xx BadRequest）
     let llm_config = crate::services::llm::get_llm_config(&state.db, project_id).await?;
     let api_key = crate::services::llm::decrypt_api_key(&llm_config.api_key, &state.config)?;
     let base_url = llm_config
@@ -145,7 +145,7 @@ async fn stream_chat_raw(
     if !upstream.status().is_success() {
         let status = upstream.status();
         let text = upstream.text().await.unwrap_or_default();
-        return Err(AppError::InternalError(format!(
+        return Err(AppError::LlmApiError(format!(
             "LLM upstream {}: {}",
             status, text
         )));
