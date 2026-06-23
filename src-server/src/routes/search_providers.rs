@@ -76,24 +76,26 @@ pub async fn update_provider(
     State(state): State<AppState>, Path((team_id, sid)): Path<(i32, i64)>, headers: HeaderMap, Json(body): Json<UpdateBody>,
 ) -> Result<Json<ProviderResp>, AppError> {
     check_team_access_with_role(&state, &headers, team_id, RequiredRole::Admin).await?;
+    let mut tx = state.db.begin().await?;
     if let Some(plain) = body.api_key.as_deref() {
         let key = derive_key(&state.config);
         let enc = crate::utils::crypto::encrypt_api_key(plain, &key)?;
         sqlx::query("UPDATE search_providers SET api_key_encrypted=$1 WHERE id=$2 AND team_id=$3")
-            .bind(&enc).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(&enc).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     if let Some(b) = body.base_url.as_deref() {
         sqlx::query("UPDATE search_providers SET base_url=$1 WHERE id=$2 AND team_id=$3")
-            .bind(b).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(b).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     if let Some(e) = body.is_enabled {
         sqlx::query("UPDATE search_providers SET is_enabled=$1 WHERE id=$2 AND team_id=$3")
-            .bind(e).bind(sid).bind(team_id).execute(&state.db).await?;
+            .bind(e).bind(sid).bind(team_id).execute(&mut *tx).await?;
     }
     let row: (i64, String, Option<String>, bool) = sqlx::query_as(
         "SELECT id, provider_type, base_url, is_enabled FROM search_providers WHERE id=$1 AND team_id=$2")
-        .bind(sid).bind(team_id).fetch_one(&state.db).await
+        .bind(sid).bind(team_id).fetch_one(&mut *tx).await
         .map_err(|_| AppError::ResourceNotFound("search_provider".into()))?;
+    tx.commit().await?;
     Ok(Json(ProviderResp { id: row.0, provider_type: row.1, base_url: row.2, is_enabled: row.3, has_key: true }))
 }
 
