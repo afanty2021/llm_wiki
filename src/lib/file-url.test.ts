@@ -24,14 +24,17 @@ describe("file-url", () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(fakeBlob) })
     vi.stubGlobal("fetch", fetchMock)
     const { fileBlobUrl } = await import("./file-url")
-    const url = await fileBlobUrl(42, "wiki/media/a.png")
-    expect(url).toBe("blob:mock-123")
+    const handle = await fileBlobUrl(42, "wiki/media/a.png")
+    expect(handle.url).toBe("blob:mock-123")
     // 核心验证:fetch 拼到 raw URL + createObjectURL 被调用拿到 blob
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/files/42/raw/wiki/media/a.png"),
       expect.any(Object),
     )
     expect(createObjSpy).toHaveBeenCalledWith(fakeBlob)
+    // revoke 句柄释放 blob 内存
+    handle.revoke()
+    expect(revokeObjSpy).toHaveBeenCalledWith("blob:mock-123")
   })
 
   it("fileBlobUrl 后端 !ok → reject", async () => {
@@ -39,6 +42,11 @@ describe("file-url", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401 }))
     const { fileBlobUrl } = await import("./file-url")
     await expect(fileBlobUrl(42, "x.png")).rejects.toThrow()
+  })
+
+  it("fileUrlForPath web 返回 null(同步降级,web 不可用)", async () => {
+    const { fileUrlForPath } = await import("./file-url")
+    expect(fileUrlForPath("/abs/a.png", "web")).toBeNull()
   })
 
   it("CURRENT_PROJECT_ID 反映 __currentProjectId", async () => {
