@@ -68,4 +68,31 @@ describe("WebIngestPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /ingest|摄取/i }))
     await waitFor(() => expect(screen.getByText(/upload failed/i)).toBeTruthy())
   })
+
+  it("轮询到 failed 终态显示摄取失败 + error", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    uploadFile.mockImplementation(async (_pid: number, file: File) => ({
+      name: file.name,
+      path: `raw/sources/${file.name}`,
+      size: file.size,
+    }))
+    triggerIngest.mockResolvedValue({ job_id: "job-2", status: "pending" })
+    getIngestJob
+      .mockResolvedValueOnce({ id: "job-2", status: "processing", progress: 10, stage: "parsing" })
+      .mockResolvedValueOnce({ id: "job-2", status: "failed", progress: 0, stage: "failed", error: "boom" })
+
+    const { WebIngestPanel } = await import("./web-ingest-panel")
+    render(<WebIngestPanel projectId={1} onDone={() => {}} />)
+
+    const file = new File(["hi"], "c.md", { type: "text/markdown" })
+    fireEvent.change(screen.getByLabelText(/upload/i), { target: { files: [file] } })
+    fireEvent.click(screen.getByRole("button", { name: /ingest|摄取/i }))
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(2000)
+
+    await waitFor(() => expect(screen.getByText(/摄取失败/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/boom/)).toBeTruthy())
+  })
 })
