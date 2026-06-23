@@ -186,6 +186,11 @@ class ApiClient {
     return this.request("GET", `/api/v1/files/${projectId}/stat/${encodeURI(path)}`)
   }
 
+  /** 当前 API base(桌面为 http://localhost:8080;web 同源为 "")。供 fileBlobUrl 等外部 fetch 拼 URL。 */
+  get base(): string {
+    return API_BASE
+  }
+
   /** 当前鉴权头(供 multipart/流式等不走 request<T> 的 fetch 场景复用,避免外部 as any 读 private)。 */
   authHeaders(): Record<string, string> {
     const h: Record<string, string> = {}
