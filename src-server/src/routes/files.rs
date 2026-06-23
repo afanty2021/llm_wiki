@@ -29,6 +29,8 @@ pub fn file_routes() -> axum::Router<AppState> {
         .route("/:project_id/upload", axum::routing::post(upload_file)
             .layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)))
         .route("/:project_id/list", axum::routing::get(list_files))
+        // stat 显式路由，必须在 /*path 通配符之前，否则会被 read_file 吞掉
+        .route("/:project_id/stat/*path", axum::routing::get(stat_file))
         .route("/:project_id/*path", axum::routing::get(read_file))
         .route("/:project_id/*path", axum::routing::post(write_file))
         .route("/:project_id/*path", axum::routing::delete(delete_file))
@@ -135,6 +137,60 @@ pub async fn list_files(
     }
 
     Ok(Json(serde_json::json!(nodes)))
+}
+
+// GET /api/v1/files/:project_id/stat/*path — 文件元信息
+// 供前端 fs.ts 的 fileExists/getFileSize/getFileModifiedTime 共用。
+// 不存在的文件返回 exists=false（而非 404），便于前端区分“无文件”与“鉴权/路径错误”。
+#[derive(Serialize)]
+struct StatResp {
+    exists: bool,
+    is_dir: bool,
+    size: u64,
+    modified: i64,
+}
+
+pub async fn stat_file(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path((project_id, path)): Path<(i32, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
+    let base = storage::project_base(state.config.storage_path(), team_id, project_id);
+
+    // 项目存储根尚不存在（全新项目未写入过任何文件）→ 目标必然不存在。
+    // 直接返回 exists=false，避免 safe_resolve 对不存在的 base canonicalize 导致 500。
+    if !base.exists() {
+        return Ok(Json(serde_json::json!(StatResp {
+            exists: false,
+            is_dir: false,
+            size: 0,
+            modified: 0,
+        })));
+    }
+
+    let file_path = storage::safe_resolve(&base, &path)?;
+
+    let resp = match std::fs::metadata(&file_path) {
+        Ok(meta) => StatResp {
+            exists: true,
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+            modified: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        },
+        Err(_) => StatResp {
+            exists: false,
+            is_dir: false,
+            size: 0,
+            modified: 0,
+        },
+    };
+    Ok(Json(serde_json::json!(resp)))
 }
 
 // GET /api/v1/files/:project_id/{*path}
