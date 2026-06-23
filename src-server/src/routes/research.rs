@@ -119,12 +119,12 @@ pub async fn get_task(
     Ok(Json(row))
 }
 
-fn sse_data(event: &str, data: &serde_json::Value) -> Result<Event, Infallible> {
+fn sse_data(event: &'static str, data: &serde_json::Value) -> Result<Event, Infallible> {
     Ok(Event::default()
-        .event(event.to_string())
+        .event(event)
         .data(data.to_string()))
 }
-
+#[allow(clippy::type_complexity)] // SSE 轮询返回类型复杂(Box<dyn Stream>),axum SSE 固有
 pub async fn stream_task(
     State(state): State<AppState>,
     Path(uuid): Path<Uuid>,
