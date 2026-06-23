@@ -5,6 +5,7 @@ import "./index.css";
 import "@/i18n";
 import { loadAndApplyTheme, watchSystemTheme } from "@/lib/theme";
 import { initLogger } from "@/lib/logger";
+import { caps } from "@/lib/capabilities";
 
 // Initialize Logger (fire-and-forget): pulls backend log level + registers
 // close-event flush handlers. Runs before render so the earliest logs route
@@ -18,8 +19,8 @@ initLogger().catch((error) => {
 });
 
 function applyPlatformClass() {
-  const isTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
-  if (isTauri && navigator.userAgent.includes("Mac OS X")) {
+  // 仅桌面壳 + macOS 加 platform-macos class
+  if (caps.platform === "tauri" && navigator.userAgent.includes("Mac OS X")) {
     document.documentElement.classList.add("platform-macos");
   }
 }
