@@ -31,6 +31,10 @@ pub fn file_routes() -> axum::Router<AppState> {
         .route("/:project_id/list", axum::routing::get(list_files))
         // stat 显式路由，必须在 /*path 通配符之前，否则会被 read_file 吞掉
         .route("/:project_id/stat/*path", axum::routing::get(stat_file))
+        // raw 二进制端点:返回文件原始字节(图片/视频/音频/pdf),供 web 预览。
+        // read_file 用 read_to_string 对二进制会乱码,故 raw 直接吐字节流。
+        // 静态段 raw 优先于 /*path 通配符(matchit 0.7),但顺序上仍放 stat 之后、/*path 之前。
+        .route("/:project_id/raw/*path", axum::routing::get(raw_file))
         .route("/:project_id/*path", axum::routing::get(read_file))
         .route("/:project_id/*path", axum::routing::post(write_file))
         .route("/:project_id/*path", axum::routing::delete(delete_file))
@@ -191,6 +195,32 @@ pub async fn stat_file(
         },
     };
     Ok(Json(serde_json::json!(resp)))
+}
+
+// GET /api/v1/files/:project_id/raw/*path — 二进制原始字节(图片/视频/音频/pdf)
+// read_file 用 read_to_string 对图片/媒体会乱码,故 raw 端点直接吐字节流。
+// 鉴权与 stat_file/read_file 同款(check_project_access + safe_resolve)。
+pub async fn raw_file(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path((project_id, path)): Path<(i32, String)>,
+) -> Result<axum::response::Response, AppError> {
+    let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
+    let base = storage::project_base(state.config.storage_path(), team_id, project_id);
+    let full = storage::safe_resolve(&base, &path)?;
+    let bytes = tokio::fs::read(&full)
+        .await
+        .map_err(|_| AppError::ResourceNotFound("file".into()))?;
+    let mime = mime_guess::from_path(&full)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string();
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", mime)
+        .header("cache-control", "private, max-age=3600")
+        .body(axum::body::Body::from(bytes))
+        .unwrap())
 }
 
 // GET /api/v1/files/:project_id/{*path}
