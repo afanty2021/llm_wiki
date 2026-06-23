@@ -63,8 +63,12 @@ function isInsideProject(path: string, projectPath: string): boolean {
 function absoluteToProjectRel(absolute: string, projectPath: string): string {
   const a = normalizePath(absolute).replace(/^\/+/, "").replace(/\\/g, "/")
   const p = normalizePath(projectPath).replace(/^\/+/, "").replace(/\\/g, "/")
-  if (a.startsWith(p + "/")) return a.slice(p.length + 1)
-  if (a === p) return ""
+  // comparePath 处理 Windows 盘符大小写不敏感(与 isInsideProject 一致),避免大小写差异导致
+  // 不剥前缀 → raw 端点收到完整绝对路径 → 404。slice 用原始 a/p 保留实际路径大小写。
+  const ca = comparePath(a)
+  const cp = comparePath(p)
+  if (ca.startsWith(cp + "/")) return a.slice(p.length + 1)
+  if (ca === cp) return ""
   return a
 }
 
