@@ -102,6 +102,12 @@ class ApiClient {
     }
   }
 
+  /** 公开刷新 access token(供 streamViaServer 等非 request<T> 的 fetch 场景 401 时续期)。
+   *  复用私有 refreshAccessToken(POST /auth/refresh + 更新 accessToken/localStorage)。 */
+  async refreshSession(): Promise<void> {
+    await this.refreshAccessToken()
+  }
+
   // === Auth ===
   async login(req: LoginRequest): Promise<AuthResponse> {
     const data = await this.request<AuthResponse>("POST", "/api/v1/auth/login", req)

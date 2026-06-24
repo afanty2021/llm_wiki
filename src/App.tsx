@@ -352,31 +352,40 @@ function App() {
     // proj.id(桌面不读此值,走 invoke)。streamViaServer 仍 Number() 防御(双保险)。
     ;(window as any).__currentProjectId = caps.platform === "web" ? Number(proj.id) : proj.id
     setProject(proj)
-    const projectOutputLang = await loadOutputLanguage(proj.id)
+    // web 下 project-store(@tauri-apps/plugin-store)不可用 → outputLanguage 用默认 "auto";
+    // 桌面从 app-state.json 读 per-project 语言。
+    const projectOutputLang = caps.platform === "web" ? null : await loadOutputLanguage(proj.id)
     useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")
     setSelectedFile(null)
     setActiveView("wiki")
     // Bump data version so any cached graphs/views invalidate
     useWikiStore.getState().bumpDataVersion()
-    await saveLastProject(proj)
+    // web 无 app-state.json,跳过 last-project 持久化(桌面专属;web 每次走 team/project picker)。
+    if (caps.platform !== "web") {
+      await saveLastProject(proj)
+    }
 
     // Restore ingest queue (resume interrupted tasks). Keyed by the
     // project's stable UUID so the queue still finds the right project
     // even if the filesystem path changed since the task was enqueued.
     // Await this before starting file sync: watcher events for raw/sources
     // may enqueue ingest tasks and require an active project queue.
-    try {
-      const { restoreQueue } = await import("@/lib/ingest-queue")
-      await restoreQueue(proj.id, proj.path)
-    } catch (err) {
-      logger.error("failed to restore ingest queue", { error: String(err) })
+    // 桌面 only:恢复本地持久化的摄取/去重队列。web 摄取走 server(triggerIngest + poll
+    // getIngestJob),队列状态在 server 端,不读本地 .llm-wiki/*.json,跳过避免无谓请求。
+    if (caps.platform !== "web") {
+      try {
+        const { restoreQueue } = await import("@/lib/ingest-queue")
+        await restoreQueue(proj.id, proj.path)
+      } catch (err) {
+        logger.error("failed to restore ingest queue", { error: String(err) })
+      }
+      // Same handshake for the dedup-merge queue.
+      import("@/lib/dedup-queue").then(({ restoreQueue }) => {
+        restoreQueue(proj.id, proj.path).catch((err) =>
+          logger.error("failed to restore dedup queue", { error: String(err) })
+        )
+      })
     }
-    // Same handshake for the dedup-merge queue.
-    import("@/lib/dedup-queue").then(({ restoreQueue }) => {
-      restoreQueue(proj.id, proj.path).catch((err) =>
-        logger.error("failed to restore dedup queue", { error: String(err) })
-      )
-    })
     // Load per-project scheduled import config
     try {
       const savedScheduledImport = await loadScheduledImportConfig(proj.path)
@@ -424,22 +433,25 @@ function App() {
         stopProjectFileSync().catch(() => {})
       }
     }).catch((err) => logger.error("failed to configure project file sync", { error: String(err) }))
-    // Notify local clip server of the current project + all recent projects
-    fetch("http://127.0.0.1:19827/project", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: proj.path }),
-    }).catch(() => {})
-
-    // Send all recent projects to clip server for extension project picker
-    getRecentProjects().then((recents) => {
-      const projects = recents.map((p) => ({ name: p.name, path: p.path }))
-      fetch("http://127.0.0.1:19827/projects", {
+    // 桌面 only:通知本地 clip server(Web Clipper 扩展用)。web 无本地 clip server,
+    // fetch 必然 ERR_CONNECTION_REFUSED;getRecentProjects 亦走桌面 project-store。web 下整体跳过。
+    if (caps.platform !== "web") {
+      fetch("http://127.0.0.1:19827/project", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projects }),
+        body: JSON.stringify({ path: proj.path }),
       }).catch(() => {})
-    }).catch(() => {})
+
+      // Send all recent projects to clip server for extension project picker
+      getRecentProjects().then((recents) => {
+        const projects = recents.map((p) => ({ name: p.name, path: p.path }))
+        fetch("http://127.0.0.1:19827/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projects }),
+        }).catch(() => {})
+      }).catch(() => {})
+    }
     try {
       const tree = await listDirectory(proj.path)
       setFileTree(tree)
@@ -459,13 +471,15 @@ function App() {
     } catch {
       // ignore, start fresh
     }
-    // Load persisted lint items
+    // Load persisted lint items(桌面;web lint 视图隐藏,不加载本地 lint.json)
     useLintStore.getState().setItems([])
-    try {
-      const savedLint = await loadLintItems(proj.path)
-      useLintStore.getState().setItems(savedLint)
-    } catch {
-      useLintStore.getState().setItems([])
+    if (caps.platform !== "web") {
+      try {
+        const savedLint = await loadLintItems(proj.path)
+        useLintStore.getState().setItems(savedLint)
+      } catch {
+        useLintStore.getState().setItems([])
+      }
     }
     // Load persisted chat history
     try {

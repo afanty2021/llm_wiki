@@ -312,6 +312,7 @@ async function streamViaServer(
   messages: import("./llm-providers").ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
+  isRetry = false,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
   // __currentProjectId 由 handleProjectOpened 注入(WikiProject.id,string,web 下 String(p.id))。
@@ -344,6 +345,18 @@ async function streamViaServer(
   }
 
   if (!response.ok) {
+    // 401:access token(5min)过期 → refreshSession 续期后重试一次。流式响应尚未读 body,
+    // 可安全 re-fetch。避免长效 chat 会话因 token 过期断流(其他请求经 request() 自动 refresh,
+    // 流式 fetch 不经 request(),需手动 refresh)。isRetry 防递归(refresh 本身失败则 Session expired)。
+    if (response.status === 401 && !isRetry) {
+      try {
+        await apiClient.refreshSession()
+        return streamViaServer(_config, messages, callbacks, signal, true)
+      } catch {
+        onError(new Error("Session expired"))
+        return
+      }
+    }
     const detail = await response.text().catch(() => "")
     onError(new Error(`chat upstream HTTP ${response.status}: ${detail}`))
     return

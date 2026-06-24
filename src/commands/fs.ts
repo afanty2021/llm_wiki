@@ -29,6 +29,14 @@ export async function readFile(
 ): Promise<string> {
   if (USE_HTTP) {
     const projectId = getCurrentProjectId()
+    // stat 先查:不存在则 throw(模拟 read 缺失语义),避免 HTTP 404 刷 console —— stat 端点
+    // 对缺失文件/全新项目 base 返回 exists:false(200)而非 4xx。web 下各 loadX
+    // (loadChatHistory/loadLintItems/restoreQueue)首次加载无持久化文件,此守卫消除全新项目
+    // 打开时的 read 404 噪声(桌面 invoke 缺失不记 HTTP error,web 需此对齐)。
+    const stat = await apiClient.statFile(projectId, path)
+    if (!stat.exists) {
+      throw new Error("File not found")
+    }
     const result = await apiClient.readFile(projectId, path)
     return result.content
   }
