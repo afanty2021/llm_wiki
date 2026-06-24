@@ -165,7 +165,7 @@ async fn list_projects(
         let projects: Vec<ProjectResponse> = if let Some(ref cursor) = q.cursor {
             let (cursor_id, cursor_ts) = decode_cursor(cursor)?;
             sqlx::query_as::<_, ProjectResponse>(
-                "SELECT id, team_id, name, storage_path, created_by, created_at, 0 as file_count \
+                "SELECT id, team_id, name, storage_path, created_by, created_at, 0::bigint as file_count \
                  FROM projects \
                  WHERE team_id = $1 \
                    AND (created_at, id) < ($2::timestamptz, $3) \
@@ -180,7 +180,7 @@ async fn list_projects(
             .await?
         } else {
             sqlx::query_as::<_, ProjectResponse>(
-                "SELECT id, team_id, name, storage_path, created_by, created_at, 0 as file_count \
+                "SELECT id, team_id, name, storage_path, created_by, created_at, 0::bigint as file_count \
                  FROM projects \
                  WHERE team_id = $1 \
                  ORDER BY created_at DESC, id DESC \
@@ -207,7 +207,7 @@ async fn list_projects(
         let projects: Vec<ProjectResponse> = if let Some(ref cursor) = q.cursor {
             let (cursor_id, cursor_ts) = decode_cursor(cursor)?;
             sqlx::query_as::<_, ProjectResponse>(
-                "SELECT p.id, p.team_id, p.name, p.storage_path, p.created_by, p.created_at, 0 as file_count \
+                "SELECT p.id, p.team_id, p.name, p.storage_path, p.created_by, p.created_at, 0::bigint as file_count \
                  FROM projects p \
                  INNER JOIN team_members tm ON p.team_id = tm.team_id \
                  WHERE tm.user_id = $1 \
@@ -223,7 +223,7 @@ async fn list_projects(
             .await?
         } else {
             sqlx::query_as::<_, ProjectResponse>(
-                "SELECT p.id, p.team_id, p.name, p.storage_path, p.created_by, p.created_at, 0 as file_count \
+                "SELECT p.id, p.team_id, p.name, p.storage_path, p.created_by, p.created_at, 0::bigint as file_count \
                  FROM projects p \
                  INNER JOIN team_members tm ON p.team_id = tm.team_id \
                  WHERE tm.user_id = $1 \
@@ -262,7 +262,7 @@ async fn get_project(
 
     // Verify team membership via JOIN
     let project = sqlx::query_as::<_, ProjectResponse>(
-        "SELECT p.id, p.team_id, p.name, p.storage_path, p.created_by, p.created_at, 0 as file_count \
+        "SELECT p.id, p.team_id, p.name, p.storage_path, p.created_by, p.created_at, 0::bigint as file_count \
          FROM projects p \
          INNER JOIN team_members tm ON p.team_id = tm.team_id \
          WHERE p.id = $1 AND tm.user_id = $2",
