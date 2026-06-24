@@ -347,7 +347,10 @@ function App() {
     const { resetProjectState } = await import("@/lib/reset-project-state")
     await resetProjectState()
 
-    ;(window as any).__currentProjectId = proj.id  // fs.ts HTTP 分支 + streamViaServer 依赖
+    // __currentProjectId 供 web 的 fs HTTP / streamViaServer / file-url 消费。web 注入 number
+    // (后端 as_i64/Path<i32> 解析;WikiProject.id 是 string,web 下 String(p.id));桌面保留
+    // proj.id(桌面不读此值,走 invoke)。streamViaServer 仍 Number() 防御(双保险)。
+    ;(window as any).__currentProjectId = caps.platform === "web" ? Number(proj.id) : proj.id
     setProject(proj)
     const projectOutputLang = await loadOutputLanguage(proj.id)
     useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")
