@@ -87,13 +87,11 @@ function extractedTextLabel(filePath: string): string {
 }
 
 function ImagePreview({ filePath, fileName }: { filePath: string; fileName: string }) {
-  const projectPath = useWikiStore((s) => s.project?.path ?? null)
-  // web 下 convertFileSrc(Tauri webview 协议)不可用,走 WebImage(raw→blob);
-  // 桌面保留 convertFileSrc 同步协议,行为零变化。
-  const webRelPath =
-    caps.platform === "web" && projectPath
-      ? resolveMarkdownImageSrc(filePath, projectPath)
-      : null
+  // web 下 convertFileSrc(Tauri webview 协议)不可用,走 WebImage(raw→blob)。
+  // filePath 是 project-relative(后端 files 路径),直接作 raw relPath(strip 前导 /);
+  // 不经 resolveMarkdownImageSrc:ImagePreview 的 filePath 是完整路径,resolver 的
+  // wiki/ fallback 会拼成 /wiki/<filePath> double。桌面保留 convertFileSrc,零变化。
+  const webRelPath = caps.platform === "web" ? filePath.replace(/^\/+/, "") : null
   const src = !webRelPath ? convertFileSrc(filePath) : null
   return (
     <div className="flex h-full flex-col p-6">

@@ -24,16 +24,28 @@ export function ProjectPicker({
     return () => { cancelled = true }
   }, [])
 
-  // team 切换后加载 project 列表（listProjects 分页，解 .items）。
+  // team 切换后加载 project 列表（listProjects cursor 分页，循环拉全部）。
   // cancelled guard 防快速切 team 时旧请求覆盖新 + 卸载后 setState。
   useEffect(() => {
     if (teamId == null) return
     let cancelled = false
     setProjects([])
-    apiClient
-      .listProjects(teamId)
-      .then((r) => { if (!cancelled) setProjects(r.items) })
-      .catch((e) => { if (!cancelled) setErr(String(e)) })
+    // 后端默认 20/页,循环跟随 next_cursor 拉全部(防 >20 project 不可见不可选)。
+    ;(async () => {
+      try {
+        const all: ProjectResponse[] = []
+        let cursor: string | undefined
+        do {
+          const r = await apiClient.listProjects(teamId, cursor)
+          if (cancelled) return
+          all.push(...r.items)
+          cursor = r.has_more ? r.next_cursor : undefined
+        } while (cursor)
+        if (!cancelled) setProjects(all)
+      } catch (e) {
+        if (!cancelled) setErr(String(e))
+      }
+    })()
     return () => { cancelled = true }
   }, [teamId])
 

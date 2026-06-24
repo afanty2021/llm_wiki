@@ -348,5 +348,14 @@ describe("resolveMarkdownImageSrc", () => {
       const { resolveMarkdownImageSrc: resolveWeb } = await import("./markdown-image-resolver")
       expect(resolveWeb("https://example.com/x.png", "/proj")).toBe("https://example.com/x.png")
     })
+
+    it("web 平台 projectPath 为空仍解析 project-relative(不短路,真实 web 场景)", async () => {
+      // web 真实场景:ProjectPicker 构造 {path:""},projectPath=""。旧 if(!projectPath) 短路
+      // 返回 rawSrc → WebImage fetch raw/media/... 缺 wiki/ → 404。修复后按 wiki/ 约定解析。
+      const { resolveMarkdownImageSrc: resolveWeb } = await import("./markdown-image-resolver")
+      expect(resolveWeb("media/slug/img.png", "")).toBe("wiki/media/slug/img.png")
+      // 相对 src + currentFileDir(project-relative,web 无绝对 projectPath)
+      expect(resolveWeb("a.png", "", "wiki/concepts")).toBe("wiki/concepts/a.png")
+    })
   })
 })

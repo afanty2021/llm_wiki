@@ -131,9 +131,13 @@ export function resolveMarkdownImageSrc(
   if (!rawSrc) return rawSrc
   if (PASSTHROUGH_RE.test(rawSrc)) return rawSrc
 
-  if (!projectPath) return rawSrc
+  // web 下 projectPath 为空(ProjectPicker 构造 {path:""}),仍按 wiki/ 约定解析出
+  // project-relative 供 raw 端点:isInsideProject 对 root="" 的绝对 path 放行(candidate
+  // startsWith "/"),absoluteToProjectRel strip 前导 / 得 project-rel。仅桌面无项目时短路
+  // (convertFileSrc 需绝对路径)。
+  if (!projectPath && caps.platform !== "web") return rawSrc
 
-  const pp = normalizePath(projectPath)
+  const pp = normalizePath(projectPath ?? "")
   const isAbsolute =
     rawSrc.startsWith("/") || /^[a-zA-Z]:/.test(rawSrc) || rawSrc.startsWith("\\\\")
 
@@ -145,7 +149,7 @@ export function resolveMarkdownImageSrc(
   // through via PASSTHROUGH_RE above.
   if (isAbsolute) {
     const absolute = collapsePath(normalizePath(decodePathSrc(rawSrc)))
-    return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, projectPath) : rawSrc
+    return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, pp) : rawSrc
   }
 
   // Strip a leading `./` for cleanliness; treat `media/foo.png` and
@@ -192,7 +196,7 @@ export function resolveMarkdownImageSrc(
       dir.startsWith("/") || /^[a-zA-Z]:/.test(dir) || dir.startsWith("\\\\")
     const baseDir = dirIsAbsolute ? dir : `${pp}/${dir}`
     const absolute = collapsePath(`${baseDir.replace(/\/+$/, "")}/${cleaned}`)
-    return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, projectPath) : rawSrc
+    return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, pp) : rawSrc
   }
 
   // Fallback: resolve as wiki-root-relative. Image references in
@@ -200,5 +204,5 @@ export function resolveMarkdownImageSrc(
   // so the path is stable regardless of page depth, and callers
   // without a file context (chat replies) rely on it too.
   const absolute = collapsePath(`${pp}/wiki/${wikiRootMediaPath}`)
-  return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, projectPath) : rawSrc
+  return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, pp) : rawSrc
 }

@@ -55,4 +55,27 @@ describe("ProjectPicker", () => {
       expect(onPick).toHaveBeenCalledWith({ id: 20, name: "NewP", team_id: 1 })
     )
   })
+
+  it("listProjects 分页:循环拉全部页(>20 project 都可见)", async () => {
+    getUserTeams.mockResolvedValue([{ id: 1, name: "Team A" }])
+    listProjects
+      .mockResolvedValueOnce({
+        items: Array.from({ length: 20 }, (_, i) => ({ id: 100 + i, name: `P${i}`, team_id: 1 })),
+        next_cursor: "cur2",
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        items: [{ id: 200, name: "Page2Proj", team_id: 1 }],
+        next_cursor: null,
+        has_more: false,
+      })
+    const onPick = vi.fn()
+    const { ProjectPicker } = await import("./project-picker")
+    render(<ProjectPicker onPick={onPick} />)
+    await waitFor(() => expect(screen.getByText("Team A")).toBeTruthy())
+    fireEvent.click(screen.getByText("Team A"))
+    // 循环跟随 cursor:第二页的 Page2Proj 也应可见(否则 >20 project 不可选)
+    await waitFor(() => expect(screen.getByText("Page2Proj")).toBeTruthy())
+    expect(screen.getByText("P0")).toBeTruthy() // 第一页也在
+  })
 })

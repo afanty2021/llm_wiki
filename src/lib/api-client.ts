@@ -146,9 +146,13 @@ class ApiClient {
     return this.request<ProjectResponse>("POST", "/api/v1/projects", { name, team_id: teamId })
   }
 
-  async listProjects(teamId?: number): Promise<{ items: ProjectResponse[]; next_cursor?: string; has_more: boolean }> {
-    const params = teamId ? `?team_id=${teamId}` : ""
-    return this.request("GET", `/api/v1/projects${params}`)
+  async listProjects(teamId?: number, cursor?: string, limit?: number): Promise<{ items: ProjectResponse[]; next_cursor?: string; has_more: boolean }> {
+    const params = new URLSearchParams()
+    if (teamId != null) params.set("team_id", String(teamId))
+    if (cursor) params.set("cursor", cursor)
+    if (limit != null) params.set("limit", String(limit))
+    const qs = params.toString()
+    return this.request("GET", `/api/v1/projects${qs ? `?${qs}` : ""}`)
   }
 
   // === Search ===
