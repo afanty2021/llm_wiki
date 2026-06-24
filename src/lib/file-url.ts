@@ -1,19 +1,8 @@
-import { convertFileSrc } from "@tauri-apps/api/core"
-import { caps } from "@/lib/capabilities"
 import { apiClient } from "@/lib/api-client"
 
 /** 当前项目 ID(由 App 层注入 window.__currentProjectId);未设置返回 null。 */
 export function CURRENT_PROJECT_ID(): number | null {
   return (globalThis as any).__currentProjectId ?? null
-}
-
-/** 同步取 URL:桌面用 convertFileSrc(行为不变);web 同步不可用(blob 需 async fetch)返回 null。 */
-export function fileUrlForPath(
-  absOrRelPath: string,
-  platform: "tauri" | "web" = caps.platform,
-): string | null {
-  if (platform === "tauri") return convertFileSrc(absOrRelPath)
-  return null
 }
 
 export interface BlobUrlHandle {

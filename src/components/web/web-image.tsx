@@ -5,6 +5,10 @@ import { createLogger } from "@/lib/logger"
 
 const logger = createLogger("web-image")
 
+// 外链/passthrough URL scheme(与 markdown-image-resolver PASSTHROUGH_RE 一致)。
+// 这类 URL 直接作 <img src>,不走 raw 端点(桌面 <img src> 等价;resolveMarkdownImageSrc 原样返回)。
+const PASSTHROUGH_RE = /^(https?:|data:|blob:|file:|tauri:)/i
+
 /**
  * web 下异步加载图片(raw 端点 → blob URL)。桌面走 convertFileSrc,不用此组件。
  *
@@ -54,6 +58,8 @@ export function WebImage({
   // visible 后才 fetch raw → blob(防视口外图片扇出请求)。
   useEffect(() => {
     if (!visible || pid == null) return
+    // 外链/passthrough URL(http/data/blob/tauri)直接作 src,不走 raw 端点(防 ${base}/raw/https://... 404)。
+    if (PASSTHROUGH_RE.test(relPath)) { setUrl(relPath); return }
     let revoke: (() => void) | null = null
     let cancelled = false
     fileBlobUrl(pid, relPath)

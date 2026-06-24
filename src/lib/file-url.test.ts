@@ -44,11 +44,6 @@ describe("file-url", () => {
     await expect(fileBlobUrl(42, "x.png")).rejects.toThrow()
   })
 
-  it("fileUrlForPath web 返回 null(同步降级,web 不可用)", async () => {
-    const { fileUrlForPath } = await import("./file-url")
-    expect(fileUrlForPath("/abs/a.png", "web")).toBeNull()
-  })
-
   it("CURRENT_PROJECT_ID 反映 __currentProjectId", async () => {
     const { CURRENT_PROJECT_ID } = await import("./file-url")
     ;(globalThis as any).__currentProjectId = 7
