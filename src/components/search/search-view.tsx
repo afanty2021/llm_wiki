@@ -9,6 +9,8 @@ import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 import { isImeComposing } from "@/lib/keyboard-utils"
 import { createLogger } from "@/lib/logger"
+import { caps } from "@/lib/capabilities"
+import { WebImage } from "@/components/web/web-image"
 
 const logger = createLogger("search")
 
@@ -388,11 +390,21 @@ function Lightbox({
 
         {/* Image area — flex-1 fills, object-contain preserves aspect. */}
         <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-4">
-          <img
-            src={src}
-            alt={hit.alt || ""}
-            className="max-h-full max-w-full object-contain"
-          />
+          {/* web 下 convertFileSrc 不可用:resolver 返回 project-rel,用 WebImage
+           * 异步拉 raw→blob;桌面保留原 convertFileSrc 同步逻辑。 */}
+          {caps.platform === "web" ? (
+            <WebImage
+              relPath={resolveMarkdownImageSrc(hit.url, projectPath) || hit.url}
+              alt={hit.alt || ""}
+              className="max-h-full max-w-full object-contain"
+            />
+          ) : (
+            <img
+              src={src}
+              alt={hit.alt || ""}
+              className="max-h-full max-w-full object-contain"
+            />
+          )}
         </div>
 
         {/* Action strip — single button to jump to source.
@@ -473,18 +485,28 @@ function ImageHitCard({
         {/* `loading="lazy"` matters: a project with hundreds of
          *  images would otherwise issue a request for every one
          *  on first render, even when most are scrolled offscreen. */}
-        <img
-          src={src}
-          alt={hit.alt || ""}
-          loading="lazy"
-          className="h-full w-full object-cover transition-transform group-hover:scale-105"
-          // Hide broken-image icon when convertFileSrc can't resolve
-          // (network image deleted, project moved, etc.) — leave the
-          // bg-muted placeholder visible instead of a sad 🖼️.
-          onError={(e) => {
-            ;(e.currentTarget as HTMLImageElement).style.opacity = "0"
-          }}
-        />
+        {/* web 下 convertFileSrc 不可用:resolver 返回 project-rel,用 WebImage
+         * 异步拉 raw→blob;桌面保留原 convertFileSrc 同步逻辑。 */}
+        {caps.platform === "web" ? (
+          <WebImage
+            relPath={resolveMarkdownImageSrc(hit.url, projectPath) || hit.url}
+            alt={hit.alt || ""}
+            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+          />
+        ) : (
+          <img
+            src={src}
+            alt={hit.alt || ""}
+            loading="lazy"
+            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+            // Hide broken-image icon when convertFileSrc can't resolve
+            // (network image deleted, project moved, etc.) — leave the
+            // bg-muted placeholder visible instead of a sad 🖼️.
+            onError={(e) => {
+              ;(e.currentTarget as HTMLImageElement).style.opacity = "0"
+            }}
+          />
+        )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-0.5 p-2">
         {hit.alt ? (

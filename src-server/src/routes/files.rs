@@ -29,6 +29,12 @@ pub fn file_routes() -> axum::Router<AppState> {
         .route("/:project_id/upload", axum::routing::post(upload_file)
             .layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)))
         .route("/:project_id/list", axum::routing::get(list_files))
+        // stat 显式路由，必须在 /*path 通配符之前，否则会被 read_file 吞掉
+        .route("/:project_id/stat/*path", axum::routing::get(stat_file))
+        // raw 二进制端点:返回文件原始字节(图片/视频/音频/pdf),供 web 预览。
+        // read_file 用 read_to_string 对二进制会乱码,故 raw 直接吐字节流。
+        // 静态段 raw 优先于 /*path 通配符(matchit 0.7),但顺序上仍放 stat 之后、/*path 之前。
+        .route("/:project_id/raw/*path", axum::routing::get(raw_file))
         .route("/:project_id/*path", axum::routing::get(read_file))
         .route("/:project_id/*path", axum::routing::post(write_file))
         .route("/:project_id/*path", axum::routing::delete(delete_file))
@@ -43,6 +49,9 @@ pub async fn upload_file(
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
     let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
+    // 写操作:全新项目 storage base 尚不存在 → 先创建(safe_resolve 对不存在 base
+    // canonicalize 会 500;读端点返回空/404,写端点必须建目录)。
+    storage::ensure_dir(&base)?;
 
     let mut dest_subdir = String::new();
     let mut file_data: Vec<u8> = Vec::new();
@@ -71,6 +80,16 @@ pub async fn upload_file(
         return Err(AppError::BadRequest("No file provided".into()));
     }
 
+    // 创建目标子目录(使 safe_resolve 能 canonicalize candidate 的父目录;全新项目深层
+    // 子目录尚不存在,直接 safe_resolve 会对不存在的 parent canonicalize 而 500)。
+    // 拒绝含 .. 的子目录防遍历(file_name 的遍历仍由下方 safe_resolve starts_with 拦截)。
+    let subdir_rel = dest_subdir.trim_start_matches('/');
+    if subdir_rel.contains("..") {
+        return Err(AppError::BadRequest("Invalid upload path".into()));
+    }
+    if !subdir_rel.is_empty() {
+        storage::ensure_dir(&base.join(subdir_rel))?;
+    }
     // safe_resolve 防止路径遍历
     let dest = storage::safe_resolve(&base, &format!("{}/{}", dest_subdir, file_name))?;
     if let Some(parent) = dest.parent() {
@@ -99,6 +118,11 @@ pub async fn list_files(
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
     let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
+    // 全新项目 storage base 尚不存在(未写入任何文件)→ 任何子目录(/raw/sources、/wiki 等)必然不存在。
+    // 直接返回空列表,避免 safe_resolve 对不存在的 base canonicalize 导致 500(与 stat_file/raw_file 同款短路)。
+    if !base.exists() {
+        return Ok(Json(serde_json::json!([])));
+    }
     let dir_path = if let Some(dir) = params.dir {
         if dir.is_empty() {
             base.clone()
@@ -137,15 +161,114 @@ pub async fn list_files(
     Ok(Json(serde_json::json!(nodes)))
 }
 
-// GET /api/v1/files/:project_id/{*path}
-pub async fn read_file(
+// GET /api/v1/files/:project_id/stat/*path — 文件元信息
+// 供前端 fs.ts 的 fileExists/getFileSize/getFileModifiedTime 共用。
+// 不存在的文件返回 exists=false（而非 404），便于前端区分“无文件”与“鉴权/路径错误”。
+#[derive(Serialize)]
+struct StatResp {
+    exists: bool,
+    is_dir: bool,
+    size: u64,
+    modified: i64,
+}
+
+pub async fn stat_file(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Path((project_id, path)): Path<(i32, String)>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
-    let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
+    let base = storage::project_base(state.config.storage_path(), team_id, project_id);
+
+    // 项目存储根尚不存在（全新项目未写入过任何文件）→ 目标必然不存在。
+    // 直接返回 exists=false，避免 safe_resolve 对不存在的 base canonicalize 导致 500。
+    if !base.exists() {
+        return Ok(Json(serde_json::json!(StatResp {
+            exists: false,
+            is_dir: false,
+            size: 0,
+            modified: 0,
+        })));
+    }
+
     let file_path = storage::safe_resolve(&base, &path)?;
+
+    let resp = match std::fs::metadata(&file_path) {
+        Ok(meta) => StatResp {
+            exists: true,
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+            modified: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        },
+        Err(_) => StatResp {
+            exists: false,
+            is_dir: false,
+            size: 0,
+            modified: 0,
+        },
+    };
+    Ok(Json(serde_json::json!(resp)))
+}
+
+// GET /api/v1/files/:project_id/raw/*path — 二进制原始字节(图片/视频/音频/pdf)
+// read_file 用 read_to_string 对图片/媒体会乱码,故 raw 端点直接吐字节流。
+// 鉴权与 stat_file/read_file 同款(check_project_access + safe_resolve)。
+pub async fn raw_file(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path((project_id, path)): Path<(i32, String)>,
+) -> Result<axum::response::Response, AppError> {
+    let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
+    let base = storage::project_base(state.config.storage_path(), team_id, project_id);
+    // 全新项目 storage base 尚不存在 → 目标必然不存在,直接 404(避免 safe_resolve 对
+    // 不存在 base canonicalize 导致 500,与 stat_file 同款短路)。
+    if !base.exists() {
+        return Err(AppError::ResourceNotFound("file".into()));
+    }
+    let full = storage::safe_resolve(&base, &path)?;
+    let bytes = tokio::fs::read(&full)
+        .await
+        .map_err(|_| AppError::ResourceNotFound("file".into()))?;
+    let mime = mime_guess::from_path(&full)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string();
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", mime)
+        .header("x-content-type-options", "nosniff") // 防 MIME sniffing(服务用户上传字节)
+        .header("cache-control", "private, max-age=3600")
+        .body(axum::body::Body::from(bytes))
+        .unwrap())
+}
+
+// GET /api/v1/files/:project_id/read?path=<project-relative> — 读文本文件内容。
+// path 取 query(apiClient.readFile URL /read?path=),非 URL *path(="read",仅占位);
+// 早期用 URL *path 导致永远读 base/read(query path 被忽略),web 文件读取全坏。
+#[derive(Deserialize)]
+struct ReadQuery {
+    path: String,
+}
+
+pub async fn read_file(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path((project_id, _)): Path<(i32, String)>,
+    Query(q): Query<ReadQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
+    let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
+    // 全新项目 storage base 尚不存在 → 目标必然不存在,直接 404(避免 safe_resolve 对
+    // 不存在 base canonicalize 导致 500,与 stat_file/raw_file/list_files 同款短路)。
+    if !base.exists() {
+        return Err(AppError::ResourceNotFound("File not found".into()));
+    }
+    let file_path = storage::safe_resolve(&base, &q.path)?;
 
     if !file_path.exists() {
         return Err(AppError::ResourceNotFound("File not found".into()));
@@ -164,7 +287,7 @@ pub async fn read_file(
     };
 
     Ok(Json(serde_json::json!({
-        "path": path,
+        "path": q.path,
         "content": content,
         "extension": ext,
     })))
@@ -213,39 +336,63 @@ fn extract_spreadsheet(path: &PathBuf) -> Result<String, AppError> {
 }
 
 // POST /api/v1/files/:project_id/{*path} — 写入文件
+// 目标路径取自 body(WriteRequest.path);URL *path 仅占位(="write"),前端 apiClient.writeFile
+// 发 body {path, contents}。早期实现误用 URL *path,写到 base/write(body path 被忽略)。
 #[derive(Deserialize)]
 pub struct WriteRequest {
+    pub path: String,
     pub contents: String,
 }
 
 pub async fn write_file(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Path((project_id, path)): Path<(i32, String)>,
+    Path((project_id, _)): Path<(i32, String)>,
     Json(payload): Json<WriteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
     let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    let file_path = storage::safe_resolve(&base, &path)?;
-
-    if let Some(parent) = file_path.parent() {
-        storage::ensure_dir(parent)?;
+    // 写操作:全新项目 storage base 尚不存在 → 先创建。
+    storage::ensure_dir(&base)?;
+    // 目标路径取自 body(payload.path);拒绝含 .. 防遍历,先建父目录使 safe_resolve 能 canonicalize
+    // (深层新路径的 parent 不存在时 safe_resolve 会 500,与 upload 同款)。
+    let path_rel = payload.path.trim_start_matches('/');
+    if path_rel.contains("..") {
+        return Err(AppError::BadRequest("Invalid write path".into()));
     }
+    if !path_rel.is_empty() {
+        if let Some(parent) = base.join(path_rel).parent() {
+            storage::ensure_dir(parent)?;
+        }
+    }
+    let file_path = storage::safe_resolve(&base, &payload.path)?;
     std::fs::write(&file_path, &payload.contents)
         .map_err(|e| AppError::IoError(e))?;
 
-    Ok(Json(serde_json::json!({"status": "ok"})))
+    Ok(Json(serde_json::json!({"status": "ok", "path": payload.path})))
 }
 
-// DELETE /api/v1/files/:project_id/{*path}
+// DELETE /api/v1/files/:project_id/{*path} — 目标 path 取自 body(DeleteRequest.path),
+// URL *path 仅占位(="delete");与 read/write 一致,前端 apiClient.deleteFile 发 body {path}。
+#[derive(Deserialize)]
+struct DeleteRequest {
+    path: String,
+}
+
 pub async fn delete_file(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Path((project_id, path)): Path<(i32, String)>,
+    Path((project_id, _)): Path<(i32, String)>,
+    Json(payload): Json<DeleteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id, _) = check_project_access_with_role(&state, &headers, project_id, RequiredRole::Admin).await?;
     let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    let file_path = storage::safe_resolve(&base, &path)?;
+    // 全新项目 storage base 尚不存在 → 目标必然不存在,直接 404(避免 safe_resolve 对
+    // 不存在 base canonicalize 导致 500,与读端点同款短路)。
+    if !base.exists() {
+        return Err(AppError::ResourceNotFound("File not found".into()));
+    }
+    let file_path = storage::safe_resolve(&base, &payload.path)?;
 
     if !file_path.exists() {
         return Err(AppError::ResourceNotFound("File not found".into()));

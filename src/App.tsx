@@ -19,7 +19,9 @@ import type { WikiProject } from "@/types/wiki"
 import { useAuthStore } from "@/stores/auth-store"
 import { LoginPage } from "@/components/auth/LoginPage"
 import { RegisterPage } from "@/components/auth/RegisterPage"
+import { ProjectPicker } from "@/components/web/project-picker"
 import { createLogger } from "@/lib/logger"
+import { caps } from "@/lib/capabilities"
 
 const logger = createLogger("app")
 
@@ -43,7 +45,10 @@ function App() {
   // Set up auto-save and clip watcher once on mount
   useEffect(() => {
     setupAutoSave()
-    startClipWatcher()
+    // 桌面 only:clip-watcher 轮询本地 clip server,web 无此能力
+    if (caps.canWatchClipboard) {
+      startClipWatcher()
+    }
   }, [])
 
   // Dev-only helper for visually testing the update-banner UX.
@@ -263,29 +268,36 @@ function App() {
         } catch (err) {
           logger.warn("failed to hydrate close behavior", { error: String(err) })
         }
-        try {
-          const currentAutostart = await isAutostartEnabled()
-          if (savedGeneral.autostart && !currentAutostart) {
-            await enableAutostart()
-          } else if (!savedGeneral.autostart && currentAutostart) {
-            await disableAutostart()
+        // 桌面 only:开机自启同步,web 无此能力(canAutoStart=false 跳过)
+        if (caps.canAutoStart) {
+          try {
+            const currentAutostart = await isAutostartEnabled()
+            if (savedGeneral.autostart && !currentAutostart) {
+              await enableAutostart()
+            } else if (!savedGeneral.autostart && currentAutostart) {
+              await disableAutostart()
+            }
+          } catch (err) {
+            logger.warn("failed to sync autostart", { error: String(err) })
           }
-        } catch (err) {
-          logger.warn("failed to sync autostart", { error: String(err) })
         }
         const savedLang = await loadLanguage()
         if (savedLang) {
           await i18n.changeLanguage(savedLang)
         }
-        const lastProject = await getLastProject()
-        if (lastProject) {
-          try {
-            const proj = await openProject(lastProject.path)
-            await handleProjectOpened(proj)
-          } catch {
-            // Last project no longer valid
+        if (caps.platform === "tauri") {
+          const lastProject = await getLastProject()
+          if (lastProject) {
+            try {
+              const proj = await openProject(lastProject.path)
+              await handleProjectOpened(proj)
+            } catch {
+              // Last project no longer valid
+            }
           }
         }
+        // web:auth 已由现有 isAuthenticated 门控(Login/Register 就绪);
+        // 项目选择 UI 留期2,期1 不自动 openProject(无本地路径)。
       } catch {
         // ignore init errors
       } finally {
@@ -312,6 +324,21 @@ function App() {
     return <LoginPage onNavigate={setAuthPage} />
   }
 
+  // web:登录后强制走 team→project 选择器（桌面走本地 openProject，零回归）。
+  // __currentProjectId 缺空时显示选择器；选中后立即写入并经 handleProjectOpened 加载。
+  if (caps.platform === "web" && (window as any).__currentProjectId == null) {
+    return (
+      <ProjectPicker
+        onPick={async (p) => {
+          // WikiProject.id 是 string（前端），ProjectResponse.id 是 number（后端），String 强转。
+          // __currentProjectId 由 handleProjectOpened 内部设（proj.id），此处不重复写。
+          const proj = { id: String(p.id), path: "", name: p.name } as WikiProject
+          await handleProjectOpened(proj)
+        }}
+      />
+    )
+  }
+
   async function handleProjectOpened(proj: WikiProject) {
     // Clear all per-project state BEFORE loading new project data
     // to prevent cross-project contamination. MUST be awaited so the
@@ -320,32 +347,45 @@ function App() {
     const { resetProjectState } = await import("@/lib/reset-project-state")
     await resetProjectState()
 
+    // __currentProjectId 供 web 的 fs HTTP / streamViaServer / file-url 消费。web 注入 number
+    // (后端 as_i64/Path<i32> 解析;WikiProject.id 是 string,web 下 String(p.id));桌面保留
+    // proj.id(桌面不读此值,走 invoke)。streamViaServer 仍 Number() 防御(双保险)。
+    ;(window as any).__currentProjectId = caps.platform === "web" ? Number(proj.id) : proj.id
     setProject(proj)
-    const projectOutputLang = await loadOutputLanguage(proj.id)
+    // web 下 project-store(@tauri-apps/plugin-store)不可用 → outputLanguage 用默认 "auto";
+    // 桌面从 app-state.json 读 per-project 语言。
+    const projectOutputLang = caps.platform === "web" ? null : await loadOutputLanguage(proj.id)
     useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")
     setSelectedFile(null)
     setActiveView("wiki")
     // Bump data version so any cached graphs/views invalidate
     useWikiStore.getState().bumpDataVersion()
-    await saveLastProject(proj)
+    // web 无 app-state.json,跳过 last-project 持久化(桌面专属;web 每次走 team/project picker)。
+    if (caps.platform !== "web") {
+      await saveLastProject(proj)
+    }
 
     // Restore ingest queue (resume interrupted tasks). Keyed by the
     // project's stable UUID so the queue still finds the right project
     // even if the filesystem path changed since the task was enqueued.
     // Await this before starting file sync: watcher events for raw/sources
     // may enqueue ingest tasks and require an active project queue.
-    try {
-      const { restoreQueue } = await import("@/lib/ingest-queue")
-      await restoreQueue(proj.id, proj.path)
-    } catch (err) {
-      logger.error("failed to restore ingest queue", { error: String(err) })
+    // 桌面 only:恢复本地持久化的摄取/去重队列。web 摄取走 server(triggerIngest + poll
+    // getIngestJob),队列状态在 server 端,不读本地 .llm-wiki/*.json,跳过避免无谓请求。
+    if (caps.platform !== "web") {
+      try {
+        const { restoreQueue } = await import("@/lib/ingest-queue")
+        await restoreQueue(proj.id, proj.path)
+      } catch (err) {
+        logger.error("failed to restore ingest queue", { error: String(err) })
+      }
+      // Same handshake for the dedup-merge queue.
+      import("@/lib/dedup-queue").then(({ restoreQueue }) => {
+        restoreQueue(proj.id, proj.path).catch((err) =>
+          logger.error("failed to restore dedup queue", { error: String(err) })
+        )
+      })
     }
-    // Same handshake for the dedup-merge queue.
-    import("@/lib/dedup-queue").then(({ restoreQueue }) => {
-      restoreQueue(proj.id, proj.path).catch((err) =>
-        logger.error("failed to restore dedup queue", { error: String(err) })
-      )
-    })
     // Load per-project scheduled import config
     try {
       const savedScheduledImport = await loadScheduledImportConfig(proj.path)
@@ -393,44 +433,53 @@ function App() {
         stopProjectFileSync().catch(() => {})
       }
     }).catch((err) => logger.error("failed to configure project file sync", { error: String(err) }))
-    // Notify local clip server of the current project + all recent projects
-    fetch("http://127.0.0.1:19827/project", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: proj.path }),
-    }).catch(() => {})
-
-    // Send all recent projects to clip server for extension project picker
-    getRecentProjects().then((recents) => {
-      const projects = recents.map((p) => ({ name: p.name, path: p.path }))
-      fetch("http://127.0.0.1:19827/projects", {
+    // 桌面 only:通知本地 clip server(Web Clipper 扩展用)。web 无本地 clip server,
+    // fetch 必然 ERR_CONNECTION_REFUSED;getRecentProjects 亦走桌面 project-store。web 下整体跳过。
+    if (caps.platform !== "web") {
+      fetch("http://127.0.0.1:19827/project", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projects }),
+        body: JSON.stringify({ path: proj.path }),
       }).catch(() => {})
-    }).catch(() => {})
+
+      // Send all recent projects to clip server for extension project picker
+      getRecentProjects().then((recents) => {
+        const projects = recents.map((p) => ({ name: p.name, path: p.path }))
+        fetch("http://127.0.0.1:19827/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projects }),
+        }).catch(() => {})
+      }).catch(() => {})
+    }
     try {
       const tree = await listDirectory(proj.path)
       setFileTree(tree)
     } catch (err) {
       logger.error("failed to load file tree", { error: String(err) })
     }
-    // Load persisted review items
+    // Load review items(桌面 localStorage;web 从服务器 HTTP)
     try {
-      const savedReview = await loadReviewItems(proj.path)
-      if (savedReview.length > 0) {
-        useReviewStore.getState().setItems(savedReview)
+      if (caps.platform === "web") {
+        await useReviewStore.getState().loadReviewsFromServer(Number(proj.id))
+      } else {
+        const savedReview = await loadReviewItems(proj.path)
+        if (savedReview.length > 0) {
+          useReviewStore.getState().setItems(savedReview)
+        }
       }
     } catch {
       // ignore, start fresh
     }
-    // Load persisted lint items
+    // Load persisted lint items(桌面;web lint 视图隐藏,不加载本地 lint.json)
     useLintStore.getState().setItems([])
-    try {
-      const savedLint = await loadLintItems(proj.path)
-      useLintStore.getState().setItems(savedLint)
-    } catch {
-      useLintStore.getState().setItems([])
+    if (caps.platform !== "web") {
+      try {
+        const savedLint = await loadLintItems(proj.path)
+        useLintStore.getState().setItems(savedLint)
+      } catch {
+        useLintStore.getState().setItems([])
+      }
     }
     // Load persisted chat history
     try {

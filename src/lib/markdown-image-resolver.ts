@@ -36,6 +36,7 @@
  */
 import { convertFileSrc } from "@tauri-apps/api/core"
 import { normalizePath } from "@/lib/path-utils"
+import { caps } from "@/lib/capabilities"
 
 const PASSTHROUGH_RE = /^(https?:|data:|blob:|file:|tauri:)/i
 
@@ -51,6 +52,34 @@ function isInsideProject(path: string, projectPath: string): boolean {
   const root = comparePath(trimTrailingSlash(normalizePath(projectPath)))
   const candidate = comparePath(trimTrailingSlash(normalizePath(path)))
   return candidate === root || candidate.startsWith(`${root}/`)
+}
+
+/**
+ * 绝对路径 → project-relative(web 用)。
+ * web 下 raw 端点以 `path 相对 project root` 取文件,故解析后的绝对路径
+ * 必须剥去 project 前缀,得到 project-relative 交给 WebImage/raw。
+ * 不在 project 内的路径原样返回(raw 多半 404,保留诊断信息)。
+ */
+function absoluteToProjectRel(absolute: string, projectPath: string): string {
+  const a = normalizePath(absolute).replace(/^\/+/, "").replace(/\\/g, "/")
+  const p = normalizePath(projectPath).replace(/^\/+/, "").replace(/\\/g, "/")
+  // comparePath 处理 Windows 盘符大小写不敏感(与 isInsideProject 一致),避免大小写差异导致
+  // 不剥前缀 → raw 端点收到完整绝对路径 → 404。slice 用原始 a/p 保留实际路径大小写。
+  const ca = comparePath(a)
+  const cp = comparePath(p)
+  if (ca.startsWith(cp + "/")) return a.slice(p.length + 1)
+  if (ca === cp) return ""
+  return a
+}
+
+/**
+ * 解析后的 project-内绝对路径 → 桌面 convertFileSrc URL / web project-relative。
+ * 桌面行为零变化;web 返回 project-rel 供 WebImage 传给 raw 端点拉 blob。
+ */
+function resolvedToSrc(absolute: string, projectPath: string): string {
+  return caps.platform === "web"
+    ? absoluteToProjectRel(absolute, projectPath)
+    : convertFileSrc(absolute)
 }
 
 function decodePathSrc(src: string): string {
@@ -102,9 +131,13 @@ export function resolveMarkdownImageSrc(
   if (!rawSrc) return rawSrc
   if (PASSTHROUGH_RE.test(rawSrc)) return rawSrc
 
-  if (!projectPath) return rawSrc
+  // web 下 projectPath 为空(ProjectPicker 构造 {path:""}),仍按 wiki/ 约定解析出
+  // project-relative 供 raw 端点:isInsideProject 对 root="" 的绝对 path 放行(candidate
+  // startsWith "/"),absoluteToProjectRel strip 前导 / 得 project-rel。仅桌面无项目时短路
+  // (convertFileSrc 需绝对路径)。
+  if (!projectPath && caps.platform !== "web") return rawSrc
 
-  const pp = normalizePath(projectPath)
+  const pp = normalizePath(projectPath ?? "")
   const isAbsolute =
     rawSrc.startsWith("/") || /^[a-zA-Z]:/.test(rawSrc) || rawSrc.startsWith("\\\\")
 
@@ -116,7 +149,7 @@ export function resolveMarkdownImageSrc(
   // through via PASSTHROUGH_RE above.
   if (isAbsolute) {
     const absolute = collapsePath(normalizePath(decodePathSrc(rawSrc)))
-    return isInsideProject(absolute, pp) ? convertFileSrc(absolute) : rawSrc
+    return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, pp) : rawSrc
   }
 
   // Strip a leading `./` for cleanliness; treat `media/foo.png` and
@@ -163,7 +196,7 @@ export function resolveMarkdownImageSrc(
       dir.startsWith("/") || /^[a-zA-Z]:/.test(dir) || dir.startsWith("\\\\")
     const baseDir = dirIsAbsolute ? dir : `${pp}/${dir}`
     const absolute = collapsePath(`${baseDir.replace(/\/+$/, "")}/${cleaned}`)
-    return isInsideProject(absolute, pp) ? convertFileSrc(absolute) : rawSrc
+    return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, pp) : rawSrc
   }
 
   // Fallback: resolve as wiki-root-relative. Image references in
@@ -171,5 +204,5 @@ export function resolveMarkdownImageSrc(
   // so the path is stable regardless of page depth, and callers
   // without a file context (chat replies) rely on it too.
   const absolute = collapsePath(`${pp}/wiki/${wikiRootMediaPath}`)
-  return isInsideProject(absolute, pp) ? convertFileSrc(absolute) : rawSrc
+  return isInsideProject(absolute, pp) ? resolvedToSrc(absolute, pp) : rawSrc
 }

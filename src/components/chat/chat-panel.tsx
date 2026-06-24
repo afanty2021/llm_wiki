@@ -13,6 +13,7 @@ import { listDirectory, readFile, deleteFile } from "@/commands/fs"
 import { searchWiki } from "@/lib/search"
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
 import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
+import { caps } from "@/lib/capabilities"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
 import { computeContextBudget } from "@/lib/context-budget"
@@ -216,7 +217,10 @@ export function ChatPanel() {
           ].join("\n"),
         })
         // Skip retrieval; queryRefs stays empty so no "Sources" chip is shown.
-      } else if (project) {
+      } else if (project && caps.platform !== "web") {
+        // web 跳过前端 retrieval:retrieval 读 wiki pages 经桌面 fs,web 不可用;
+        // web chat 经 streamViaServer(后端自建 system prompt),无 wiki 上下文(降级,
+        // follow-up:HTTP retrieval 通路)。queryRefs 空 → 无 Sources chip。
         const pp = normalizePath(project.path)
         const dataVersion = useWikiStore.getState().dataVersion
 
@@ -622,7 +626,7 @@ export function ChatPanel() {
               </div>
             </div>
 
-            {showWriteButton && (
+            {showWriteButton && caps.platform === "tauri" && (
               <div className="border-t px-3 py-2">
                 <Button
                   variant="outline"

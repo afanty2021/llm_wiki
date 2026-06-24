@@ -9,6 +9,7 @@ import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { checkForUpdates, toLatestReleaseUrl } from "@/lib/update-check"
 import { saveUpdateCheckState } from "@/lib/project-store"
 import { createLogger } from "@/lib/logger"
+import { caps } from "@/lib/capabilities"
 
 const logger = createLogger("about")
 
@@ -27,28 +28,33 @@ export function AboutSection() {
 
   useEffect(() => {
     let alive = true
-    clipServerStatus()
-      .then((s) => {
-        if (alive) setClipStatus(s)
-      })
-      .catch(() => {
-        if (alive) setClipStatus("unknown")
-      })
-    apiServerStatus()
-      .then((s) => {
-        if (alive) setApiStatus(s)
-      })
-      .catch(() => {
-        if (alive) setApiStatus("unknown")
-      })
-    fetch(API_SERVER_HEALTH_URL)
-      .then((res) => res.json() as Promise<ApiHealth>)
-      .then((value) => {
-        if (alive) setApiHealth(value)
-      })
-      .catch(() => {
-        if (alive) setApiHealth(null)
-      })
+    // clip server(api-server section)是桌面专属能力,web 下不轮询。
+    if (caps.canWatchClipboard) {
+      clipServerStatus()
+        .then((s) => {
+          if (alive) setClipStatus(s)
+        })
+        .catch(() => {
+          if (alive) setClipStatus("unknown")
+        })
+    }
+    if (caps.platform === "tauri") {
+      apiServerStatus()
+        .then((s) => {
+          if (alive) setApiStatus(s)
+        })
+        .catch(() => {
+          if (alive) setApiStatus("unknown")
+        })
+      fetch(API_SERVER_HEALTH_URL)
+        .then((res) => res.json() as Promise<ApiHealth>)
+        .then((value) => {
+          if (alive) setApiHealth(value)
+        })
+        .catch(() => {
+          if (alive) setApiHealth(null)
+        })
+    }
     return () => {
       alive = false
     }
@@ -108,8 +114,13 @@ export function AboutSection() {
   })()
   const rows: Array<{ label: string; value: string; mono?: boolean }> = [
     { label: t("settings.sections.about.version"), value: `v${__APP_VERSION__}`, mono: true },
-    { label: t("settings.sections.about.clipServer"), value: `${clipStatus}  @  127.0.0.1:19827`, mono: true },
-    { label: t("settings.sections.about.apiServer"), value: `${apiStatusDisplay}  @  127.0.0.1:${API_SERVER_PORT}`, mono: true },
+    // clip server / api server 是桌面专属本地服务,web 下隐藏对应状态行。
+    ...(caps.canWatchClipboard
+      ? [{ label: t("settings.sections.about.clipServer"), value: `${clipStatus}  @  127.0.0.1:19827`, mono: true as const }]
+      : []),
+    ...(caps.platform === "tauri"
+      ? [{ label: t("settings.sections.about.apiServer"), value: `${apiStatusDisplay}  @  127.0.0.1:${API_SERVER_PORT}`, mono: true as const }]
+      : []),
   ]
 
   // About panel = user-initiated navigation. They came here on

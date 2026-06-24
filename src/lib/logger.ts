@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { caps } from "@/lib/capabilities";
 import type { FrontendLogEntry, LogLevel, Logger } from "./logger-types";
 
 /** 全局日志级别缓存 */
@@ -99,6 +100,8 @@ async function flushBatch(): Promise<void> {
     batchTimer = null;
   }
 
+  // web 无 Tauri 日志后端 → 跳过 invoke(日志已在浏览器 console 输出);仅桌面批量发往后端。
+  if (caps.platform === "web") return
   try {
     await invoke("send_log", { logs: batch });
   } catch (error) {

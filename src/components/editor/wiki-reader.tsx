@@ -12,6 +12,8 @@ import { detectLanguage } from "@/lib/detect-language"
 import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
 import { useWikiStore } from "@/stores/wiki-store"
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
+import { caps } from "@/lib/capabilities"
+import { WebImage } from "@/components/web/web-image"
 
 interface WikiReaderProps {
   body: string
@@ -131,20 +133,33 @@ export function WikiReader({ body, filePath }: WikiReaderProps) {
               {children}
             </h3>
           ),
-          img: ({ src, alt, ...props }) => (
-            <img
-              src={
-                typeof src === "string"
-                  ? resolveMarkdownImageSrc(src, projectPath, currentFileDir)
-                  : undefined
-              }
-              data-mdsrc={typeof src === "string" ? src : undefined}
-              alt={alt ?? ""}
-              className="max-w-full rounded border border-border/40"
-              loading="lazy"
-              {...props}
-            />
-          ),
+          img: ({ src, alt, ...props }) => {
+            // web 下 convertFileSrc 不可用:resolver 返回 project-rel,
+            // 用 WebImage 异步拉 raw→blob;桌面保留原 convertFileSrc 同步逻辑。
+            if (caps.platform === "web" && typeof src === "string") {
+              return (
+                <WebImage
+                  relPath={resolveMarkdownImageSrc(src, projectPath, currentFileDir)}
+                  alt={alt ?? ""}
+                  className="max-w-full rounded border border-border/40"
+                />
+              )
+            }
+            return (
+              <img
+                src={
+                  typeof src === "string"
+                    ? resolveMarkdownImageSrc(src, projectPath, currentFileDir)
+                    : undefined
+                }
+                data-mdsrc={typeof src === "string" ? src : undefined}
+                alt={alt ?? ""}
+                className="max-w-full rounded border border-border/40"
+                loading="lazy"
+                {...props}
+              />
+            )
+          },
           table: ({ children, ...props }) => (
             <div className="my-2 overflow-x-auto rounded border border-border">
               <table className="w-full border-collapse text-xs" {...props}>

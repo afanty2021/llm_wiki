@@ -1,5 +1,6 @@
 import { loadTheme } from "@/lib/project-store"
 import { getCurrentWindow, type Theme as NativeTheme } from "@tauri-apps/api/window"
+import { caps } from "@/lib/capabilities"
 
 const logger = createLogger("theme")
 import { createLogger } from "@/lib/logger"
@@ -14,12 +15,9 @@ function systemPrefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches
 }
 
-function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window || "__TAURI__" in window
-}
-
 function syncNativeWindowTheme(resolved: NativeTheme): void {
-  if (!isTauriRuntime()) return
+  // 仅桌面壳可调原生 window API;web 跳过
+  if (caps.platform !== "tauri") return
   const win = getCurrentWindow()
   const background = resolved === "dark" ? "#27282b" : "#ffffff"
   void win.setTheme(resolved).catch((err) => {

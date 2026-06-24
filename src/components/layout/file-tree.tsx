@@ -7,6 +7,7 @@ import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
 import { openProjectFolder } from "@/commands/fs"
 import { createLogger } from "@/lib/logger"
+import { caps } from "@/lib/capabilities"
 
 const logger = createLogger("file-tree")
 
@@ -103,19 +104,22 @@ export function FileTree() {
           ))}
         </div>
       </ScrollArea>
-      <div className="shrink-0 border-t p-2">
-        <button
-          type="button"
-          onClick={() => void handleOpenProjectFolder()}
-          className="flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-accent-foreground"
-          title={project.path}
-        >
-          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">
-            {t("fileTree.openProjectFolder", { defaultValue: "Open project folder" })}
-          </span>
-        </button>
-      </div>
+      {/* 桌面 only:web 无本地文件夹概念,隐藏 openProjectFolder 按钮 */}
+      {caps.platform === "tauri" && (
+        <div className="shrink-0 border-t p-2">
+          <button
+            type="button"
+            onClick={() => void handleOpenProjectFolder()}
+            className="flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-accent-foreground"
+            title={project.path}
+          >
+            <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">
+              {t("fileTree.openProjectFolder", { defaultValue: "Open project folder" })}
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   )
 }

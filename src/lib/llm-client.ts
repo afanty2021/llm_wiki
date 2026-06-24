@@ -3,6 +3,8 @@ import { isAzureOpenAiEndpoint } from "@/lib/azure-openai"
 import { getProviderConfig, type RequestOverrides } from "./llm-providers"
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
 import { countReasoningCharsInLine, extractReasoningTextFromLine } from "./reasoning-detector"
+import { caps } from "@/lib/capabilities"
+import { API_BASE } from "@/lib/api-client"
 
 export type { ChatMessage, ContentBlock, RequestOverrides } from "./llm-providers"
 export { isFetchNetworkError } from "./tauri-fetch"
@@ -67,6 +69,13 @@ export async function streamChat(
    */
   requestOverrides?: RequestOverrides,
 ): Promise<void> {
+  // Layer 5:web(纯浏览器)走 src-server 代理(POST /api/v1/chat/stream),
+  // 服务器按 project_id 取 team provider 直通上游标准 OpenAI SSE,前端不持 key。
+  // 桌面(tauri)继续走下方既有 HTTP/invoke 路径,行为零变化。
+  if (caps.platform === "web") {
+    return streamViaServer(config, messages, callbacks, signal)
+  }
+
   const { onToken, onDone, onError } = callbacks
 
   // Claude Code CLI uses a subprocess transport (stdin/stdout), not
@@ -286,6 +295,139 @@ export async function streamChat(
       // dropped, server closed early, network blip). Same message
       // regardless of whether the webview is WebKit or Chromium.
       onError(new Error("Connection lost during streaming. Try again."))
+      return
+    }
+    onError(err instanceof Error ? err : new Error(String(err)))
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+/** web 通路:fetch POST /api/v1/chat/stream + Authorization + ReadableStream 逐行解析。
+ *  服务器按 project_id 查 team provider(见 chat.rs stream_chat_raw),前端不持 key。
+ *  复用桌面版的逐行解析(parseLines)与 reasoning 检测(reasoning-detector),
+ *  服务器侧约束 provider 恒为 OpenAI-compatible,故用 openai parseStream 单层解析。 */
+async function streamViaServer(
+  _config: LlmConfig,
+  messages: import("./llm-providers").ChatMessage[],
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+  isRetry = false,
+): Promise<void> {
+  const { onToken, onDone, onError } = callbacks
+  // __currentProjectId 由 handleProjectOpened 注入(WikiProject.id,string,web 下 String(p.id))。
+  // chat.rs 用 as_i64 解析 project_id,字符串会 None→unwrap_or(0)→check_project_access(0) 4xx,
+  // 故 JSON body 前转 number(fs/file-url 仅 URL 拼接 string 可,唯 chat JSON body 需 number)。
+  const projectId = Number(
+    (typeof window !== "undefined" && (window as any).__currentProjectId) || 0,
+  )
+  const { apiClient } = await import("@/lib/api-client")
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...apiClient.authHeaders(),
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ project_id: projectId, messages }),
+      signal,
+    })
+  } catch (err) {
+    if (signal?.aborted) {
+      onDone()
+      return
+    }
+    onError(err instanceof Error ? err : new Error(String(err)))
+    return
+  }
+
+  if (!response.ok) {
+    // 401:access token(5min)过期 → refreshSession 续期后重试一次。流式响应尚未读 body,
+    // 可安全 re-fetch。避免长效 chat 会话因 token 过期断流(其他请求经 request() 自动 refresh,
+    // 流式 fetch 不经 request(),需手动 refresh)。isRetry 防递归(refresh 本身失败则 Session expired)。
+    if (response.status === 401 && !isRetry) {
+      try {
+        await apiClient.refreshSession()
+        return streamViaServer(_config, messages, callbacks, signal, true)
+      } catch {
+        onError(new Error("Session expired"))
+        return
+      }
+    }
+    const detail = await response.text().catch(() => "")
+    onError(new Error(`chat upstream HTTP ${response.status}: ${detail}`))
+    return
+  }
+  if (!response.body) {
+    onError(new Error("chat stream body null"))
+    return
+  }
+
+  // 逐行解析复用桌面版 OpenAI-compatible 通路 + reasoning 检测(DeepSeek-R1 等思考模型)。
+  // getProviderConfig 用顶层静态 import(测试不 mock ./llm-providers,无需动态隔离)。
+  const providerConfig = getProviderConfig({
+    provider: "openai",
+    apiKey: "",
+    model: "",
+  } as LlmConfig)
+  const reader = response.body.getReader()
+  let lineBuffer = ""
+  let contentCharsEmitted = 0
+  let reasoningCharsObserved = 0
+  const REASONING_DIAGNOSTIC_THRESHOLD = 200
+  const recordToken = (text: string) => {
+    contentCharsEmitted += text.length
+    onToken(text)
+  }
+  const recordReasoning = (line: string) => {
+    for (const part of extractReasoningTextFromLine(line)) {
+      callbacks.onReasoningToken?.(part)
+    }
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        if (lineBuffer.trim()) {
+          const trimmed = lineBuffer.trim()
+          reasoningCharsObserved += countReasoningCharsInLine(trimmed)
+          recordReasoning(trimmed)
+          const token = providerConfig.parseStream(trimmed)
+          if (token !== null) recordToken(token)
+        }
+        break
+      }
+      const [lines, remaining] = parseLines(value, lineBuffer)
+      lineBuffer = remaining
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        reasoningCharsObserved += countReasoningCharsInLine(trimmed)
+        recordReasoning(trimmed)
+        const token = providerConfig.parseStream(trimmed)
+        if (token !== null) recordToken(token)
+      }
+    }
+    // 只思考无答案的诊断(与桌面版 streamChat 一致)
+    if (
+      contentCharsEmitted === 0 &&
+      reasoningCharsObserved >= REASONING_DIAGNOSTIC_THRESHOLD
+    ) {
+      onError(
+        new Error(
+          `Model produced ${reasoningCharsObserved.toLocaleString()} chars of reasoning but no content. Try shorter input, increase max_tokens, or switch model.`,
+        ),
+      )
+      return
+    }
+    onDone()
+  } catch (err) {
+    if (signal?.aborted) {
+      onDone()
       return
     }
     onError(err instanceof Error ? err : new Error(String(err)))

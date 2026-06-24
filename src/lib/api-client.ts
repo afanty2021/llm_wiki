@@ -1,9 +1,16 @@
 import type {
   ApiError, LoginRequest, RegisterRequest, AuthResponse,
   UserResponse, TeamResponse, ProjectResponse, SearchResponse, GraphData,
+  FileStat, ReviewItem, ResolveReviewBody, ResearchTask, EnqueueResearchResponse,
+  IngestJob, TriggerIngestResponse, LlmProvider, SearchProvider,
 } from "./api-types"
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080"
+/** 解析 API base。?? 而非 ||:空串(web 同源)是合法值,|| 会 falsy 回退 localhost 破坏同源。
+ *  undefined(桌面无 env)→ 默认 localhost:8080(连 src-server);""(web 同源)→ 相对 fetch。 */
+export function resolveApiBase(envValue: string | undefined): string {
+  return envValue ?? "http://localhost:8080"
+}
+export const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE_URL)
 
 class ApiClient {
   private accessToken: string | null = null
@@ -95,6 +102,12 @@ class ApiClient {
     }
   }
 
+  /** 公开刷新 access token(供 streamViaServer 等非 request<T> 的 fetch 场景 401 时续期)。
+   *  复用私有 refreshAccessToken(POST /auth/refresh + 更新 accessToken/localStorage)。 */
+  async refreshSession(): Promise<void> {
+    await this.refreshAccessToken()
+  }
+
   // === Auth ===
   async login(req: LoginRequest): Promise<AuthResponse> {
     const data = await this.request<AuthResponse>("POST", "/api/v1/auth/login", req)
@@ -139,9 +152,13 @@ class ApiClient {
     return this.request<ProjectResponse>("POST", "/api/v1/projects", { name, team_id: teamId })
   }
 
-  async listProjects(teamId?: number): Promise<{ items: ProjectResponse[]; next_cursor?: string; has_more: boolean }> {
-    const params = teamId ? `?team_id=${teamId}` : ""
-    return this.request("GET", `/api/v1/projects${params}`)
+  async listProjects(teamId?: number, cursor?: string, limit?: number): Promise<{ items: ProjectResponse[]; next_cursor?: string; has_more: boolean }> {
+    const params = new URLSearchParams()
+    if (teamId != null) params.set("team_id", String(teamId))
+    if (cursor) params.set("cursor", cursor)
+    if (limit != null) params.set("limit", String(limit))
+    const qs = params.toString()
+    return this.request("GET", `/api/v1/projects${qs ? `?${qs}` : ""}`)
   }
 
   // === Search ===
@@ -172,6 +189,100 @@ class ApiClient {
 
   async deleteFile(projectId: number, path: string): Promise<void> {
     await this.request("POST", `/api/v1/files/${projectId}/delete`, { path })
+  }
+
+  // === Files: stat / upload ===
+  async statFile(projectId: number, path: string): Promise<FileStat> {
+    return this.request("GET", `/api/v1/files/${projectId}/stat/${encodeURI(path)}`)
+  }
+
+  /** 当前 API base(桌面为 http://localhost:8080;web 同源为 "")。供 fileBlobUrl 等外部 fetch 拼 URL。 */
+  get base(): string {
+    return API_BASE
+  }
+
+  /** 当前鉴权头(供 multipart/流式等不走 request<T> 的 fetch 场景复用,避免外部 as any 读 private)。 */
+  authHeaders(): Record<string, string> {
+    const h: Record<string, string> = {}
+    if (this.accessToken) h["Authorization"] = `Bearer ${this.accessToken}`
+    return h
+  }
+
+  async uploadFile(
+    projectId: number,
+    file: File,
+    dir = "",
+  ): Promise<{ name: string; path: string; size: number }> {
+    const form = new FormData()
+    form.append("path", dir)
+    form.append("file", file)
+    // multipart 不能设 Content-Type(浏览器自动加 boundary),手动 fetch + 复用 authHeaders
+    const resp = await fetch(`${API_BASE}/api/v1/files/${projectId}/upload`, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: form,
+    })
+    if (!resp.ok) throw new Error(`upload failed: HTTP ${resp.status}`)
+    return resp.json()
+  }
+
+  // === Ingest ===
+  // 实际响应为 {job_id, status:"pending"}(ingest.rs::create_ingest_job),非 JobResponse。
+  async triggerIngest(projectId: number, sourcePaths: string[]): Promise<TriggerIngestResponse> {
+    return this.request("POST", `/api/v1/projects/${projectId}/ingest`, { source_paths: sourcePaths })
+  }
+
+  // GET /ingest/jobs/:id 全局端点,返回完整 JobResponse。
+  async getIngestJob(jobId: string): Promise<IngestJob> {
+    return this.request("GET", `/api/v1/ingest/jobs/${jobId}`)
+  }
+
+  // === Review(camelCase ReviewItemResp)===
+  async listReviews(projectId: number): Promise<ReviewItem[]> {
+    return this.request("GET", `/api/v1/projects/${projectId}/reviews`)
+  }
+
+  // body 为 ResolveAction(tag="kind");如 { kind: "create_page" } 或 { kind: "delete", path: "x" }。
+  async resolveReview(projectId: number, itemId: number, body: ResolveReviewBody): Promise<unknown> {
+    return this.request("POST", `/api/v1/projects/${projectId}/reviews/${itemId}/resolve`, body)
+  }
+
+  // 后端 dismiss_review 无 body 提取器;传 {} 被忽略。
+  async dismissReview(projectId: number, itemId: number): Promise<unknown> {
+    return this.request("POST", `/api/v1/projects/${projectId}/reviews/${itemId}/dismiss`, {})
+  }
+
+  // === Research ===
+  // 实际响应为 {uuid}(research.rs::enqueue_research),非 ResearchTask。
+  async enqueueResearch(
+    projectId: number,
+    body: { topic: string; search_queries?: string[] },
+  ): Promise<EnqueueResearchResponse> {
+    return this.request("POST", `/api/v1/projects/${projectId}/research`, body)
+  }
+
+  // GET /research/tasks/:uuid 全局端点(后端仍 check_project_access 鉴权),返回完整 snake_case ResearchTask。
+  async getResearchTask(uuid: string): Promise<ResearchTask> {
+    return this.request("GET", `/api/v1/research/tasks/${uuid}`)
+  }
+
+  // === LLM / Search providers(team 维度,snake_case ProviderResp)===
+  // GET 实际返回 Option<ProviderResp>(Json<Option<..>>):null 或单对象,非数组。
+  async getLlmProvider(teamId: number): Promise<LlmProvider | null> {
+    return this.request("GET", `/api/v1/teams/${teamId}/llm-providers`)
+  }
+
+  // POST 为创建(create_provider);每 team 同 provider_type 唯一,故 upsert 语义=先 POST 创建。
+  async upsertLlmProvider(
+    teamId: number,
+    body: { provider_type: string; api_key: string; base_url?: string; model?: string; context_size?: number },
+  ): Promise<LlmProvider> {
+    return this.request("POST", `/api/v1/teams/${teamId}/llm-providers`, body)
+  }
+
+  // 命名 getSearchProvider 反映 routes 实际(Json<Option<ProviderResp>>,单条而非 list)。
+  async getSearchProvider(teamId: number): Promise<SearchProvider | null> {
+    return this.request("GET", `/api/v1/teams/${teamId}/search-providers`)
   }
 
   // === Chat (SSE) ===

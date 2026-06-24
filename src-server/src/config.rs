@@ -66,6 +66,29 @@ fn default_allowed_origins() -> Vec<String> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct FrontendConfig {
+    #[serde(default = "default_frontend_dist_dir")]
+    pub dist_dir: String,
+    #[serde(default = "default_frontend_index_html")]
+    pub index_html: String,
+}
+
+fn default_frontend_dist_dir() -> String {
+    "../dist".to_string()
+}
+
+fn default_frontend_index_html() -> String {
+    "../dist/index.html".to_string()
+}
+
+fn default_frontend() -> FrontendConfig {
+    FrontendConfig {
+        dist_dir: default_frontend_dist_dir(),
+        index_html: default_frontend_index_html(),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
@@ -74,6 +97,8 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub cors: CorsConfig,
     pub embedding: Option<EmbeddingConfig>,
+    #[serde(default = "default_frontend")]
+    pub frontend: FrontendConfig,
 }
 
 impl AppConfig {
@@ -150,6 +175,15 @@ impl AppConfig {
     // CORS configuration getter
     pub fn allowed_origins(&self) -> &[String] {
         &self.cors.allowed_origins
+    }
+
+    // Frontend 配置 getter（Layer 5 同源托管 dist）
+    pub fn dist_dir(&self) -> &str {
+        &self.frontend.dist_dir
+    }
+
+    pub fn index_html(&self) -> &str {
+        &self.frontend.index_html
     }
 }
 

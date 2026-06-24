@@ -32,6 +32,7 @@ import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { createLogger } from "@/lib/logger"
 import { LlmProviderSection } from "./sections/llm-provider-section"
+import { caps } from "@/lib/capabilities"
 
 const logger = createLogger("settings")
 import { EmbeddingSection } from "./sections/embedding-section"
@@ -79,7 +80,12 @@ interface Category {
   icon: typeof Bot
 }
 
-const CATEGORIES: Category[] = [
+// 桌面专属 section gate:web 下隐藏桌面 only 的能力 section。
+// - api-server:仅桌面(platform === "tauri")
+// - source-watch / scheduled-import:依赖本地 file-watcher(canWatchFiles)
+// - mineru:依赖本地 CLI 进程(canRunCli)
+// 其余(web-search / llm / embedding 等)为 team 维度,web 也保留。
+const ALL_CATEGORIES: Category[] = [
   { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "llm", labelKey: "settings.categories.llm", icon: Bot },
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
@@ -98,6 +104,21 @@ const CATEGORIES: Category[] = [
   { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
+
+// 模块加载时按 caps 过滤:caps 是运行时探测的单例,桌面全保留 / web 过滤掉桌面专属。
+const CATEGORIES = ALL_CATEGORIES.filter((c) => {
+  switch (c.id) {
+    case "api-server":
+      return caps.platform === "tauri"
+    case "source-watch":
+    case "scheduled-import":
+      return caps.canWatchFiles
+    case "mineru":
+      return caps.canRunCli
+    default:
+      return true
+  }
+})
 
 function initialDraft(
   llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
@@ -650,6 +671,7 @@ export function SettingsView() {
               <button
                 key={c.id}
                 type="button"
+                data-testid={`section-tab-${c.id}`}
                 onClick={() => setActive(c.id)}
                 aria-current={isActive ? "page" : undefined}
                 className={`group mb-0.5 flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${
