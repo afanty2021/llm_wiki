@@ -314,8 +314,12 @@ async function streamViaServer(
   signal?: AbortSignal,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
-  const projectId =
-    (typeof window !== "undefined" && (window as any).__currentProjectId) || 0
+  // __currentProjectId 由 handleProjectOpened 注入(WikiProject.id,string,web 下 String(p.id))。
+  // chat.rs 用 as_i64 解析 project_id,字符串会 None→unwrap_or(0)→check_project_access(0) 4xx,
+  // 故 JSON body 前转 number(fs/file-url 仅 URL 拼接 string 可,唯 chat JSON body 需 number)。
+  const projectId = Number(
+    (typeof window !== "undefined" && (window as any).__currentProjectId) || 0,
+  )
   const { apiClient } = await import("@/lib/api-client")
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

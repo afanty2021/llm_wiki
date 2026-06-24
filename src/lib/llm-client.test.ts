@@ -239,7 +239,8 @@ describe("streamChat web 分发", () => {
       }),
     )
     vi.stubGlobal("fetch", mockFetch)
-    vi.stubGlobal("window", { __currentProjectId: 9 })
+    // string,模拟真实 web:handleProjectOpened 设 WikiProject.id=String(p.id) → __currentProjectId="9"
+    vi.stubGlobal("window", { __currentProjectId: "9" })
 
     const { streamChat: streamChatWeb } = await import("./llm-client")
     const tokens: string[] = []
@@ -259,6 +260,11 @@ describe("streamChat web 分发", () => {
     expect(url).toContain("/api/v1/chat/stream")
     expect((init as RequestInit).method).toBe("POST")
     expect(((init as RequestInit).headers as Record<string, string>)["Authorization"]).toBe("Bearer tok")
+    // project_id 必须是 number(非 string):chat.rs as_i64 对字符串返回 None→unwrap_or(0)→4xx,
+    // web 聊天失效。streamViaServer 发送前 Number() 转换(string "9" → number 9)。
+    const reqBody = JSON.parse((init as RequestInit).body as string)
+    expect(reqBody.project_id).toBe(9)
+    expect(typeof reqBody.project_id).toBe("number")
     expect(tokens.join("")).toBe("Hi")
 
     vi.unstubAllGlobals()
