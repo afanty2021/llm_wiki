@@ -1,5 +1,11 @@
 import { create } from "zustand"
 import { normalizeReviewTitle } from "@/lib/review-utils"
+import { apiClient } from "@/lib/api-client"
+import { caps } from "@/lib/capabilities"
+import { createLogger } from "@/lib/logger"
+import type { ReviewItem as ApiReviewItem } from "@/lib/api-types"
+
+const logger = createLogger("review-store")
 
 export interface ReviewOption {
   label: string
@@ -28,9 +34,31 @@ interface ReviewState {
   resolveItem: (id: string, action: string) => void
   dismissItem: (id: string) => void
   clearResolved: () => void
+  /** web:从服务器加载 review(桌面走 loadReviewItems localStorage + addItems)。 */
+  loadReviewsFromServer: (projectId: number) => Promise<void>
 }
 
 let counter = 0
+
+/** web 映射:服务器 ReviewItem(id number / reviewType / status)→ store ReviewItem(id string / type / resolved)。 */
+function mapApiReview(api: ApiReviewItem): ReviewItem {
+  return {
+    id: String(api.id),
+    type: api.reviewType as ReviewItem["type"],
+    title: api.title,
+    description: api.description,
+    sourcePath: api.sourcePath ?? undefined,
+    affectedPages: api.affectedPages ?? undefined,
+    searchQueries: api.searchQueries ?? undefined,
+    options: api.options,
+    resolved: api.status === "resolved",
+    resolvedAction: api.resolvedAction ?? undefined,
+    createdAt: new Date(api.createdAt).getTime(),
+  }
+}
+
+const currentProjectId = () =>
+  Number((typeof window !== "undefined" && (window as any).__currentProjectId) || 0)
 
 export const useReviewStore = create<ReviewState>((set) => ({
   items: [],
@@ -98,17 +126,40 @@ export const useReviewStore = create<ReviewState>((set) => ({
 
   setItems: (items) => set({ items }),
 
-  resolveItem: (id, action) =>
+  // web 从服务器加载 review(桌面走 loadReviewItems localStorage + setItems)。
+  loadReviewsFromServer: async (projectId) => {
+    try {
+      const items = await apiClient.listReviews(projectId)
+      set({ items: items.map(mapApiReview) })
+    } catch (e) {
+      logger.warn("loadReviewsFromServer 失败", { projectId, error: String(e) })
+    }
+  },
+
+  resolveItem: (id, action) => {
+    // 乐观更新本地 state(桌面+web 共用);web 额外异步同步服务器。
     set((state) => ({
       items: state.items.map((item) =>
         item.id === id ? { ...item, resolved: true, resolvedAction: action } : item
       ),
-    })),
+    }))
+    if (caps.platform === "web") {
+      apiClient
+        .resolveReview(currentProjectId(), Number(id), { kind: action })
+        .catch((e) => logger.warn("resolveReview 同步失败", { id, error: String(e) }))
+    }
+  },
 
-  dismissItem: (id) =>
+  dismissItem: (id) => {
     set((state) => ({
       items: state.items.filter((item) => item.id !== id),
-    })),
+    }))
+    if (caps.platform === "web") {
+      apiClient
+        .dismissReview(currentProjectId(), Number(id))
+        .catch((e) => logger.warn("dismissReview 同步失败", { id, error: String(e) }))
+    }
+  },
 
   clearResolved: () =>
     set((state) => ({

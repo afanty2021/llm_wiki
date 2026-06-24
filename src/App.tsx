@@ -446,11 +446,15 @@ function App() {
     } catch (err) {
       logger.error("failed to load file tree", { error: String(err) })
     }
-    // Load persisted review items
+    // Load review items(桌面 localStorage;web 从服务器 HTTP)
     try {
-      const savedReview = await loadReviewItems(proj.path)
-      if (savedReview.length > 0) {
-        useReviewStore.getState().setItems(savedReview)
+      if (caps.platform === "web") {
+        await useReviewStore.getState().loadReviewsFromServer(Number(proj.id))
+      } else {
+        const savedReview = await loadReviewItems(proj.path)
+        if (savedReview.length > 0) {
+          useReviewStore.getState().setItems(savedReview)
+        }
       }
     } catch {
       // ignore, start fresh

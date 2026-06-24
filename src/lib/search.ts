@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core"
+import { caps } from "@/lib/capabilities"
+import { apiClient } from "@/lib/api-client"
 import { normalizePath } from "@/lib/path-utils"
 import { useWikiStore } from "@/stores/wiki-store"
 
@@ -64,6 +66,13 @@ export async function searchWiki(
 ): Promise<SearchResult[]> {
   if (!query.trim()) return []
   const pp = normalizePath(projectPath)
+  // web 走 HTTP search API(桌面 invoke search_project 在 web 不可用)。后端 result.path
+  // 是 project-relative,web readFile 用 project-relative(不拼 pp);桌面拼 pp 成绝对路径。
+  if (caps.platform === "web") {
+    const projectId = Number((typeof window !== "undefined" && (window as any).__currentProjectId) || 0)
+    const response = await apiClient.search(projectId, query)
+    return response.results
+  }
   const embCfg = useWikiStore.getState().embeddingConfig
 
   const response = await invoke<BackendSearchResponse>("search_project", {
