@@ -2,6 +2,7 @@
 #![cfg(test)]
 use llm_wiki_server::config::AppConfig;
 use llm_wiki_server::services::{embedding, search};
+use llm_wiki_server::services::vector_store::PgVectorStore;
 
 async fn setup() -> (sqlx::PgPool, AppConfig, reqwest::Client) {
     let cfg = AppConfig::from_env().expect("from_env");
@@ -16,6 +17,7 @@ async fn setup() -> (sqlx::PgPool, AppConfig, reqwest::Client) {
 /// 确保 project 249 有向量（自给自足播种：读真实 wiki_pages → embed_and_store，幂等）。
 /// 不 cleanup——保留向量供复用。
 async fn ensure_project_seeded(
+    store: &dyn llm_wiki_server::services::vector_store::VectorStore,
     pool: &sqlx::PgPool,
     emb_cfg: &llm_wiki_server::config::EmbeddingConfig,
     client: &reqwest::Client,
@@ -30,7 +32,7 @@ async fn ensure_project_seeded(
     .filter(|(_, c)| !c.trim().is_empty())
     .collect();
     assert!(!pages.is_empty(), "project 249 应有 wiki 页");
-    embedding::embed_and_store(pool, Some(emb_cfg), client, 249, &pages)
+    embedding::embed_and_store(store, Some(emb_cfg), client, 249, &pages)
         .await
         .unwrap();
 }
@@ -39,10 +41,11 @@ async fn ensure_project_seeded(
 #[ignore = "requires PG(project 249) + omlx"]
 async fn hybrid_search_finds_alice() {
     let (pool, cfg, client) = setup().await;
+    let store = PgVectorStore::new(pool.clone());
     let emb_cfg = cfg.embedding.as_ref().expect("embedding configured");
-    ensure_project_seeded(&pool, emb_cfg, &client).await; // 自给自足播种
+    ensure_project_seeded(&store, &pool, emb_cfg, &client).await; // 自给自足播种
 
-    let resp = search::hybrid_search(&pool, Some(emb_cfg), &client, 249, "Alice", 10)
+    let resp = search::hybrid_search(&pool, &store, Some(emb_cfg), &client, 249, "Alice", 10)
         .await
         .unwrap();
     assert!(matches!(resp.mode.as_str(), "hybrid" | "keyword" | "vector"));
