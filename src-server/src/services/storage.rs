@@ -127,22 +127,30 @@ impl LocalStorage {
 
 #[async_trait]
 impl StorageBackend for LocalStorage {
+    /// 读取文本文件。文件不存在 → ResourceNotFound（对齐 read_file 的 404）；其它 IO 错误 → IoError(500)。
     async fn read_string(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<String, AppError> {
         let base = self.base(team_id, project_id);
         if !base.exists() {
             return Err(AppError::ResourceNotFound("project storage not found".into()));
         }
         let p = safe_resolve(&base, rel_path)?;
-        tokio::fs::read_to_string(&p).await.map_err(AppError::IoError)
+        tokio::fs::read_to_string(&p).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::ResourceNotFound("file not found".into()),
+            _ => AppError::IoError(e),
+        })
     }
 
+    /// 读取二进制文件。文件不存在 → ResourceNotFound（对齐 raw_file 的 404）；其它 IO 错误 → IoError(500)。
     async fn read_bytes(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<Vec<u8>, AppError> {
         let base = self.base(team_id, project_id);
         if !base.exists() {
             return Err(AppError::ResourceNotFound("project storage not found".into()));
         }
         let p = safe_resolve(&base, rel_path)?;
-        tokio::fs::read(&p).await.map_err(AppError::IoError)
+        tokio::fs::read(&p).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::ResourceNotFound("file not found".into()),
+            _ => AppError::IoError(e),
+        })
     }
 
     async fn write_string(&self, team_id: i32, project_id: i32, rel_path: &str, data: &str) -> Result<(), AppError> {
