@@ -210,3 +210,44 @@ impl StorageBackend for LocalStorage {
         }
     }
 }
+
+/// S3 / 对象存储实现 —— 占位。Phase 1 不实现真实 S3 调用(不引入 S3 SDK 依赖)。
+/// 逻辑坐标 (team_id, project_id, rel_path) 可直接映射为 object key
+/// teams/{team_id}/projects/{project_id}/{rel_path},故未来实现时 trait 签名无需改动。
+pub struct S3Storage {
+    #[allow(dead_code)]
+    endpoint: Option<String>,
+    #[allow(dead_code)]
+    bucket: Option<String>,
+}
+
+impl S3Storage {
+    pub fn new(endpoint: Option<String>, bucket: Option<String>) -> Self {
+        Self { endpoint, bucket }
+    }
+}
+
+#[async_trait]
+impl StorageBackend for S3Storage {
+    async fn read_string(&self, _t: i32, _p: i32, _r: &str) -> Result<String, AppError> {
+        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+    }
+    async fn read_bytes(&self, _t: i32, _p: i32, _r: &str) -> Result<Vec<u8>, AppError> {
+        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+    }
+    async fn write_string(&self, _t: i32, _p: i32, _r: &str, _d: &str) -> Result<(), AppError> {
+        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+    }
+    async fn write_bytes(&self, _t: i32, _p: i32, _r: &str, _d: &[u8]) -> Result<(), AppError> {
+        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+    }
+    async fn list_dir(&self, _t: i32, _p: i32, _r: &str) -> Result<Vec<FileEntry>, AppError> {
+        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+    }
+    async fn metadata(&self, _t: i32, _p: i32, _r: &str) -> Result<FileMeta, AppError> {
+        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+    }
+    async fn remove(&self, _t: i32, _p: i32, _r: &str) -> Result<(), AppError> {
+        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+    }
+}
