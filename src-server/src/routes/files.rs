@@ -13,15 +13,6 @@ use std::path::PathBuf;
 
 const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100MB
 
-#[derive(Serialize)]
-struct FileNode {
-    name: String,
-    path: String,
-    is_dir: bool,
-    size: u64,
-    modified: i64,
-}
-
 pub fn file_routes() -> axum::Router<AppState> {
     axum::Router::new()
         // 通配符路由匹配架构文档 §3.1.2
@@ -48,10 +39,6 @@ pub async fn upload_file(
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
-    let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    // 写操作:全新项目 storage base 尚不存在 → 先创建(safe_resolve 对不存在 base
-    // canonicalize 会 500;读端点返回空/404,写端点必须建目录)。
-    storage::ensure_dir(&base)?;
 
     let mut dest_subdir = String::new();
     let mut file_data: Vec<u8> = Vec::new();
@@ -80,26 +67,22 @@ pub async fn upload_file(
         return Err(AppError::BadRequest("No file provided".into()));
     }
 
-    // 创建目标子目录(使 safe_resolve 能 canonicalize candidate 的父目录;全新项目深层
-    // 子目录尚不存在,直接 safe_resolve 会对不存在的 parent canonicalize 而 500)。
-    // 拒绝含 .. 的子目录防遍历(file_name 的遍历仍由下方 safe_resolve starts_with 拦截)。
     let subdir_rel = dest_subdir.trim_start_matches('/');
     if subdir_rel.contains("..") {
         return Err(AppError::BadRequest("Invalid upload path".into()));
     }
-    if !subdir_rel.is_empty() {
-        storage::ensure_dir(&base.join(subdir_rel))?;
-    }
-    // safe_resolve 防止路径遍历
-    let dest = storage::safe_resolve(&base, &format!("{}/{}", dest_subdir, file_name))?;
-    if let Some(parent) = dest.parent() {
-        storage::ensure_dir(parent)?;
-    }
-    std::fs::write(&dest, &file_data).map_err(|e| AppError::IoError(e))?;
+    // rel = project-relative path（原 dest.strip_prefix(&base) 的等价形式，无前导斜杠）
+    // write_bytes 内部创建 project base + 父目录，故不再需要显式 ensure_dir。
+    let rel = if subdir_rel.is_empty() {
+        file_name.clone()
+    } else {
+        format!("{}/{}", subdir_rel, file_name)
+    };
+    state.storage.write_bytes(team_id, project_id, &rel, &file_data).await?;
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({
         "name": file_name,
-        "path": dest.strip_prefix(&base).unwrap_or(&dest).to_string_lossy(),
+        "path": rel,
         "size": file_data.len(),
     }))))
 }
@@ -117,48 +100,10 @@ pub async fn list_files(
     Query(params): Query<ListQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
-    let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    // 全新项目 storage base 尚不存在(未写入任何文件)→ 任何子目录(/raw/sources、/wiki 等)必然不存在。
-    // 直接返回空列表,避免 safe_resolve 对不存在的 base canonicalize 导致 500(与 stat_file/raw_file 同款短路)。
-    if !base.exists() {
-        return Ok(Json(serde_json::json!([])));
-    }
-    let dir_path = if let Some(dir) = params.dir {
-        if dir.is_empty() {
-            base.clone()
-        } else {
-            storage::safe_resolve(&base, &dir)?
-        }
-    } else {
-        base.clone()
-    };
-
-    if !dir_path.exists() {
-        // GET 不应产生副作用 — 返回空列表而非自动创建目录
-        return Ok(Json(serde_json::json!([])));
-    }
-
-    let mut nodes: Vec<FileNode> = Vec::new();
-    for entry in std::fs::read_dir(&dir_path).map_err(|e| AppError::IoError(e))? {
-        let entry = entry.map_err(|e| AppError::IoError(e))?;
-        let meta = entry.metadata().map_err(|e| AppError::IoError(e))?;
-        nodes.push(FileNode {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: entry.path().strip_prefix(&base)
-                .unwrap_or(&entry.path())
-                .to_string_lossy()
-                .to_string(),
-            is_dir: meta.is_dir(),
-            size: meta.len(),
-            modified: meta.modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-        });
-    }
-
-    Ok(Json(serde_json::json!(nodes)))
+    // list_dir 对不存在的 base / dir 返回空 Vec（对齐原 base.exists/dir.exists 短路）。
+    let dir_rel = params.dir.unwrap_or_default();
+    let entries = state.storage.list_dir(team_id, project_id, &dir_rel).await?;
+    Ok(Json(serde_json::json!(entries)))
 }
 
 // GET /api/v1/files/:project_id/stat/*path — 文件元信息
@@ -178,39 +123,11 @@ pub async fn stat_file(
     Path((project_id, path)): Path<(i32, String)>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
-    let base = storage::project_base(state.config.storage_path(), team_id, project_id);
 
-    // 项目存储根尚不存在（全新项目未写入过任何文件）→ 目标必然不存在。
-    // 直接返回 exists=false，避免 safe_resolve 对不存在的 base canonicalize 导致 500。
-    if !base.exists() {
-        return Ok(Json(serde_json::json!(StatResp {
-            exists: false,
-            is_dir: false,
-            size: 0,
-            modified: 0,
-        })));
-    }
-
-    let file_path = storage::safe_resolve(&base, &path)?;
-
-    let resp = match std::fs::metadata(&file_path) {
-        Ok(meta) => StatResp {
-            exists: true,
-            is_dir: meta.is_dir(),
-            size: meta.len(),
-            modified: meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-        },
-        Err(_) => StatResp {
-            exists: false,
-            is_dir: false,
-            size: 0,
-            modified: 0,
-        },
+    // metadata 对 base 不存在 / 文件不存在均返回 Err → 统一映射 exists:false（软失败，对齐原行为）。
+    let resp = match state.storage.metadata(team_id, project_id, &path).await {
+        Ok(m) => StatResp { exists: true, is_dir: m.is_dir, size: m.size, modified: m.modified },
+        Err(_) => StatResp { exists: false, is_dir: false, size: 0, modified: 0 },
     };
     Ok(Json(serde_json::json!(resp)))
 }
@@ -224,17 +141,12 @@ pub async fn raw_file(
     Path((project_id, path)): Path<(i32, String)>,
 ) -> Result<axum::response::Response, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
-    let base = storage::project_base(state.config.storage_path(), team_id, project_id);
-    // 全新项目 storage base 尚不存在 → 目标必然不存在,直接 404(避免 safe_resolve 对
-    // 不存在 base canonicalize 导致 500,与 stat_file 同款短路)。
-    if !base.exists() {
-        return Err(AppError::ResourceNotFound("file".into()));
-    }
-    let full = storage::safe_resolve(&base, &path)?;
-    let bytes = tokio::fs::read(&full)
+    // read_bytes 对缺失返回 ResourceNotFound，其余 IO 错误返回 IoError；统一映射 404
+    // （对齐原 tokio::fs::read().map_err(|_| ResourceNotFound) 的全错误折叠）。
+    let bytes = state.storage.read_bytes(team_id, project_id, &path)
         .await
         .map_err(|_| AppError::ResourceNotFound("file".into()))?;
-    let mime = mime_guess::from_path(&full)
+    let mime = mime_guess::from_path(&path)
         .first_or_octet_stream()
         .essence_str()
         .to_string();
@@ -262,28 +174,33 @@ pub async fn read_file(
     Query(q): Query<ReadQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
-    let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    // 全新项目 storage base 尚不存在 → 目标必然不存在,直接 404(避免 safe_resolve 对
-    // 不存在 base canonicalize 导致 500,与 stat_file/raw_file/list_files 同款短路)。
-    if !base.exists() {
-        return Err(AppError::ResourceNotFound("File not found".into()));
-    }
-    let file_path = storage::safe_resolve(&base, &q.path)?;
 
-    if !file_path.exists() {
-        return Err(AppError::ResourceNotFound("File not found".into()));
-    }
-    if !file_path.is_file() {
+    // ① 存在 + 是否目录（保留原 404/400 区分，经 trait metadata）
+    let meta = match state.storage.metadata(team_id, project_id, &q.path).await {
+        Ok(m) => m,
+        Err(_) => return Err(AppError::ResourceNotFound("File not found".into())),
+    };
+    if meta.is_dir {
         return Err(AppError::BadRequest("Path is a directory".into()));
     }
-
-    let ext = storage::file_ext(&file_path).to_lowercase();
+    // ② 按扩展名分发
+    let ext = storage::file_ext(std::path::Path::new(&q.path)).to_lowercase();
     let content = match ext.as_str() {
-        "pdf" => extract_pdf(&file_path)?,
-        "docx" => extract_docx(&file_path)?,
-        "xlsx" | "xls" | "ods" => extract_spreadsheet(&file_path)?,
-        _ => std::fs::read_to_string(&file_path)
-            .map_err(|e| AppError::IoError(e))?,
+        "pdf" => {
+            // pdftotext 需本地文件路径，无法纯字节。Phase 1 唯一不通过 trait 的读取分支（spec §4 标注）。
+            let base = storage::project_base(state.config.storage_path(), team_id, project_id);
+            let p = storage::safe_resolve(&base, &q.path)?;
+            extract_pdf(&p)?
+        }
+        "docx" => {
+            let bytes = state.storage.read_bytes(team_id, project_id, &q.path).await?;
+            extract_docx(&bytes)?
+        }
+        "xlsx" | "xls" | "ods" => {
+            let bytes = state.storage.read_bytes(team_id, project_id, &q.path).await?;
+            extract_spreadsheet(&bytes)?
+        }
+        _ => state.storage.read_string(team_id, project_id, &q.path).await?,
     };
 
     Ok(Json(serde_json::json!({
@@ -307,16 +224,15 @@ fn extract_pdf(path: &PathBuf) -> Result<String, AppError> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn extract_docx(path: &PathBuf) -> Result<String, AppError> {
-    let bytes = std::fs::read(path).map_err(|e| AppError::IoError(e))?;
-    docx_rs::read_docx(&bytes)
+fn extract_docx(bytes: &[u8]) -> Result<String, AppError> {
+    docx_rs::read_docx(bytes)
         .map(|doc| doc.json())
         .map_err(|e| AppError::InternalError(format!("DOCX parse error: {}", e)))
 }
 
-fn extract_spreadsheet(path: &PathBuf) -> Result<String, AppError> {
-    use calamine::{open_workbook, Reader};
-    let mut workbook = open_workbook::<calamine::Xlsx<_>, _>(path)
+fn extract_spreadsheet(bytes: &[u8]) -> Result<String, AppError> {
+    use calamine::{Reader, open_workbook_auto_from_rs};
+    let mut workbook = open_workbook_auto_from_rs(std::io::Cursor::new(bytes.to_vec()))
         .map_err(|e| AppError::InternalError(format!("XLSX open error: {}", e)))?;
     let mut result = String::new();
     let sheet_names = workbook.sheet_names().to_vec();
@@ -351,24 +267,10 @@ pub async fn write_file(
     Json(payload): Json<WriteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
-    let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    // 写操作:全新项目 storage base 尚不存在 → 先创建。
-    storage::ensure_dir(&base)?;
-    // 目标路径取自 body(payload.path);拒绝含 .. 防遍历,先建父目录使 safe_resolve 能 canonicalize
-    // (深层新路径的 parent 不存在时 safe_resolve 会 500,与 upload 同款)。
-    let path_rel = payload.path.trim_start_matches('/');
-    if path_rel.contains("..") {
-        return Err(AppError::BadRequest("Invalid write path".into()));
-    }
-    if !path_rel.is_empty() {
-        if let Some(parent) = base.join(path_rel).parent() {
-            storage::ensure_dir(parent)?;
-        }
-    }
-    let file_path = storage::safe_resolve(&base, &payload.path)?;
-    std::fs::write(&file_path, &payload.contents)
-        .map_err(|e| AppError::IoError(e))?;
-
+    // write_string → write_bytes 内部创建 project base + 父目录；safe_resolve 在
+    // LocalStorage 内部捕获 .. → BadRequest(400)（原显式检查冗余，错误信息由 "Invalid
+    // write path" 变为 "Path traversal detected"，均 400，可接受）。
+    state.storage.write_string(team_id, project_id, &payload.path, &payload.contents).await?;
     Ok(Json(serde_json::json!({"status": "ok", "path": payload.path})))
 }
 
@@ -386,23 +288,12 @@ pub async fn delete_file(
     Json(payload): Json<DeleteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id, _) = check_project_access_with_role(&state, &headers, project_id, RequiredRole::Admin).await?;
-    let base = storage::project_base(&state.config.storage_path(), team_id, project_id);
-    // 全新项目 storage base 尚不存在 → 目标必然不存在,直接 404(避免 safe_resolve 对
-    // 不存在 base canonicalize 导致 500,与读端点同款短路)。
-    if !base.exists() {
-        return Err(AppError::ResourceNotFound("File not found".into()));
+    // remove() 对不存在的目标返回 IoError(500)；原行为是 404。故经 metadata 前置检查映射 404
+    //（对齐 trait 在 storage.rs:86 文档化的契约：调用方自行前置 exists 检查）。
+    match state.storage.metadata(team_id, project_id, &payload.path).await {
+        Ok(_) => {}
+        Err(_) => return Err(AppError::ResourceNotFound("File not found".into())),
     }
-    let file_path = storage::safe_resolve(&base, &payload.path)?;
-
-    if !file_path.exists() {
-        return Err(AppError::ResourceNotFound("File not found".into()));
-    }
-
-    if file_path.is_dir() {
-        std::fs::remove_dir_all(&file_path).map_err(|e| AppError::IoError(e))?;
-    } else {
-        std::fs::remove_file(&file_path).map_err(|e| AppError::IoError(e))?;
-    }
-
+    state.storage.remove(team_id, project_id, &payload.path).await?;
     Ok(Json(serde_json::json!({"status": "deleted"})))
 }
