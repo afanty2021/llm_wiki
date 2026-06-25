@@ -31,6 +31,7 @@ pub async fn search_handler(
     let limit = params.limit.unwrap_or(DEFAULT_RESULTS).min(MAX_RESULTS);
     let resp = search::hybrid_search(
         &state.db,
+        &*state.vector_store,
         state.config.embedding.as_ref(),
         &state.http,
         params.project_id,

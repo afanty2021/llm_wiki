@@ -29,6 +29,8 @@ pub struct AppState {
     pub redis: RedisPool,
     pub config: Arc<AppConfig>,
     pub http: reqwest::Client,
+    pub storage: Arc<dyn services::storage::StorageBackend>,
+    pub vector_store: Arc<dyn services::vector_store::VectorStore>,
 }
 
 pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
@@ -43,11 +45,28 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
         .build()
         .expect("failed to build reqwest Client");
 
+    // Layer 6 Phase 1：按 storage_type 分发构造存储后端（用尚未 move 的 config）
+    let storage: Arc<dyn services::storage::StorageBackend> =
+        if config.is_s3_storage() {
+            Arc::new(services::storage::S3Storage::new(
+                config.storage.s3_endpoint.clone(),
+                config.storage.s3_bucket.clone(),
+            ))
+        } else {
+            Arc::new(services::storage::LocalStorage::new(config.storage.path.clone()))
+        };
+
+    // 向量后端：PgVectorStore 持 PgPool（db.clone()，DbPool 是 Clone）
+    let vector_store: Arc<dyn services::vector_store::VectorStore> =
+        Arc::new(services::vector_store::PgVectorStore::new(db.clone()));
+
     let state = AppState {
         db,
         redis,
         config: Arc::new(config),
         http,
+        storage,
+        vector_store,
     };
 
     // 构建 CORS 中间件层

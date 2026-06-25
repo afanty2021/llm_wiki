@@ -3,6 +3,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use crate::{AppError, config::EmbeddingConfig};
 use crate::services::embedding;
+use crate::services::vector_store::VectorStore;
 
 // ── 常量（桌面原值，照搬）──
 pub const DEFAULT_RESULTS: usize = 20;
@@ -367,6 +368,7 @@ async fn fetch_page_title_content(
 /// embedding 未配/失败 → 退化为 keyword。返回 camelCase SearchResponse。
 pub async fn hybrid_search(
     pool: &PgPool,
+    vector_store: &dyn VectorStore,
     emb_cfg: Option<&EmbeddingConfig>,
     client: &reqwest::Client,
     project_id: i32,
@@ -426,7 +428,7 @@ pub async fn hybrid_search(
             }
         };
         if !qvec.is_empty() {
-            match embedding::vector_search(pool, project_id, qvec, (limit.max(10)) as i32).await {
+            match embedding::vector_search(vector_store, project_id, qvec, (limit.max(10)) as i32).await {
                 Ok(vres) => {
                     vector_hits = vres.len();
                     for (i, vr) in vres.iter().enumerate() {

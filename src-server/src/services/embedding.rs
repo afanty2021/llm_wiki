@@ -1,6 +1,6 @@
-use sqlx::PgPool;
 use crate::AppError;
 use crate::config::EmbeddingConfig;
+use crate::services::vector_store::VectorStore;
 
 /// 解析 omlx /v1/embeddings 响应。纯函数，便于单测。
 /// 校验每条维度 == expected_dim，不符报错（防模型/配置错配）。
@@ -48,7 +48,7 @@ pub async fn embed_batch(
 /// 批量嵌入 + bulk upsert（ingest 用）。pages: (wiki_page_path, text)。
 /// cfg=None → no-op 返回 Ok(0)。
 pub async fn embed_and_store(
-    pool: &sqlx::PgPool,
+    store: &dyn VectorStore,
     cfg: Option<&EmbeddingConfig>,
     client: &reqwest::Client,
     project_id: i32,
@@ -63,38 +63,22 @@ pub async fn embed_and_store(
     }
     let texts: Vec<String> = pages.iter().map(|(_, t)| t.clone()).collect();
     let vectors = embed_batch(cfg, client, &texts).await?;
-
-    let mut qb = sqlx::QueryBuilder::new(
-        "INSERT INTO embeddings (project_id, wiki_page_id, content) VALUES ",
-    );
-    for (i, ((path, _), vec)) in pages.iter().zip(vectors.iter()).enumerate() {
-        if i > 0 {
-            qb.push(",");
-        }
-        qb.push("(")
-            .push_bind(project_id)
-            .push(", ")
-            .push_bind(path.clone())
-            .push(", ")
-            .push_bind(pgvector::Vector::from(vec.clone()))
-            .push(")");
-    }
-    qb.push(" ON CONFLICT (project_id, wiki_page_id) DO UPDATE SET content = EXCLUDED.content");
-
-    let rows = qb.build().execute(pool).await?.rows_affected();
-    Ok(rows as usize)
+    let page_vecs: Vec<(String, Vec<f32>)> = pages.iter().zip(vectors.into_iter())
+        .map(|((path, _), vec)| (path.clone(), vec))
+        .collect();
+    store.upsert_vectors(project_id, &page_vecs).await
 }
 
 /// 单页嵌入（pages CRUD create/update 用，content 非空时）。
 pub async fn embed_page(
-    pool: &sqlx::PgPool,
+    store: &dyn VectorStore,
     cfg: Option<&EmbeddingConfig>,
     client: &reqwest::Client,
     project_id: i32,
     path: &str,
     text: &str,
 ) -> Result<(), AppError> {
-    embed_and_store(pool, cfg, client, project_id, &[(path.to_string(), text.to_string())])
+    embed_and_store(store, cfg, client, project_id, &[(path.to_string(), text.to_string())])
         .await
         .map(|_| ())
 }
@@ -111,16 +95,11 @@ pub async fn embed_query(
 
 /// 删页向量。不接收 cfg——纯幂等 SQL DELETE，与 embedding 配置无关、始终生效。
 pub async fn delete_embedding(
-    pool: &sqlx::PgPool,
+    store: &dyn VectorStore,
     project_id: i32,
     path: &str,
 ) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
-        .bind(project_id)
-        .bind(path)
-        .execute(pool)
-        .await?;
-    Ok(())
+    store.delete_page(project_id, path).await
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -133,33 +112,12 @@ pub struct VectorSearchResult {
 
 /// 使用 pgvector 进行余弦相似度搜索
 pub async fn vector_search(
-    pool: &PgPool,
+    store: &dyn VectorStore,
     project_id: i32,
     query_embedding: Vec<f32>,
     limit: i32,
 ) -> Result<Vec<VectorSearchResult>, AppError> {
-    let embedding = pgvector::Vector::from(query_embedding);
-
-    let results = sqlx::query_as::<_, VectorSearchResult>(
-        "SELECT
-            wp.path,
-            wp.title,
-            COALESCE(substring(COALESCE(wp.content, '') FROM 1 FOR 200), '') as snippet,
-            1.0 - (e.content <=> $1) as score
-        FROM embeddings e
-        JOIN wiki_pages wp ON e.wiki_page_id = wp.path AND e.project_id = wp.project_id
-        WHERE e.project_id = $2
-        ORDER BY e.content <=> $1
-        LIMIT $3"
-    )
-    .bind(embedding)
-    .bind(project_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| AppError::DatabaseError(e))?;
-
-    Ok(results)
+    store.search(project_id, query_embedding, limit).await
 }
 
 #[cfg(test)]

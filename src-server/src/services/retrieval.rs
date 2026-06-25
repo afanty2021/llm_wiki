@@ -199,6 +199,7 @@ pub async fn retrieve_context(
     // Phase 1: keyword/vector hybrid search
     let search = crate::services::search::hybrid_search(
         &state.db,
+        &*state.vector_store,
         state.config.embedding.as_ref(),
         &state.http,
         project_id,

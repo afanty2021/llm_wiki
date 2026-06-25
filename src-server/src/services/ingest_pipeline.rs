@@ -445,7 +445,7 @@ pub async fn run_ingest_job(
     // 批量嵌入（rebuild 之后，覆盖 source + reserved）
     if !collected.is_empty() {
         if let Err(e) = crate::services::embedding::embed_and_store(
-            &state.db,
+            &*state.vector_store,
             state.config.embedding.as_ref(),
             &state.http,
             job.project_id,

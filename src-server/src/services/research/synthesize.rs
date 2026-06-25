@@ -152,7 +152,7 @@ pub async fn run_research_job(
     )
     .await?;
     if let Err(e) = crate::services::embedding::embed_page(
-        &state.db,
+        &*state.vector_store,
         state.config.embedding.as_ref(),
         &state.http,
         task.project_id,
