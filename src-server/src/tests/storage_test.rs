@@ -79,6 +79,23 @@ async fn local_storage_remove_missing_returns_not_found() {
 }
 
 #[tokio::test]
+async fn local_storage_write_creates_deep_dirs() {
+    // review #5：tokio::fs::create_dir_all 对多层缺失中间目录（深层新路径）生效
+    let (_tmp, store) = tmp_store();
+    store
+        .write_string(1, 1, "raw/sources/nested/deep/note.md", "deep")
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .read_string(1, 1, "raw/sources/nested/deep/note.md")
+            .await
+            .unwrap(),
+        "deep"
+    );
+}
+
+#[tokio::test]
 async fn s3_storage_returns_not_implemented_501() {
     // review F3：S3 占位返回 NotImplemented（→HTTP 501），而非 InternalError(500)
     use axum::response::IntoResponse;

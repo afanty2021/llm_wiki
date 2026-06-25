@@ -79,8 +79,8 @@ impl VectorStore for PgVectorStore {
         query_embedding: Vec<f32>,
         limit: i32,
     ) -> Result<Vec<VectorSearchResult>, AppError> {
-        // F8: 钳制 limit，防调用方传 ≤0 致 Postgres LIMIT 报错或静默空结果（trait 边界自我守卫）
-        let limit = limit.clamp(1, 200);
+        // review #8：钳制 limit 到合法区间（trait 边界自我守卫，防 ≤0 致 Postgres 错误/空结果）
+        let limit = clamp_search_limit(limit);
         let embedding = pgvector::Vector::from(query_embedding);
         let results = sqlx::query_as::<_, VectorSearchResult>(
             "SELECT
@@ -101,5 +101,27 @@ impl VectorStore for PgVectorStore {
         .await
         .map_err(AppError::DatabaseError)?;
         Ok(results)
+    }
+}
+
+/// 钳制向量检索 limit 到合法区间（review #8：trait 边界自我守卫）。
+/// ≤0 → 1（避免 Postgres `LIMIT must not be negative` 或 LIMIT 0 空结果），>200 → 200（上限保护）。
+fn clamp_search_limit(limit: i32) -> i32 {
+    limit.clamp(1, 200)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_search_limit;
+
+    #[test]
+    fn clamp_search_limit_bounds() {
+        // review #8：钳制逻辑无 DB 依赖即可单测，锁定 trait 边界不变量
+        assert_eq!(clamp_search_limit(0), 1);
+        assert_eq!(clamp_search_limit(-5), 1);
+        assert_eq!(clamp_search_limit(1), 1);
+        assert_eq!(clamp_search_limit(50), 50);
+        assert_eq!(clamp_search_limit(200), 200);
+        assert_eq!(clamp_search_limit(1000), 200);
     }
 }

@@ -50,12 +50,6 @@ pub fn safe_resolve(
     Ok(resolved)
 }
 
-/// 确保目录存在
-pub fn ensure_dir(path: &Path) -> Result<(), AppError> {
-    std::fs::create_dir_all(path)
-        .map_err(|e| AppError::IoError(e))
-}
-
 /// 提取文件扩展名（小写）
 pub fn file_ext(path: &Path) -> &str {
     path.extension()
@@ -66,14 +60,14 @@ pub fn file_ext(path: &Path) -> &str {
 // ============================================================================
 // Layer 6 Phase 1: StorageBackend trait + LocalStorage / S3Storage
 // 逻辑坐标 (team_id, project_id, rel_path) 抽象,LocalStorage 内部复用上面的
-// project_base / safe_resolve / ensure_dir,行为与 routes/files.rs 现有直调一致。
+// project_base / safe_resolve,行为与 routes/files.rs 现有直调一致。
 // ============================================================================
 
 use async_trait::async_trait;
 
 /// 文件存储后端抽象。方法接收**逻辑坐标** (team_id, project_id, rel_path),
 /// 对 Local(本地路径)和 S3(object key = teams/{tid}/projects/{pid}/{rel})都成立。
-/// LocalStorage 内部负责 project_base + safe_resolve + ensure_dir + base.exists 短路。
+/// LocalStorage 内部负责 project_base + safe_resolve + base.exists 短路（写时 tokio::fs::create_dir_all 建父目录）。
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     async fn read_string(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<String, AppError>;

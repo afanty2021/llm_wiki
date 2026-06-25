@@ -186,9 +186,11 @@ pub async fn read_file(
     let ext = storage::file_ext(std::path::Path::new(&q.path)).to_lowercase();
     let content = match ext.as_str() {
         "pdf" => {
-            // 经 trait 读字节，pdftotext 走 stdin(-)→stdout，无需本地路径（消除 LocalStorage 依赖，S3 就绪）
+            // 经 trait 读字节；extract_pdf 是阻塞子进程 → spawn_blocking 移出 reactor（review #1）
             let bytes = state.storage.read_bytes(team_id, project_id, &q.path).await?;
-            extract_pdf(&bytes)?
+            tokio::task::spawn_blocking(move || extract_pdf(&bytes))
+                .await
+                .map_err(|e| AppError::InternalError(format!("pdf extract join failed: {}", e)))??
         }
         "docx" => {
             let bytes = state.storage.read_bytes(team_id, project_id, &q.path).await?;
@@ -208,8 +210,10 @@ pub async fn read_file(
     })))
 }
 
-/// PDF 文本提取：pdftotext 走 stdin(-)→stdout，输入字节而非本地路径，
-/// 使 pdf 读取也能经 StorageBackend::read_bytes（消除 LocalStorage 路径依赖）。
+/// PDF 文本提取（**同步阻塞**——调用方须在 `spawn_blocking` 内执行）。
+/// pdftotext 走 stdin(-)→stdout，输入字节而非本地路径，使 pdf 读取也能经
+/// StorageBackend::read_bytes（消除 LocalStorage 路径依赖，S3 就绪）。
+/// 检查退出码：损坏/加密 PDF 等非零退出 → 报错，而非静默返回空串（review #1）。
 fn extract_pdf(bytes: &[u8]) -> Result<String, AppError> {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -219,17 +223,28 @@ fn extract_pdf(bytes: &[u8]) -> Result<String, AppError> {
         .arg("-") // stdout
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped()) // 捕获 stderr 供错误诊断（原 Stdio::null 使失败不可见）
         .spawn()
         .map_err(|_| AppError::InternalError(
-            "pdftotext not available. Install poppler-utils in Dockerfile.".into()
+            "pdftotext not available. Install poppler-utils in Dockerfile.".into(),
         ))?;
-    // 写 stdin（忽略 broken pipe：pdftotext 可能提前结束读取）
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(bytes);
+        // 写 stdin；broken pipe（pdftotext 提前退出，如损坏 PDF）→ 报错交调用方知悉，不静默吞
+        stdin
+            .write_all(bytes)
+            .map_err(|e| AppError::InternalError(format!("pdftotext stdin write failed: {}", e)))?;
     }
-    let output = child.wait_with_output()
-        .map_err(|e| AppError::InternalError(format!("pdftotext failed: {}", e)))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AppError::InternalError(format!("pdftotext wait failed: {}", e)))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::InternalError(format!(
+            "pdftotext exited {}: {}",
+            output.status,
+            stderr.trim()
+        )));
+    }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -301,4 +316,45 @@ pub async fn delete_file(
     // 不再前置 metadata 预检查（消除双 stat + 修复权限被掩盖为 404）。
     state.storage.remove(team_id, project_id, &payload.path).await?;
     Ok(Json(serde_json::json!({"status": "deleted"})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_pdf;
+
+    #[test]
+    fn extract_pdf_invalid_bytes_returns_error() {
+        // review #1：非 PDF 输入 → pdftotext 非零退出 → 报错而非静默空串。
+        // （pdftotext 二进制缺失时 spawn 失败也返 Err，测试同样通过。）
+        let res = extract_pdf(b"definitely not a pdf");
+        assert!(res.is_err(), "invalid PDF must error, not return empty; got {:?}", res);
+    }
+
+    #[test]
+    fn extract_pdf_valid_bytes_returns_text() {
+        // review #2：pdf 经 stdin 提取的端到端覆盖（防静默回归）。
+        // fixture：同仓 crates/llm-wiki-parser/tests/fixtures/sample.pdf（标题含「定价未来」）。
+        // 无 pdftotext 或无 fixture 时跳过（不 fail）。
+        if std::process::Command::new("pdftotext").arg("-v").output().is_err() {
+            eprintln!("skip: pdftotext not on PATH");
+            return;
+        }
+        let pdf_path = format!(
+            "{}/../crates/llm-wiki-parser/tests/fixtures/sample.pdf",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bytes = match std::fs::read(&pdf_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skip: sample.pdf fixture unavailable: {}", e);
+                return;
+            }
+        };
+        let text = extract_pdf(&bytes).expect("valid PDF should extract");
+        assert!(
+            text.contains("定价未来"),
+            "应提取到样本 PDF 标题「定价未来」；got first 40 chars: {}",
+            text.chars().take(40).collect::<String>()
+        );
+    }
 }
