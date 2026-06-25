@@ -110,7 +110,7 @@ pub struct VectorSearchResult {
     pub score: f64,
 }
 
-/// 使用 pgvector 进行余弦相似度搜索
+/// 向量相似度搜索（委托 VectorStore::search，Phase 2 起 chunk 级聚合在实现侧）
 pub async fn vector_search(
     store: &dyn VectorStore,
     project_id: i32,
