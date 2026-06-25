@@ -81,7 +81,9 @@ pub trait StorageBackend: Send + Sync {
     async fn write_string(&self, team_id: i32, project_id: i32, rel_path: &str, data: &str) -> Result<(), AppError>;
     async fn write_bytes(&self, team_id: i32, project_id: i32, rel_path: &str, data: &[u8]) -> Result<(), AppError>;
     async fn list_dir(&self, team_id: i32, project_id: i32, dir_rel: &str) -> Result<Vec<FileEntry>, AppError>;
+    /// 文件/目录不存在 → Err（调用方按需映射 exists:false 或 404；不在此软失败）
     async fn metadata(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<FileMeta, AppError>;
+    /// 目标不存在 → Err(IoError)；调用方需自行前置 exists 检查映射 404（对齐原 delete_file）
     async fn remove(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<(), AppError>;
 }
 
@@ -149,10 +151,12 @@ impl StorageBackend for LocalStorage {
 
     async fn write_bytes(&self, team_id: i32, project_id: i32, rel_path: &str, data: &[u8]) -> Result<(), AppError> {
         let base = self.base(team_id, project_id);
-        let p = safe_resolve(&base, rel_path)?;
-        if let Some(parent) = p.parent() {
+        // 先创建父目录（对齐 upload_file：深层新路径需先 ensure_dir 才能 safe_resolve 的 parent canonicalize）
+        let target = base.join(rel_path.trim_start_matches('/'));
+        if let Some(parent) = target.parent() {
             ensure_dir(parent)?;
         }
+        let p = safe_resolve(&base, rel_path)?;
         tokio::fs::write(&p, data).await.map_err(AppError::IoError)
     }
 
@@ -166,6 +170,9 @@ impl StorageBackend for LocalStorage {
         } else {
             safe_resolve(&base, dir_rel)?
         };
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
         let mut out = Vec::new();
         let mut entries = tokio::fs::read_dir(&dir).await.map_err(AppError::IoError)?;
         while let Some(entry) = entries.next_entry().await.map_err(AppError::IoError)? {
