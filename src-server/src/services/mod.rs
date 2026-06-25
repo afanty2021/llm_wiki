@@ -3,6 +3,7 @@ pub mod search;
 pub mod llm;
 pub mod llm_stream;
 pub mod embedding;
+pub mod vector_store;
 pub mod graph;
 pub mod ingest_queue;
 pub mod ingest_worker;
