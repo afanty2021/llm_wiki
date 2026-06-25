@@ -66,7 +66,7 @@ pub async fn embed_and_store(
     let page_vecs: Vec<(String, Vec<f32>)> = pages.iter().zip(vectors.into_iter())
         .map(|((path, _), vec)| (path.clone(), vec))
         .collect();
-    store.upsert_vectors(project_id, &page_vecs).await
+    store.upsert_vectors(project_id, page_vecs).await
 }
 
 /// 单页嵌入（pages CRUD create/update 用，content 非空时）。

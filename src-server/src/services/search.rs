@@ -366,6 +366,10 @@ async fn fetch_page_title_content(
 
 /// 单入口 hybrid 搜索（keyword + vector + RRF）。
 /// embedding 未配/失败 → 退化为 keyword。返回 camelCase SearchResponse。
+///
+/// ⚠️ 不变量：`pool`（keyword 侧 SQL）与 `vector_store`（向量侧）**必须指向同一数据库**。
+/// 二者无事务链接——若指向不同库，RRF 会静默融合不相关 ranking。当前调用方均传同一 `state.db`
+/// 派生的句柄，安全；新增调用方务必保持此约束。
 pub async fn hybrid_search(
     pool: &PgPool,
     vector_store: &dyn VectorStore,

@@ -83,7 +83,8 @@ pub trait StorageBackend: Send + Sync {
     async fn list_dir(&self, team_id: i32, project_id: i32, dir_rel: &str) -> Result<Vec<FileEntry>, AppError>;
     /// 文件/目录不存在 → Err（调用方按需映射 exists:false 或 404；不在此软失败）
     async fn metadata(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<FileMeta, AppError>;
-    /// 目标不存在 → Err(IoError)；调用方需自行前置 exists 检查映射 404（对齐原 delete_file）
+    /// 目标不存在 → ResourceNotFound（对齐 delete_file 的 404，调用方无需前置 exists 检查）；
+    /// 其它 IO 错误（权限等）→ IoError(500)
     async fn remove(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<(), AppError>;
 }
 
@@ -123,17 +124,23 @@ impl LocalStorage {
     fn base(&self, team_id: i32, project_id: i32) -> PathBuf {
         project_base(&self.root, team_id, project_id)
     }
+
+    /// 解析项目内已存在路径：项目 base 不存在 → ResourceNotFound；否则 safe_resolve 防穿越。
+    /// read_string/read_bytes/metadata/remove 共用，收拢 base.exists 守卫（DRY）。
+    fn resolve_existing(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<PathBuf, AppError> {
+        let base = self.base(team_id, project_id);
+        if !base.exists() {
+            return Err(AppError::ResourceNotFound("project storage not found".into()));
+        }
+        safe_resolve(&base, rel_path)
+    }
 }
 
 #[async_trait]
 impl StorageBackend for LocalStorage {
     /// 读取文本文件。文件不存在 → ResourceNotFound（对齐 read_file 的 404）；其它 IO 错误 → IoError(500)。
     async fn read_string(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<String, AppError> {
-        let base = self.base(team_id, project_id);
-        if !base.exists() {
-            return Err(AppError::ResourceNotFound("project storage not found".into()));
-        }
-        let p = safe_resolve(&base, rel_path)?;
+        let p = self.resolve_existing(team_id, project_id, rel_path)?;
         tokio::fs::read_to_string(&p).await.map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => AppError::ResourceNotFound("file not found".into()),
             _ => AppError::IoError(e),
@@ -142,11 +149,7 @@ impl StorageBackend for LocalStorage {
 
     /// 读取二进制文件。文件不存在 → ResourceNotFound（对齐 raw_file 的 404）；其它 IO 错误 → IoError(500)。
     async fn read_bytes(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<Vec<u8>, AppError> {
-        let base = self.base(team_id, project_id);
-        if !base.exists() {
-            return Err(AppError::ResourceNotFound("project storage not found".into()));
-        }
-        let p = safe_resolve(&base, rel_path)?;
+        let p = self.resolve_existing(team_id, project_id, rel_path)?;
         tokio::fs::read(&p).await.map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => AppError::ResourceNotFound("file not found".into()),
             _ => AppError::IoError(e),
@@ -158,11 +161,16 @@ impl StorageBackend for LocalStorage {
     }
 
     async fn write_bytes(&self, team_id: i32, project_id: i32, rel_path: &str, data: &[u8]) -> Result<(), AppError> {
+        // F1: 显式拒绝 `..` —— 必须在创建父目录之前，否则穿越路径会先在 base 外创建目录
+        // （原 write_file 前置 `..` 守卫随抽象下沉，此处恢复 fail-closed-before-IO 不变量）。
+        if rel_path.split('/').any(|c| c == "..") {
+            return Err(AppError::BadRequest("Path traversal detected".into()));
+        }
         let base = self.base(team_id, project_id);
-        // 先创建父目录（对齐 upload_file：深层新路径需先 ensure_dir 才能 safe_resolve 的 parent canonicalize）
+        // F5: tokio::fs 异步建父目录（消除 async 内 std::fs 阻塞）；深层新路径仍可正确 canonicalize
         let target = base.join(rel_path.trim_start_matches('/'));
         if let Some(parent) = target.parent() {
-            ensure_dir(parent)?;
+            tokio::fs::create_dir_all(parent).await.map_err(AppError::IoError)?;
         }
         let p = safe_resolve(&base, rel_path)?;
         tokio::fs::write(&p, data).await.map_err(AppError::IoError)
@@ -198,11 +206,7 @@ impl StorageBackend for LocalStorage {
     }
 
     async fn metadata(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<FileMeta, AppError> {
-        let base = self.base(team_id, project_id);
-        if !base.exists() {
-            return Err(AppError::ResourceNotFound("project storage not found".into()));
-        }
-        let p = safe_resolve(&base, rel_path)?;
+        let p = self.resolve_existing(team_id, project_id, rel_path)?;
         let meta = tokio::fs::metadata(&p).await.map_err(AppError::IoError)?;
         Ok(FileMeta {
             is_dir: meta.is_dir(),
@@ -212,12 +216,16 @@ impl StorageBackend for LocalStorage {
     }
 
     async fn remove(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<(), AppError> {
-        let base = self.base(team_id, project_id);
-        if !base.exists() {
-            return Err(AppError::ResourceNotFound("project storage not found".into()));
-        }
-        let p = safe_resolve(&base, rel_path)?;
-        let meta = tokio::fs::metadata(&p).await.map_err(AppError::IoError)?;
+        let p = self.resolve_existing(team_id, project_id, rel_path)?;
+        // 区分「不存在」(→ResourceNotFound/404) 与「其它 IO 错误如权限」(→IoError/500)，
+        // 调用方无需前置 exists 检查（兼修 delete_file 双 stat + 权限被掩盖为 404）。
+        let meta = match tokio::fs::metadata(&p).await {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AppError::ResourceNotFound("file not found".into()));
+            }
+            Err(e) => return Err(AppError::IoError(e)),
+        };
         if meta.is_dir() {
             tokio::fs::remove_dir_all(&p).await.map_err(AppError::IoError)
         } else {
@@ -245,24 +253,24 @@ impl S3Storage {
 #[async_trait]
 impl StorageBackend for S3Storage {
     async fn read_string(&self, _t: i32, _p: i32, _r: &str) -> Result<String, AppError> {
-        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+        Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
     }
     async fn read_bytes(&self, _t: i32, _p: i32, _r: &str) -> Result<Vec<u8>, AppError> {
-        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+        Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
     }
     async fn write_string(&self, _t: i32, _p: i32, _r: &str, _d: &str) -> Result<(), AppError> {
-        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+        Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
     }
     async fn write_bytes(&self, _t: i32, _p: i32, _r: &str, _d: &[u8]) -> Result<(), AppError> {
-        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+        Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
     }
     async fn list_dir(&self, _t: i32, _p: i32, _r: &str) -> Result<Vec<FileEntry>, AppError> {
-        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+        Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
     }
     async fn metadata(&self, _t: i32, _p: i32, _r: &str) -> Result<FileMeta, AppError> {
-        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+        Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
     }
     async fn remove(&self, _t: i32, _p: i32, _r: &str) -> Result<(), AppError> {
-        Err(AppError::InternalError("s3 storage not yet implemented".into()))
+        Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
     }
 }

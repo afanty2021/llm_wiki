@@ -10,7 +10,7 @@ pub trait VectorStore: Send + Sync {
     async fn upsert_vectors(
         &self,
         project_id: i32,
-        pages: &[(String, Vec<f32>)],
+        pages: Vec<(String, Vec<f32>)>,
     ) -> Result<usize, AppError>;
     async fn delete_page(&self, project_id: i32, path: &str) -> Result<(), AppError>;
     async fn search(
@@ -37,7 +37,7 @@ impl VectorStore for PgVectorStore {
     async fn upsert_vectors(
         &self,
         project_id: i32,
-        pages: &[(String, Vec<f32>)],
+        pages: Vec<(String, Vec<f32>)>,
     ) -> Result<usize, AppError> {
         if pages.is_empty() {
             return Ok(0);
@@ -45,16 +45,16 @@ impl VectorStore for PgVectorStore {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO embeddings (project_id, wiki_page_id, content) VALUES ",
         );
-        for (i, (path, vec)) in pages.iter().enumerate() {
+        for (i, (path, vec)) in pages.into_iter().enumerate() {
             if i > 0 {
                 qb.push(",");
             }
             qb.push("(")
                 .push_bind(project_id)
                 .push(", ")
-                .push_bind(path.clone())
+                .push_bind(path)
                 .push(", ")
-                .push_bind(pgvector::Vector::from(vec.clone()))
+                .push_bind(pgvector::Vector::from(vec))
                 .push(")");
         }
         // ⚠️ Phase 1 保留原 ON CONFLICT（旧约束 uniq_embeddings_page 仍在）。
@@ -79,6 +79,8 @@ impl VectorStore for PgVectorStore {
         query_embedding: Vec<f32>,
         limit: i32,
     ) -> Result<Vec<VectorSearchResult>, AppError> {
+        // F8: 钳制 limit，防调用方传 ≤0 致 Postgres LIMIT 报错或静默空结果（trait 边界自我守卫）
+        let limit = limit.clamp(1, 200);
         let embedding = pgvector::Vector::from(query_embedding);
         let results = sqlx::query_as::<_, VectorSearchResult>(
             "SELECT

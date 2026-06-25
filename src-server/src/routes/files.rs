@@ -9,7 +9,6 @@ use crate::{
     middleware::project_guard::{check_project_access, check_project_access_with_role, RequiredRole},
     services::storage,
 };
-use std::path::PathBuf;
 
 const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100MB
 
@@ -187,10 +186,9 @@ pub async fn read_file(
     let ext = storage::file_ext(std::path::Path::new(&q.path)).to_lowercase();
     let content = match ext.as_str() {
         "pdf" => {
-            // pdftotext 需本地文件路径，无法纯字节。Phase 1 唯一不通过 trait 的读取分支（spec §4 标注）。
-            let base = storage::project_base(state.config.storage_path(), team_id, project_id);
-            let p = storage::safe_resolve(&base, &q.path)?;
-            extract_pdf(&p)?
+            // 经 trait 读字节，pdftotext 走 stdin(-)→stdout，无需本地路径（消除 LocalStorage 依赖，S3 就绪）
+            let bytes = state.storage.read_bytes(team_id, project_id, &q.path).await?;
+            extract_pdf(&bytes)?
         }
         "docx" => {
             let bytes = state.storage.read_bytes(team_id, project_id, &q.path).await?;
@@ -210,17 +208,28 @@ pub async fn read_file(
     })))
 }
 
-fn extract_pdf(path: &PathBuf) -> Result<String, AppError> {
-    // 依赖外部 pdftotext 工具（Dockerfile 需安装 poppler-utils）
-    use std::process::Command;
-    let output = Command::new("pdftotext")
+/// PDF 文本提取：pdftotext 走 stdin(-)→stdout，输入字节而非本地路径，
+/// 使 pdf 读取也能经 StorageBackend::read_bytes（消除 LocalStorage 路径依赖）。
+fn extract_pdf(bytes: &[u8]) -> Result<String, AppError> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("pdftotext")
         .arg("-layout")
-        .arg(path)
-        .arg("-")
-        .output()
+        .arg("-") // stdin
+        .arg("-") // stdout
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|_| AppError::InternalError(
             "pdftotext not available. Install poppler-utils in Dockerfile.".into()
         ))?;
+    // 写 stdin（忽略 broken pipe：pdftotext 可能提前结束读取）
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(bytes);
+    }
+    let output = child.wait_with_output()
+        .map_err(|e| AppError::InternalError(format!("pdftotext failed: {}", e)))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -288,12 +297,8 @@ pub async fn delete_file(
     Json(payload): Json<DeleteRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let (_user_id, team_id, _) = check_project_access_with_role(&state, &headers, project_id, RequiredRole::Admin).await?;
-    // remove() 对不存在的目标返回 IoError(500)；原行为是 404。故经 metadata 前置检查映射 404
-    //（对齐 trait 在 storage.rs:86 文档化的契约：调用方自行前置 exists 检查）。
-    match state.storage.metadata(team_id, project_id, &payload.path).await {
-        Ok(_) => {}
-        Err(_) => return Err(AppError::ResourceNotFound("File not found".into())),
-    }
+    // remove() 缺失目标 → ResourceNotFound(→404)；权限等其它 IO 错误 → IoError(→500)。
+    // 不再前置 metadata 预检查（消除双 stat + 修复权限被掩盖为 404）。
     state.storage.remove(team_id, project_id, &payload.path).await?;
     Ok(Json(serde_json::json!({"status": "deleted"})))
 }
