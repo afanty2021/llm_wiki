@@ -62,3 +62,151 @@ pub fn file_ext(path: &Path) -> &str {
         .and_then(|e| e.to_str())
         .unwrap_or("")
 }
+
+// ============================================================================
+// Layer 6 Phase 1: StorageBackend trait + LocalStorage / S3Storage
+// 逻辑坐标 (team_id, project_id, rel_path) 抽象,LocalStorage 内部复用上面的
+// project_base / safe_resolve / ensure_dir,行为与 routes/files.rs 现有直调一致。
+// ============================================================================
+
+use async_trait::async_trait;
+
+/// 文件存储后端抽象。方法接收**逻辑坐标** (team_id, project_id, rel_path),
+/// 对 Local(本地路径)和 S3(object key = teams/{tid}/projects/{pid}/{rel})都成立。
+/// LocalStorage 内部负责 project_base + safe_resolve + ensure_dir + base.exists 短路。
+#[async_trait]
+pub trait StorageBackend: Send + Sync {
+    async fn read_string(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<String, AppError>;
+    async fn read_bytes(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<Vec<u8>, AppError>;
+    async fn write_string(&self, team_id: i32, project_id: i32, rel_path: &str, data: &str) -> Result<(), AppError>;
+    async fn write_bytes(&self, team_id: i32, project_id: i32, rel_path: &str, data: &[u8]) -> Result<(), AppError>;
+    async fn list_dir(&self, team_id: i32, project_id: i32, dir_rel: &str) -> Result<Vec<FileEntry>, AppError>;
+    async fn metadata(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<FileMeta, AppError>;
+    async fn remove(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<(), AppError>;
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileMeta {
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified: i64,
+}
+
+fn modified_secs(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub struct LocalStorage {
+    root: String,
+}
+
+impl LocalStorage {
+    pub fn new(root: String) -> Self {
+        Self { root }
+    }
+
+    fn base(&self, team_id: i32, project_id: i32) -> PathBuf {
+        project_base(&self.root, team_id, project_id)
+    }
+}
+
+#[async_trait]
+impl StorageBackend for LocalStorage {
+    async fn read_string(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<String, AppError> {
+        let base = self.base(team_id, project_id);
+        if !base.exists() {
+            return Err(AppError::ResourceNotFound("project storage not found".into()));
+        }
+        let p = safe_resolve(&base, rel_path)?;
+        tokio::fs::read_to_string(&p).await.map_err(AppError::IoError)
+    }
+
+    async fn read_bytes(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<Vec<u8>, AppError> {
+        let base = self.base(team_id, project_id);
+        if !base.exists() {
+            return Err(AppError::ResourceNotFound("project storage not found".into()));
+        }
+        let p = safe_resolve(&base, rel_path)?;
+        tokio::fs::read(&p).await.map_err(AppError::IoError)
+    }
+
+    async fn write_string(&self, team_id: i32, project_id: i32, rel_path: &str, data: &str) -> Result<(), AppError> {
+        self.write_bytes(team_id, project_id, rel_path, data.as_bytes()).await
+    }
+
+    async fn write_bytes(&self, team_id: i32, project_id: i32, rel_path: &str, data: &[u8]) -> Result<(), AppError> {
+        let base = self.base(team_id, project_id);
+        let p = safe_resolve(&base, rel_path)?;
+        if let Some(parent) = p.parent() {
+            ensure_dir(parent)?;
+        }
+        tokio::fs::write(&p, data).await.map_err(AppError::IoError)
+    }
+
+    async fn list_dir(&self, team_id: i32, project_id: i32, dir_rel: &str) -> Result<Vec<FileEntry>, AppError> {
+        let base = self.base(team_id, project_id);
+        if !base.exists() {
+            return Ok(Vec::new());
+        }
+        let dir = if dir_rel.trim_matches('/').is_empty() {
+            base.clone()
+        } else {
+            safe_resolve(&base, dir_rel)?
+        };
+        let mut out = Vec::new();
+        let mut entries = tokio::fs::read_dir(&dir).await.map_err(AppError::IoError)?;
+        while let Some(entry) = entries.next_entry().await.map_err(AppError::IoError)? {
+            let meta = entry.metadata().await.map_err(AppError::IoError)?;
+            let path = entry.path().strip_prefix(&base).unwrap_or(&entry.path()).to_string_lossy().to_string();
+            out.push(FileEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path,
+                is_dir: meta.is_dir(),
+                size: meta.len(),
+                modified: modified_secs(&meta),
+            });
+        }
+        Ok(out)
+    }
+
+    async fn metadata(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<FileMeta, AppError> {
+        let base = self.base(team_id, project_id);
+        if !base.exists() {
+            return Err(AppError::ResourceNotFound("project storage not found".into()));
+        }
+        let p = safe_resolve(&base, rel_path)?;
+        let meta = tokio::fs::metadata(&p).await.map_err(AppError::IoError)?;
+        Ok(FileMeta {
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+            modified: modified_secs(&meta),
+        })
+    }
+
+    async fn remove(&self, team_id: i32, project_id: i32, rel_path: &str) -> Result<(), AppError> {
+        let base = self.base(team_id, project_id);
+        if !base.exists() {
+            return Err(AppError::ResourceNotFound("project storage not found".into()));
+        }
+        let p = safe_resolve(&base, rel_path)?;
+        let meta = tokio::fs::metadata(&p).await.map_err(AppError::IoError)?;
+        if meta.is_dir() {
+            tokio::fs::remove_dir_all(&p).await.map_err(AppError::IoError)
+        } else {
+            tokio::fs::remove_file(&p).await.map_err(AppError::IoError)
+        }
+    }
+}
