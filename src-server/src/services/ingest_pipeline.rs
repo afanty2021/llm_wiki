@@ -479,10 +479,8 @@ async fn process_source_path(
     team_id: i32,
     source_path: &str,
 ) -> Result<Option<ProcessedSource>, AppError> {
-    let storage_base = state.config.storage_path();
-    let full_path = crate::services::storage::project_base(storage_base, team_id, project_id)
-        .join(source_path);
-    let bytes = tokio::fs::read(&full_path).await.map_err(AppError::IoError)?;
+    // 经 StorageBackend trait 读字节（Phase 1 抽象收敛：与 files.rs docx/xlsx 分支一致，S3 就绪）
+    let bytes = state.storage.read_bytes(team_id, project_id, source_path).await?;
 
     // —— A: 用 llm-wiki-parser 解析文档（按扩展名 dispatch pdf/docx/xlsx/pptx/.md）——
     let parsed = llm_wiki_parser::parse_bytes(source_path, &bytes)
