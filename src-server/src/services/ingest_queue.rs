@@ -59,6 +59,11 @@ pub struct IngestJob {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub retry_count: i32,
+    pub max_retries: i32,
+    pub cancel_requested: bool,
+    pub item_states: serde_json::Value,  // JSONB
+    pub lease_expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// D 产出 → C 透传存 result JSONB + 发给 API 前端。
@@ -95,6 +100,9 @@ pub struct JobResponse {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    pub retry_count: i32,
+    pub cancel_requested: bool,
+    pub item_states: serde_json::Value,
 }
 
 // ── 映射 helper ──
@@ -111,6 +119,9 @@ fn job_to_response(job: IngestJob) -> JobResponse {
         created_at: job.created_at.to_rfc3339(),
         started_at: job.started_at.map(|t| t.to_rfc3339()),
         finished_at: job.finished_at.map(|t| t.to_rfc3339()),
+        retry_count: job.retry_count,
+        cancel_requested: job.cancel_requested,
+        item_states: job.item_states,
     }
 }
 
@@ -225,6 +236,7 @@ pub async fn mark_job_failed(
     sqlx::query("UPDATE ingest_jobs SET status='failed', error=$1, finished_at=NOW() WHERE id=$2")
         .bind(error).bind(job_id)
         .execute(&state.db).await?;
+    emit_job_event(state, job_id, "job_failed", serde_json::json!({}));
     Ok(())
 }
 
@@ -238,6 +250,101 @@ pub async fn mark_job_succeeded(
     sqlx::query("UPDATE ingest_jobs SET status='succeeded', result=$1, progress=100, finished_at=NOW() WHERE id=$2")
         .bind(&result_json).bind(job_id)
         .execute(&state.db).await?;
+    emit_job_event(state, job_id, "job_succeeded", serde_json::json!({}));
+    Ok(())
+}
+
+// ── 取消（cancel_requested 协作式）──
+
+/// 请求取消（endpoint 调）：仅置 cancel_requested=TRUE。worker 在下个 checkpoint 响应。
+pub async fn request_cancel(state: &AppState, job_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE ingest_jobs SET cancel_requested=TRUE WHERE id=$1")
+        .bind(job_id).execute(&state.db).await?;
+    Ok(())
+}
+
+/// 标记 cancelled（pipeline check_cancel 命中时调）。
+pub async fn mark_job_cancelled(state: &AppState, job_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE ingest_jobs SET status='cancelled', finished_at=NOW() WHERE id=$1")
+        .bind(job_id).execute(&state.db).await?;
+    emit_job_event(state, job_id, "job_cancelled", serde_json::json!({}));
+    Ok(())
+}
+
+/// 检查取消：cancel_requested=true → mark_cancelled + Err(Cancelled)；否则 Ok。
+pub async fn check_cancel(state: &AppState, job_id: Uuid) -> Result<(), AppError> {
+    let cancel: bool = sqlx::query_scalar("SELECT cancel_requested FROM ingest_jobs WHERE id=$1")
+        .bind(job_id).fetch_optional(&state.db).await?.unwrap_or(false);
+    if cancel {
+        mark_job_cancelled(state, job_id).await?;
+        return Err(AppError::Cancelled);
+    }
+    Ok(())
+}
+
+// ── 重试 ──
+
+/// 自动重试：status=pending, retry_count++（worker 在调此函数前已 sleep backoff）。不校验当前 status。重投 Redis。
+/// 清 finished_at/progress/stage——避免重投 job 携带矛盾状态（finished_at 非 NULL / progress=100）。
+pub async fn mark_job_retry_pending(state: &AppState, job_id: Uuid, error: &str) -> Result<(), AppError> {
+    sqlx::query("UPDATE ingest_jobs SET status='pending', retry_count=retry_count+1, error=$2, finished_at=NULL, progress=0, stage=NULL WHERE id=$1")
+        .bind(job_id).bind(error).execute(&state.db).await?;
+    emit_job_event(state, job_id, "job_retry", serde_json::json!({}));
+    // 重投 Redis（复用 enqueue 的 LPUSH；enqueue 还做 INSERT——这里只 LPUSH）
+    if let Ok(mut redis) = state.redis.get().await {
+        let _: i64 = redis::cmd("LPUSH").arg("ingest:queue").arg(job_id.to_string())
+            .query_async(&mut *redis).await.unwrap_or(0);
+    }
+    Ok(())
+}
+
+/// 手动重试（endpoint 调）：校验 status∈{failed,cancelled}，retry_count **重置 0**（重新发放自动重试额度），重投。
+/// 清 finished_at/progress/stage/error——failed/cancelled job 的 finished_at 已设、progress 多为 100，须一并清。
+pub async fn manual_retry(state: &AppState, job_id: Uuid) -> Result<(), AppError> {
+    let affected = sqlx::query(
+        "UPDATE ingest_jobs
+         SET status='pending', retry_count=0, error=NULL, cancel_requested=FALSE,
+             finished_at=NULL, progress=0, stage=NULL
+         WHERE id=$1 AND status IN ('failed','cancelled')",
+    ).bind(job_id).execute(&state.db).await?.rows_affected();
+    if affected == 0 {
+        return Err(AppError::BadRequest("job not in failed/cancelled state".into()));
+    }
+    emit_job_event(state, job_id, "job_retry", serde_json::json!({}));
+    if let Ok(mut redis) = state.redis.get().await {
+        let _: i64 = redis::cmd("LPUSH").arg("ingest:queue").arg(job_id.to_string())
+            .query_async(&mut *redis).await.unwrap_or(0);
+    }
+    Ok(())
+}
+
+// ── 三态标记 + item_state ──
+
+/// 三态之一：部分 source failed 但有成功 → succeeded_with_warnings。
+pub async fn mark_job_succeeded_with_warnings(state: &AppState, job_id: Uuid, result: &IngestJobResult) -> Result<(), AppError> {
+    sqlx::query("UPDATE ingest_jobs SET status='succeeded_with_warnings', progress=100, result=$2, finished_at=NOW() WHERE id=$1")
+        .bind(job_id).bind(serde_json::to_value(result).unwrap_or(serde_json::Value::Null))
+        .execute(&state.db).await?;
+    emit_job_event(state, job_id, "job_succeeded_with_warnings", serde_json::json!({}));
+    Ok(())
+}
+
+/// 更新某 source 的 item_state（done/failed/skipped + error）。item_states 是 JSONB 数组。
+pub async fn update_item_state(state: &AppState, job_id: Uuid, path: &str, item_status: &str, error: Option<&str>) -> Result<(), AppError> {
+    // 读当前 item_states，upsert 该 path，写回
+    let cur: serde_json::Value = sqlx::query_scalar("SELECT item_states FROM ingest_jobs WHERE id=$1")
+        .bind(job_id).fetch_one(&state.db).await?;
+    let mut arr = cur.as_array().cloned().unwrap_or_default();
+    let entry = serde_json::json!({ "path": path, "status": item_status, "error": error });
+    if let Some(slot) = arr.iter_mut().find(|v| v.get("path").and_then(|p| p.as_str()) == Some(path)) {
+        *slot = entry;
+    } else {
+        arr.push(entry);
+    }
+    sqlx::query("UPDATE ingest_jobs SET item_states=$2 WHERE id=$1")
+        .bind(job_id).bind(serde_json::Value::Array(arr)).execute(&state.db).await?;
+    let kind = if item_status == "done" { "item_done" } else { "item_failed" };
+    emit_job_event(state, job_id, kind, serde_json::json!({ "path": path, "status": item_status }));
     Ok(())
 }
 
