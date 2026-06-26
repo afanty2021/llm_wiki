@@ -6,6 +6,43 @@ use sqlx::Row;
 use uuid::Uuid;
 use crate::{AppError, AppState};
 
+/// 状态机转移规则（纯函数，单测用）。非法转移 → None。
+/// 实际转移由 mark_* 函数命令式执行；此函数固化 §4 规则供测试 + 文档。
+pub fn next_status(current: &str, trigger: &str) -> Option<&'static str> {
+    match (current, trigger) {
+        ("pending", "claim") => Some("running"),
+        ("running", "succeeded_clean") => Some("succeeded"),
+        ("running", "succeeded_with_warnings") => Some("succeeded_with_warnings"),
+        ("running", "cancel") => Some("cancelled"),
+        ("running", "transient_retry") => Some("pending"),
+        ("running", "fail") => Some("failed"),
+        ("failed", "manual_retry") => Some("pending"),
+        ("cancelled", "manual_retry") => Some("pending"),
+        _ => None,
+    }
+}
+
+/// job 级瞬态错误判定（spec §6.1）。瞬态 → 自动重试候选。
+pub fn is_transient_job_err(e: &AppError) -> bool {
+    match e {
+        AppError::DatabaseError(_) | AppError::RedisError(_) | AppError::IoError(_) => true,
+        AppError::LlmApiError(msg) => is_transient_msg(msg),
+        // redis 命令错现映射为 InternalError（如 cache_step1_result），按 message 特判
+        AppError::InternalError(msg) => {
+            let m = msg.to_lowercase();
+            m.contains("redis") || m.contains("connection refused") || m.contains("timeout") || m.contains("connect")
+        }
+        AppError::Cancelled => false,
+        _ => false,
+    }
+}
+
+fn is_transient_msg(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    // 两种 5xx 报文格式：embedding.rs 用 "HTTP {status}"；LLM streaming（LlmError::ApiError Display）用 "API error {status}"
+    m.contains("http 5") || m.contains("api error 5") || m.contains("timeout") || m.contains("connect") || m.contains("connection")
+}
+
 // ── 模型 ──
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
@@ -189,4 +226,46 @@ pub async fn mark_job_succeeded(
         .bind(&result_json).bind(job_id)
         .execute(&state.db).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_status, is_transient_job_err};
+    use crate::AppError;
+
+    #[test]
+    fn next_status_legal_transitions() {
+        assert_eq!(next_status("pending", "claim"), Some("running"));
+        assert_eq!(next_status("running", "succeeded_clean"), Some("succeeded"));
+        assert_eq!(next_status("running", "succeeded_with_warnings"), Some("succeeded_with_warnings"));
+        assert_eq!(next_status("running", "cancel"), Some("cancelled"));
+        assert_eq!(next_status("running", "transient_retry"), Some("pending"));
+        assert_eq!(next_status("running", "fail"), Some("failed"));
+        assert_eq!(next_status("failed", "manual_retry"), Some("pending"));
+        assert_eq!(next_status("cancelled", "manual_retry"), Some("pending"));
+    }
+
+    #[test]
+    fn next_status_illegal_rejected() {
+        assert_eq!(next_status("succeeded", "claim"), None);
+        assert_eq!(next_status("pending", "cancel"), None); // 未运行不可取消
+        assert_eq!(next_status("failed", "transient_retry"), None); // 失败只走手动 retry
+    }
+
+    #[test]
+    fn is_transient_classification() {
+        // sqlx 0.7 无 PoolClosed 变体；用 ColumnNotFound 作为可构造的 DatabaseError 来源
+        assert!(is_transient_job_err(&AppError::DatabaseError(sqlx::Error::ColumnNotFound("x".into()))));
+        assert!(is_transient_job_err(&AppError::IoError(std::io::Error::new(std::io::ErrorKind::TimedOut, "x"))));
+        assert!(is_transient_job_err(&AppError::LlmApiError("embed HTTP 503: down".into())));
+        assert!(is_transient_job_err(&AppError::LlmApiError("step1: API error 503: upstream down".into())));
+        assert!(is_transient_job_err(&AppError::LlmApiError("connect timeout".into())));
+        assert!(is_transient_job_err(&AppError::InternalError("redis SET: connection refused".into())));
+        // 非瞬态
+        assert!(!is_transient_job_err(&AppError::BadRequest("bad".into())));
+        assert!(!is_transient_job_err(&AppError::ResourceNotFound("x".into())));
+        assert!(!is_transient_job_err(&AppError::InternalError("DOCX parse error: bad format".into())));
+        assert!(!is_transient_job_err(&AppError::LlmApiError("HTTP 400 content violation".into())));
+        assert!(!is_transient_job_err(&AppError::Cancelled));
+    }
 }

@@ -65,6 +65,9 @@ pub enum AppError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    #[error("ingest cancelled by request")]
+    Cancelled,
+
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 }
@@ -143,6 +146,11 @@ impl IntoResponse for AppError {
                 msg.clone(),
             ),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, ERR_CONFLICT, msg.clone()),
+            AppError::Cancelled => (
+                StatusCode::OK,
+                ERR_INTERNAL_ERROR,
+                "ingest cancelled".to_string(),
+            ),
             AppError::NotImplemented(msg) => (
                 StatusCode::NOT_IMPLEMENTED,
                 ERR_NOT_IMPLEMENTED,
