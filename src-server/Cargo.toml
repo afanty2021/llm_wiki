@@ -60,7 +60,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # 流处理
 futures = "0.3"
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 async-stream = "0.3"
 async-trait = "0.1"
 
