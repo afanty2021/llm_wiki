@@ -96,13 +96,35 @@ async fn worker_loop(state: AppState) {
                     result.updated_reserved.len(),
                     result.warnings.len()
                 );
-                let _ = crate::services::ingest_queue::mark_job_succeeded(&state, job_id, &result)
-                    .await;
+                if result.warnings.is_empty() {
+                    let _ = crate::services::ingest_queue::mark_job_succeeded(&state, job_id, &result)
+                        .await;
+                } else {
+                    let _ = crate::services::ingest_queue::mark_job_succeeded_with_warnings(&state, job_id, &result)
+                        .await;
+                }
+            }
+            Err(AppError::Cancelled) => {
+                // pipeline check_cancel 已 mark_job_cancelled；此处仅记日志，不重试、不 mark_failed
+                tracing::info!("job {} cancelled at checkpoint", job_id);
             }
             Err(e) => {
-                tracing::error!("job {} failed: {}", job_id, e);
-                let _ = crate::services::ingest_queue::mark_job_failed(&state, job_id, &e.to_string())
-                    .await;
+                // 瞬态 & 额度内 → 退避后重投；否则 mark_failed
+                let transient = crate::services::ingest_queue::is_transient_job_err(&e);
+                let under_budget = job.retry_count < job.max_retries;
+                if transient && under_budget {
+                    tracing::warn!(
+                        "job {} transient err (attempt {}/{}): {}——retry after backoff",
+                        job_id, job.retry_count, job.max_retries, e
+                    );
+                    tokio::time::sleep(crate::services::embedding::backoff_delay(job.retry_count as u32)).await;
+                    let _ = crate::services::ingest_queue::mark_job_retry_pending(&state, job_id, &e.to_string())
+                        .await;
+                } else {
+                    tracing::error!("job {} failed: {}", job_id, e);
+                    let _ = crate::services::ingest_queue::mark_job_failed(&state, job_id, &e.to_string())
+                        .await;
+                }
             }
         }
     }
