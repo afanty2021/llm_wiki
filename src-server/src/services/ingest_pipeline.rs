@@ -390,6 +390,9 @@ pub async fn run_ingest_job(
             })
             .unwrap_or(false);
         if already_done {
+            // 已完成的 source 计入 done_this_run——避免 resume 时「剩余 source 全失败」误判 all-failed
+            // （prior-done 代表历史成功，不应让本次剩余全失败把整个 job 标 failed；只停不清，数据已在）
+            done_this_run += 1;
             continue;
         }
 
