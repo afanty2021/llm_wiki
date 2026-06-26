@@ -260,6 +260,23 @@ handler / worker 统一调这些，不上 trait（spec §6.8）。
 | `succeeded_with_warnings` 让前端需区分新状态 | UI 已有 warnings 展示；status 字符串契约扩展，前端按枚举兼容 |
 | 瞬态分类误判（把确定性错误当瞬态→无限重跑） | retry_count 上限 max_retries 兜底；分类偏保守（InternalError 默认非瞬态） |
 
+### 11.1 已知限制 / tech-debt（第二轮 `/code-review` 发现，2026-06-27）
+
+> 8-angle recall review 发现的 10 项。**#1/#2 已修**（commit `3d6e246`，含回归测）；**#3–#10 单实例单 worker 下接受 / 记录**，多 worker 或注入缝落地前不修。
+
+| # | 现象 | 触发条件 | 接受理由 / 何时修 |
+|---|------|----------|-------------------|
+| #1 | all-failed 误判：`Ok(Some)` 即使全部 upsert 失败也计 done → 静默 `succeeded_with_warnings` | 全部 source 的 page upsert 失败（DB 抖动） | **已修** `3d6e246`：`pages_written==0` 的 source 标 `failed`、不计 `done_this_run`；all-failed 守卫正确触发 |
+| #2 | SSE 不发 stage_changed/progress/job_running（spec §8.2 要求） | 任何 ingest | **已修** `3d6e246`：`update_job_stage` 发 stage_changed，新增 `mark_job_running` 发 job_running |
+| #3 | `mark_job_retry_pending`/`manual_retry` 吞掉 LPUSH 错 → job 在 PG=pending 但不在 redis 队列 | LPUSH 时 redis 短暂不可用 | 重启 `recover_pending` 兜底；redis 高可用/多 worker 时改「LPUSH 失败 → 不置 pending + 返回 Err 让 worker mark_failed」 |
+| #4 | worker `let _ = mark_job_retry_pending` 吞错 → job 卡 running 不重投不终态 | backoff 后 mark 的 UPDATE 恰失败（同一 DB 抖动） | 重启 recover 兜底；多 worker 时该分支应 fallback `mark_job_failed` |
+| #5 | cancel 在长 LLM(step1/step2)/batch embed 内不响应 → cancelled-but-written + 浪费 quota | 单 source 长 LLM/embed 期间请求取消 | checkpoint 粒度 tradeoff（spec §11 已记）；step1/step2 内部加 checkpoint 需 provider 协作（与注入缝一并） |
+| #6 | `mark_job_cancelled`/`mark_job_running` UPDATE 无 `WHERE status` 守卫 → 重复消费可覆盖终态 | 队列重复条目（double-LPUSH / recover 重投 running）+ 一个 pending 的 cancel_requested | 单 worker 顺序消费下不触发；多 worker 时加 `WHERE status IN ('pending','running')` 守卫 + claim 租约 |
+| #7 | `is_transient_job_err` 子串过宽（`connect`/`timeout`）→ 永久错被误判瞬态 → 重试到预算耗尽 | 含 connect/timeout 字样的确定性 InternalError/LlmApiError | max_retries 兜底；长期改 `AppError::Retryable` 结构化变体（spec §12 第 10 条） |
+| #8 | 队列无去重/claim → 重复 LPUSH（retry/manual_retry/recover）使同 job_id 被多次消费 | double-click retry / recover 与 manual 竞态 | 单 worker：顺序重复跑（幂等 upsert，费 LLM）；多 worker：并发跑 race `update_item_state` RMW → 须加 claim 租约（`lease_expires_at` 字段已占位） |
+| #9 | `stream_job` 终态事件后不主动关流 → keep-alive 持续到客户端断开 | 任何 SSE 订阅 | 客户端收终态后自关；服务端无泄漏。spec §10「收尾帧」未实现——可在终态 kind 处返回 `None` 终止 stream |
+| #10 | `lease_expires_at` 列/字段从不读（dead state）；`next_status()` 仅自测、运行时不调（doc-as-code） | — | `lease_expires_at`：多 worker claim 落地时启用（YAGNI）；`next_status`：要么在各 `mark_*` 内作守卫调用、要么删 fn 仅留 §4 文档表（防「测试通过→以为状态机被强制」的假信心） |
+
 ---
 
 ## 12. 与 spec §6 的差异（本期收敛）
