@@ -15,3 +15,4 @@ pub mod retrieval;
 pub mod review;
 pub mod web_search;
 pub mod research;
+pub mod rerank;
