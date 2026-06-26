@@ -69,6 +69,19 @@ pub struct IngestJobResult {
     pub warnings: Vec<String>,
 }
 
+/// ingest job 生命周期事件（SSE 推送给前端 + 内部观察）。
+#[derive(Clone, serde::Serialize)]
+pub struct JobEvent {
+    pub job_id: Uuid,
+    pub kind: &'static str,  // stage_changed|progress|item_done|item_failed|job_succeeded|job_failed|job_cancelled（示意，非穷举）
+    pub payload: serde_json::Value,
+}
+
+/// 发事件到 broadcast channel（无接收端时 send 报错忽略——`let _ =`）。
+pub fn emit_job_event(state: &AppState, job_id: Uuid, kind: &'static str, payload: serde_json::Value) {
+    let _ = state.job_events.send(JobEvent { job_id, kind, payload });
+}
+
 /// API 返回给前端的精简视图。
 #[derive(Debug, serde::Serialize)]
 pub struct JobResponse {
