@@ -78,13 +78,8 @@ async fn worker_loop(state: AppState) {
             }
         };
 
-        // 标记 running（pending→running 转换 + started_at，独立于 ingest_queue::update_job_stage）
-        let _ = sqlx::query(
-            "UPDATE ingest_jobs SET status='running', started_at=NOW() WHERE id=$1"
-        )
-        .bind(job_id)
-        .execute(&state.db)
-        .await;
+        // 标记 running（pending→running + started_at + 发 job_running 事件，#2：经 mark_job_running 统一发事件）
+        let _ = crate::services::ingest_queue::mark_job_running(&state, job_id).await;
 
         // D (ingest_pipeline) 已就绪：执行 job，按结果标记 succeeded/failed。
         match crate::services::ingest_pipeline::run_ingest_job(&state, &job).await {

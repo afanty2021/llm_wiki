@@ -257,3 +257,68 @@ async fn job_events_broadcast_delivers_terminal_event() {
     assert_eq!(evt.job_id, job_id);
     assert_eq!(evt.kind, "job_cancelled");
 }
+
+/// #2 回归：update_job_stage 发 stage_changed 事件（spec §8.2 进度推送，SSE 客户端可见 stage/progress）。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn update_job_stage_emits_stage_changed_event() {
+    let (_server, state, pid, _token) = setup().await;
+    let job_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ingest_jobs (id, project_id, source_paths, status) \
+         VALUES ($1, $2, ARRAY['raw/stage_probe.md'], 'running')",
+    )
+    .bind(job_id)
+    .bind(pid)
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let mut rx = state.job_events.subscribe();
+    ingest_queue::update_job_stage(&state, job_id, "parsing", 42)
+        .await
+        .unwrap();
+
+    let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("recv 超时")
+        .expect("channel closed");
+    assert_eq!(evt.kind, "stage_changed");
+    assert_eq!(evt.job_id, job_id);
+    assert_eq!(evt.payload["stage"], "parsing");
+    assert_eq!(evt.payload["progress"], 42);
+}
+
+/// #2 回归：mark_job_running 发 job_running 事件 + 置 status=running（worker 取到 job 时 SSE 可知 job 开始跑）。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn mark_job_running_emits_job_running_event() {
+    let (_server, state, pid, _token) = setup().await;
+    let job_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ingest_jobs (id, project_id, source_paths, status) \
+         VALUES ($1, $2, ARRAY['raw/running_probe.md'], 'pending')",
+    )
+    .bind(job_id)
+    .bind(pid)
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let mut rx = state.job_events.subscribe();
+    ingest_queue::mark_job_running(&state, job_id).await.unwrap();
+
+    let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("recv 超时")
+        .expect("channel closed");
+    assert_eq!(evt.kind, "job_running");
+    assert_eq!(evt.job_id, job_id);
+
+    let status: String = sqlx::query_scalar("SELECT status FROM ingest_jobs WHERE id=$1")
+        .bind(job_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "running");
+}

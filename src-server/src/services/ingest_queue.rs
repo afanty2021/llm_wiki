@@ -225,6 +225,24 @@ pub async fn update_job_stage(
     sqlx::query("UPDATE ingest_jobs SET stage=$1, progress=$2 WHERE id=$3")
         .bind(stage).bind(progress).bind(job_id)
         .execute(&state.db).await?;
+    // #2 修正（code-review）：发 stage_changed 事件，让 SSE 客户端看到进度推进（spec §8.2）。
+    emit_job_event(
+        state,
+        job_id,
+        "stage_changed",
+        serde_json::json!({ "stage": stage, "progress": progress }),
+    );
+    Ok(())
+}
+
+/// 标记 running（pending→running + started_at + 发 job_running 事件）。
+/// worker 取到 job 后调（#2：经此函数统一发事件，替代既存内联 UPDATE）。
+pub async fn mark_job_running(state: &AppState, job_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE ingest_jobs SET status='running', started_at=NOW() WHERE id=$1")
+        .bind(job_id)
+        .execute(&state.db)
+        .await?;
+    emit_job_event(state, job_id, "job_running", serde_json::json!({}));
     Ok(())
 }
 

@@ -408,10 +408,13 @@ pub async fn run_ingest_job(
             } // 内容未变，已跳过
             Ok(Some(processed)) => {
                 let mut all_upserted = true;
+                let pages_to_write = processed.pages.len();
+                let mut pages_written = 0usize;
                 for page in &processed.pages {
                     match upsert_wiki_page(state, job.project_id, page).await {
                         Ok(path) => {
                             result.new_pages.push(path.clone());
+                            pages_written += 1;
                             if let Some(text) = page_content_for_embed(page) {
                                 collected.push((path, text));
                             }
@@ -450,8 +453,22 @@ pub async fn run_ingest_job(
                         }
                     }
                 }
-                let _ = ingest_queue::update_item_state(state, job.id, sp, "done", None).await;
-                done_this_run += 1;
+                // #1 修正（code-review all-failed 回归）：仅当本次写了页面（或本就无页面可写）才计 done。
+                // 所有 upsert 失败（pages_to_write>0 但 pages_written==0）→ 标 failed、不计 done_this_run，
+                // 让 all-failed 守卫（done_this_run==0）正确触发 + resume 重试该 source（避免静默 succeeded_with_warnings）。
+                if pages_written > 0 || pages_to_write == 0 {
+                    let _ = ingest_queue::update_item_state(state, job.id, sp, "done", None).await;
+                    done_this_run += 1;
+                } else {
+                    let _ = ingest_queue::update_item_state(
+                        state,
+                        job.id,
+                        sp,
+                        "failed",
+                        Some("all page upserts failed"),
+                    )
+                    .await;
+                }
             }
             Err(e) => {
                 result.warnings.push(format!("process {}: {}", sp, e));
