@@ -3,6 +3,7 @@ pub mod search;
 pub mod llm;
 pub mod llm_stream;
 pub mod embedding;
+pub mod chunking;
 pub mod vector_store;
 pub mod graph;
 pub mod ingest_queue;
