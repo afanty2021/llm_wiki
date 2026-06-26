@@ -1,6 +1,7 @@
 use crate::AppError;
 use crate::config::EmbeddingConfig;
-use crate::services::vector_store::VectorStore;
+use crate::services::chunking::chunk_for_embedding;
+use crate::services::vector_store::{ChunkHit, PageChunk, VectorStore};
 
 /// 解析 omlx /v1/embeddings 响应。纯函数，便于单测。
 /// 校验每条维度 == expected_dim，不符报错（防模型/配置错配）。
@@ -45,8 +46,9 @@ pub async fn embed_batch(
     parse_embedding_response(&body, cfg.dim)
 }
 
-/// 批量嵌入 + bulk upsert（ingest 用）。pages: (wiki_page_path, text)。
-/// cfg=None → no-op 返回 Ok(0)。
+/// 批量嵌入 + chunk 级 upsert（ingest 用）。pages: (wiki_page_path, text)。
+/// cfg=None 或空 pages → no-op。**所有 page 的 chunk 拍平到一次 embed_batch 调用**（bge-m3 接受数组），
+/// 再按 page 切回逐页 upsert_page_chunks（DELETE+INSERT）。保持「bulk ingest 单 HTTP 请求」语义。
 pub async fn embed_and_store(
     store: &dyn VectorStore,
     cfg: Option<&EmbeddingConfig>,
@@ -61,12 +63,36 @@ pub async fn embed_and_store(
     if pages.is_empty() {
         return Ok(0);
     }
-    let texts: Vec<String> = pages.iter().map(|(_, t)| t.clone()).collect();
-    let vectors = embed_batch(cfg, client, &texts).await?;
-    let page_vecs: Vec<(String, Vec<f32>)> = pages.iter().zip(vectors.into_iter())
-        .map(|((path, _), vec)| (path.clone(), vec))
-        .collect();
-    store.upsert_vectors(project_id, page_vecs).await
+    // 1. 切分所有 page → all_texts；记录每 page 的 chunk 范围 (path, start, count)
+    let mut all_texts: Vec<String> = Vec::new();
+    let mut page_spans: Vec<(String, usize, usize)> = Vec::new();
+    for (path, text) in pages {
+        let pieces = chunk_for_embedding(text, cfg.chunk_size, cfg.overlap);
+        let start = all_texts.len();
+        all_texts.extend(pieces);
+        page_spans.push((path.clone(), start, all_texts.len() - start));
+    }
+    // 2. 一次性嵌入全部 chunk（单 HTTP 请求）
+    let all_vecs = if all_texts.is_empty() {
+        Vec::new()
+    } else {
+        embed_batch(cfg, client, &all_texts).await?
+    };
+    // 3. 按 page_span 切回，逐页 upsert_page_chunks（空 chunk → 仅 DELETE，清空该页）
+    let mut page_count = 0usize;
+    for (path, start, count) in page_spans {
+        let chunks: Vec<PageChunk> = (0..count)
+            .map(|i| PageChunk {
+                chunk_index: i as i32,
+                chunk_text: all_texts[start + i].clone(),
+                heading_path: None, // Phase 2 不做 markdown heading 抽取；列已建，留 NULL
+                vector: all_vecs[start + i].clone(),
+            })
+            .collect();
+        store.upsert_page_chunks(project_id, &path, chunks).await?;
+        page_count += 1;
+    }
+    Ok(page_count)
 }
 
 /// 单页嵌入（pages CRUD create/update 用，content 非空时）。
@@ -110,14 +136,25 @@ pub struct VectorSearchResult {
     pub score: f64,
 }
 
-/// 向量相似度搜索（委托 VectorStore::search，Phase 2 起 chunk 级聚合在实现侧）
+/// 向量检索（hybrid_search 用）：chunk 级检索 + page 聚合，返回 page 级 VectorSearchResult。
+/// top_k_chunks 拉宽候选（默认 40），top_n_pages = limit。
 pub async fn vector_search(
     store: &dyn VectorStore,
     project_id: i32,
     query_embedding: Vec<f32>,
     limit: i32,
 ) -> Result<Vec<VectorSearchResult>, AppError> {
-    store.search(project_id, query_embedding, limit).await
+    let top_k_chunks = (limit.max(20) as usize) * 4; // 拉宽候选供去重与（T6）rerank
+    let top_n_pages = limit.max(1) as usize;
+    let hits: Vec<ChunkHit> = store
+        .search_chunks(project_id, query_embedding, top_k_chunks, top_n_pages)
+        .await?;
+    Ok(hits.into_iter().map(|h| VectorSearchResult {
+        path: h.page_id,
+        title: h.title,
+        snippet: h.snippet,
+        score: h.score,
+    }).collect())
 }
 
 #[cfg(test)]

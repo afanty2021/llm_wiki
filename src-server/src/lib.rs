@@ -56,9 +56,12 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
             Arc::new(services::storage::LocalStorage::new(config.storage.path.clone()))
         };
 
-    // 向量后端：PgVectorStore 持 PgPool（db.clone()，DbPool 是 Clone）
+    // 向量后端：PgVectorStore 持 PgPool（db.clone()，DbPool 是 Clone）。ef_search 取 EmbeddingConfig（默认 80）。
     let vector_store: Arc<dyn services::vector_store::VectorStore> =
-        Arc::new(services::vector_store::PgVectorStore::new(db.clone()));
+        Arc::new(services::vector_store::PgVectorStore::with_ef_search(
+            db.clone(),
+            config.embedding.as_ref().map(|c| c.ef_search).unwrap_or(80),
+        ));
 
     let state = AppState {
         db,

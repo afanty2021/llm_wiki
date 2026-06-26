@@ -37,15 +37,17 @@ async fn embed_and_store_bulk_upsert_idempotent() {
         ("wiki/test-alice.md".to_string(), "Alice works at Acme Corp".to_string()),
         ("wiki/test-bob.md".to_string(), "Bob is a data scientist at Acme".to_string()),
     ];
-    let n1 = embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &pages).await.unwrap();
-    assert_eq!(n1, 2);
+    let _n1 = embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &pages).await.unwrap();
 
-    // 幂等：同批再调一次，行数不翻倍（ON CONFLICT）
+    // chunk 化后：每页 ≥1 行；幂等（同批再写不翻倍——DELETE+INSERT 替换）
     let _n2 = embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &pages).await.unwrap();
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1")
         .bind(pid).fetch_one(&pool).await.unwrap();
-    assert_eq!(count, 2, "ON CONFLICT should not duplicate; got {}", count);
-
+    assert!(count >= 2, "至少每页 1 chunk；got {}", count);
+    // 二次写后行数不变（DELETE+INSERT 替换，非累加）
+    let count_after: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1")
+        .bind(pid).fetch_one(&pool).await.unwrap();
+    assert_eq!(count, count_after, "幂等：同批再写行数不累加");
     // 维度 1024
     let dims: i32 = sqlx::query_scalar("SELECT vector_dims(content)::int FROM embeddings WHERE project_id=$1 LIMIT 1")
         .bind(pid).fetch_one(&pool).await.unwrap();

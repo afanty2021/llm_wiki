@@ -59,7 +59,20 @@ pub struct EmbeddingConfig {
     pub model: String,
     pub dim: usize,
     pub timeout_secs: u64,
+    #[serde(default = "default_chunk_size")]
+    pub chunk_size: usize,
+    #[serde(default = "default_overlap")]
+    pub overlap: usize,
+    #[serde(default = "default_ef_search")]
+    pub ef_search: usize,
+    #[serde(default = "default_embed_max_retries")]
+    pub max_retries: u32,
 }
+
+fn default_chunk_size() -> usize { 384 }
+fn default_overlap() -> usize { 64 }
+fn default_ef_search() -> usize { 80 }
+fn default_embed_max_retries() -> u32 { 3 }
 
 fn default_allowed_origins() -> Vec<String> {
     vec!["http://localhost:1420".to_string()]
