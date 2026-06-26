@@ -28,7 +28,10 @@ pub fn chunk_for_embedding(text: &str, chunk_size: usize, overlap: usize) -> Vec
                 packed.push(piece);
             }
         } else if buf.chars().count() + pchars.len() + 2 > chunk_size {
-            packed.push(std::mem::take(&mut buf));
+            // 仅当 buf 非空才 flush（与上方 overlong 分支一致；否则段落长度≈chunk_size 时会 push 空块）
+            if !buf.is_empty() {
+                packed.push(std::mem::take(&mut buf));
+            }
             buf.push_str(&para);
         } else {
             if !buf.is_empty() {
@@ -172,5 +175,17 @@ mod tests {
         for chunk in &out {
             let _ = chunk.chars().count();
         }
+    }
+
+    #[test]
+    fn no_empty_chunk_at_chunk_size_boundary() {
+        // review：段落长度 == chunk_size（或 chunk_size-1）时，packing 的 else-if 分支不得push 空 buf
+        // （否则空 chunk 被送去 embedding，若服务拒空输入则 ingest 断；且 chunk_index 错位）
+        let out = chunk_for_embedding(&"a".repeat(384), 384, 0);
+        assert!(out.iter().all(|c| !c.is_empty()), "不应有空 chunk；got {:?}", out);
+        assert_eq!(out.len(), 1, "单段 == chunk_size 应合成 1 块；got {} 块", out.len());
+        // chunk_size-1 边界同样
+        let out2 = chunk_for_embedding(&"a".repeat(383), 384, 0);
+        assert!(out2.iter().all(|c| !c.is_empty()), "got {:?}", out2);
     }
 }

@@ -475,10 +475,17 @@ pub async fn hybrid_search(
         }
     }
 
-    // 3. RRF + mode + sort + truncate（snippet 不重建）
+    // 3. RRF + 按 score 排序（rerank 候选 take(top_n) 必须在 score 排序后取——否则 vector-only
+    //    命中排在 keyword 之后被 take 漏掉，破坏 chunk 级向量召回）
     if vector_hits > 0 {
         apply_rrf(&mut results, &token_rank, &vector_rank, &vector_score_map);
     }
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
+    });
 
     // 4. LLM rerank（可选）。成功 → 用 LLM 序覆盖 + 收窄到 rerank_final_k；失败/无 provider → 走 RRF 序。
     //    provider 由调用方注入（hybrid_search 无 &AppState，无法自行 provider_for_project）。
@@ -517,15 +524,7 @@ pub async fn hybrid_search(
             }
         }
     }
-    // rerank 路径：保留 LLM 序，不重排（重排会按陈旧 score 毁掉 LLM 序）；fallback 路径：按 RRF score 排。
-    if !rerank_applied {
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.path.cmp(&b.path))
-        });
-    }
+    // 上方已按 RRF score 排序：rerank 路径的 reorder 覆盖该序（保留 LLM 序），fallback 路径直接保持。
     // rerank 路径收窄到 rerank_final_k（min limit，真正生效）；fallback 路径截到 limit。
     let final_limit = if rerank_applied { search_cfg.rerank_final_k.min(limit) } else { limit };
     results.truncate(final_limit);

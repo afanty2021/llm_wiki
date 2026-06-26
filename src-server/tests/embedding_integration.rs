@@ -124,4 +124,5 @@ async fn e2e_vector_search_recalls() {
     // cleanup
     sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
     sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM projects WHERE id=$1").bind(pid).execute(&pool).await.unwrap();
 }

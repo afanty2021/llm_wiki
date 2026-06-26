@@ -50,6 +50,7 @@ async fn cleanup(pool: &sqlx::PgPool, pages: &[(String, String)]) {
         sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2").bind(PID).bind(p).execute(pool).await.unwrap();
         sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2").bind(PID).bind(p).execute(pool).await.unwrap();
     }
+    sqlx::query("DELETE FROM projects WHERE id=$1").bind(PID).execute(pool).await.unwrap();
 }
 
 #[tokio::test]
