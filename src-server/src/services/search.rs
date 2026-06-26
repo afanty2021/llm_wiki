@@ -1,9 +1,11 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use serde::Serialize;
 use sqlx::PgPool;
-use crate::{AppError, config::EmbeddingConfig};
+use crate::{AppError, config::{EmbeddingConfig, SearchConfig}};
 use crate::services::embedding;
 use crate::services::vector_store::VectorStore;
+use crate::services::rerank::{rerank_pages, RerankCandidate};
+use crate::services::llm_stream::StreamChatProvider;
 
 // ── 常量（桌面原值，照搬）──
 pub const DEFAULT_RESULTS: usize = 20;
@@ -373,11 +375,13 @@ async fn fetch_page_title_content(
 pub async fn hybrid_search(
     pool: &PgPool,
     vector_store: &dyn VectorStore,
+    search_cfg: &SearchConfig,
     emb_cfg: Option<&EmbeddingConfig>,
     client: &reqwest::Client,
     project_id: i32,
     query: &str,
     limit: usize,
+    llm_provider: Option<&dyn StreamChatProvider>,
 ) -> Result<SearchResponse, AppError> {
     let limit = limit.clamp(1, MAX_RESULTS);
     let tokens = tokenize_query(query);
@@ -472,13 +476,56 @@ pub async fn hybrid_search(
     if vector_hits > 0 {
         apply_rrf(&mut results, &token_rank, &vector_rank, &vector_score_map);
     }
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.path.cmp(&b.path))
-    });
-    results.truncate(limit);
+
+    // 4. LLM rerank（可选）。成功 → 用 LLM 序覆盖 + 收窄到 rerank_final_k；失败/无 provider → 走 RRF 序。
+    //    provider 由调用方注入（hybrid_search 无 &AppState，无法自行 provider_for_project）。
+    let mut rerank_applied = false;
+    if search_cfg.rerank_enabled && results.len() > 1 {
+        if let Some(provider) = llm_provider {
+            let top_n = search_cfg.rerank_top_n.min(results.len());
+            let cands_for_rerank: Vec<SearchResult> = results.iter().take(top_n).cloned().collect();
+            let rerank_inputs: Vec<RerankCandidate> = cands_for_rerank.iter().map(|r| RerankCandidate {
+                page_id: r.path.clone(),
+                title: r.title.clone(),
+                text: r.snippet.clone(),
+            }).collect();
+            match rerank_pages(provider, query, rerank_inputs).await {
+                Ok(order) => {
+                    // 按 LLM 给的 page_id 顺序重排 cands_for_rerank，未命中的补尾，再拼回原 top_n 之后
+                    let mut reordered: Vec<SearchResult> = Vec::new();
+                    let mut seen: HashSet<String> = HashSet::new();
+                    for rp in &order {
+                        if let Some(r) = cands_for_rerank.iter().find(|c| c.path == rp.page_id) {
+                            reordered.push(r.clone());
+                            seen.insert(rp.page_id.clone());
+                        }
+                    }
+                    for r in &cands_for_rerank {
+                        if !seen.contains(&r.path) {
+                            reordered.push(r.clone());
+                        }
+                    }
+                    let tail: Vec<SearchResult> = results.iter().skip(top_n).cloned().collect();
+                    results = reordered;
+                    results.extend(tail);
+                    rerank_applied = true;
+                }
+                Err(e) => tracing::warn!("rerank failed, fallback to RRF order: {}", e),
+            }
+        }
+    }
+    // rerank 路径：保留 LLM 序，不重排（重排会按陈旧 score 毁掉 LLM 序）；fallback 路径：按 RRF score 排。
+    if !rerank_applied {
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+    }
+    // rerank 路径收窄到 rerank_final_k（min limit，真正生效）；fallback 路径截到 limit。
+    let final_limit = if rerank_applied { search_cfg.rerank_final_k.min(limit) } else { limit };
+    results.truncate(final_limit);
 
     Ok(SearchResponse {
         mode: search_mode(token_rank.is_empty(), vector_hits),

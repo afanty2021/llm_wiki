@@ -74,6 +74,26 @@ fn default_overlap() -> usize { 64 }
 fn default_ef_search() -> usize { 80 }
 fn default_embed_max_retries() -> u32 { 3 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchConfig {
+    #[serde(default = "default_rerank_enabled")]
+    pub rerank_enabled: bool,
+    #[serde(default = "default_rerank_top_n")]
+    pub rerank_top_n: usize,
+    #[serde(default = "default_rerank_final_k")]
+    pub rerank_final_k: usize,
+}
+
+fn default_rerank_enabled() -> bool { true }
+fn default_rerank_top_n() -> usize { 20 }
+fn default_rerank_final_k() -> usize { 5 }
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        SearchConfig { rerank_enabled: true, rerank_top_n: 20, rerank_final_k: 5 }
+    }
+}
+
 fn default_allowed_origins() -> Vec<String> {
     vec!["http://localhost:1420".to_string()]
 }
@@ -110,6 +130,8 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub cors: CorsConfig,
     pub embedding: Option<EmbeddingConfig>,
+    #[serde(default)]
+    pub search: SearchConfig,
     #[serde(default = "default_frontend")]
     pub frontend: FrontendConfig,
 }

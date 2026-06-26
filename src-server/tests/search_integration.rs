@@ -1,6 +1,6 @@
 // 需 PG(project 249 有 wiki_pages) + omlx bge-m3。cargo test --test search_integration -- --ignored
 #![cfg(test)]
-use llm_wiki_server::config::AppConfig;
+use llm_wiki_server::config::{AppConfig, SearchConfig};
 use llm_wiki_server::services::{embedding, search};
 use llm_wiki_server::services::vector_store::PgVectorStore;
 
@@ -45,9 +45,19 @@ async fn hybrid_search_finds_alice() {
     let emb_cfg = cfg.embedding.as_ref().expect("embedding configured");
     ensure_project_seeded(&store, &pool, emb_cfg, &client).await; // 自给自足播种
 
-    let resp = search::hybrid_search(&pool, &store, Some(emb_cfg), &client, 249, "Alice", 10)
-        .await
-        .unwrap();
+    let resp = search::hybrid_search(
+        &pool,
+        &store,
+        &SearchConfig::default(),
+        Some(emb_cfg),
+        &client,
+        249,
+        "Alice",
+        10,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(matches!(resp.mode.as_str(), "hybrid" | "keyword" | "vector"));
     // emb_cfg=Some + "Alice"：keyword(alice token) + vector(语义) 应同时命中 → 真 hybrid
     assert!(
