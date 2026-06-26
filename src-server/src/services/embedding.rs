@@ -4,10 +4,15 @@ use crate::services::chunking::chunk_for_embedding;
 use crate::services::vector_store::{ChunkHit, PageChunk, VectorStore};
 
 /// 解析 omlx /v1/embeddings 响应。纯函数，便于单测。
-/// 校验每条维度 == expected_dim，不符报错（防模型/配置错配）。
-fn parse_embedding_response(body: &serde_json::Value, expected_dim: usize) -> Result<Vec<Vec<f32>>, AppError> {
+/// 校验：向量数 == expected_count（防部分响应致下游越界 panic）、每条维度 == expected_dim。
+fn parse_embedding_response(body: &serde_json::Value, expected_dim: usize, expected_count: usize) -> Result<Vec<Vec<f32>>, AppError> {
     let data = body["data"].as_array()
         .ok_or_else(|| AppError::LlmApiError("embedding response missing 'data' array".into()))?;
+    if data.len() != expected_count {
+        return Err(AppError::LlmApiError(format!(
+            "embed returned {} vectors, expected {}", data.len(), expected_count
+        )));
+    }
     let mut out = Vec::with_capacity(data.len());
     for item in data {
         let emb = item["embedding"].as_array()
@@ -55,9 +60,21 @@ pub async fn embed_batch(
             .await;
         match res {
             Ok(resp) if resp.status().is_success() => {
-                let body: serde_json::Value = resp.json().await
-                    .map_err(|e| AppError::LlmApiError(format!("embed body parse: {}", e)))?;
-                return parse_embedding_response(&body, cfg.dim);
+                // 200 但 body 解析失败/向量数不足/维度错 = 瞬态（proxy 截断/部分响应），纳入重试
+                let body_res: Result<serde_json::Value, AppError> = resp.json().await
+                    .map_err(|e| AppError::LlmApiError(format!("embed body parse: {}", e)));
+                let parsed = match body_res {
+                    Ok(b) => parse_embedding_response(&b, cfg.dim, texts.len()),
+                    Err(e) => Err(e),
+                };
+                match parsed {
+                    Ok(vecs) => return Ok(vecs),
+                    Err(e) if attempt < max_retries => {
+                        tracing::warn!("embed success-branch err (attempt {}): {}, retrying", attempt, e);
+                        last_err = Some(e);
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             Ok(resp) => {
                 let status = resp.status();
@@ -173,6 +190,7 @@ pub struct VectorSearchResult {
     pub path: String,
     pub title: String,
     pub snippet: String,
+    pub rerank_text: String,
     pub score: f64,
 }
 
@@ -193,6 +211,7 @@ pub async fn vector_search(
         path: h.page_id,
         title: h.title,
         snippet: h.snippet,
+        rerank_text: h.rerank_text,
         score: h.score,
     }).collect())
 }
@@ -210,7 +229,7 @@ mod tests {
                 { "embedding": [0.4, 0.5, 0.6] },
             ]
         });
-        let out = parse_embedding_response(&body, 3).unwrap();
+        let out = parse_embedding_response(&body, 3, 2).unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], vec![0.1, 0.2, 0.3]);
     }
@@ -218,14 +237,22 @@ mod tests {
     #[test]
     fn parse_wrong_dim_errors() {
         let body = json!({ "data": [{ "embedding": [0.1, 0.2] }] });
-        let err = parse_embedding_response(&body, 3).unwrap_err();
+        let err = parse_embedding_response(&body, 3, 1).unwrap_err();
         assert!(err.to_string().contains("dim"));
     }
 
     #[test]
     fn parse_missing_data_errors() {
         let body = json!({});
-        assert!(parse_embedding_response(&body, 3).is_err());
+        assert!(parse_embedding_response(&body, 3, 1).is_err());
+    }
+
+    #[test]
+    fn parse_count_mismatch_errors() {
+        // P1 防回归：向量数 != 输入数（部分响应）→ 报错而非让下游越界 panic
+        let body = json!({ "data": [{ "embedding": [0.1, 0.2, 0.3] }] }); // 1 条
+        let err = parse_embedding_response(&body, 3, 2).unwrap_err(); // 期望 2 条
+        assert!(err.to_string().contains("expected 2"), "got {}", err);
     }
 
     use super::backoff_delay;

@@ -426,6 +426,8 @@ pub async fn hybrid_search(
     // 2. vector：embed_query → vector_search → vector_rank(全路径, 1-indexed) + 物化 vector-only
     let mut vector_rank: HashMap<String, usize> = HashMap::new();
     let mut vector_score_map: HashMap<String, f64> = HashMap::new();
+    // vector 命中的全文（§5.4 rerank_text，COALESCE(chunk_text, content)）——喂给 rerank 用全文而非 200 字 snippet
+    let mut vector_rerank_text: HashMap<String, String> = HashMap::new();
     let mut vector_hits = 0usize;
     if let Some(cfg) = emb_cfg {
         let qvec = match embedding::embed_query(cfg, client, query).await {
@@ -442,6 +444,7 @@ pub async fn hybrid_search(
                     for (i, vr) in vres.iter().enumerate() {
                         vector_rank.insert(vr.path.clone(), i + 1);
                         vector_score_map.insert(vr.path.clone(), vr.score as f64);
+                        vector_rerank_text.insert(vr.path.clone(), vr.rerank_text.clone());
                     }
                     // vector-only 物化：重取全量 content（vector_search 的 snippet 是前 200 字符截断、
                     // 不含锚点上下文），用 pick_snippet_anchor + build_snippet 产出对齐 keyword 侧的片段。
@@ -487,7 +490,7 @@ pub async fn hybrid_search(
             let rerank_inputs: Vec<RerankCandidate> = cands_for_rerank.iter().map(|r| RerankCandidate {
                 page_id: r.path.clone(),
                 title: r.title.clone(),
-                text: r.snippet.clone(),
+                text: vector_rerank_text.get(&r.path).cloned().unwrap_or_else(|| r.snippet.clone()),
             }).collect();
             match rerank_pages(provider, query, rerank_inputs).await {
                 Ok(order) => {
