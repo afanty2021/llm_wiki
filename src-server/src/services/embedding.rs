@@ -22,28 +22,68 @@ fn parse_embedding_response(body: &serde_json::Value, expected_dim: usize) -> Re
     Ok(out)
 }
 
+/// 指数退避：base 1s × 2^attempt，上限 30s。
+pub fn backoff_delay(attempt: u32) -> std::time::Duration {
+    let secs = 1u64.checked_shl(attempt).unwrap_or(1u64 << 30).min(30);
+    std::time::Duration::from_secs(secs)
+}
+
+/// 瞬态错误判定：网络/连接/超时/5xx 视为可重试；非瞬态（4xx 内容违规等）不重试。
+pub fn is_transient_embed_err(e: &reqwest::Error) -> bool {
+    if e.is_connect() || e.is_timeout() || e.is_request() {
+        return true;
+    }
+    e.status().map(|s| s.is_server_error()).unwrap_or(false)
+}
+
 /// 批量嵌入：一次 HTTP 调 {base_url}/embeddings（bge-m3 支持多文本）。
+/// 瞬态失败（网络/超时/5xx）按指数退避重试 `max_retries` 次；非瞬态（4xx）直接返回。
 pub async fn embed_batch(
     cfg: &EmbeddingConfig,
     client: &reqwest::Client,
     texts: &[String],
 ) -> Result<Vec<Vec<f32>>, AppError> {
-    let resp = client
-        .post(format!("{}/embeddings", cfg.base_url.trim_end_matches('/')))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "model": cfg.model, "input": texts }))
-        .timeout(std::time::Duration::from_secs(cfg.timeout_secs))
-        .send()
-        .await
-        .map_err(|e| AppError::LlmApiError(format!("embed request: {}", e)))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::LlmApiError(format!("embed HTTP {}: {}", status, body)));
+    let max_retries = cfg.max_retries;
+    let mut last_err: Option<AppError> = None;
+    for attempt in 0..=max_retries {
+        let res = client
+            .post(format!("{}/embeddings", cfg.base_url.trim_end_matches('/')))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({ "model": cfg.model, "input": texts }))
+            .timeout(std::time::Duration::from_secs(cfg.timeout_secs))
+            .send()
+            .await;
+        match res {
+            Ok(resp) if resp.status().is_success() => {
+                let body: serde_json::Value = resp.json().await
+                    .map_err(|e| AppError::LlmApiError(format!("embed body parse: {}", e)))?;
+                return parse_embedding_response(&body, cfg.dim);
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                let api_err = AppError::LlmApiError(format!("embed HTTP {}: {}", status, body));
+                if status.is_server_error() && attempt < max_retries {
+                    tracing::warn!("embed HTTP {} (attempt {}), retrying", status, attempt);
+                    last_err = Some(api_err);
+                } else {
+                    return Err(api_err);
+                }
+            }
+            Err(e) => {
+                if is_transient_embed_err(&e) && attempt < max_retries {
+                    tracing::warn!("embed request err (attempt {}): {}, retrying", attempt, e);
+                    last_err = Some(AppError::LlmApiError(format!("embed request: {}", e)));
+                } else {
+                    return Err(AppError::LlmApiError(format!("embed request: {}", e)));
+                }
+            }
+        }
+        if attempt < max_retries {
+            tokio::time::sleep(backoff_delay(attempt)).await;
+        }
     }
-    let body: serde_json::Value = resp.json().await
-        .map_err(|e| AppError::LlmApiError(format!("embed body parse: {}", e)))?;
-    parse_embedding_response(&body, cfg.dim)
+    Err(last_err.unwrap_or_else(|| AppError::LlmApiError("embed retries exhausted".into())))
 }
 
 /// 批量嵌入 + chunk 级 upsert（ingest 用）。pages: (wiki_page_path, text)。
@@ -186,5 +226,17 @@ mod tests {
     fn parse_missing_data_errors() {
         let body = json!({});
         assert!(parse_embedding_response(&body, 3).is_err());
+    }
+
+    use super::backoff_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn backoff_delay_grows_exponentially() {
+        // base 1s × 2^attempt：attempt 0→1s, 1→2s, 2→4s（上限 30s 防失控）
+        assert_eq!(backoff_delay(0), Duration::from_secs(1));
+        assert_eq!(backoff_delay(1), Duration::from_secs(2));
+        assert_eq!(backoff_delay(2), Duration::from_secs(4));
+        assert!(backoff_delay(10) <= Duration::from_secs(30), "上限 30s");
     }
 }
