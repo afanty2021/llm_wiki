@@ -368,13 +368,41 @@ pub async fn run_ingest_job(
     // 收集所有成功落库页的 (path, content) 供批量嵌入（覆盖 source 页 + reserved 页）。
     let mut collected: Vec<(String, String)> = Vec::new();
 
+    // 本次 run 中成功（done）的 source 计数 —— 用于 all-failed 判定。
+    // 注意：不能用 job.item_states 快照（不含本次 run 的写入，会误判 all-failed）。
+    let mut done_this_run = 0usize;
+
     let total = job.source_paths.len();
     for (i, sp) in job.source_paths.iter().enumerate() {
+        // 取消检查点（每 source 前）
+        if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
+            return Err(e); // AppError::Cancelled，已 mark_cancelled
+        }
+        // 部分续传：item_states 中该 source 已 done → 跳过（省 LLM/embedding）
+        let already_done = job
+            .item_states
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|v| {
+                    v.get("path").and_then(|p| p.as_str()) == Some(sp.as_str())
+                        && v.get("status").and_then(|s| s.as_str()) == Some("done")
+                })
+            })
+            .unwrap_or(false);
+        if already_done {
+            continue;
+        }
+
         let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
             .await;
 
         match process_source_path(state, job.project_id, team_id, sp).await {
-            Ok(None) => {} // 内容未变，已跳过
+            Ok(None) => {
+                // 内容未变，视为 done
+                let _ =
+                    ingest_queue::update_item_state(state, job.id, sp, "done", None).await;
+                done_this_run += 1;
+            } // 内容未变，已跳过
             Ok(Some(processed)) => {
                 let mut all_upserted = true;
                 for page in &processed.pages {
@@ -419,8 +447,15 @@ pub async fn run_ingest_job(
                         }
                     }
                 }
+                let _ = ingest_queue::update_item_state(state, job.id, sp, "done", None).await;
+                done_this_run += 1;
             }
-            Err(e) => result.warnings.push(format!("process {}: {}", sp, e)),
+            Err(e) => {
+                result.warnings.push(format!("process {}: {}", sp, e));
+                let _ =
+                    ingest_queue::update_item_state(state, job.id, sp, "failed", Some(&e.to_string()))
+                        .await;
+            }
         }
 
         let _ = ingest_queue::update_job_stage(
@@ -433,6 +468,9 @@ pub async fn run_ingest_job(
     }
 
     // reserved 重建
+    if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
+        return Err(e);
+    }
     let _ = ingest_queue::update_job_stage(state, job.id, "building_index", 100).await;
     match rebuild_reserved_pages(state, job.project_id).await {
         Ok(reserved) => {
@@ -442,7 +480,22 @@ pub async fn run_ingest_job(
         Err(e) => result.warnings.push(format!("reserved pages: {}", e)),
     }
 
+    // all-failed 判定（修正既存 bug：现行 updated_reserved.is_empty() 恒假）
+    // 本次 run 中所有 source 都失败（done_this_run==0）且有 warnings → Err（落入 worker 的 mark_job_failed）
+    // CRITICAL: 用 LOCAL done_this_run，不用 job.item_states 快照（不含本次 run 写入，会误判）。
+    let total_sources = job.source_paths.len();
+    if total_sources > 0 && done_this_run == 0 && !result.warnings.is_empty() {
+        return Err(AppError::InternalError(format!(
+            "all {} source(s) failed: {}",
+            total_sources,
+            result.warnings.join("; ")
+        )));
+    }
+
     // 批量嵌入（rebuild 之后，覆盖 source + reserved）
+    if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
+        return Err(e);
+    }
     if !collected.is_empty() {
         if let Err(e) = crate::services::embedding::embed_and_store(
             &*state.vector_store,
@@ -455,17 +508,6 @@ pub async fn run_ingest_job(
         {
             result.warnings.push(format!("embed batch: {}", e));
         }
-    }
-
-    // 全部失败 → Err
-    if result.new_pages.is_empty()
-        && result.updated_reserved.is_empty()
-        && !result.warnings.is_empty()
-    {
-        return Err(AppError::InternalError(format!(
-            "all source_paths failed: {}",
-            result.warnings.join("; ")
-        )));
     }
 
     Ok(result)
