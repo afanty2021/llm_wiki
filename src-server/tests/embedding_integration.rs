@@ -90,41 +90,38 @@ async fn embed_page_then_delete() {
     assert_eq!(count2, 0);
 }
 
-/// 端到端：embed project 249 真实 wiki_pages → embed_query → vector_search 召回。
-/// 自给自足（不依赖外部 ingest）：自己播种 project 249 的页面向量。
-/// 播种的向量保留（不 cleanup），供后续 2b hybrid_search 测试复用。
+/// 端到端：自给自足播种临时 project 的 alice 页 → embed_query → vector_search 召回 alice。
+/// 不依赖任何外部 fixture（原读 project 249 真实 wiki_pages，本 dev DB 已空 → 改自播种）。
 #[tokio::test]
-#[ignore = "requires PG(project 249 有 wiki_pages) + omlx bge-m3"]
+#[ignore = "requires PG + omlx bge-m3"]
 async fn e2e_vector_search_recalls() {
     let _g = serial_lock().await;
     let (pool, cfg, client) = setup().await;
     let store = PgVectorStore::new(pool.clone());
     let emb_cfg = cfg.embedding.as_ref().unwrap();
-    let pid = 249i32;
+    let pid = 251i32; // 临时 project（避开 golden_recall 249 / search_integration 250）
+    let path = "wiki/e2e-alice.md";
+    let text = "Alice 在 Acme 公司负责量化研究，常用 Python 构建因子模型。";
 
-    // 自给自足播种：读 project 249 真实 wiki_pages (path, content)，content 非空的嵌入。
-    // ON CONFLICT 幂等——已播种则 no-op。
-    let pages: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
-        "SELECT path, COALESCE(content,'') FROM wiki_pages WHERE project_id = $1",
-    )
-    .bind(pid)
-    .fetch_all(&pool)
-    .await
-    .unwrap()
-    .into_iter()
-    .filter(|(_, content)| !content.trim().is_empty())
-    .collect();
-    assert!(!pages.is_empty(), "project 249 应有 wiki 页（entities/alice.md 等）；若为空检查 DB");
-    embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &pages).await.unwrap();
+    sqlx::query("INSERT INTO projects (id, name, storage_path) VALUES ($1,'p2-e2e','/tmp/x') ON CONFLICT (id) DO NOTHING")
+        .bind(pid).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO wiki_pages (project_id, path, title, content) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
+        .bind(pid).bind(path).bind(path).bind(text).execute(&pool).await.unwrap();
+    embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &[(path.to_string(), text.to_string())]).await.unwrap();
 
-    // 召回：query 语义近似 alice（"Alice 在哪里工作"）
+    // 召回：query 语义近似 alice
     let qvec = embedding::embed_query(emb_cfg, &client, "Alice 在哪里工作").await.unwrap();
     let results = embedding::vector_search(&store, pid, qvec, 5).await.unwrap();
     assert!(!results.is_empty(), "vector_search should return results");
-    // alice.md 应在 top5（语义相关）
     let paths: Vec<&str> = results.iter().map(|r| r.path.as_str()).collect();
     assert!(
         paths.iter().any(|p| p.contains("alice")),
-        "alice.md should be recalled; got {:?}", paths
+        "alice 页应被召回；got {:?}", paths
     );
+
+    // cleanup
+    sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
 }
