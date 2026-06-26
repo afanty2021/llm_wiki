@@ -1,5 +1,6 @@
 pub mod auth_test;
 pub mod ingest_queue_test;
+pub mod ingest_reliability_test;
 pub mod ingest_test;
 pub mod pages_test;
 pub mod files_stat_test;
