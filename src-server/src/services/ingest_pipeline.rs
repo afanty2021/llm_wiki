@@ -253,8 +253,55 @@ async fn step1_analyze(
         .chat_to_string(messages, opts)
         .await
         .map_err(|e| AppError::LlmApiError(format!("step1: {}", e)))?;
-    serde_json::from_str(&response)
-        .map_err(|e| AppError::LlmApiError(format!("step1 JSON parse: {}", e)))
+    // 宽容解析：先直接 from_str；失败则抠最外层 {...}（兼容 Qwen3 thinking 残留、
+    // markdown fence、前导文字）。与 llm_stream 的 enable_thinking=false 双保险。
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&response) {
+        return Ok(v);
+    }
+    if let Some(v) = extract_json_object(&response) {
+        tracing::warn!("step1: 直接 JSON 解析失败，fuzzy 提取兜底成功");
+        return Ok(v);
+    }
+    let head: String = response.chars().take(80).collect();
+    Err(AppError::LlmApiError(format!(
+        "step1 JSON parse failed（无有效 JSON 对象）| head: {:?}",
+        head
+    )))
+}
+
+/// 从文本抠出最外层 `{...}` 并解析。处理 Qwen3 thinking 链、```json fence、前导文字。
+fn extract_json_object(s: &str) -> Option<serde_json::Value> {
+    let bytes = s.as_bytes();
+    let start = bytes.iter().position(|&b| b == b'{')?;
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut esc = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if esc {
+            esc = false;
+            continue;
+        }
+        if b == b'\\' {
+            esc = true;
+            continue;
+        }
+        if b == b'"' {
+            in_str = !in_str;
+            continue;
+        }
+        if in_str {
+            continue;
+        }
+        if b == b'{' {
+            depth += 1;
+        } else if b == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                return serde_json::from_str(&s[start..=i]).ok();
+            }
+        }
+    }
+    None
 }
 
 /// Step 2：基于 step1 分析 JSON + 原文，生成 FILE blocks 形式的 wiki 页面。

@@ -179,7 +179,10 @@ impl StreamChatProvider for OpenAiProvider {
             "temperature": opts.temperature,
             "max_tokens": opts.max_tokens,
             "stream": true,
-            "stream_options": {"include_usage": true}
+            "stream_options": {"include_usage": true},
+            // Qwen3 thinking mode 默认输出思考链，会让 step1 等需要纯 JSON 的场景
+            // 解析失败。通过 chat_template_kwargs 关闭。OpenAI 官方 API 会忽略此字段。
+            "chat_template_kwargs": {"enable_thinking": false}
         });
 
         let resp = self.client
