@@ -55,3 +55,66 @@ jobs:
       - name: Check Rust build
         working-directory: src-tauri
         run: cargo build
+
+  # src-server 集成测试：起 PG(pgvector)+ Redis,跑 lib 单测 + integration
+  # binary 的非 ignored 子集。#[ignore] 测试硬依赖本地 omlx(@8001 bge-m3)
+  # 或预播种的 project 249,CI 无法提供 → 留作本地 `cargo test -- --ignored`。
+  src-server-test:
+    name: src-server (PG + Redis)
+    runs-on: ubuntu-22.04
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: llmwiki
+          POSTGRES_PASSWORD: test123
+          POSTGRES_DB: llmwiki
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # sqlx migrate run 与 config/default.json 都指向 localhost:5433
+      DATABASE_URL: postgres://llmwiki:test123@localhost:5433/llmwiki
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # reqwest 默认 native-tls → 需 libssl;sqlx 已用 rustls 不受影响
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-server
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres,rustls --locked
+
+      # create_app 不自动建表,必须显式 migrate（含 CREATE EXTENSION vector）
+      - name: Run migrations
+        working-directory: src-server
+        run: sqlx migrate run
+
+      - name: cargo test (lib + integration)
+        working-directory: src-server
+        run: cargo test --lib --test integration
