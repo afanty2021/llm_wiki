@@ -16,6 +16,7 @@ pub const ERR_FILE_UPLOAD_FAILED: &str = "FILE_UPLOAD_FAILED";
 pub const ERR_LLM_API_ERROR: &str = "LLM_API_ERROR";
 pub const ERR_INTERNAL_ERROR: &str = "INTERNAL_ERROR";
 pub const ERR_CONFLICT: &str = "CONFLICT";
+pub const ERR_NOT_IMPLEMENTED: &str = "NOT_IMPLEMENTED";
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -63,6 +64,12 @@ pub enum AppError {
 
     #[error("Conflict: {0}")]
     Conflict(String),
+
+    #[error("ingest cancelled by request")]
+    Cancelled,
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl IntoResponse for AppError {
@@ -139,6 +146,16 @@ impl IntoResponse for AppError {
                 msg.clone(),
             ),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, ERR_CONFLICT, msg.clone()),
+            AppError::Cancelled => (
+                StatusCode::OK,
+                ERR_INTERNAL_ERROR,
+                "ingest cancelled".to_string(),
+            ),
+            AppError::NotImplemented(msg) => (
+                StatusCode::NOT_IMPLEMENTED,
+                ERR_NOT_IMPLEMENTED,
+                msg.clone(),
+            ),
         };
 
         let body = Json(json!({

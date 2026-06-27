@@ -127,6 +127,10 @@ async fn mark_job_lifecycle() {
     assert_eq!(job.progress, 100);
     assert!(job.result.is_some());
 
+    // Phase 3 新字段默认值（T4 扩 JobResponse）
+    assert_eq!(job.retry_count, 0);
+    assert!(!job.cancel_requested);
+
     let jobs = llm_wiki_server::services::ingest_queue::list_jobs(&state, pid, None, None)
         .await
         .unwrap();

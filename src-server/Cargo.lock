@@ -1927,6 +1927,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
@@ -3903,6 +3904,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

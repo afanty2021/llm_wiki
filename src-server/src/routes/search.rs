@@ -29,13 +29,22 @@ pub async fn search_handler(
         return Err(AppError::ValidationError("query is required".into()));
     }
     let limit = params.limit.unwrap_or(DEFAULT_RESULTS).min(MAX_RESULTS);
+    // 解析 LLM provider；失败 → None（hybrid_search 走 RRF fallback，不阻断）
+    let provider_box = crate::services::llm_stream::provider_for_project(&state, params.project_id)
+        .await
+        .ok();
+    let provider_ref: Option<&dyn crate::services::llm_stream::StreamChatProvider> =
+        provider_box.as_deref();
     let resp = search::hybrid_search(
         &state.db,
+        &*state.vector_store,
+        &state.config.search,
         state.config.embedding.as_ref(),
         &state.http,
         params.project_id,
         &params.query,
         limit,
+        provider_ref,
     )
     .await?;
     Ok(Json(resp))

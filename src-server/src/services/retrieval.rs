@@ -197,13 +197,20 @@ pub async fn retrieve_context(
     let budget = compute_context_budget(context_size);
 
     // Phase 1: keyword/vector hybrid search
+    let provider_box =
+        crate::services::llm_stream::provider_for_project(state, project_id).await.ok();
+    let provider_ref: Option<&dyn crate::services::llm_stream::StreamChatProvider> =
+        provider_box.as_deref();
     let search = crate::services::search::hybrid_search(
         &state.db,
+        &*state.vector_store,
+        &state.config.search,
         state.config.embedding.as_ref(),
         &state.http,
         project_id,
         query,
         SEARCH_LIMIT,
+        provider_ref,
     )
     .await?;
 

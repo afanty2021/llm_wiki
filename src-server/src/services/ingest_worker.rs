@@ -78,13 +78,8 @@ async fn worker_loop(state: AppState) {
             }
         };
 
-        // 标记 running（pending→running 转换 + started_at，独立于 ingest_queue::update_job_stage）
-        let _ = sqlx::query(
-            "UPDATE ingest_jobs SET status='running', started_at=NOW() WHERE id=$1"
-        )
-        .bind(job_id)
-        .execute(&state.db)
-        .await;
+        // 标记 running（pending→running + started_at + 发 job_running 事件，#2：经 mark_job_running 统一发事件）
+        let _ = crate::services::ingest_queue::mark_job_running(&state, job_id).await;
 
         // D (ingest_pipeline) 已就绪：执行 job，按结果标记 succeeded/failed。
         match crate::services::ingest_pipeline::run_ingest_job(&state, &job).await {
@@ -96,13 +91,35 @@ async fn worker_loop(state: AppState) {
                     result.updated_reserved.len(),
                     result.warnings.len()
                 );
-                let _ = crate::services::ingest_queue::mark_job_succeeded(&state, job_id, &result)
-                    .await;
+                if result.warnings.is_empty() {
+                    let _ = crate::services::ingest_queue::mark_job_succeeded(&state, job_id, &result)
+                        .await;
+                } else {
+                    let _ = crate::services::ingest_queue::mark_job_succeeded_with_warnings(&state, job_id, &result)
+                        .await;
+                }
+            }
+            Err(AppError::Cancelled) => {
+                // pipeline check_cancel 已 mark_job_cancelled；此处仅记日志，不重试、不 mark_failed
+                tracing::info!("job {} cancelled at checkpoint", job_id);
             }
             Err(e) => {
-                tracing::error!("job {} failed: {}", job_id, e);
-                let _ = crate::services::ingest_queue::mark_job_failed(&state, job_id, &e.to_string())
-                    .await;
+                // 瞬态 & 额度内 → 退避后重投；否则 mark_failed
+                let transient = crate::services::ingest_queue::is_transient_job_err(&e);
+                let under_budget = job.retry_count < job.max_retries;
+                if transient && under_budget {
+                    tracing::warn!(
+                        "job {} transient err (attempt {}/{}): {}——retry after backoff",
+                        job_id, job.retry_count, job.max_retries, e
+                    );
+                    tokio::time::sleep(crate::services::embedding::backoff_delay(job.retry_count as u32)).await;
+                    let _ = crate::services::ingest_queue::mark_job_retry_pending(&state, job_id, &e.to_string())
+                        .await;
+                } else {
+                    tracing::error!("job {} failed: {}", job_id, e);
+                    let _ = crate::services::ingest_queue::mark_job_failed(&state, job_id, &e.to_string())
+                        .await;
+                }
             }
         }
     }

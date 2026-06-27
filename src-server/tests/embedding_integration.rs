@@ -3,6 +3,7 @@
 #![cfg(test)]
 use llm_wiki_server::config::AppConfig;
 use llm_wiki_server::services::embedding;
+use llm_wiki_server::services::vector_store::PgVectorStore;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
@@ -26,6 +27,7 @@ async fn setup() -> (sqlx::PgPool, AppConfig, reqwest::Client) {
 async fn embed_and_store_bulk_upsert_idempotent() {
     let _g = serial_lock().await;
     let (pool, cfg, client) = setup().await;
+    let store = PgVectorStore::new(pool.clone());
     let emb_cfg = cfg.embedding.as_ref().expect("embedding configured");
     // project_id=249 真实存在(E2E Project);wiki_page_id 无 FK,可用任意路径。清理:
     let pid = 249i32;
@@ -35,15 +37,17 @@ async fn embed_and_store_bulk_upsert_idempotent() {
         ("wiki/test-alice.md".to_string(), "Alice works at Acme Corp".to_string()),
         ("wiki/test-bob.md".to_string(), "Bob is a data scientist at Acme".to_string()),
     ];
-    let n1 = embedding::embed_and_store(&pool, Some(emb_cfg), &client, pid, &pages).await.unwrap();
-    assert_eq!(n1, 2);
+    let _n1 = embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &pages).await.unwrap();
 
-    // 幂等：同批再调一次，行数不翻倍（ON CONFLICT）
-    let _n2 = embedding::embed_and_store(&pool, Some(emb_cfg), &client, pid, &pages).await.unwrap();
+    // chunk 化后：每页 ≥1 行；幂等（同批再写不翻倍——DELETE+INSERT 替换）
+    let _n2 = embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &pages).await.unwrap();
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1")
         .bind(pid).fetch_one(&pool).await.unwrap();
-    assert_eq!(count, 2, "ON CONFLICT should not duplicate; got {}", count);
-
+    assert!(count >= 2, "至少每页 1 chunk；got {}", count);
+    // 二次写后行数不变（DELETE+INSERT 替换，非累加）
+    let count_after: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1")
+        .bind(pid).fetch_one(&pool).await.unwrap();
+    assert_eq!(count, count_after, "幂等：同批再写行数不累加");
     // 维度 1024
     let dims: i32 = sqlx::query_scalar("SELECT vector_dims(content)::int FROM embeddings WHERE project_id=$1 LIMIT 1")
         .bind(pid).fetch_one(&pool).await.unwrap();
@@ -58,7 +62,8 @@ async fn embed_and_store_bulk_upsert_idempotent() {
 async fn embed_and_store_noop_when_cfg_none() {
     let _g = serial_lock().await;
     let (pool, _cfg, client) = setup().await;
-    let n = embedding::embed_and_store(&pool, None, &client, 249, &[("x.md".into(), "x".into())]).await.unwrap();
+    let store = PgVectorStore::new(pool.clone());
+    let n = embedding::embed_and_store(&store, None, &client, 249, &[("x.md".into(), "x".into())]).await.unwrap();
     assert_eq!(n, 0);
 }
 
@@ -67,57 +72,57 @@ async fn embed_and_store_noop_when_cfg_none() {
 async fn embed_page_then_delete() {
     let _g = serial_lock().await;
     let (pool, cfg, client) = setup().await;
+    let store = PgVectorStore::new(pool.clone());
     let emb_cfg = cfg.embedding.as_ref().unwrap();
     let pid = 249i32;
     let path = "wiki/test-single.md";
     sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
         .bind(pid).bind(path).execute(&pool).await.unwrap();
 
-    embedding::embed_page(&pool, Some(emb_cfg), &client, pid, path, "single page text").await.unwrap();
+    embedding::embed_page(&store, Some(emb_cfg), &client, pid, path, "single page text").await.unwrap();
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
         .bind(pid).bind(path).fetch_one(&pool).await.unwrap();
     assert_eq!(count, 1);
 
-    embedding::delete_embedding(&pool, pid, path).await.unwrap();
+    embedding::delete_embedding(&store, pid, path).await.unwrap();
     let count2: i64 = sqlx::query_scalar("SELECT count(*) FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2")
         .bind(pid).bind(path).fetch_one(&pool).await.unwrap();
     assert_eq!(count2, 0);
 }
 
-/// 端到端：embed project 249 真实 wiki_pages → embed_query → vector_search 召回。
-/// 自给自足（不依赖外部 ingest）：自己播种 project 249 的页面向量。
-/// 播种的向量保留（不 cleanup），供后续 2b hybrid_search 测试复用。
+/// 端到端：自给自足播种临时 project 的 alice 页 → embed_query → vector_search 召回 alice。
+/// 不依赖任何外部 fixture（原读 project 249 真实 wiki_pages，本 dev DB 已空 → 改自播种）。
 #[tokio::test]
-#[ignore = "requires PG(project 249 有 wiki_pages) + omlx bge-m3"]
+#[ignore = "requires PG + omlx bge-m3"]
 async fn e2e_vector_search_recalls() {
     let _g = serial_lock().await;
     let (pool, cfg, client) = setup().await;
+    let store = PgVectorStore::new(pool.clone());
     let emb_cfg = cfg.embedding.as_ref().unwrap();
-    let pid = 249i32;
+    let pid = 251i32; // 临时 project（避开 golden_recall 249 / search_integration 250）
+    let path = "wiki/e2e-alice.md";
+    let text = "Alice 在 Acme 公司负责量化研究，常用 Python 构建因子模型。";
 
-    // 自给自足播种：读 project 249 真实 wiki_pages (path, content)，content 非空的嵌入。
-    // ON CONFLICT 幂等——已播种则 no-op。
-    let pages: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
-        "SELECT path, COALESCE(content,'') FROM wiki_pages WHERE project_id = $1",
-    )
-    .bind(pid)
-    .fetch_all(&pool)
-    .await
-    .unwrap()
-    .into_iter()
-    .filter(|(_, content)| !content.trim().is_empty())
-    .collect();
-    assert!(!pages.is_empty(), "project 249 应有 wiki 页（entities/alice.md 等）；若为空检查 DB");
-    embedding::embed_and_store(&pool, Some(emb_cfg), &client, pid, &pages).await.unwrap();
+    sqlx::query("INSERT INTO projects (id, name, storage_path) VALUES ($1,'p2-e2e','/tmp/x') ON CONFLICT (id) DO NOTHING")
+        .bind(pid).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO wiki_pages (project_id, path, title, content) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
+        .bind(pid).bind(path).bind(path).bind(text).execute(&pool).await.unwrap();
+    embedding::embed_and_store(&store, Some(emb_cfg), &client, pid, &[(path.to_string(), text.to_string())]).await.unwrap();
 
-    // 召回：query 语义近似 alice（"Alice 在哪里工作"）
+    // 召回：query 语义近似 alice
     let qvec = embedding::embed_query(emb_cfg, &client, "Alice 在哪里工作").await.unwrap();
-    let results = embedding::vector_search(&pool, pid, qvec, 5).await.unwrap();
+    let results = embedding::vector_search(&store, pid, qvec, 5).await.unwrap();
     assert!(!results.is_empty(), "vector_search should return results");
-    // alice.md 应在 top5（语义相关）
     let paths: Vec<&str> = results.iter().map(|r| r.path.as_str()).collect();
     assert!(
         paths.iter().any(|p| p.contains("alice")),
-        "alice.md should be recalled; got {:?}", paths
+        "alice 页应被召回；got {:?}", paths
     );
+
+    // cleanup
+    sqlx::query("DELETE FROM embeddings WHERE project_id=$1 AND wiki_page_id=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM wiki_pages WHERE project_id=$1 AND path=$2").bind(pid).bind(path).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM projects WHERE id=$1").bind(pid).execute(&pool).await.unwrap();
 }

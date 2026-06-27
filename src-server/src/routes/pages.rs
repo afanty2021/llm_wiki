@@ -159,14 +159,14 @@ pub async fn create_page(
     match content_for_embed.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(text) => {
             if let Err(e) = crate::services::embedding::embed_page(
-                &state.db, state.config.embedding.as_ref(), &state.http,
+                &*state.vector_store, state.config.embedding.as_ref(), &state.http,
                 project_id, &req.path, text,
             ).await {
                 tracing::warn!("embed page {} failed (search degraded): {}", req.path, e);
             }
         }
         None => {
-            let _ = crate::services::embedding::delete_embedding(&state.db, project_id, &req.path).await;
+            let _ = crate::services::embedding::delete_embedding(&*state.vector_store, project_id, &req.path).await;
         }
     }
     Ok((StatusCode::CREATED, Json(page)))
@@ -237,14 +237,14 @@ pub async fn update_page(
     match content_for_embed.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(text) => {
             if let Err(e) = crate::services::embedding::embed_page(
-                &state.db, state.config.embedding.as_ref(), &state.http,
+                &*state.vector_store, state.config.embedding.as_ref(), &state.http,
                 project_id, &pq.path, text,
             ).await {
                 tracing::warn!("embed page {} failed (search degraded): {}", pq.path, e);
             }
         }
         None => {
-            let _ = crate::services::embedding::delete_embedding(&state.db, project_id, &pq.path).await;
+            let _ = crate::services::embedding::delete_embedding(&*state.vector_store, project_id, &pq.path).await;
         }
     }
     Ok(Json(page))
@@ -268,7 +268,7 @@ pub async fn delete_page(
         return Err(AppError::ResourceNotFound("page".to_string()));
     }
     // 页已删才清向量（404 不维护）。失败忽略（best-effort）。
-    let _ = crate::services::embedding::delete_embedding(&state.db, project_id, &pq.path).await;
+    let _ = crate::services::embedding::delete_embedding(&*state.vector_store, project_id, &pq.path).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

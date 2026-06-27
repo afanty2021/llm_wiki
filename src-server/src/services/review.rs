@@ -468,7 +468,7 @@ async fn exec_create_page(
     crate::services::ingest_pipeline::upsert_wiki_page(state, project_id, &page).await?;
     // best-effort embedding (failure logged, does not block resolve)
     if let Err(e) = crate::services::embedding::embed_page(
-        &state.db,
+        &*state.vector_store,
         state.config.embedding.as_ref(),
         &state.http,
         project_id,
@@ -499,7 +499,7 @@ async fn exec_delete_page(
     if n.rows_affected() == 0 {
         return Err(AppError::ResourceNotFound("page".into()));
     }
-    let _ = crate::services::embedding::delete_embedding(&state.db, project_id, path).await;
+    let _ = crate::services::embedding::delete_embedding(&*state.vector_store, project_id, path).await;
     // DELETE doesn't bump remaining rows' updated_at, so the (project_id, MAX(updated_at))
     // graph cache key wouldn't refresh on its own — invalidate explicitly (Step 1b).
     crate::services::graph::invalidate_project_cache(project_id);
