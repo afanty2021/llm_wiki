@@ -2,7 +2,7 @@ import type {
   ApiError, LoginRequest, RegisterRequest, AuthResponse,
   UserResponse, TeamResponse, ProjectResponse, SearchResponse, GraphData,
   FileStat, ReviewItem, ResolveReviewBody, ResearchTask, EnqueueResearchResponse,
-  IngestJob, TriggerIngestResponse, LlmProvider, SearchProvider,
+  IngestJob, TriggerIngestResponse, LlmProvider, SearchProvider, WikiPage,
 } from "./api-types"
 
 /** 解析 API base。?? 而非 ||:空串(web 同源)是合法值,|| 会 falsy 回退 localhost 破坏同源。
@@ -15,6 +15,8 @@ export const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE_URL)
 class ApiClient {
   private accessToken: string | null = null
   private refreshToken: string | null = null
+  /** 并发去重:多个 401 同时触发 refresh 时共享同一个 promise,避免并发刷新竞态/浪费。 */
+  private refreshPromise: Promise<void> | null = null
 
   setTokens(access: string, refresh: string) {
     this.accessToken = access
@@ -86,6 +88,18 @@ class ApiClient {
   }
 
   private async refreshAccessToken(): Promise<void> {
+    // 并发去重:多个请求同时 401 时只发一次 /auth/refresh,其余等同一个 promise,
+    // 避免并发刷新竞态（refresh_token 单次使用语义下尤其重要）。
+    if (this.refreshPromise) return this.refreshPromise
+    this.refreshPromise = this.doRefreshAccessToken()
+    try {
+      await this.refreshPromise
+    } finally {
+      this.refreshPromise = null
+    }
+  }
+
+  private async doRefreshAccessToken(): Promise<void> {
     if (!this.refreshToken) throw new Error("No refresh token")
     const data = await this.request<{ access_token: string }>(
       "POST",
@@ -170,6 +184,12 @@ class ApiClient {
   // === Graph ===
   async getGraph(projectId: number): Promise<GraphData> {
     return this.request<GraphData>("GET", `/api/v1/graph/${projectId}`)
+  }
+
+  // === Pages (wiki_pages DB;web 摄取只写 DB 不写文件,knowledge-tree web 模式读此) ===
+  async listPages(projectId: number, pageType?: string): Promise<WikiPage[]> {
+    const params = pageType ? `?type=${encodeURIComponent(pageType)}` : ""
+    return this.request<WikiPage[]>("GET", `/api/v1/projects/${projectId}/pages${params}`)
   }
 
   // === Files ===

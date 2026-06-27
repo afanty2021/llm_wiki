@@ -223,3 +223,18 @@ export interface SearchProvider {
   is_enabled: boolean
   has_key: boolean
 }
+
+/** wiki_pages DB 行（src-server 摄取只写 DB 不写 storage 文件）。 */
+export interface WikiPage {
+  id: number
+  project_id: number
+  path: string
+  title: string | null
+  content: string | null
+  frontmatter: Record<string, unknown> | null
+  page_type: string | null
+  sources: unknown | null
+  images: unknown | null
+  created_at: string
+  updated_at: string
+}

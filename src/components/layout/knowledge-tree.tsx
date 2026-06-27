@@ -6,6 +6,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, listDirectory } from "@/commands/fs"
+import { apiClient } from "@/lib/api-client"
+import { caps } from "@/lib/capabilities"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
@@ -55,6 +57,29 @@ export function KnowledgeTree() {
 
   const loadPages = useCallback(async () => {
     if (!project) return
+    // web: src-server 摄取只写 DB(wiki_pages 表)不写 storage 文件,knowledge-tree
+    // 走 pages API 读 DB;桌面摄取写本地文件,走 listDirectory 读 wiki/ 目录。
+    if (caps.platform === "web") {
+      try {
+        const pages = await apiClient.listPages(Number(project.id))
+        const pageInfos: WikiPageInfo[] = pages
+          .filter((p) => p.path !== "wiki/index.md" && p.path !== "wiki/log.md")
+          .map((p) => {
+            const fm = (p.frontmatter || {}) as Record<string, unknown>
+            return {
+              path: p.path,
+              title: p.title || p.path.replace(/\.md$/, "").replace(/-/g, " "),
+              type: p.page_type ?? (inferWikiTypeFromPath(p.path) || "other"),
+              tags: Array.isArray(fm.tags) ? (fm.tags as string[]) : [],
+              origin: typeof fm.origin === "string" ? (fm.origin as string) : undefined,
+            }
+          })
+        setPages(pageInfos)
+      } catch {
+        setPages([])
+      }
+      return
+    }
     const pp = normalizePath(project.path)
     try {
       const wikiTree = await listDirectory(`${pp}/wiki`)

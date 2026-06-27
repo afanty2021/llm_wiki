@@ -421,18 +421,22 @@ function App() {
       )
     }
 
-    // Start project source watch if enabled
-    import("@/lib/project-file-sync").then(async ({ startProjectFileSync, stopProjectFileSync }) => {
-      const config = await loadSourceWatchConfig(proj.id)
-      useWikiStore.getState().setSourceWatchConfig(config)
-      if (config.enabled) {
-        startProjectFileSync(proj, config).catch((err) =>
-          logger.error("failed to start project file sync", { error: String(err) })
-        )
-      } else {
-        stopProjectFileSync().catch(() => {})
-      }
-    }).catch((err) => logger.error("failed to configure project file sync", { error: String(err) }))
+    // Start project source watch if enabled — 桌面 only:file watcher 同步走 Tauri invoke。
+    // web 下 canWatchFiles=false（无本地 FS），整块跳过避免 invoke undefined 报错
+    // （window.__TAURI__ 不存在 → "Cannot read properties of undefined (reading 'invoke')"）。
+    if (caps.canWatchFiles) {
+      import("@/lib/project-file-sync").then(async ({ startProjectFileSync, stopProjectFileSync }) => {
+        const config = await loadSourceWatchConfig(proj.id)
+        useWikiStore.getState().setSourceWatchConfig(config)
+        if (config.enabled) {
+          startProjectFileSync(proj, config).catch((err) =>
+            logger.error("failed to start project file sync", { error: String(err) })
+          )
+        } else {
+          stopProjectFileSync().catch(() => {})
+        }
+      }).catch((err) => logger.error("failed to configure project file sync", { error: String(err) }))
+    }
     // 桌面 only:通知本地 clip server(Web Clipper 扩展用)。web 无本地 clip server,
     // fetch 必然 ERR_CONNECTION_REFUSED;getRecentProjects 亦走桌面 project-store。web 下整体跳过。
     if (caps.platform !== "web") {
