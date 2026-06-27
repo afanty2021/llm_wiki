@@ -617,7 +617,14 @@ async fn process_source_path(
     {
         cached
     } else {
-        let context_budget = 128_000 - 8000; // TODO: 从 get_llm_config 读 context_size 计算
+        // context_budget 从 team provider 的 context_size 推导，适配不同模型
+        // (如 Qwen3.6-35B-A3B 可能非 128k)；无 provider 配置时回退 128k（与原
+        // 硬编码一致，不引入回归）；.max(8000) 保留下限防止 context_size<8000 下溢。
+        let context_size = crate::services::llm::get_llm_config(&state.db, project_id)
+            .await
+            .map(|c| c.context_size)
+            .unwrap_or(128_000);
+        let context_budget = ((context_size - 8000).max(8000)) as usize;
         let chunks = chunk_document(&text, context_budget);
         let analyses: Vec<serde_json::Value> = if chunks.len() == 1 {
             vec![step1_analyze(state, project_id, &chunks[0]).await?]

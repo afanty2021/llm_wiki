@@ -51,3 +51,10 @@ pnpm-debug.log*
 .superpowers/
 .claude/
 src-server/target/
+
+# Workspace hygiene — local-only generated artifacts (never tracked)
+/target/
+src-server/tests_tmp/
+.serena/
+.playwright-mcp/
+e2e-ui-*.png
