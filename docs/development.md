@@ -55,38 +55,79 @@ npm run tauri build
 
 ## 🧪 测试策略
 
-### 测试框架
+本项目跨三个测试目标:前端 (Vitest)、桌面端 Rust (`src-tauri`)、Web 服务端 Rust (`src-server`)。
 
-- **单元测试**: Vitest@4.1.4
-- **测试位置**: `src/lib/__tests__/`
-- **当前覆盖**: 仅 LLM provider 配置测试
+### 前端测试 (Vitest)
 
-### 运行测试
+- **框架**: Vitest 4.x（配置在 `vitest.config.ts`）
+- **规模**: 125+ 测试文件，覆盖 `src/lib/`、`src/components/`、`src/stores/`、`src/i18n/`
+- **分两类**:
+  - **mock 测试**（默认）: 纯逻辑，不调真实 LLM —— `*.test.ts`
+  - **real-llm 测试**: 调真实 LLM provider，串行运行 —— `*.real-llm.test.ts`
+- **主要覆盖域**: 摄取 (`ingest*`)、搜索 (`search*`、`graph-search`)、embedding、`sweep-reviews`、`deep-research`、`lint`、`wiki-*`、`okf-export`、`i18n-parity` 等
 
 ```bash
-# 运行所有测试
+# 全量（mock + real-llm）
 npm test
+
+# 仅 mock 测试（CI 默认，无需 provider）
+npm run test:mocks
+
+# 仅 real-llm 测试（需配置 LLM provider，串行）
+npm run test:llm
 
 # 监听模式（开发时推荐）
 npm run test -- --watch
-
-# 查看覆盖率
-npm run test -- --coverage
-
-# Rust 测试
-cargo test
 ```
 
-### 测试覆盖缺口
+### 桌面端测试 (src-tauri)
 
-- ❌ ingest.ts 单元测试（两步摄取流程、SHA256 缓存）
-- ❌ search.ts 单元测试（分词、图扩展、预算控制）
-- ❌ wiki-graph.ts 单元测试（图谱构建、Louvain、相关性计算）
-- ❌ embedding.ts 单元测试（向量嵌入、搜索）
-- ❌ graph-relevance.ts 单元测试（四信号模型）
-- ❌ Rust 后端集成测试（文件操作、向量存储）
-- ❌ E2E 测试（摄取 → 搜索 → 聊天流程）
-- ❌ UI 组件测试（React Testing Library）
+Rust 原生 `#[test]` / `#[tokio::test]`，约 155 个，位于 `src-tauri/src/` 各模块的 `mod tests`。
+
+```bash
+cd src-tauri && cargo test
+```
+
+### Web 服务端测试 (src-server)
+
+三层（用 `cargo -p llm-wiki-server` 或在 `src-server/` 下运行）:
+
+| 层 | 内容 | 依赖 |
+|---|---|---|
+| `--lib` 单测 | ~180 个：SSE 解析、文档分块、review 解析、storage、auth 等 | 无 |
+| `--test integration` | ~68 个：auth / files / pages / reviews / ingest-queue / research / permissions 等 | PG + Redis |
+| `#[ignore]` | ~9 个：embedding / search / golden-recall / graph | 本地 omlx (@8001 bge-m3) 或预播种 project 249 |
+
+```bash
+cd src-server
+
+# lib 单测（无外部依赖）
+cargo test --lib
+
+# 集成测试（需 PG@5433 + Redis@6380）
+docker compose up -d            # 起 pgvector + redis，见 docker-compose.yml
+cargo test --test integration
+
+# ignored 测试（需本地 omlx embedding 服务 + 预播种数据）
+cargo test -- --ignored
+```
+
+> **本地陷阱**: 若同时跑着 src-server main (@8080)，其 ingest worker 会 `BRPOP` 消费 `ingest:queue`，使 `ingest_queue_test::enqueue_and_job_status_roundtrip` 失败 —— 停掉 server 再跑即过（非代码 bug，CI 里不复现）。
+
+### CI (`.github/workflows/`)
+
+- **`ci.yml` · `check`**: mac / linux / windows 三平台跑 `vite build` + `src-tauri cargo build`。
+- **`ci.yml` · `src-server-test`**: ubuntu 起 `pgvector/pgvector:pg16` (@5433) + `redis:7` (@6380)，`sqlx migrate run` 后 `cargo test --lib --test integration`（不含 `#[ignore]`）。
+- **`build.yml`**: tag `v*` 触发多平台发版打包（tauri-action）；`workflow_dispatch` 可手动出包。
+
+> **fork 仓库注意**: `afanty2021/llm_wiki` 的 GitHub Actions 默认不运行，需在 Actions 页手动点一次 "Enable workflows"（一次性，无 API）；启用后 push / `workflow_dispatch` 才触发。
+
+### 测试覆盖现状
+
+覆盖较完整，已知缺口:
+
+- `src/lib/wiki-graph.ts`、`graph-relevance.ts` 无直接单测（部分由 `graph-search` / `graph-filters` 间接覆盖）。
+- 端到端（摄取 → 搜索 → 聊天全链路）靠前端 `*.real-llm.test.ts` + src-server integration 拼接，无单一全链路 E2E 脚本。
 
 ---
 
@@ -104,7 +145,9 @@ cargo test
 - **版本**: 2021 edition
 - **风格**: `cargo fmt` (rustfmt)
 - **Linter**: `cargo clippy`
-- **错误处理**: 使用 `Result<T, String>` 返回错误信息给前端
+- **错误处理**:
+  - 桌面端 (`src-tauri` commands): `Result<T, String>` 返回错误信息给前端
+  - Web 服务端 (`src-server`): `AppError`（axum `IntoResponse`），统一映射 HTTP 状态码
 
 ### 代码质量工具
 
