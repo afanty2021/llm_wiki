@@ -635,7 +635,10 @@
       "loadError": "Failed to load logs",
       "total": "{{count}} entries",
       "prev": "Prev",
-      "next": "Next"
+      "next": "Next",
+      "clear": "Clear Logs",
+      "clearConfirm": "Clear all log files? This cannot be undone.",
+      "clearError": "Failed to clear logs"
     },
     "okfExport": {
       "title": "Export as OKF bundle",
