@@ -200,8 +200,6 @@ async fn read_log_file(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    clip_server::start_clip_server();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init()) // 错误桌面通知 (logging phase 2)
         .plugin(tauri_plugin_opener::init())
@@ -225,6 +223,8 @@ pub fn run() {
 
             logging::init_logging(app_data_dir, app.handle().clone())
                 .expect("Failed to initialize logging");
+            // clip_server 在 init_logging 之后启动，确保其启动期日志不丢失（审计 #4）
+            clip_server::start_clip_server();
             // ================================================================
             // Let the PDF extractor find the bundled pdfium dynamic
             // library via Tauri's platform-correct resource path.

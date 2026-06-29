@@ -53,7 +53,11 @@ fn acquire_slot_at(
     now: Instant,
     threshold: Duration,
 ) -> bool {
-    let mut last = last_notify.lock().expect("last_notify mutex poisoned");
+    let mut last = match last_notify.lock() {
+        Ok(g) => g,
+        // 中毒 mutex 容错：不 panic（审计 #8），沿用中毒值继续，最多去重窗口偏差
+        Err(e) => e.into_inner(),
+    };
     if let Some(t) = *last {
         if now.duration_since(t) < threshold {
             return false;
@@ -218,5 +222,23 @@ mod tests {
         assert!(acquire_slot_at(&last, t1, Duration::from_secs(10)));
         // last_notify 更新为 t1
         assert_eq!(*last.lock().unwrap(), Some(t1));
+    }
+
+    /// 审计 #8：mutex 中毒时 acquire_slot_at 不 panic，沿用中毒值继续。
+    #[test]
+    fn acquire_slot_handles_poisoned_mutex() {
+        let last = std::sync::Arc::new(Mutex::new(None));
+        let last2 = std::sync::Arc::clone(&last);
+        let h = std::thread::spawn(move || {
+            let _g = last2.lock().unwrap();
+            panic!("poison the mutex");
+        });
+        let _ = h.join(); // 线程 panic 致 mutex 中毒
+
+        // 中毒 mutex 下 acquire_slot_at 不应 panic（修复后 into_inner 取中毒值）
+        let now = Instant::now();
+        let result = acquire_slot_at(&last, now, Duration::from_secs(10));
+        // 中毒值为 None（线程持锁后未写即 panic），占用返回 true
+        assert_eq!(result, true);
     }
 }
