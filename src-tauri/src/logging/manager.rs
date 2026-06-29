@@ -25,6 +25,23 @@ static FILTER_HANDLE: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::
 /// 已简化为单 channel。如未来需要 error 日志独立通道/文件，应让 error appender 写不同文件。
 static NORMAL_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
+/// 当前日志文件 base_name（不含扩展名）。init_logging 与 clear_logs 的 reopen 共用，
+/// 消除两处硬编码分歧（否则 init 改名后 reopen 会重建错误路径 → 幽灵 bug 复现）。
+const LOG_BASE_NAME: &str = "llm-wiki";
+
+/// clear_logs 触达 worker fd/size 的共享句柄。init_logging 中、appender move 进
+/// non_blocking 之前构造（clone 现有 Arc）。合并 file+size 为单结构体，消除「file 设了
+/// size 没设」的非法中间态，且让 get/set 各一次。
+/// 不可存 appender 本体——non_blocking take ownership move 进 worker，且
+/// Arc<Mutex<Appender>> 不 impl Write（见 FIX-PLAN 方案 B）。
+#[derive(Clone)]
+struct SharedHandle {
+    current_file: Arc<Mutex<File>>,
+    current_size: Arc<Mutex<u64>>,
+}
+
+static SHARED: OnceLock<SharedHandle> = OnceLock::new();
+
 // ============================================================================
 // SizeBasedRollingFileAppender（基于大小轮转的文件 appender）
 // ============================================================================
@@ -181,10 +198,17 @@ pub fn init_logging(app_data_dir: PathBuf, app_handle: AppHandle) -> Result<(), 
     // base_name 不含扩展名：当前文件 llm-wiki.log，轮转历史 llm-wiki.1.log、llm-wiki.2.log、…
     let file_appender = SizeBasedRollingFileAppender::new(
         &log_dir,
-        "llm-wiki",
+        LOG_BASE_NAME,
         10 * 1024 * 1024, // 10MB
         5, // 保留5个历史文件
     ).map_err(|e| format!("Failed to create file appender: {}", e))?;
+
+    // clone appender 的 current_file / current_size Arc 存入全局（须在 move 进 non_blocking 之前），
+    // 让 clear_logs 的 reopen 能触达 worker 线程持有的 fd 与 size。clone 与 appender 共享同一组 Arc。
+    let _ = SHARED.set(SharedHandle {
+        current_file: Arc::clone(&file_appender.current_file),
+        current_size: Arc::clone(&file_appender.current_size),
+    });
 
     // 创建 NonBlocking channel（tracing-appender 异步写入，防止日志 IO 阻塞业务）
     let (normal_appender, normal_guard) = tracing_appender::non_blocking(file_appender);
@@ -211,21 +235,26 @@ pub fn init_logging(app_data_dir: PathBuf, app_handle: AppHandle) -> Result<(), 
     FILTER_HANDLE.set(reload_handle)
         .map_err(|_| "Failed to initialize FILTER_HANDLE".to_string())?;
 
-    // 配置 subscriber（开发模式：控制台人类可读 + 文件JSON；生产模式：仅文件JSON）
+    // 配置 subscriber（开发模式：控制台人类可读 + 文件JSON；生产模式：仅文件JSON）。
+    // stdout layer 用 #[cfg(debug_assertions)] 条件添加——release 编译期移除整层（审计 #2）。
     let subscriber = Registry::default()
-        .with(filter)
-        .with(
-            fmt::layer()
-                .with_writer(std::io::stdout)
-                .with_target(true)
-                .with_thread_ids(false)
-                .with_ansi(cfg!(debug_assertions))
-        )
+        .with(filter);
+
+    #[cfg(debug_assertions)]
+    let subscriber = subscriber.with(
+        fmt::layer()
+            .with_writer(std::io::stdout)
+            .with_target(true)
+            .with_thread_ids(false)
+            .with_ansi(true),
+    );
+
+    let subscriber = subscriber
         .with(
             fmt::layer()
                 .json()
                 .with_writer(normal_appender)
-                .with_target(true)
+                .with_target(true),
         )
         .with(NotifyLayer::new(app_handle));
 
@@ -323,25 +352,60 @@ pub fn get_log_files(app_data_dir: PathBuf) -> Result<Vec<super::types::LogFileE
     Ok(entries)
 }
 
-/// 清理所有日志文件
-/// 注意：clear_logs 后文件会在下次写入时自动重建（tracing-appender 的 NonBlocking 特性）
+/// reopen 核心逻辑（纯函数，可测）：关闭并重建共享的当前日志 fd，重置 size。
+///
+/// 测试可直接构造 SharedHandle（Arc::clone 注入点），绕开 AppHandle 与全局 subscriber，
+/// 真正复现「appender 持 fd 时 reopen」场景。
+///
+/// **锁顺序严格 file→size**（与 Write::write 轮转路径一致，反序会死锁，worker 停摆）。
+/// 全程 `?` 传播错误，禁 unwrap/expect——持锁期 panic 会中毒 Mutex，worker 后续每次
+/// lock 失败而静默丢全部日志。FS 操作（remove/open）在锁外执行，仅赋值时持锁，
+/// 缩短 worker 停顿窗口。
+fn reopen_shared(handle: &SharedHandle, log_dir: &Path) -> std::io::Result<()> {
+    let current_path = SizeBasedRollingFileAppender::current_path(log_dir, LOG_BASE_NAME);
+    // remove 当前路径（容忍 ENOENT：clear 可能已删，或首启未建）——锁外
+    let _ = std::fs::remove_file(&current_path);
+    // 重建空文件（create+append）——锁外
+    let (new_file, new_size) = SizeBasedRollingFileAppender::open_or_create_file(&current_path)?;
+    // 锁顺序 file→size（与轮转路径一致），仅赋值持锁
+    let mut file_guard = handle.current_file.lock()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let mut size_guard = handle.current_size.lock()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    *file_guard = new_file; // 旧 fd drop（unlinked inode 释放）
+    *size_guard = new_size; // 新文件 size（通常 0）
+    Ok(())
+}
+
+/// 清理所有日志文件。
+///
+/// 删除所有 .log 历史文件（跳过当前，由 reopen 处理，避免双删），再通过 reopen 重建
+/// 当前文件 fd。关键：appender 的 fd 在 NonBlocking worker 线程内，直接 remove_file 会让
+/// fd 指向 unlinked inode（幽灵文件，审计 #1）。reopen 通过全局共享 Arc 替换 worker 的 fd，
+/// 使新日志写进重建后的可见文件，根治幽灵文件 + 磁盘泄漏，三平台一致。
 pub fn clear_logs(app_data_dir: PathBuf) -> Result<(), String> {
     let log_dir = app_data_dir.join("logs");
+    let current_path = SizeBasedRollingFileAppender::current_path(&log_dir, LOG_BASE_NAME);
 
+    // 1. 删除所有 .log 历史文件，跳过当前（由 reopen 重建 fd，避免双删）
     let entries = std::fs::read_dir(&log_dir)
         .map_err(|e| format!("Failed to read log directory: {}", e))?;
-
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let path = entry.path();
-
         if path.extension().and_then(|s| s.to_str()) != Some("log") {
             continue;
         }
-
+        if path == current_path {
+            continue; // 留给 reopen，避免重复 remove
+        }
         std::fs::remove_file(&path)
             .map_err(|e| format!("Failed to remove log file: {}", e))?;
     }
+
+    // 2. reopen 当前文件：通过共享 Arc 替换 worker fd，根治幽灵文件
+    let handle = SHARED.get().ok_or("logging not initialized")?;
+    reopen_shared(handle, &log_dir).map_err(|e| format!("Failed to reopen current log: {}", e))?;
 
     Ok(())
 }
@@ -396,7 +460,8 @@ mod tests {
         assert_eq!(current_content, big_data);
     }
 
-    /// 测试：clear_logs 删除 logs 目录下所有 .log 文件（不经过 init_logging）
+    /// 测试：clear_logs 删除所有 .log 历史文件，并通过 reopen 重建当前文件 fd。
+    /// 须先初始化全局共享句柄（模拟 init_logging 注入）——clear_logs 依赖它触达 worker fd。
     #[test]
     fn test_clear_logs_deletes_files() {
         let dir = TempDir::new().expect("should create temp dir");
@@ -412,28 +477,78 @@ mod tests {
             std::fs::write(&path, b"dummy content").expect("should write dummy file");
         }
 
+        // 初始化全局共享句柄（模拟 init_logging），指向当前 llm-wiki.log。
+        // OnceLock 单例：set 容忍已初始化（并行测试下可能被先 set，无妨——reopen 以 log_dir 为准）。
+        let current_path = logs_dir.join("llm-wiki.log");
+        let (file, size) = SizeBasedRollingFileAppender::open_or_create_file(&current_path)
+            .expect("should open current log");
+        let _ = SHARED.set(SharedHandle {
+            current_file: Arc::new(Mutex::new(file)),
+            current_size: Arc::new(Mutex::new(size)),
+        });
+
         // 调用 clear_logs
         clear_logs(dir.path().to_path_buf()).expect("should clear logs");
 
-        // 验证 .log 文件被删除
-        let remaining: Vec<_> = std::fs::read_dir(&logs_dir)
+        // 验证：历史/其他 .log 被删，llm-wiki.log 被 reopen 重建（空），other.txt 保留
+        let names: std::collections::HashSet<String> = std::fs::read_dir(&logs_dir)
             .expect("should read logs dir")
             .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
 
-        assert_eq!(
-            remaining.len(),
-            1,
-            "only other.txt should remain, got: {:?}",
-            remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
-        );
+        assert!(names.contains("other.txt"), "non-.log file should remain");
+        assert!(names.contains("llm-wiki.log"), "current log should be recreated by reopen");
+        assert!(!names.contains("llm-wiki.1.log"), "rotated history should be deleted");
+        assert!(!names.contains("app.log"), "other .log file should be deleted");
 
-        let remaining_name = remaining[0].file_name();
-        assert_eq!(
-            remaining_name.to_str().unwrap(),
-            "other.txt",
-            "non-.log file should remain"
-        );
+        // reopen 重建的当前文件为空
+        let content = std::fs::read_to_string(logs_dir.join("llm-wiki.log"))
+            .expect("should read recreated log");
+        assert_eq!(content, "", "recreated current log should be empty");
+    }
+
+    /// 测试：reopen_shared 关闭并重建 fd，复现「appender 持 fd 时 clear」盲区。
+    /// 直接 Arc::clone 构造共享句柄（模拟 init_logging 注入点），绕开 AppHandle + 全局 subscriber。
+    #[test]
+    fn reopen_shared_replaces_fd_and_resets_size() {
+        let dir = TempDir::new().expect("should create temp dir");
+        let log_dir = dir.path();
+
+        // 构造与 init_logging 相同的共享句柄
+        let current_path = SizeBasedRollingFileAppender::current_path(log_dir, LOG_BASE_NAME);
+        let (file, size) = SizeBasedRollingFileAppender::open_or_create_file(&current_path)
+            .expect("should open_or_create");
+        let handle = SharedHandle {
+            current_file: Arc::new(Mutex::new(file)),
+            current_size: Arc::new(Mutex::new(size)),
+        };
+
+        // 写入数据到当前文件（模拟 worker 写日志）
+        {
+            let mut f = handle.current_file.lock().expect("lock file");
+            f.write_all(b"old data\n").expect("should write");
+        }
+        *handle.current_size.lock().expect("lock size") += b"old data\n".len() as u64;
+        assert_eq!(*handle.current_size.lock().expect("lock size"), 9);
+
+        // reopen：关旧 fd → remove → 重建空文件 → size=0
+        reopen_shared(&handle, log_dir).expect("reopen should succeed");
+
+        // size 归零
+        assert_eq!(*handle.current_size.lock().expect("lock size"), 0);
+
+        // 重建后文件为空（旧数据随旧 fd 的 unlinked inode 释放）
+        let content = std::fs::read_to_string(&current_path).expect("should read");
+        assert_eq!(content, "");
+
+        // 新 fd 可继续写入（验证 fd 有效，非幽灵）
+        {
+            let mut f = handle.current_file.lock().expect("lock file");
+            f.write_all(b"new data\n").expect("should write");
+        }
+        let content = std::fs::read_to_string(&current_path).expect("should read");
+        assert_eq!(content, "new data\n");
     }
 
     // ========================================================================
