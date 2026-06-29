@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { RefreshCw, Loader2 } from "lucide-react"
+import { RefreshCw, Loader2, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { readLogFile } from "@/commands/logging"
+import { readLogFile, clearLogs } from "@/commands/logging"
 import { createLogger } from "@/lib/logger"
 import type { LogDisplayEntry, LogLevel } from "@/lib/logger-types"
 
@@ -29,6 +29,7 @@ export function LogsSection() {
   const [traceId, setTraceId] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -59,6 +60,23 @@ export function LogsSection() {
     void loadLogs()
   }, [loadLogs])
 
+  const handleClear = useCallback(async () => {
+    const confirmed = window.confirm(t("settings.logs.clearConfirm"))
+    if (!confirmed) return
+    setClearing(true)
+    try {
+      await clearLogs()
+      setPage(0)
+      await loadLogs()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
+      logger.error("Failed to clear logs", { error: msg })
+    } finally {
+      setClearing(false)
+    }
+  }, [t, loadLogs])
+
   const toggleLevel = (lvl: LogLevel) => {
     setLevels((prev) =>
       prev.includes(lvl)
@@ -73,9 +91,24 @@ export function LogsSection() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h3 className="text-lg font-medium">{t("settings.logs.title")}</h3>
-        <p className="text-sm text-muted-foreground">{t("settings.logs.description")}</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-medium">{t("settings.logs.title")}</h3>
+          <p className="text-sm text-muted-foreground">{t("settings.logs.description")}</p>
+        </div>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={() => void handleClear()}
+          disabled={clearing || loading || total === 0}
+        >
+          {clearing ? (
+            <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="mr-1 h-4 w-4" />
+          )}
+          {t("settings.logs.clear")}
+        </Button>
       </div>
 
       {/* 过滤栏 */}
