@@ -122,6 +122,40 @@ fn default_frontend() -> FrontendConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_log_dir")]
+    pub dir: String,
+    #[serde(default = "default_log_max_size_bytes")]
+    pub max_size_bytes: u64,
+    #[serde(default = "default_log_max_files")]
+    pub max_files: usize,
+    #[serde(default = "default_log_level")]
+    pub level: String,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_log_dir(),
+            max_size_bytes: default_log_max_size_bytes(),
+            max_files: default_log_max_files(),
+            level: default_log_level(),
+        }
+    }
+}
+
+fn default_log_dir() -> String { "./logs".to_string() }
+fn default_log_max_size_bytes() -> u64 { 10 * 1024 * 1024 }
+fn default_log_max_files() -> usize { 5 }
+fn default_log_level() -> String { "INFO".to_string() }
+fn default_admin_usernames() -> String { String::new() }
+
+/// 解析逗号分隔的 admin 用户名（空白名单 → 空 Vec）
+fn parse_admin_usernames(s: &str) -> Vec<String> {
+    s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
@@ -134,6 +168,10 @@ pub struct AppConfig {
     pub search: SearchConfig,
     #[serde(default = "default_frontend")]
     pub frontend: FrontendConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
+    #[serde(default = "default_admin_usernames")]
+    pub admin_usernames: String,
 }
 
 impl AppConfig {
@@ -220,6 +258,16 @@ impl AppConfig {
     pub fn index_html(&self) -> &str {
         &self.frontend.index_html
     }
+
+    // Logging 配置 getter（src-server 日志系统）
+    pub fn log_dir(&self) -> &str { &self.logging.dir }
+    pub fn log_max_size_bytes(&self) -> u64 { self.logging.max_size_bytes }
+    pub fn log_max_files(&self) -> usize { self.logging.max_files }
+    pub fn log_level(&self) -> &str { &self.logging.level }
+    /// admin 用户名列表（从 ADMIN_USERNAMES 逗号分隔字符串解析，空白名单 → 空 Vec）
+    pub fn admin_usernames(&self) -> Vec<String> {
+        parse_admin_usernames(&self.admin_usernames)
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +297,18 @@ mod tests {
         let origins = default_allowed_origins();
         assert_eq!(origins.len(), 1);
         assert_eq!(origins[0], "http://localhost:1420");
+    }
+
+    #[test]
+    fn admin_usernames_parses_comma_string() {
+        assert!(parse_admin_usernames("").is_empty());
+        assert_eq!(parse_admin_usernames("alice"), vec!["alice"]);
+        // 含空格与空段
+        assert_eq!(
+            parse_admin_usernames("alice, bob , carol"),
+            vec!["alice", "bob", "carol"]
+        );
+        assert_eq!(parse_admin_usernames("alice,,bob,"), vec!["alice", "bob"]);
     }
 
     #[test]

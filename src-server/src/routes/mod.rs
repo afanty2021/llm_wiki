@@ -1,5 +1,6 @@
 mod health;
 mod auth;
+mod logs;
 mod users;
 mod teams;
 mod projects;
@@ -39,6 +40,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/search", search::search_routes())
         .nest("/api/v1/chat", chat::chat_routes())
         .nest("/api/v1/graph", graph::graph_routes())
+        .nest("/api/v1/logs", logs::logs_routes())
         .merge(ingest::global_ingest_routes())
         .merge(research::global_research_routes())
         .merge(llm_providers::llm_provider_routes())

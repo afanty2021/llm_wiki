@@ -35,7 +35,8 @@ sha2 = "0.10"
 
 # 日志
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-appender = "0.2"
 
 # 时间处理
 chrono = { version = "0.4", features = ["serde"] }
