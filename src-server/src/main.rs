@@ -1,24 +1,23 @@
 use anyhow::{Context, Result};
 use dotenvy::dotenv;
 use llm_wiki_server::create_app;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // 加载环境变量
     dotenv().ok();
 
-    // 初始化日志
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "llm_wiki_server=info,tower_http=debug,axum=trace".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    // 读取配置
+    // 读取配置（在 init_logging 前，日志参数从 config 取）
     let config = llm_wiki_server::AppConfig::from_env()?;
+
+    // 初始化日志系统（文件轮转 + 级别控制；在 create_app 前使启动期日志可写文件）
+    llm_wiki_server::services::logging::init_logging(
+        config.logging.dir.clone().into(),
+        config.logging.level.clone(),
+        config.logging.max_size_bytes,
+        config.logging.max_files,
+    )
+    .expect("Failed to initialize logging");
 
     // 创建应用
     let (app, state) = create_app(config).await?;
