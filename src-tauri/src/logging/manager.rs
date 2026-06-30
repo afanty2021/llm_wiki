@@ -145,7 +145,8 @@ impl Write for SizeBasedRollingFileAppender {
 
             let mut size_guard = self.current_size.lock()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-            *size_guard = new_size;
+            // 轮转后新文件已写入本次 buf，size 须计入 buf.len()（审计 #3：原仅 = new_size 漏算）
+            *size_guard = new_size + buf.len() as u64;
         }
 
         // 写入当前文件
@@ -332,8 +333,8 @@ pub fn get_log_files(app_data_dir: PathBuf) -> Result<Vec<super::types::LogFileE
             .unwrap_or("unknown")
             .to_string();
 
-        // 判断是否为当前活跃日志文件：无数字后缀（如 "llm-wiki.log"）
-        let is_current = !name.chars().any(|c| c.is_ascii_digit());
+        // 判断是否为当前活跃日志文件：精确匹配 {base}.log（审计 #7：原数字启发式脆弱）
+        let is_current = is_current_log(&name, LOG_BASE_NAME);
 
         entries.push(super::types::LogFileEntry {
             name,
@@ -350,6 +351,14 @@ pub fn get_log_files(app_data_dir: PathBuf) -> Result<Vec<super::types::LogFileE
 
     entries.sort_by(|a, b| b.name.cmp(&a.name));
     Ok(entries)
+}
+
+/// 判断日志文件名是否为当前活跃文件（精确匹配 {base}.log）。
+///
+/// 审计 #7：原 `!name.chars().any(|c| c.is_ascii_digit())` 启发式在 base_name 含数字时
+/// 误判（如 base "llm-wiki2"）。改为 strip 后缀比较 stem，精确且无分配。
+fn is_current_log(name: &str, base_name: &str) -> bool {
+    name.strip_suffix(".log") == Some(base_name)
 }
 
 /// reopen 核心逻辑（纯函数，可测）：关闭并重建共享的当前日志 fd，重置 size。
@@ -551,6 +560,97 @@ mod tests {
         assert_eq!(content, "new data\n");
     }
 
+    /// 审计 #3：轮转后 current_size 须计入本次写入的 buf.len()（原仅 = new_size 漏算）。
+    #[test]
+    fn rotate_size_includes_written_bytes() {
+        let dir = TempDir::new().expect("should create temp dir");
+        // max_size=10：写入累计 >10 即触发轮转
+        let mut appender = SizeBasedRollingFileAppender::new(dir.path(), "llm-wiki", 10, 3)
+            .expect("should create appender");
+
+        // 写 5 字节：不轮转，size=5
+        appender.write_all(b"hello").expect("write");
+        assert_eq!(*appender.current_size.lock().unwrap(), 5);
+
+        // 写 10 字节：size 先 +=10=15 > 10 触发轮转；轮转后 size 须 = new_size(0) + 10
+        appender.write_all(b"0123456789").expect("write");
+        assert_eq!(
+            *appender.current_size.lock().unwrap(),
+            10,
+            "轮转后 size 须计入本次 buf.len()"
+        );
+    }
+
+    /// 审计 #7：is_current_log 精确匹配 {base}.log，base_name 含数字也不误判。
+    #[test]
+    fn is_current_log_matches_exact_name() {
+        assert!(is_current_log("llm-wiki.log", "llm-wiki"));
+        assert!(!is_current_log("llm-wiki.1.log", "llm-wiki"));
+        assert!(!is_current_log("llm-wiki.2.log", "llm-wiki"));
+        // base_name 含数字（原数字启发式会误判，精确匹配不受影响）
+        assert!(is_current_log("app2.log", "app2"));
+        assert!(!is_current_log("app2.1.log", "app2"));
+    }
+
+    /// 审计 #6：前端日志优先 span.frontend_ts，后端日志回退顶层 timestamp。
+    #[test]
+    fn extract_entry_prefers_frontend_ts() {
+        // 前端日志：span 含 frontend_ts
+        let json = serde_json::json!({
+            "timestamp": "2026-06-29T12:00:00Z",
+            "level": "INFO",
+            "target": "frontend",
+            "span": { "name": "frontend_log", "module": "src/lib/ingest.ts",
+                      "trace_id": "t1", "frontend_ts": "2026-06-29T12:00:01.123Z" },
+            "fields": { "message": "hello" }
+        });
+        let entry = extract_entry(&json).expect("should extract");
+        assert_eq!(entry.timestamp, "2026-06-29T12:00:01.123Z");
+        assert_eq!(entry.module, "src/lib/ingest.ts");
+        assert_eq!(entry.trace_id.as_deref(), Some("t1"));
+
+        // 后端日志：无 frontend_ts，回退顶层 timestamp
+        let json2 = serde_json::json!({
+            "timestamp": "2026-06-29T12:00:00Z",
+            "level": "INFO",
+            "target": "ingest",
+            "fields": { "message": "backend" }
+        });
+        let entry2 = extract_entry(&json2).expect("should extract");
+        assert_eq!(entry2.timestamp, "2026-06-29T12:00:00Z");
+    }
+
+    /// 审计 #5：同日多次导出文件名唯一（含时分秒）+ 按 mtime 升序拼接（老→新）。
+    #[test]
+    fn export_logs_unique_name_and_sorted() {
+        let dir = TempDir::new().expect("should create temp dir");
+        let logs_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).expect("create logs dir");
+
+        // 三个文件，sleep 区分 mtime（现代 FS 纳秒粒度足够）：.2.log 最老，.log 最新
+        std::fs::write(logs_dir.join("llm-wiki.2.log"), b"oldest\n").expect("write oldest");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        std::fs::write(logs_dir.join("llm-wiki.1.log"), b"middle\n").expect("write middle");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        std::fs::write(logs_dir.join("llm-wiki.log"), b"newest\n").expect("write newest");
+
+        let path1 = export_logs(dir.path().to_path_buf(), 30).expect("export should succeed");
+        let name1 = std::path::Path::new(&path1)
+            .file_name().unwrap().to_string_lossy().to_string();
+        assert!(name1.starts_with("llm-wiki-export-") && name1.ends_with(".jsonl"));
+        // 含时分秒：YYYY-MM-DD-HHMMSS（至少 5 个 '-' 分隔段）
+        assert!(name1.matches('-').count() >= 5, "文件名须含时分秒段");
+
+        // 跨秒再导出：文件名唯一不覆盖
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let path2 = export_logs(dir.path().to_path_buf(), 30).expect("export should succeed");
+        assert_ne!(path1, path2, "同日多次导出文件名须唯一");
+
+        // 排序：老→新
+        let content = std::fs::read_to_string(&path2).expect("read export");
+        assert_eq!(content, "oldest\nmiddle\nnewest\n", "按 mtime 升序拼接");
+    }
+
     // ========================================================================
     // read_log_file 测试辅助函数
     // ========================================================================
@@ -736,32 +836,35 @@ mod tests {
 /// 导出日志为 JSONL
 pub fn export_logs(app_data_dir: PathBuf, days: u32) -> Result<String, String> {
     let log_dir = app_data_dir.join("logs");
+    // 文件名含时分秒，避免同日多次导出覆盖（审计 #5）
     let export_path = app_data_dir.join(format!("llm-wiki-export-{}.jsonl",
-        chrono::Utc::now().format("%Y-%m-%d")));
+        chrono::Utc::now().format("%Y-%m-%d-%H%M%S")));
 
     let mut output = std::fs::File::create(&export_path)
         .map_err(|e| format!("Failed to create export file: {}", e))?;
 
     let cutoff_time = chrono::Utc::now() - chrono::Duration::days(days as i64);
 
-    let entries = std::fs::read_dir(&log_dir)
-        .map_err(|e| format!("Failed to read log directory: {}", e))?;
-
-    for entry in entries {
+    // 收集 .log 文件并按 mtime 升序（老→新）排序，保证导出按时间顺序（审计 #5）
+    let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+    for entry in std::fs::read_dir(&log_dir)
+        .map_err(|e| format!("Failed to read log directory: {}", e))?
+    {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let path = entry.path();
-
         if path.extension().and_then(|s| s.to_str()) != Some("log") {
             continue;
         }
-
         let metadata = std::fs::metadata(&path)
             .map_err(|e| format!("Failed to read metadata: {}", e))?;
-
         let modified = metadata
             .modified()
             .map_err(|e| format!("Failed to get modified time: {}", e))?;
+        files.push((path, modified));
+    }
+    files.sort_by(|a, b| a.1.cmp(&b.1));
 
+    for (path, modified) in files {
         let modified_chrono = chrono::DateTime::<chrono::Utc>::from(modified);
 
         if modified_chrono < cutoff_time {
@@ -858,7 +961,13 @@ pub fn read_log_file(
 }
 
 fn extract_entry(json: &serde_json::Value) -> Option<LogDisplayEntry> {
-    let timestamp = json.get("timestamp")?.as_str()?.to_string();
+    // 前端日志优先用 span.frontend_ts（router 注入的前端原始时间，审计 #6）；
+    // 后端日志无此 span 字段，回退 tracing 顶层 timestamp（wall-clock）。
+    let timestamp = json.get("span")
+        .and_then(|s| s.get("frontend_ts"))
+        .and_then(|t| t.as_str())
+        .or_else(|| json.get("timestamp").and_then(|t| t.as_str()))?
+        .to_string();
     let level = json.get("level")?.as_str()?.to_string();
     let module = json.get("span")
         .and_then(|s| s.get("module")).and_then(|m| m.as_str())

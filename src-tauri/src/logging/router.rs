@@ -18,7 +18,7 @@ fn route_single_log(entry: FrontendLogEntry) {
     // module 作为 span 字段保留，供 JSON 日志查询与字段过滤。
     match entry.level {
         LogLevel::Debug => {
-            let span = tracing::debug_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::debug_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module, frontend_ts = %entry.timestamp);
             let _guard = span.enter();
             tracing::debug!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
@@ -26,7 +26,7 @@ fn route_single_log(entry: FrontendLogEntry) {
             }
         }
         LogLevel::Info => {
-            let span = tracing::info_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::info_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module, frontend_ts = %entry.timestamp);
             let _guard = span.enter();
             tracing::info!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
@@ -34,7 +34,7 @@ fn route_single_log(entry: FrontendLogEntry) {
             }
         }
         LogLevel::Warn => {
-            let span = tracing::warn_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::warn_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module, frontend_ts = %entry.timestamp);
             let _guard = span.enter();
             tracing::warn!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
@@ -42,7 +42,7 @@ fn route_single_log(entry: FrontendLogEntry) {
             }
         }
         LogLevel::Error => {
-            let span = tracing::error_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module);
+            let span = tracing::error_span!(target: "frontend", "frontend_log", trace_id = %trace_id, module = %entry.module, frontend_ts = %entry.timestamp);
             let _guard = span.enter();
             tracing::error!(target: "frontend", "{}", entry.message);
             if let Some(data) = entry.data {
