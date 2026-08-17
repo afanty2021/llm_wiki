@@ -18,7 +18,7 @@
 - 注册开关：`AUTH__REGISTRATION_ENABLED`（config 结构默认 **false**，`config/default.json` 显式 true 供开发/测试；生产 launchd/compose 环境置 false）
 - src-server 监听 `127.0.0.1`；docker-compose 端口绑 `127.0.0.1:`、全部服务 `restart: unless-stopped`
 - 转写参数：whisper.cpp + `ggml-large-v3-turbo`、`-l zh`、`--prompt` LT 域词表；16kHz mono wav；`--window 23:00-08:00`；JSONL 断点续跑；单文件重试 2 次
-- transcript 页 path 一律 `transcripts/<slug>.md`；slug = 净化 basename + `-` + sha256(relPath) 前 8 hex（确定性，幂等）
+- transcript 页 path 一律 `transcripts/<slug>.md`；**slug 内容寻址 = 净化 basename + `-` + wav 的 SHA-256 前 8 hex**（在音频抽取之后派生；同一文件跨目录迁移 relPath 变化时 slug/transcript/asset 记录天然稳定幂等——主库→HEVC 迁移期间的关键属性）
 - **不改 search/ingest/pages 既有端点行为**；新代码全部新增（routes/training.rs、routes/media.rs、utils/media_sign.rs、migrations/013）
 - 集成测试需要 5433 活库：先 `sqlx migrate run`；测试基建参照 `src-server/tests/integration/mod.rs`（register_user 助手 + TestServer）
 - TS 侧仓库根 `"type": "module"`：禁 `__dirname`，路径用 `fileURLToPath(new URL(...))`
@@ -220,7 +220,7 @@ async fn register_rejected_when_disabled() {
     // 改 config 后 create_app 模式（本任务首次建立，T6/T8 复用）
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.auth.registration_enabled = false;
-    let app = llm_wiki_server::create_app(cfg).await.unwrap();
+    let (app, _state) = llm_wiki_server::create_app(cfg).await.unwrap(); // create_app 返回 (Router, AppState) 元组——须解构，T6/T7/T8 复用此模式
     let server = TestServer::new(app).unwrap();
     let resp = server.post("/api/v1/auth/register")
         .json(&serde_json::json!({"username":"blocked","email":"b@x.com","password":"secret123"}))
@@ -865,7 +865,7 @@ Expected: 60s 音频 < 30s 转完（Metal ≥2× 实时）；文本为中文、�
 
 **Interfaces:**
 - Produces:
-  - `slugFor(relPath: string): string`（净化 basename + `-` + sha256(relPath) 前 8 hex；[a-zA-Z0-9] 保留、其余 `-`）
+  - `slugFor(basename: string, wavSha8: string): string`（净化 basename + `-` + wavSha8；[a-zA-Z0-9] 保留、其余 `-`；**在音频抽取后调用**——slug 随内容稳定，不随目录迁移漂移）
   - `extractAudio(absPath, wavOut): Promise<void>`（ffmpeg `-ac 1 -ar 16000`）
   - `transcodePlayback(absPath, mp4Out): Promise<void>`（桶 B：macOS 硬编 `-c:v h264_videotoolbox -c:a aac`（23.88h 内容约 0.5-1.5h）；软编 fallback `-c:v libx264 -preset veryfast -crf 23` 约 6-12h——若被迫软编则加 `--no-transcode` 惰性转码、验收只需 1 个可播副本；`-vn` 音频源转 m4a：本任务实现 `transcodeAudioPlayback`）
   - `sha256File(p): Promise<string>`；wav 去重键 = sha256(wav)
@@ -877,10 +877,11 @@ Expected: 60s 音频 < 30s 转完（Metal ≥2× 实时）；文本为中文、�
 import { describe, it, expect } from "vitest";
 import { slugFor } from "../src/slug";
 describe("slugFor", () => {
-  it("确定性：同路径同 slug；不同目录同名文件不同 slug", () => {
-    expect(slugFor("专栏/01.提问.mp4")).toBe(slugFor("专栏/01.提问.mp4"));
-    expect(slugFor("专栏/01.提问.mp4")).not.toBe("专栏2/01.提问.mp4" && slugFor("专栏2/01.提问.mp4"));
-    expect(slugFor("专栏/01.提问.mp4")).toMatch(/^[a-zA-Z0-9-]+$/);
+  it("确定性：同名+同 wavSha 同 slug；同内容跨目录（wavSha 同、basename 同）slug 不变", () => {
+    expect(slugFor("01.提问.mp4", "ab12cd34")).toBe(slugFor("01.提问.mp4", "ab12cd34"));
+    expect(slugFor("01.提问.mp4", "ab12cd34")).toBe(slugFor("01.提问.mp4", "ab12cd34")); // 同内容从主库迁到 HEVC：basename 与 wav 均不变
+    expect(slugFor("01.提问.mp4", "ab12cd34")).not.toBe(slugFor("01.提问.mp4", "ff00ff00"));
+    expect(slugFor("01.提问.mp4", "ab12cd34")).toMatch(/^[a-zA-Z0-9-]+$/);
   });
 });
 // audio.test.ts：extractAudio/transcodePlayback 用 spawnStub? 简化：导出 buildArgs 纯函数测参数序列
@@ -1033,7 +1034,7 @@ describe("upsertTranscriptPage 409 策略", () => {
 
 （同构补三个用例：409 不一致 → PUT 带 If-Match；401 → refresh 轮换后重放（第二次 mock 返回新 token 且断言 auth.json 写入）；waitJob 在 succeeded 停止。）
 
-- [ ] **Step 2: 确认失败** → **Step 3: 实现**（fetch 包装 + 上述分支；auth.json 读写用 node:fs；hash 用 node:crypto sha256 of content）→ **Step 4: 跑通** → **Step 5: 提交** `git commit -m "feat(transcriber): 写入客户端——五步/409预检/refresh轮换持久化/job轮询/hash对账"`
+- [ ] **Step 2: 确认失败** → **Step 3: 实现**（fetch 包装 + 上述分支；auth.json 读写用 node:fs，**写入后 chmod 600**——兑现 spec §3.3 声明；hash 用 node:crypto sha256 of content）→ **Step 4: 跑通** → **Step 5: 提交** `git commit -m "feat(transcriber): 写入客户端——五步/409预检/refresh轮换持久化/job轮询/hash对账"`
 
 ---
 
@@ -1050,10 +1051,10 @@ describe("upsertTranscriptPage 409 策略", () => {
 - [ ] **Step 1: 实现 transcribe 主循环**
 
 ```
-读 manifest.json → 过滤首批视频 48 个 →
+读 manifest 前先**重跑 audit**（≈14s，迁移期间 manifest 是时点快照；重跑兼作迁移健康检查——probeFailures 涌增即转换器产坏件）。**preflight 同步调整：配置根目录不存在时降级为警告并视为空集**（迁移终态主库目录将被整体删除，音频同样迁移、最终仅存 HEVC 目录）。→ 过滤首批视频 48 个（以重审计结果为准）→
 对每个（受 window/limit 控制）：
-  slug = slugFor(relPath)；wav = out/audio/<sha8>.wav（不存在则 extractAudio，sha 去重命中则跳过抽取）
-  桶B → transcodePlayback 至 out/playback/<slug>.mp4
+  slug = slugFor(basename, wavSha8)；wav = out/audio/<sha8>.wav（不存在则 extractAudio，sha 去重命中则跳过抽取）
+  桶B 转码**默认不做批量**（按需转码缓存为 M4 主案）：仅当 `--demo-slug <slug>` 指定时转该一个供验收演示
   state 行 pending → runTranscribe → segments
   { md, chapters } = buildTranscriptMd(...)
   api.writeSource(`sources/transcripts/<slug>.md`, md)
@@ -1065,14 +1066,14 @@ ingest 触发：api.triggerIngest(全部 source_path) → waitJob → job 终态
 写 out/m1-first-batch-report.json：{files, transcribed, skipped, failed, jobStatus, durationMinutes}
 ```
 
-- [ ] **Step 2: 首批真实运行**（预计 videotoolbox 转码 0.5-1.5h + whisper 转写 1.5-2.5h @ ≥8× 实时，两项合计 ~2-4h；白天直接跑可临时 `--window 00:00-23:59`。若硬编不可用退软编（6-12h）则改 `--no-transcode` 惰性转码，全量副本挪 M4）
+- [ ] **Step 2: 首批真实运行**（whisper 转写 1.5-2.5h @ ≥8× 实时 + 演示件 videotoolbox 转码分钟级，合计 ~2-3h；白天直接跑可临时 `--window 00:00-23:59`。批量转码已废弃（M4 按需缓存），预算中不再含 6-12h 软编场景）
 
 ```bash
 # 服务端带全套 env 起着（Task 9 输出的变量 + docker compose up -d + sqlx migrate run 已做）
 npx tsx tools/transcriber/src/cli.ts transcribe --window 00:00-23:59
 ```
 
-Expected: 48 done、failed=0（2 个损坏文件不在首批）；job 终态 succeeded(_with_warnings)；对账无覆写告警。
+Expected: 48 done（以重审计为准，迁移漂移下允许 ±）、failed=0（损坏文件不在首批；若重审计发现新 probeFailures 逐个核查——可能是迁移转换器新产的坏件）；job 终态 succeeded(_with_warnings)；对账无覆写告警。
 
 - [ ] **Step 3: 提交**：`git commit -m "feat(transcriber): transcribe子命令+首批48个端到端运行（report留档）"`
 
