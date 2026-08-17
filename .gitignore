@@ -58,3 +58,7 @@ src-server/tests_tmp/
 .serena/
 .playwright-mcp/
 e2e-ui-*.png
+
+# Transcriber local config and generated manifest
+tools/transcriber/config.json
+tools/transcriber/out/manifest.json

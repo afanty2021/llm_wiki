@@ -1,0 +1,9 @@
+// tools/transcriber/tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ESNext", "moduleResolution": "bundler",
+    "strict": true, "noEmit": true, "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "__tests__/**/*.ts"]
+}
