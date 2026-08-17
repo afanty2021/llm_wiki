@@ -155,6 +155,45 @@ fn parse_admin_usernames(s: &str) -> Vec<String> {
     s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
 }
 
+/// 注册开关（AUTH__REGISTRATION_ENABLED；默认 false，生产保持关闭，dev/test 由 default.json 显式开启）
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct AuthConfig {
+    #[serde(default)]
+    pub registration_enabled: bool,
+}
+
+/// 训练管线（TRAINING__ADMIN_TOKEN / TRAINING__PROJECT_ID；密钥经环境变量注入、不入 git）
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct TrainingConfig {
+    #[serde(default)]
+    pub admin_token: String,
+    #[serde(default)]
+    pub project_id: Option<i32>,
+}
+
+/// 媒体签名密钥（MEDIA__SIGNING_KEY；经环境变量注入、不入 git）
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct MediaConfig {
+    #[serde(default)]
+    pub signing_key: String,
+}
+
+/// 已泄露/占位 secret 黑名单：命中即拒绝启动
+/// - "your-super-secret-key-change-this": 模板占位符
+/// - "test_secret_for_development_32bytes!": 2026-08 已提交进 git，视为泄露
+const LEAKED_SECRETS: &[&str] = &[
+    "your-super-secret-key-change-this",
+    "test_secret_for_development_32bytes!", // 2026-08 已提交进 git，视为泄露
+];
+
+/// 校验必填配置（jwt secret 非空且不在黑名单）
+fn validate(cfg: &AppConfig) -> anyhow::Result<()> {
+    if cfg.jwt.secret.is_empty() || LEAKED_SECRETS.contains(&cfg.jwt.secret.as_str()) {
+        anyhow::bail!("JWT_SECRET must be set to a secure value");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -164,6 +203,12 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub cors: CorsConfig,
     pub embedding: Option<EmbeddingConfig>,
+    #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub training: TrainingConfig,
+    #[serde(default)]
+    pub media: MediaConfig,
     #[serde(default)]
     pub search: SearchConfig,
     #[serde(default = "default_frontend")]
@@ -184,10 +229,7 @@ impl AppConfig {
 
         let config: AppConfig = builder.try_deserialize()?;
 
-        // Validate required configuration
-        if config.jwt.secret.is_empty() || config.jwt.secret == "your-super-secret-key-change-this" {
-            anyhow::bail!("JWT_SECRET must be set to a secure value");
-        }
+        validate(&config)?;
 
         Ok(config)
     }
@@ -314,10 +356,53 @@ mod tests {
     #[test]
     fn test_embedding_config_loaded() {
         // config/default.json 含 embedding 段；cargo test cwd = src-server
+        // 旧 dev secret 已入黑名单（Task 6 才轮换 default.json），此处经 env 覆盖注入
+        // 非黑名单 secret（Environment 源优先于 File 源；本测试是 lib 测试二进制中唯一
+        // from_env 调用方，无并发 env 竞争）
+        std::env::set_var("JWT__SECRET", "unit-test-secret-override-not-leaked");
         let cfg = AppConfig::from_env().expect("from_env");
         let emb = cfg.embedding.expect("embedding should be configured in default.json");
         assert_eq!(emb.model, "bge-m3-mlx-fp16");
         assert_eq!(emb.dim, 1024);
+    }
+
+    #[test]
+    fn registration_disabled_by_default() {
+        // brief 的 from_str("{}") 写法对必填段必 panic；按其注释意图（断言 Deserialize 默认）
+        // 改为最小必填 JSON、不含 auth/training/media 段，验证 #[serde(default)] 生效
+        let json = r#"{
+            "server": {"host": "0.0.0.0", "port": 8080},
+            "database": {"url": "postgres://x", "max_connections": 1},
+            "redis_url": "redis://x",
+            "jwt": {"secret": "x"},
+            "storage": {"path": "/tmp/x"},
+            "cors": {"allowed_origins": ["http://localhost"]}
+        }"#;
+        let c: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(!c.auth.registration_enabled);
+        assert_eq!(c.training.admin_token, "");
+        assert!(c.training.project_id.is_none());
+        assert_eq!(c.media.signing_key, "");
+    }
+
+    #[test]
+    fn leaked_dev_secret_rejected() {
+        // 旧已泄露 dev secret 必须被校验拒绝（黑名单）
+        // 无 test_config_with_override helper → 按 brief 备注 from_value 构造最小 AppConfig
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "server": {"host": "0.0.0.0", "port": 8080},
+            "database": {"url": "postgres://x", "max_connections": 1},
+            "redis_url": "redis://x",
+            "jwt": {"secret": "x"},
+            "storage": {"path": "/tmp/x"},
+            "cors": {"allowed_origins": ["http://localhost"]}
+        }))
+        .expect("minimal AppConfig");
+        // 阳性对照：普通 secret 应通过，防 validate 恒错
+        assert!(validate(&cfg).is_ok());
+        cfg.jwt.secret = "test_secret_for_development_32bytes!".to_string();
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("JWT_SECRET"));
     }
 
     #[test]
