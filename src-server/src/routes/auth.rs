@@ -70,6 +70,12 @@ async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    // 注册开关 gate（AUTH__REGISTRATION_ENABLED）：关闭时直接拒绝
+    if !state.config.auth.registration_enabled {
+        tracing::warn!("registration attempt rejected (disabled)");
+        return Err(AppError::PermissionDenied); // 无载荷单元变体（error.rs:33），消息走 log
+    }
+
     // Validate required fields
     if req.username.trim().is_empty() {
         return Err(AppError::ValidationError("Username is required".to_string()));
