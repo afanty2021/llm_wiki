@@ -1,8 +1,8 @@
 # LT 教师培训系统改造设计（llm_wiki × Hermes × 企业微信）
 
 **日期**: 2026-08-17
-**版本**: v4（v3 评审修订：seen 粒度、project_id 来源、read_page 闭合、表拆分重排、409/覆盖防护等 9 项 + 7 项低分，见 §12）
-**状态**: 待用户审阅
+**版本**: v5（v4 评审修订 4 项 + 8 项低分措辞收敛；设计冻结，进入 M0 实施，见 §12）
+**状态**: 已冻结
 **路径分类**: Architectural（多子系统，M0-M4 五个里程碑，约 4.5 周）
 
 ---
@@ -23,7 +23,7 @@
 | 学习形态 | 问答 + 学习清单（无固定课程路径） |
 | 转写策略 | 分批：先核心专栏跑通全链路，再夜间窗口扩全量 |
 | 教师画像冷启动 | 首次对话 agent 自动问卷（onboarding_state 跟踪），之后行为累积 |
-| 进度判定 | 落地页 beacon 确认 view（页面级/项级双粒度）+ 对话/按钮确认完成 |
+| 进度判定 | 落地页 beacon 确认 **seen**（页面级/项级双粒度；view 仅是渲染信号，含预取噪声）+ 对话/按钮确认完成 |
 | 架构方案 | 数据底座在 src-server，智能编排在 Hermes 的 LLM |
 | Agent 运行时 | Hermes；自定义工具经扩展既有 mcp-server 包提供（skill 本体是纯指令文档） |
 
@@ -82,7 +82,7 @@
 - **分桶（两桶，含音频维度）**：
   - 桶 A「浏览器可播」：视频 = MP4 + H.264 + AAC；音频 = mp3/m4a → 直用
   - 桶 B「一律转码」：其余全部——hevc、VOB/MPEG-2（60 个）、mkv/avi/flv/wmv 内非 H.264、**wma（16 个，浏览器不可播音频）** → 视频 H.264+AAC mp4 副本，音频转 AAC/MP3 副本
-- 权威 manifest：清单/桶归属/播放副本需求/总时长（**约 343-363h** = 主库 ~253h + HEVC 独有 ~90-110h；夜间窗口 4-6 晚）/归一化重叠
+- 权威 manifest：清单/桶归属/播放副本需求/总时长（**约 343-363h** = 主库 ~253h + HEVC 独有 ~90-110h；夜间窗口 4-6 晚，推算：343-363h ÷ 14-18× 实时 ≈ 19-26h 纯转写，9h/晚 + 转码/重试余量）/归一化重叠
 - 少儿影像隐私标注（链接生命周期见 §4.2）
 - v1 事实修正存档：mp3↔mp4 归一化同名 0 对；HEVC 目录纳入；首批专栏 = 教学新知班级管理专栏（36 个）
 
@@ -96,7 +96,7 @@
    - ② **transcript 页**：`POST /pages`，path 确定性派生 **`transcripts/<slug>.md`**，type: transcript，含 `[mm:ss]`；创建即嵌入（实测确认）。**409 策略**（POST 对已存在 path 返回 Conflict，实测确认）：续跑先 GET——hash 一致跳过，不一致走 If-Match PUT 更新
    - ③ media-assets 注册：`POST /training/media-assets`，**含 chapters**（由转写时间戳行按 ~5 分钟窗聚合，label 取段首句截断 40 字）
    - ④ 摘要页：storage 源文件触发现有 ingest（零改动）
-   - ⑤ **transcripts/ 对账**：摘要页 ingest 完成后校验 `transcripts/` 前缀页 hash 未被 LLM 生成页覆写（ingest upsert 是 ON CONFLICT DO UPDATE，path 由 LLM 输出决定，实测确认撞名即覆盖）；被改则重写并告警；实测撞名频发则 M2 升级为 ingest 运行时拒绝该前缀（列入风险跟踪）
+   - ⑤ **transcripts/ 对账**：CLI 轮询 ingest job 状态（jobs API），job 完成后校验 `transcripts/` 前缀页 hash 未被 LLM 生成页覆写（ingest upsert 是 ON CONFLICT DO UPDATE，path 由 LLM 输出决定，实测确认撞名即覆盖）；被改则重写并告警；实测撞名频发则 M2 升级为 ingest 运行时拒绝该前缀（列入风险跟踪）
 
 ### 3.3 CLI 凭证与批产控制
 - **svc-transcriber 服务账号**（LT team Admin，注册关闭前手工创建）：CLI 加密存储其 refresh token 自行刷新（一次性旋转，每次持久化新 token）；media-assets 端点鉴权即 LT team Admin 角色 token，**CLI 不持 TRAINING__ADMIN_TOKEN**
@@ -144,10 +144,10 @@ learning_events
 ```
 
 **beacon 双粒度规则（写死）**：
-- **页面级 beacon**（body 无 item_id）：记 plan 级 seen 事件（item_id NULL），**不改任何 item 投影**——语义是"清单被真实打开"（企微预取无 JS，不产生）
-- **项级 beacon**（body 带 item_id，校验 ∈ 该 plan）：置该项 viewed（同事务单调更新）
+- **页面级 beacon**（body 无 item_id）：记 plan 级 seen 事件（item_id NULL），**不改任何 item 投影**——语义是"清单被真实打开"（企微预取无 JS，不产生）；事件 user_id 取 plan.user_id（链接可能被转发，持链者行为归因到清单主人）
+- **项级 beacon**（body 带 item_id，校验 ∈ 该 plan）：**记 item 级 seen 事件 + 置该项 viewed，同一事务**
 - interests 归因只认 item 级事件（seen/complete）与 ask；rebuild_projection 只消费 item 级事件
-- complete：与 `UPDATE ... WHERE id=$1 AND status <> 'completed'` 同事务（单调守卫）
+- complete：**记事件 + 更新投影同一事务**，`UPDATE ... WHERE id=$1 AND status <> 'completed'`（单调守卫）
 
 ### 4.2 API
 
@@ -173,14 +173,14 @@ learning_events
 | `GET /t/:token` | plan_link token（绑 plan_id，TTL 7 天） | 落地页 HTML；渲染事务记 view 事件 |
 | `POST /t/:token/seen` | 同上 | beacon：body 可选 item_id（双粒度规则见 §4.1） |
 | `POST /t/:token/complete` | 同上 | body {item_id}，校验 ∈ 该 plan |
-| `GET /media/:media_id` | 签名 URL（HMAC, exp ≤12h） | Range 流式；按 ID 查 media_assets |
+| `GET /media/:media_id` | 签名 URL（HMAC 消息 = media_id + exp + **当次 plan_link 指纹**，exp ≤12h） | Range 流式；media_id 即 media_assets.slug（字符串，消歧）；受众绑定：URL 随清单链接失效而失效 |
 
-**资源归属规则（正文统一陈述）**：一切资源级端点强制 owner 链校验（plan→user、item→plan→user 与 token 用户一致），不一致按 404 处理；入 §8 鉴权矩阵测试。
+**资源归属规则（正文统一陈述）**：一切单资源端点强制 owner 链校验（plan→user、item→plan→user 与 token 用户一致），非本人资源按 404 处理；collection 端点（GET /plans）天然只返回本人数据，不适用 404 措辞；入 §8 鉴权矩阵测试。
 
 **凭证模型（三层，JWT 带 `typ`，`require_auth` 增加 typ 校验）**：
 - access/refresh（300s/7d，refresh 一次性旋转）：老师与服务账号持有，MCP/CLI 持久化每次新 refresh；MCP 并发刷新 **single-flight**（合并为单次，防旋转竞态丢 token）
 - plan_link：一链一清单，TTL 7 天；到期 /plans/:id/link 重发
-- /media 签名：渲染时现签，`<video>` 与 Range 天然可用
+- /media 签名：渲染时现签，HMAC 消息含当次 plan_link 指纹——纯时限 bearer 升级为受众绑定凭证（未成年人影像的"转发即失效"），`<video>` 与 Range 天然可用
 - 管理员服务 token：`TRAINING__ADMIN_TOKEN`（32B hex，常数时间比较），**仅护 /bind 与 /overview**
 
 ### 4.3 落地页 `/t/:token`（M2 交付）
@@ -222,11 +222,12 @@ get_progress / record_ask
 | 公网入口 | cloudflared tunnel：api → src-server、cb → hermes 回调（8645，GET 验证握手同隧道）；自动 TLS，不开入站端口 | M2 |
 | 监听收敛 | src-server host 改 127.0.0.1；hermes callback 显式绑 127.0.0.1 | M1 |
 | 密钥轮换 | 新 JWT secret 经 `JWT__SECRET` 注入；dev secret 失效化，视为已泄露 | M1 |
+| 密钥供给 | 全部经环境变量、不入 git：`JWT__SECRET`、`TRAINING__ADMIN_TOKEN`、`TRAINING__PROJECT_ID`、`MEDIA__SIGNING_KEY`（/media HMAC） | M1 |
 | 数据库 | compose 端口绑 127.0.0.1；容器 `restart: unless-stopped` | M1 |
 | 注册关闭 | `auth.registration_enabled` 默认 false；svc-transcriber 关闭前创建；此后 /bind 唯一建号 | M1 |
 | 常驻保活 | launchd KeepAlive：cloudflared、hermes gateway、src-server；Docker Desktop 自启 | M2 |
 | 日志脱敏 | /t/、/media 路径与 query 脱敏（现状写全量 URI） | M2 |
-| 遗留鉴权缺口 | /ingest/jobs/:id 加鉴权（admin token 或项目绑定） | M2 |
+| 遗留鉴权缺口 | /ingest/jobs/:id 加项目绑定鉴权（经 check_project_access；不用 admin token——其范围已收窄至 /bind 与 /overview） | M2 |
 
 ## 7. 错误处理
 
@@ -260,8 +261,8 @@ get_progress / record_ask
 |---|---|---|
 | **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（约 343-363h 定值）/重叠；首批排产 |
 | **M1（1 周）** | whisper.cpp 管线 + 首批专栏五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
-| **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + 白名单 + 日志脱敏 + /ingest 收敛 | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
-| **M3（1.5 周）** | 问卷编排、/overview、周报 cron、launchd 保活 | 3-5 人灰度一周；**M3 版 E2E 全量**；重启演练；AGENTS.md/docs 同步 |
+| **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
+| **M3（1.5 周）** | 问卷编排、/overview、周报 cron | 3-5 人灰度一周；**M3 版 E2E 全量**；全链路重启演练（launchd 已于 M2 就位，此处为演练验收）；AGENTS.md/docs 同步 |
 | **M4（持续）** | 全量夜间批处理（桶 B 转码副本）+ 推荐迭代 + 15 人上线 | manifest 100% 转写；周报完成率可观测；可选 snippet 增强 |
 
 ## 10. 明确不做（YAGNI）
@@ -283,7 +284,14 @@ get_progress / record_ask
 
 ## 12. 修订记录
 
-### v3 → v4（本轮 9 项 ≥80 + 7 项低分全落）
+### v4 → v5（本轮 4 项 ≥80 + 8 项低分，设计冻结）
+1. 决策表术语：进度判定改"beacon 确认 seen"（view/seen 对立信号不再混用一个词）
+2. §6 /ingest 收敛措施改项目绑定鉴权，与 admin token 收窄范围（仅 /bind 与 /overview）对齐
+3. /media 签名加受众绑定：HMAC 消息含当次 plan_link 指纹，URL 随清单链接失效（未成年人影像威胁模型自洽）；media_id 消歧为 slug
+4. launchd 归属统一为 M2（§6 与 §9 一致），M3 仅保留重启演练验收
+5. 低分项：item 级 seen/complete"记事件+更新投影同事务"显式化；plan 级事件 user_id 取 plan.user_id（转发归因语义）；transcripts/ 对账触发方 = CLI 轮询 jobs API；§6 补密钥供给条目（四种环境变量）；collection 端点 404 措辞修正；M2 白名单补 §5.4 引用；夜间窗口补推算依据
+
+### v3 → v4（9 项 ≥80 + 7 项低分）
 1. **beacon 双粒度规则写死**：页面级（无 item_id）只记 plan 级 seen 不碰投影；项级（带 item_id）置 viewed；interests/rebuild 只认 item 级事件
 2. **project_id 来源**：单项目假设 + TRAINING__PROJECT_ID（search 必填实测确认；CLI/MCP/落地页共用）
 3. **read_page(path) 工具补全**：时间戳消费侧解析的取全文环节闭合（GET page 全文实测确认）
