@@ -15,6 +15,7 @@ mod reviews_test;
 mod permissions_test;
 mod research_test;
 mod registration_gate_test;
+mod training_test;
 
 use axum::Router;
 use llm_wiki_server::AppState;
