@@ -41,6 +41,12 @@ describe("classifyBucket（两桶制，spec §3.1）", () => {
   it("桶B：wma 等浏览器不可播音频", () => {
     expect(classifyBucket(f("wma", "audio"), p("asf", null, "wmav2"))).toBe("B_transcode");
   });
+  it("桶B：救援出的无扩展名媒体（ext=\"\"）按安全默认转码——视频音频两类都如此", () => {
+    const rescuedVideo: ScannedFile = { absPath: "/x", relPath: "137. IBL-Inquiry based learning", source: "hevc", category: "video", ext: "" };
+    const rescuedAudio: ScannedFile = { absPath: "/x", relPath: "137. 某讲座", source: "main", category: "audio", ext: "" };
+    expect(classifyBucket(rescuedVideo, p("mov", "h264", "aac"))).toBe("B_transcode");
+    expect(classifyBucket(rescuedAudio, p("mp3", null, "mp3"))).toBe("B_transcode");
+  });
   it("doc 类返回 null（不参与桶统计）", () => {
     expect(classifyBucket(f("pdf", "doc"), p("", null, null))).toBeNull();
   });

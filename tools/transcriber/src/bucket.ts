@@ -11,6 +11,7 @@ export type Bucket = "A_playable" | "B_transcode";
  */
 export function classifyBucket(file: ScannedFile, probe: ProbeResult): Bucket | null {
   if (file.category === "doc") return null;
+  if (file.ext === "") return "B_transcode"; // 救援出的无扩展名媒体（编码已知但浏览器兼容性未验）：安全默认转码
   if (file.category === "audio") {
     return file.ext === ".mp3" || file.ext === ".m4a" ? "A_playable" : "B_transcode";
   }

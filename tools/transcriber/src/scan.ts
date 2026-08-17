@@ -14,9 +14,11 @@ export interface ScannedFile {
   ext: string;
 }
 
-export function scanDirectory(root: string, source: "main" | "hevc"): { files: ScannedFile[]; ignored: number } {
+// 返回 files（登记扩展名）+ ignoredPaths（未登记扩展名文件的绝对路径，供 CLI 救援扫描用；
+// __MACOSX / 隐藏文件 / ._ 资源叉仍无条件排除且不出现在 ignoredPaths）
+export function scanDirectory(root: string, source: "main" | "hevc"): { files: ScannedFile[]; ignoredPaths: string[] } {
   const files: ScannedFile[] = [];
-  let ignored = 0;
+  const ignoredPaths: string[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === "__MACOSX" || entry.name.startsWith(".")) continue;
@@ -27,10 +29,10 @@ export function scanDirectory(root: string, source: "main" | "hevc"): { files: S
       const category = AUDIO_EXTS.has(ext) ? "audio"
         : VIDEO_EXTS.has(ext) ? "video"
         : DOC_EXTS.has(ext) ? "doc" : null;
-      if (!category) { ignored++; continue; }
+      if (!category) { ignoredPaths.push(full); continue; }
       files.push({ absPath: full, relPath: full.slice(root.length + 1), source, category, ext });
     }
   };
   walk(root);
-  return { files, ignored };
+  return { files, ignoredPaths };
 }

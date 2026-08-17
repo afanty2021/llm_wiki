@@ -21,22 +21,22 @@ describe("scanDirectory", () => {
     expect(files.find(f => f.relPath === "c.pdf")?.category).toBe("doc");
   });
 
-  it("排除 __MACOSX、隐藏文件与 ._ 资源叉（不计入 ignored）", () => {
+  it("排除 __MACOSX、隐藏文件与 ._ 资源叉（不计入 ignoredPaths）", () => {
     mkdirSync(join(root, "__MACOSX", "sub"), { recursive: true });
     writeFileSync(join(root, "__MACOSX", "sub", "junk.mp4"), "x");
     writeFileSync(join(root, "._hidden.mp4"), "x");
     writeFileSync(join(root, ".DS_Store"), "x");
-    const { files, ignored } = scanDirectory(root, "main");
+    const { files, ignoredPaths } = scanDirectory(root, "main");
     expect(files.some(f => f.relPath.includes("__MACOSX"))).toBe(false);
     expect(files.some(f => f.relPath.startsWith("._"))).toBe(false);
-    expect(ignored).toBe(0);
+    expect(ignoredPaths).toHaveLength(0);
   });
 
-  it("未登记扩展名计入 ignored，不静默丢弃", () => {
+  it("未登记扩展名进 ignoredPaths（绝对路径，供救援扫描），不静默丢弃", () => {
     writeFileSync(join(root, "note.txt"), "x");
     writeFileSync(join(root, "cover.jpg"), "x");
-    const { files, ignored } = scanDirectory(root, "main");
+    const { files, ignoredPaths } = scanDirectory(root, "main");
     expect(files.some(f => f.relPath === "note.txt")).toBe(false);
-    expect(ignored).toBe(2);
+    expect([...ignoredPaths].sort()).toEqual([join(root, "cover.jpg"), join(root, "note.txt")]);
   });
 });

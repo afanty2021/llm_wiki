@@ -1,35 +1,43 @@
 {
-  "generatedAt": "2026-08-17T13:38:21.128Z",
-  "totalFiles": 1850,
-  "totalDurationH": 398.97,
+  "generatedAt": "2026-08-17T14:44:08.253Z",
+  "elapsedS": 13.9,
+  "totalFiles": 1879,
+  "totalDurationH": 404.51,
   "byBucket": {
     "A_playable": {
-      "files": 943,
-      "durationH": 177.99
+      "files": 926,
+      "durationH": 169.04
     },
     "B_transcode": {
-      "files": 554,
-      "durationH": 220.98
+      "files": 600,
+      "durationH": 235.47
     }
   },
   "bySource": {
-    "main": 1352,
-    "hevc": 498
+    "main": {
+      "files": 1364,
+      "durationH": 169.44
+    },
+    "hevc": {
+      "files": 515,
+      "durationH": 235.07
+    }
   },
   "docFiles": 351,
-  "ignoredFiles": 46,
+  "privacyFiles": 252,
+  "ignoredFiles": 17,
   "probeFailures": 2,
   "overlap": {
-    "matchedPairs": 3,
-    "mainOnly": 815,
-    "hevcOnly": 474
+    "matchedPairs": 0,
+    "mainOnly": 901,
+    "hevcOnly": 494
   },
   "firstBatch": {
     "dir": "教学新知班级管理专栏",
-    "files": 44,
-    "durationH": 21.82,
+    "files": 48,
+    "durationH": 23.88,
     "bySource": {
-      "main": 0,
+      "main": 4,
       "hevc": 44
     }
   }
