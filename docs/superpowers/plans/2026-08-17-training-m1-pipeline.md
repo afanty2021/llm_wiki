@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 打通 M1：whisper.cpp 转写首批专栏（44 个 HEVC mp4）三路写入 wiki、src-server training 基础（migration 013 + media-assets 注册 + /media 签名流式 + /bind）、安全基线落地，全部按 spec §9 M1 验收标准闭环。
+**Goal:** 打通 M1：whisper.cpp 转写首批专栏（48 个：44 个 HEVC mp4 + 4 个伪扩展名救援视频，23.88h）三路写入 wiki、src-server training 基础（migration 013 + media-assets 注册 + /media 签名流式 + /bind）、安全基线落地，全部按 spec §9 M1 验收标准闭环。
 
 **Architecture:** 三块——① `tools/transcriber/`（TS CLI）扩展为五步写入管线（storage 源文件 → POST /pages → media-assets 注册 → 触发 ingest → hash 对账），whisper.cpp 为转写引擎；② `src-server` 新增 `/api/v1/training` 路由组与顶级 `/media/:media_id`（HMAC 签名 + Range 流式）；③ 安全基线（注册开关/监听收敛/密钥轮换/DB 绑定 127.0.0.1 + restart）。
 
@@ -54,7 +54,7 @@ tools/transcriber/
 
 ---
 
-### Task 1: 转写器收敛（最终评审遗留项）
+### Task 1: 转写器收敛（最终评审遗留项；error→null 已由 M0 复审修复波 51a5532c 完成——本任务补齐剩余三项）
 
 **Files:**
 - Modify: `tools/transcriber/src/manifest.ts`、`tools/transcriber/src/scan.ts`
@@ -1034,13 +1034,13 @@ describe("upsertTranscriptPage 409 策略", () => {
 - Create（运行产物）: `tools/transcriber/out/m1-first-batch-report.json`（提交留档）
 
 **Interfaces:**
-- Consumes: Task 11-14 全部；manifest（筛选 `inFirstBatch && !error && category==='video'`，44 个）
+- Consumes: Task 11-14 全部；manifest（筛选 `inFirstBatch && !error && category==='video'`，48 个）
 - Produces: `npx tsx tools/transcriber/src/cli.ts transcribe [--window 23:00-08:00] [--limit N]`；`sign-media <slug> [--hours 12]`（TS 端 HMAC 与 Task 7 同算法，输出 `http://127.0.0.1:8080/media/<slug>?exp=..&sig=..`）
 
 - [ ] **Step 1: 实现 transcribe 主循环**
 
 ```
-读 manifest.json → 过滤首批视频 44 个 →
+读 manifest.json → 过滤首批视频 48 个 →
 对每个（受 window/limit 控制）：
   slug = slugFor(relPath)；wav = out/audio/<sha8>.wav（不存在则 extractAudio，sha 去重命中则跳过抽取）
   桶B → transcodePlayback 至 out/playback/<slug>.mp4
@@ -1062,9 +1062,9 @@ ingest 触发：api.triggerIngest(全部 source_path) → waitJob → job 终态
 npx tsx tools/transcriber/src/cli.ts transcribe --window 00:00-23:59
 ```
 
-Expected: 44 done、failed=0（2 个损坏文件不在首批）；job 终态 succeeded(_with_warnings)；对账无覆写告警。
+Expected: 48 done、failed=0（2 个损坏文件不在首批）；job 终态 succeeded(_with_warnings)；对账无覆写告警。
 
-- [ ] **Step 3: 提交**：`git commit -m "feat(transcriber): transcribe子命令+首批44个端到端运行（report留档）"`
+- [ ] **Step 3: 提交**：`git commit -m "feat(transcriber): transcribe子命令+首批48个端到端运行（report留档）"`
 
 ---
 

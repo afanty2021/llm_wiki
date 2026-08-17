@@ -11,7 +11,7 @@
 
 把 llm_wiki（文档知识库）改造为面向 15 名老师的师训学习系统：
 
-- 内容源：`~/Github/L T师训 2024-2025` + `~/Github/L T师训 2024-2025（HEVC）`（两目录合计 1499 个媒体文件，仅存 HEVC 目录 474 个唯一归一名（M0 实测，见 §3.1）；权威清单为 `tools/transcriber/out/manifest-summary.json`）
+- 内容源：`~/Github/L T师训 2024-2025` + `~/Github/L T师训 2024-2025（HEVC）`（两目录合计 1528 个媒体文件（含自 ignored 救援的 29 个伪扩展名媒体）；权威清单为 `tools/transcriber/out/manifest-summary.json`，见 §3.1）
 - 通道：Hermes agent（已接通企业微信：上游自带 callback 适配器，强制 SHA1 验签 + AES-CBC 解密 + corp_id 匹配；gateway 本机常驻）
 - 老师体验：手机企微里问答 → 收到个性化学习清单 → 点链接看视频/文档 → 系统记录进度 → 定期收到推荐
 - 部署：本机 Mac。**公网暴露经 cloudflared 隧道**（见 §6），不开放入站端口
@@ -78,14 +78,14 @@
 **新增独立 Node CLI**（放 `tools/transcriber/`，TypeScript，复用仓库 vitest 基建）。
 
 ### 3.1 M0 内容对账（先于一切转写）
-- 扫描两目录（含 HEVC 独有 474 个、跨目录归一化同名 3 对——M0 归一化配对实测定权威；排除 `__MACOSX`），ffprobe 逐个：容器/视频编码/音频编码/时长
+- 扫描两目录（排除 `__MACOSX`），ffprobe 逐个：容器/视频编码/音频编码/时长；**未登记扩展名文件也跑 ffprobe 救援**（"数字.标题"伪扩展名下实为媒体的按 ext:"" 兜底登记、桶 B——实测救援 29 个/5.54h，真 ignored 仅 17 个）
 - **分桶（两桶，含音频维度）**：
   - 桶 A「浏览器可播」：视频 = MP4 + H.264 + AAC；音频 = mp3/m4a → 直用
   - 桶 B「一律转码」：其余全部——hevc、VOB/MPEG-2（60 个）、mkv/avi/flv/wmv 内非 H.264、**wma（16 个，浏览器不可播音频）** → 视频 H.264+AAC mp4 副本，音频转 AAC/MP3 副本
-- 权威 manifest：清单/桶归属/播放副本需求/总时长（**实测 398.97h**（M0 manifest-summary.json）= 主库 172.85h + HEVC 目录 226.12h；夜间窗口 5-7 晚，推算：398.97h ÷ 14-18× 实时 ≈ 22-29h 纯转写，9h/晚 + 转码/重试余量）/归一化重叠
+- 权威 manifest：清单/桶归属/播放副本需求/总时长（**实测 398.97h**（M0 manifest-summary.json）= 主库 172.85h + HEVC 目录 226.12h；夜间窗口 5-7 晚，推算：398.97h ÷ 14-18× 实时 ≈ 22-29h 纯转写，9h/晚 + 转码/重试余量）/重叠（**配对键含一级父目录 + 时长交叉验证 |Δ|≤max(2s,1%)；实测有效配对 0 对**——名称级 3 对中 1 对空名假阳性已消除，2 对为主库完好↔HEVC 损坏，明细见 `out/overlap.json`；mainOnly 901 / hevcOnly 494 键）/privacyFiles 252/elapsedS；配对明细与 M4 排产用的 `--diff`/manifest 信封格式延后至 M4
 - 少儿影像隐私标注（链接生命周期见 §4.2）
-- v1 事实修正存档：mp3↔mp4 归一化同名 0 对；HEVC 目录纳入；首批专栏 = 教学新知班级管理专栏（**视频主体在 HEVC 目录：44 个 mp4、21.82h，M0 实测 bySource：hevc 44 / main 0；主库同目录仅 4 个无扩展名文件（落 ignoredFiles）**——历轮"36 个"系错误匹配口径，M0 对账定权威值）
-- M0 实测发现 2 个损坏文件（ffprobe demuxer 错误，均 HEVC 源、均不在首批专栏内，M1 前需手工重导出）：`【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/高中词汇课练习设计案例分析.mp4`；`【2024-2025】LT年度师训会员（高年级版）/独立教师教学力专栏/420. 独立教师-双减后行业现状.mp4`
+- v1 事实修正存档：mp3↔mp4 归一化同名 0 对；HEVC 目录纳入；首批专栏 = 教学新知班级管理专栏（**合计 48 个 / 23.88h：HEVC 侧 44 个 mp4 + 主库同目录 4 个伪扩展名视频（137/141/144/145，2.05h，经救援登记）**——历轮"36/44 个"均为不完整口径）
+- M0 实测发现 2 个损坏文件（ffprobe demuxer 错误，均 HEVC 源、均不在首批专栏内；**主库有同名完好副本可替代转写**，见 overlap.json error_involved 标记，M1 前需手工重导出或直接用主库副本）：`【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/高中词汇课练习设计案例分析.mp4`；`【2024-2025】LT年度师训会员（高年级版）/独立教师教学力专栏/420. 独立教师-双减后行业现状.mp4`
 
 ### 3.2 管线五段式
 1. **扫描分类**（以 manifest 为准）：直收音频；视频抽音频；文档不走转写
@@ -260,8 +260,8 @@ get_progress / record_ask
 
 | 里程碑 | 内容 | 验收标准 |
 |---|---|---|
-| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（实测 398.97h，manifest-summary.json）/重叠（hevcOnly 474）；首批排产 |
-| **M1（1 周）** | whisper.cpp 管线 + 首批专栏五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
+| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（实测 398.97h）/重叠（时长验证后 0 对，hevcOnly 494 键）/救援 29 个；首批 48 个/23.88h 排产 ✅ |
+| **M1（1 周）** | whisper.cpp 管线 + 首批专栏（48 个，**首批源全为 hevc/伪扩展名——即含桶 B 全量转码副本**）五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
 | **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
 | **M3（1.5 周）** | 问卷编排、/overview、周报 cron | 3-5 人灰度一周；**M3 版 E2E 全量**；全链路重启演练（launchd 已于 M2 就位，此处为演练验收）；AGENTS.md/docs 同步 |
 | **M4（持续）** | 全量夜间批处理（桶 B 转码副本）+ 推荐迭代 + 15 人上线 | manifest 100% 转写；周报完成率可观测；可选 snippet 增强 |
@@ -285,7 +285,15 @@ get_progress / record_ask
 
 ## 12. 修订记录
 
-### v4 → v5（本轮 4 项 ≥80 + 8 项低分，设计冻结）
+### M0 复审修复（feat/Training-System，commit 51a5532c；三路评审用真实 manifest 交叉复算）
+1. 🔴 ignored 救援：46 个未登记扩展名文件经 ffprobe 救援出 **29 个真媒体（5.54h）**（"数字.标题"伪扩展名，extname 取到伪后缀），ext:"" 兜底登记、桶 B；首批由 44 个/21.82h 修正为 **48 个/23.88h**（主库 4 个救援视频入首批）
+2. 🔴 配对键重做：键含一级父目录 + 仅剥节目前缀数字 + 分隔符类补 `_` + **时长交叉验证 |Δ|≤max(2s,1%)**；matchedPairs 由 3（1 空名假阳性 + 2 坏文件对）修正为 **0 有效对**；mainOnly 901 / hevcOnly 494 键；明细落 `out/overlap.json`（error_involved 标记出"主库完好↔HEVC 损坏"可替代转写对）
+3. 🔴 error 行 bucket 改 null（提前于原 M1 计划；error 的 .mp3 原会判 A_playable）
+4. 🟡 一并落：bySource 加时长（可复核提交产物）、privacyFiles 252 入 summary、probeMedia real-llm 冒烟（仓库 test:llm 惯例）、`--concurrency` 配置 + config/根目录/ffprobe 预检、elapsedS 留档
+5. 延后至 M4：`audit --diff` 模式、manifest 信封格式（去 absPath 省 45%）
+6. 流程项备查：分支名 feat/Training-System 承接 M0（用户指定）；M1 计划 Task 1 的 error→null 项已由本波完成，T1 剩余收敛项不变
+
+### v4 → v5（4 项 ≥80 + 8 项低分，设计冻结）
 1. 决策表术语：进度判定改"beacon 确认 seen"（view/seen 对立信号不再混用一个词）
 2. §6 /ingest 收敛措施改项目绑定鉴权，与 admin token 收窄范围（仅 /bind 与 /overview）对齐
 3. /media 签名加受众绑定：HMAC 消息含当次 plan_link 指纹，URL 随清单链接失效（未成年人影像威胁模型自洽）；media_id 消歧为 slug
