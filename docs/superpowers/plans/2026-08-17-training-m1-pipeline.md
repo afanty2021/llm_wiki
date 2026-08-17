@@ -217,8 +217,7 @@ mod helpers; use helpers::setup_test_app;
 
 #[tokio::test]
 async fn register_rejected_when_disabled() {
-    let (app, mut state) = setup_test_app().await; // state.config.auth.registration_enabled = false 需在建 app 前改
-    // 方案：setup 后重建：复制 setup_test_app 逻辑，load config 后置 false 再 create_app
+    // 改 config 后 create_app 模式（本任务首次建立，T6/T8 复用）
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.auth.registration_enabled = false;
     let app = llm_wiki_server::create_app(cfg).await.unwrap();
@@ -239,7 +238,8 @@ async fn register_rejected_when_disabled() {
 
 ```rust
 if !state.config.auth.registration_enabled {
-    return Err(AppError::PermissionDenied("registration disabled".to_string()));
+    tracing::warn!("registration attempt rejected (disabled)");
+    return Err(AppError::PermissionDenied); // 无载荷单元变体（error.rs:33），消息走 log
 }
 ```
 
@@ -441,6 +441,7 @@ async fn import_media_assets(State(state): State<AppState>, headers: HeaderMap, 
         .ok_or_else(|| AppError::InternalError("TRAINING__PROJECT_ID not configured".into()))?;
     let (_uid, _tid, _role) = crate::middleware::check_project_access_with_role(&state, &headers, project_id, crate::middleware::RequiredRole::Admin).await?;
     if req.items.is_empty() { return Err(AppError::BadRequest("items is empty".into())); }
+    let mut tx = state.db.begin().await.map_err(AppError::from)?; // 批量原子：部分失败不落半批
     for it in &req.items {
         if !(it.kind == "video" || it.kind == "audio") { return Err(AppError::BadRequest(format!("bad kind: {}", it.kind))); }
         sqlx::query(
@@ -453,8 +454,9 @@ async fn import_media_assets(State(state): State<AppState>, headers: HeaderMap, 
         .bind(&it.slug).bind(&it.media_ref).bind(&it.playback_path).bind(it.duration_s)
         .bind(&it.codec).bind(&it.kind).bind(&it.chapters)
         .bind(&it.transcript_page_path).bind(&it.source_path)
-        .execute(&state.db).await.map_err(AppError::from)?;
+        .execute(&mut *tx).await.map_err(AppError::from)?;
     }
+    tx.commit().await.map_err(AppError::from)?;
     Ok(Json(serde_json::json!({ "imported": req.items.len() })))
 }
 ```
@@ -559,21 +561,24 @@ pub fn media_routes() -> Router<AppState> {
     Router::new().route("/media/:media_id", axum::routing::get(get_media))
 }
 
-/// "bytes=a-b" | "bytes=a-" → Some((start, end_inclusive))；其他格式返回 None（按全量 200 处理）
+/// "bytes=a-b" | "bytes=a-" → Some((start, end_inclusive))；total=0 / 无法解析 / 后缀式 "bytes=-n" → None（按全量 200）
+/// 畸形头（start>end 或 start≥total）→ Some((total, total-1)) 哨兵，调用方判 416。total=0 已早退，哨兵不构造失败。
 pub fn parse_range(h: Option<&str>, total: u64) -> Option<(u64, u64)> {
+    if total == 0 { return None; }
     let h = h?.strip_prefix("bytes=")?;
     let (a, b) = h.split_once('-')?;
-    let start: u64 = a.parse().ok()?;
-    if start >= total { return Some((total, total - 1)); } // 哨兵：调用方判 416
+    let start: u64 = a.parse().ok()?;                       // 后缀式 a 为空 → parse 失败 → None
     let end = if b.is_empty() { total - 1 } else { b.parse::<u64>().ok()?.min(total - 1) };
+    if start >= total || start > end { return Some((total, total - 1)); } // 哨兵 → 416
     Some((start, end))
 }
 
-async fn get_media(State(state): State<AppState>, Path(media_id): Path<String>, Query(q): Query<MediaQuery>) -> Result<Response, AppError> {
+async fn get_media(State(state): State<AppState>, headers: HeaderMap, Path(media_id): Path<String>, Query(q): Query<MediaQuery>) -> Result<Response, AppError> {
     let key = &state.config.media.signing_key;
     if key.is_empty() { return Err(AppError::InternalError("MEDIA__SIGNING_KEY not configured".into())); }
     if q.exp <= chrono::Utc::now().timestamp() || !crate::utils::media_sign::verify_media_sig(key, &media_id, q.exp, &q.sig) {
-        return Err(AppError::PermissionDenied("invalid or expired media signature".into()));
+        tracing::warn!(media_id = %media_id, "media request rejected: invalid or expired signature");
+        return Err(AppError::PermissionDenied);
     }
     let row = sqlx::query("SELECT COALESCE(playback_path, media_ref) AS p, kind FROM media_assets WHERE slug = $1")
         .bind(&media_id).fetch_optional(&state.db).await.map_err(AppError::from)?;
@@ -585,8 +590,8 @@ async fn get_media(State(state): State<AppState>, Path(media_id): Path<String>, 
         Some("mp4") | Some("m4v") => "video/mp4", Some("mp3") => "audio/mpeg",
         Some("m4a") | Some("aac") => "audio/aac", _ => "application/octet-stream",
     };
-    let headers_range = /* 从请求头取 range：本 handler 增加 headers: HeaderMap 参数，headers.get(header::RANGE).and_then(|v| v.to_str().ok()) */;
-    match parse_range(headers_range, total) {
+    let range_hdr = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    match parse_range(range_hdr, total) {
         Some((s, e)) if s >= total => {
             Ok((StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, format!("bytes */{total}"))]).into_response())
         }
@@ -613,7 +618,7 @@ async fn get_media(State(state): State<AppState>, Path(media_id): Path<String>, 
 }
 ```
 
-（`headers` 参数按 axum 提取器顺序加入 `get_media`；`file.take(len)` 需要 `use tokio::io::AsyncReadExt` 已引入；`AppError` 变体名按 error.rs 对齐。）
+（`headers` 已是提取器参数；`file.take(len)` 需要 `use tokio::io::AsyncReadExt` 已引入；`AppError::PermissionDenied` 为无载荷单元变体，拒绝原因走 tracing log。）
 
 - [ ] **Step 4: 跑通**：`cargo test media_test && cargo test`（全量）
 
@@ -679,7 +684,7 @@ fn require_training_admin(state: &AppState, headers: &HeaderMap) -> Result<(), A
     if expect.is_empty() { return Err(AppError::InternalError("TRAINING__ADMIN_TOKEN not configured".into())); }
     let got = headers.get("x-training-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     if subtle::ConstantTimeEq::ct_eq(expect.as_bytes(), got.as_bytes()).into() { Ok(()) }
-    else { Err(AppError::PermissionDenied("invalid training admin token".into())) }
+    else { tracing::warn!("bind rejected: invalid training admin token"); Err(AppError::PermissionDenied) }
 }
 
 async fn bind(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<BindRequest>) -> Result<Json<crate::models::AuthResponse>, AppError> {
@@ -689,6 +694,8 @@ async fn bind(State(state): State<AppState>, headers: HeaderMap, Json(req): Json
         .ok_or_else(|| AppError::InternalError("TRAINING__PROJECT_ID not configured".into()))?;
     let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id = $1")
         .bind(project_id).fetch_one(&state.db).await.map_err(AppError::from)?;
+    // 多表写入全部走同一事务：中途失败不留半账号，重 bind 幂等自愈
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
     let existing: Option<i32> = sqlx::query_scalar(
         "SELECT user_id FROM teacher_profiles WHERE wecom_userid = $1")
@@ -696,30 +703,32 @@ async fn bind(State(state): State<AppState>, headers: HeaderMap, Json(req): Json
 
     let (user_id, username) = if let Some(uid) = existing {
         let uname: String = sqlx::query_scalar("SELECT username FROM users WHERE id=$1").bind(uid).fetch_one(&state.db).await.map_err(AppError::from)?;
-        // 轮换：废全部活跃 refresh
+        // 轮换：废全部活跃 refresh（heal：team_members 若曾被中断则补写）
         sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id=$1 AND revoked_at IS NULL")
-            .bind(uid).execute(&state.db).await.map_err(AppError::from)?;
+            .bind(uid).execute(&mut *tx).await.map_err(AppError::from)?;
+        sqlx::query("INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'member') ON CONFLICT DO NOTHING")
+            .bind(team_id).bind(uid).execute(&mut *tx).await.map_err(AppError::from)?;
         (uid, uname)
     } else {
-        // 合成唯一 username/email + 随机不可登录密码（64 hex，永不外发）
-        let raw = format!("{:x}", md5_like_hash(&req.wecom_userid)); // 见下：用 sha2 hex 前 8
-        let base = format!("wecom_{}", req.wecom_userid);
-        let username = if base.chars().count() > 43 {
-            let h: String = hex::encode(sha2::Sha256::digest(req.wecom_userid.as_bytes())); // 摘要取 8
-            format!("wecom_{}_{h}", req.wecom_userid.chars().take(30).collect::<String>())[..50.min(...)].to_string() + &h[..8]
-        } else { base };
+        // 合成唯一 username（chars 截断防 UTF-8 边界 panic）+ 随机不可登录密码（64 hex，永不外发）
+        let digest = &hex::encode(sha2::Sha256::digest(req.wecom_userid.as_bytes()))[..8];
+        let username = if req.wecom_userid.chars().count() + 6 > 50 {
+            format!("wecom_{}_{}", req.wecom_userid.chars().take(30).collect::<String>(), digest)
+        } else {
+            format!("wecom_{}", req.wecom_userid)
+        };
         let email = format!("{}@wecom.local", req.wecom_userid);
         let password = hex::encode(rand::random::<[u8; 32]>());
         let hash = crate::utils::hash_password(&password)?;
         let row = sqlx::query_scalar::<_, i32>(
             "INSERT INTO users (username, email, password_hash, full_name) VALUES ($1,$2,$3,$4) RETURNING id")
             .bind(&username).bind(&email).bind(&hash).bind(&req.display_name)
-            .fetch_one(&state.db).await.map_err(AppError::from)?;
+            .fetch_one(&mut *tx).await.map_err(AppError::from)?;
         sqlx::query("INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'member') ON CONFLICT DO NOTHING")
-            .bind(team_id).bind(row).execute(&state.db).await.map_err(AppError::from)?;
+            .bind(team_id).bind(row).execute(&mut *tx).await.map_err(AppError::from)?;
         sqlx::query("INSERT INTO teacher_profiles (user_id, wecom_userid, display_name) VALUES ($1,$2,$3)")
             .bind(row).bind(&req.wecom_userid).bind(&req.display_name)
-            .execute(&state.db).await.map_err(AppError::from)?;
+            .execute(&mut *tx).await.map_err(AppError::from)?;
         (row, username)
     };
 
@@ -732,7 +741,8 @@ async fn bind(State(state): State<AppState>, headers: HeaderMap, Json(req): Json
     let token_hash = crate::utils::hash_refresh_token(&refresh);
     let expires = chrono::Utc::now() + chrono::Duration::seconds(state.config.jwt.refresh_token_ttl as i64);
     sqlx::query("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1,$2,$3)")
-        .bind(user_id).bind(&token_hash).bind(expires).execute(&state.db).await.map_err(AppError::from)?;
+        .bind(user_id).bind(&token_hash).bind(expires).execute(&mut *tx).await.map_err(AppError::from)?;
+    tx.commit().await.map_err(AppError::from)?;
 
     let user = sqlx::query_as::<_, sqlx::postgres::PgRow>( // 按实际 UserResponse 组装（SELECT id,username,email,full_name,created_at）
         "SELECT id, username, email, full_name, created_at FROM users WHERE id=$1")
@@ -745,7 +755,7 @@ async fn bind(State(state): State<AppState>, headers: HeaderMap, Json(req): Json
 }
 ```
 
-（实现时删除示意性 md5 注释行，直接用条件分支 + `hex::encode(Sha256::digest(...))[..8]`；UserResponse 无 Default 则逐字段 `row.get(...)`。`team_members` 列名/唯一约束按 migration 001 对齐。）
+（后续 user SELECT 读库可在 commit 后进行；`UserResponse` 逐字段 `row.get(...)` 组装，无 Default 则显式构造；`team_members` 列名/唯一约束按 migration 001 对齐。）
 
 - [ ] **Step 4: 跑通**：`cargo test training_test`
 
@@ -857,7 +867,7 @@ Expected: 60s 音频 < 30s 转完（Metal ≥2× 实时）；文本为中文、�
 - Produces:
   - `slugFor(relPath: string): string`（净化 basename + `-` + sha256(relPath) 前 8 hex；[a-zA-Z0-9] 保留、其余 `-`）
   - `extractAudio(absPath, wavOut): Promise<void>`（ffmpeg `-ac 1 -ar 16000`）
-  - `transcodePlayback(absPath, mp4Out): Promise<void>`（桶 B：`-c:v libx264 -preset veryfast -crf 23 -c:a aac`，`-vn` 音频源转 m4a：本任务实现 `transcodeAudioPlayback`）
+  - `transcodePlayback(absPath, mp4Out): Promise<void>`（桶 B：macOS 硬编 `-c:v h264_videotoolbox -c:a aac`（23.88h 内容约 0.5-1.5h）；软编 fallback `-c:v libx264 -preset veryfast -crf 23` 约 6-12h——若被迫软编则加 `--no-transcode` 惰性转码、验收只需 1 个可播副本；`-vn` 音频源转 m4a：本任务实现 `transcodeAudioPlayback`）
   - `sha256File(p): Promise<string>`；wav 去重键 = sha256(wav)
 
 - [ ] **Step 1: 失败测试**（纯函数 + 命令构造；真实 ffmpeg 集成一个用例标 `#real` 后缀跳过 mock run）
@@ -881,7 +891,7 @@ it("audioArgs: 16k mono wav", () => {
 });
 it("audioArgs: 桶B视频转 H.264+AAC", () => {
   expect(audioArgs("playbackVideo", "/a/b.mp4", "/o/b.mp4")).toEqual(
-    expect.arrayContaining(["-c:v", "libx264", "-c:a", "aac"]));
+    expect.arrayContaining(["-c:v", "h264_videotoolbox", "-c:a", "aac"]));
 });
 ```
 
@@ -1055,7 +1065,7 @@ ingest 触发：api.triggerIngest(全部 source_path) → waitJob → job 终态
 写 out/m1-first-batch-report.json：{files, transcribed, skipped, failed, jobStatus, durationMinutes}
 ```
 
-- [ ] **Step 2: 首批真实运行**（预计纯转写 1.5-2.5h @ ≥8× 实时；白天直接跑可临时 `--window 00:00-23:59`）
+- [ ] **Step 2: 首批真实运行**（预计 videotoolbox 转码 0.5-1.5h + whisper 转写 1.5-2.5h @ ≥8× 实时，两项合计 ~2-4h；白天直接跑可临时 `--window 00:00-23:59`。若硬编不可用退软编（6-12h）则改 `--no-transcode` 惰性转码，全量副本挪 M4）
 
 ```bash
 # 服务端带全套 env 起着（Task 9 输出的变量 + docker compose up -d + sqlx migrate run 已做）
@@ -1081,10 +1091,10 @@ curl -s -H "authorization: Bearer $SVC_TOKEN" \
   "http://127.0.0.1:8080/api/v1/search?project_id=$TRAINING__PROJECT_ID&query=班级管理" | python3 -m json.tool | head -30
 # 断言：results[].path 以 transcripts/ 开头且 snippet 含查询词；vector_hits>0 一次（向量命中抽查，若 embedding 服务未配则记 keyword 模式并标注）
 
-# ② Range 播放演示（手工签 URL）
+# ② Range 播放演示（手工签 URL）——M1 在**桌面浏览器**演示（服务已绑回环、隧道 M2 才有，手机不可达；真机验证随 M2）
 URL=$(npx tsx tools/transcriber/src/cli.ts sign-media <某slug> --hours 12)
 curl -s -o /dev/null -D - -H "Range: bytes=0-1023" "$URL"    # 期待 206 + Content-Range
-# 企微/浏览器演示：生成 out/media-demo.html（<video src="$URL" controls>）真机打开可播、可拖动
+# 桌面浏览器打开 out/media-demo.html（<video src="$URL" controls>）可播、可拖动
 
 # ③ 注册关闭后 /bind 建测试账号
 # 服务端以 AUTH__REGISTRATION_ENABLED=false 重启后：
@@ -1092,8 +1102,8 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/auth/register -d '{...}'   # 403
 curl -s -X POST http://127.0.0.1:8080/api/v1/training/bind -H "x-training-admin-token: $TRAINING__ADMIN_TOKEN" \
   -H 'content-type: application/json' -d '{"wecom_userid":"test01","display_name":"验收账号"}'   # 200 + tokens
 
-# ④ 无对外明文端口
-lsof -nP -iTCP -sTCP:LISTEN | grep -Ev '127\.0\.0\.1|\[::1\]'   # 8080/5433/6380 应只绑回环
+# ④ 无对外明文端口（只查本系统三端口，避免被无关本机服务误报）
+lsof -nP -iTCP:8080 -iTCP:5433 -iTCP:6380 -sTCP:LISTEN   # 三个端口的绑定地址应全为 127.0.0.1（或 [::1]）
 ```
 
 - [ ] **Step 2: 写验收记录**（四项结果 + 偏差说明）并提交：`git commit -m "docs(specs): M1 验收记录——四项全过/偏差留档"`
@@ -1105,6 +1115,6 @@ lsof -nP -iTCP -sTCP:LISTEN | grep -Ev '127\.0\.0\.1|\[::1\]'   # 8080/5433/6380
 - **Spec 覆盖**（§9 M1 行逐项）：whisper.cpp 管线（T10-15）、首批五步写入（T15）、migration 013（T5）、/media/:id 签名（T7）、/bind 完整版（T8）、svc-transcriber（T9）、安全基线四行（T4 + T2/T3）；验收四条（T16）。§3.2 的 ①-⑤ 五步 = T14/T15；`--window`（T12）；chapters 生产（T13）；409 策略（T14）；对账（T14/T15）
 - **遗留项闭环**：error→null+重跑（T1）、isMp4Family 假分支（T1）、删死代码（T1）、.m4a ALAC 抽查（T1 Step 5）
 - **M1 边界**：/media 签名无 plan_link 指纹（M2 升级，Global Constraints 声明）；launchd 归 M2；日志脱敏归 M2
-- **占位符扫描**：Task 8 Rust 代码中两处示意注释（md5_like_hash、UserResponse 组装）标注了精确替代方案，实现者按 error.rs/models 实际签名对齐——其余任务代码完整
+- **占位符扫描**：v2 已清零——Task 8 原三处示意（username 字节切片/变体误用/md5 注释）与 Task 7 headers 占位均已改为可直接编译的写法（PermissionDenied 为无载荷单元变体，拒绝原因走 tracing）
 - **类型一致性**：`Segment`（T12 定义、T13/T15 消费）、`Chapter`（T13 产、T15 注册消费）、slug 规则 T11/T15 一致、HMAC 消息格式 T7/T15 一致（`{media_id}:{exp}` hex）
 - **风险声明**：T3/T6/T8 的集成测试需要"改 config 后 create_app"模式（仓库无 per-test config 注入基建，Task 3 首次建立该模式后复用）；embedding 服务未运行时向量验收降级为记录偏差

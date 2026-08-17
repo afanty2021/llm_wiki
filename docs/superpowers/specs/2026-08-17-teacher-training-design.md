@@ -82,7 +82,7 @@
 - **分桶（两桶，含音频维度）**：
   - 桶 A「浏览器可播」：视频 = MP4 + H.264 + AAC；音频 = mp3/m4a → 直用
   - 桶 B「一律转码」：其余全部——hevc、VOB/MPEG-2（60 个）、mkv/avi/flv/wmv 内非 H.264、**wma（16 个，浏览器不可播音频）** → 视频 H.264+AAC mp4 副本，音频转 AAC/MP3 副本
-- 权威 manifest：清单/桶归属/播放副本需求/总时长（**实测 398.97h**（M0 manifest-summary.json）= 主库 172.85h + HEVC 目录 226.12h；夜间窗口 5-7 晚，推算：398.97h ÷ 14-18× 实时 ≈ 22-29h 纯转写，9h/晚 + 转码/重试余量）/重叠（**配对键含一级父目录 + 时长交叉验证 |Δ|≤max(2s,1%)；实测有效配对 0 对**——名称级 3 对中 1 对空名假阳性已消除，2 对为主库完好↔HEVC 损坏，明细见 `out/overlap.json`；mainOnly 901 / hevcOnly 494 键）/privacyFiles 252/elapsedS；配对明细与 M4 排产用的 `--diff`/manifest 信封格式延后至 M4
+- 权威 manifest：清单/桶归属/播放副本需求/总时长（**实测 404.51h**（M0 manifest-summary.json，救援后口径）= 主库 169.44h + HEVC 目录 235.07h；夜间窗口 5-7 晚，推算：404.51h ÷ 14-18× 实时 ≈ 22-29h 纯转写，9h/晚 + 转码/重试余量）/重叠（**配对键含一级父目录 + 时长交叉验证 |Δ|≤max(2s,1%)；实测有效配对 0 对**——名称级 3 对中 1 对空名假阳性已消除，2 对为主库完好↔HEVC 损坏，明细见 `out/overlap.json`；mainOnly 901 / hevcOnly 494 键）/privacyFiles 252/elapsedS；配对明细与 M4 排产用的 `--diff`/manifest 信封格式延后至 M4
 - 少儿影像隐私标注（链接生命周期见 §4.2）
 - v1 事实修正存档：mp3↔mp4 归一化同名 0 对；HEVC 目录纳入；首批专栏 = 教学新知班级管理专栏（**合计 48 个 / 23.88h：HEVC 侧 44 个 mp4 + 主库同目录 4 个伪扩展名视频（137/141/144/145，2.05h，经救援登记）**——历轮"36/44 个"均为不完整口径）
 - M0 实测发现 2 个损坏文件（ffprobe demuxer 错误，均 HEVC 源、均不在首批专栏内；**主库有同名完好副本可替代转写**，见 overlap.json error_involved 标记，M1 前需手工重导出或直接用主库副本）：`【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/高中词汇课练习设计案例分析.mp4`；`【2024-2025】LT年度师训会员（高年级版）/独立教师教学力专栏/420. 独立教师-双减后行业现状.mp4`
@@ -100,7 +100,7 @@
    - ⑤ **transcripts/ 对账**：CLI 轮询 ingest job 状态（jobs API），job 完成后校验 `transcripts/` 前缀页 hash 未被 LLM 生成页覆写（ingest upsert 是 ON CONFLICT DO UPDATE，path 由 LLM 输出决定，实测确认撞名即覆盖）；被改则重写并告警；实测撞名频发则 M2 升级为 ingest 运行时拒绝该前缀（列入风险跟踪）
 
 ### 3.3 CLI 凭证与批产控制
-- **svc-transcriber 服务账号**（LT team Admin，注册关闭前手工创建）：CLI 加密存储其 refresh token 自行刷新（一次性旋转，每次持久化新 token）；media-assets 端点鉴权即 LT team Admin 角色 token，**CLI 不持 TRAINING__ADMIN_TOKEN**
+- **svc-transcriber 服务账号**（LT team Admin，注册关闭前手工创建）：CLI 本机文件存储 refresh token（`out/auth.json`，gitignored + chmod 600，不加密——本机单用户威胁模型下已声明）自行刷新（一次性旋转，每次持久化新 token）；media-assets 端点鉴权即 LT team Admin 角色 token，**CLI 不持 TRAINING__ADMIN_TOKEN**
 - `TRAINING__PROJECT_ID`：CLI/MCP/落地页共用的单项目 ID
 - `--window 23:00-08:00`；首批教学新知班级管理专栏；M4 全量
 
@@ -260,7 +260,7 @@ get_progress / record_ask
 
 | 里程碑 | 内容 | 验收标准 |
 |---|---|---|
-| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（实测 398.97h）/重叠（时长验证后 0 对，hevcOnly 494 键）/救援 29 个；首批 48 个/23.88h 排产 ✅ |
+| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（实测 404.51h）/重叠（时长验证后 0 对，hevcOnly 494 键）/救援 29 个；首批 48 个/23.88h 排产 ✅ |
 | **M1（1 周）** | whisper.cpp 管线 + 首批专栏（48 个，**首批源全为 hevc/伪扩展名——即含桶 B 全量转码副本**）五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
 | **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
 | **M3（1.5 周）** | 问卷编排、/overview、周报 cron | 3-5 人灰度一周；**M3 版 E2E 全量**；全链路重启演练（launchd 已于 M2 就位，此处为演练验收）；AGENTS.md/docs 同步 |
