@@ -85,7 +85,7 @@
 - 权威 manifest：清单/桶归属/播放副本需求/总时长（**实测 404.51h**（M0 manifest-summary.json，救援后口径）= 主库 169.44h + HEVC 目录 235.07h；夜间窗口 5-7 晚，推算：404.51h ÷ 14-18× 实时 ≈ 22-29h 纯转写，9h/晚 + 转码/重试余量）/重叠（**配对键含一级父目录 + 时长交叉验证 |Δ|≤max(2s,1%)；实测有效配对 0 对**——名称级 3 对中 1 对空名假阳性已消除，2 对为主库完好↔HEVC 损坏，明细见 `out/overlap.json`；mainOnly 901 / hevcOnly 494 键）/privacyFiles 252/elapsedS；配对明细与 M4 排产用的 `--diff`/manifest 信封格式延后至 M4
 - 少儿影像隐私标注（链接生命周期见 §4.2）
 - v1 事实修正存档：mp3↔mp4 归一化同名 0 对；HEVC 目录纳入；首批专栏 = 教学新知班级管理专栏（**合计 48 个 / 23.88h：HEVC 侧 44 个 mp4 + 主库同目录 4 个伪扩展名视频（137/141/144/145，2.05h，经救援登记）**——历轮"36/44 个"均为不完整口径）
-- **manifest 为时点快照**：库迁移期间每次批产前重跑 audit（≈14s，兼作迁移健康检查——probeFailures 涌增 = 转换器产坏件；迁移收尾时全量 audit 即迁移验收）。audit preflight 对"配置根目录不存在"降级为警告并视为空集（迁移终态主库目录将被删除）
+- **manifest 为时点快照**：库迁移期间每次批产前重跑 audit（≈14s，兼作迁移健康检查——probeFailures 涌增 = 转换器产坏件；迁移收尾时全量 audit 即迁移验收）。audit preflight 对"配置根目录不存在"降级为警告并视为空集（迁移终态主库目录将被删除）；**双根皆缺或审计结果为 0 媒体时报错退出（防静默空跑）**。M4 全量批产前抽一个已迁移 mp3 对比抽取 wav 的 SHA（验证"音频流直拷、SHA 稳定"假设——若被重编码则 slug 会漂移，需重估内容寻址策略）
 - M0 实测发现 2 个损坏文件（ffprobe demuxer 错误，均 HEVC 源、均不在首批专栏内；~~主库有同名完好副本可替代转写~~ **主库副本已在目录迁移中被删除——需从备份恢复或手工重导出**；overlap.json 的 error_involved 标记保留供迁移前后比对）：`【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/高中词汇课练习设计案例分析.mp4`；`【2024-2025】LT年度师训会员（高年级版）/独立教师教学力专栏/420. 独立教师-双减后行业现状.mp4`
 
 ### 3.2 管线五段式
@@ -264,7 +264,7 @@ get_progress / record_ask
 |---|---|---|
 | **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（实测 404.51h）/重叠（时长验证后 0 对，hevcOnly 494 键）/救援 29 个；首批 48 个/23.88h 排产 ✅ |
 | **M1（1 周）** | whisper.cpp 管线 + 首批专栏（48 个，**首批源全为 hevc/伪扩展名——即含桶 B 全量转码副本**）五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
-| **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
+| **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 + **真机测试件预转副本（复用 --demo-slug 模式；安卓 X5 的 HEVC 支持不保证，开工前先用测试机确认 HEVC 能力——服务端按需转码仍留 M4）** | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
 | **M3（1.5 周）** | 问卷编排、/overview、周报 cron | 3-5 人灰度一周；**M3 版 E2E 全量**；全链路重启演练（launchd 已于 M2 就位，此处为演练验收）；AGENTS.md/docs 同步 |
 | **M4（持续）** | 全量夜间批处理 + **按需转码缓存**（老师点开才转、只缓存实际消费、可淘汰——批量预转废弃）+ 推荐迭代 + 15 人上线 | manifest 100% 转写（批产前重审计口径）；周报完成率可观测；可选 snippet 增强 |
 

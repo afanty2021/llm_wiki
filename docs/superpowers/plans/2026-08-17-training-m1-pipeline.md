@@ -1051,7 +1051,7 @@ describe("upsertTranscriptPage 409 策略", () => {
 - [ ] **Step 1: 实现 transcribe 主循环**
 
 ```
-读 manifest 前先**重跑 audit**（≈14s，迁移期间 manifest 是时点快照；重跑兼作迁移健康检查——probeFailures 涌增即转换器产坏件）。**preflight 同步调整：配置根目录不存在时降级为警告并视为空集**（迁移终态主库目录将被整体删除，音频同样迁移、最终仅存 HEVC 目录）。→ 过滤首批视频 48 个（以重审计结果为准）→
+读 manifest 前先**重跑 audit**（≈14s，迁移期间 manifest 是时点快照；重跑兼作迁移健康检查——probeFailures 涌增即转换器产坏件）。**preflight 同步调整：配置根目录不存在时降级为警告并视为空集**（迁移终态主库目录将被整体删除，音频同样迁移、最终仅存 HEVC 目录）；**双根皆缺或审计结果 0 媒体时报错退出**（防 config 路径打错导致的静默空跑）。→ 过滤首批视频 48 个（以重审计结果为准）→
 对每个（受 window/limit 控制）：
   slug = slugFor(basename, wavSha8)；wav = out/audio/<sha8>.wav（不存在则 extractAudio，sha 去重命中则跳过抽取）
   桶B 转码**默认不做批量**（按需转码缓存为 M4 主案）：仅当 `--demo-slug <slug>` 指定时转该一个供验收演示
