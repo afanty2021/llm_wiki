@@ -259,7 +259,7 @@ get_progress / record_ask
 
 | 里程碑 | 内容 | 验收标准 |
 |---|---|---|
-| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（约 343-363h 定值）/重叠；首批排产 |
+| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（实测 398.97h，manifest-summary.json）/重叠（hevcOnly 474）；首批排产 |
 | **M1（1 周）** | whisper.cpp 管线 + 首批专栏五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
 | **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
 | **M3（1.5 周）** | 问卷编排、/overview、周报 cron | 3-5 人灰度一周；**M3 版 E2E 全量**；全链路重启演练（launchd 已于 M2 就位，此处为演练验收）；AGENTS.md/docs 同步 |
