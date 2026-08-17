@@ -31,6 +31,9 @@ describe("classifyBucket（两桶制，spec §3.1）", () => {
   it("桶B：h264 但容器 mkv", () => {
     expect(classifyBucket(f("mkv", "video"), p("matroska", "h264", "aac"))).toBe("B_transcode");
   });
+  it("桶B：.mp4 扩展名但容器非 MP4 家族（错标文件）", () => {
+    expect(classifyBucket(f("mp4", "video"), p("matroska", "h264", "aac"))).toBe("B_transcode");
+  });
   it("桶B：音频轨缺失（无 AAC）", () => {
     expect(classifyBucket(f("mp4", "video"), p("mov", "h264", null))).toBe("B_transcode");
   });

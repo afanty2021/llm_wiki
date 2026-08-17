@@ -21,10 +21,10 @@ export function scanDirectory(root: string, source: "main" | "hevc"): { files: S
   const ignoredPaths: string[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      // "." 前缀过滤已一并覆盖 ._ AppleDouble 资源叉（其必然以 . 开头），无需单列分支
       if (entry.name === "__MACOSX" || entry.name.startsWith(".")) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
-      if (entry.name.startsWith("._")) continue;
       const ext = extname(entry.name).toLowerCase();
       const category = AUDIO_EXTS.has(ext) ? "audio"
         : VIDEO_EXTS.has(ext) ? "video"
