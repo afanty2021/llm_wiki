@@ -16,6 +16,7 @@ pub mod chat_sessions;
 pub mod reviews;
 pub mod research;
 pub mod training;
+pub mod media;
 
 pub use pages::WikiPage;
 
@@ -47,6 +48,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(research::global_research_routes())
         .merge(llm_providers::llm_provider_routes())
         .merge(search_providers::search_provider_routes())
+        .merge(media::media_routes())
         .fallback_service(spa)
         .with_state(state)
 }
