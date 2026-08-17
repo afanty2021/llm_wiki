@@ -1,6 +1,6 @@
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 8080
   },
   "database": {
@@ -9,7 +9,7 @@
   },
   "redis_url": "redis://localhost:6380",
   "jwt": {
-    "secret": "test_secret_for_development_32bytes!",
+    "secret": "907986fb3f032f9f8df33a4e8f3760d903e778bdbb03633d85ef837bccef4d55",
     "access_token_ttl": 300,
     "refresh_token_ttl": 604800
   },
