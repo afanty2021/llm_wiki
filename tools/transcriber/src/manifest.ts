@@ -13,6 +13,7 @@ export interface ManifestEntry {
   absPath: string; relPath: string; source: "main" | "hevc";
   category: "audio" | "video" | "doc"; ext: string;
   container: string | null; videoCodec: string | null; audioCodec: string | null;
+  // error 行的 bucket 是保守兜底值（FALLBACK_PROBE 走视频分支 → "B_transcode"），消费方必须先过滤 error 行再按桶分组（M1 起将改为 error → null）
   durationS: number; bucket: Bucket | null; privacy: boolean; inFirstBatch: boolean;
   error?: string;
 }
