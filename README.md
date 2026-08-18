@@ -197,7 +197,7 @@ The original describes a simple query where the LLM reads relevant pages. We bui
 Phase 1: Tokenized Search
   - English: word splitting + stop word removal
   - Chinese: CJK bigram tokenization (每个 → [每个, 个…])
-  - Title match bonus (+10 score)
+  - Title matches weighted above content (title token ×5 vs content ×1, phrase-in-title +50)
   - Searches both wiki/ and raw/sources/
 
 Phase 1.5: Vector Semantic Search (optional)
@@ -213,7 +213,7 @@ Phase 2: Graph Expansion
 
 Phase 3: Budget Control
   - Configurable context window: 4K → 1M tokens
-  - Proportional allocation: 60% wiki pages, 20% chat history, 5% index, 15% system
+  - Proportional allocation: 50% wiki pages, ~30% chat history + system, 5% index, 15% response reserve
   - Pages prioritized by combined search + graph relevance score
 
 Phase 4: Context Assembly
@@ -304,7 +304,7 @@ The original focuses on text/markdown. We support structured extraction preservi
 
 | Format | Method |
 |--------|--------|
-| PDF | Built-in pdf-extract (Rust) with file caching; optional MinerU cloud parsing for tables, formulas, and complex layouts |
+| PDF | Built-in pdfium-render (Rust) with file caching; optional MinerU cloud parsing for tables, formulas, and complex layouts |
 | DOCX | docx-rs — headings, bold/italic, lists, tables → structured Markdown |
 | PPTX | ZIP + XML — slide-by-slide extraction with heading/list structure |
 | XLSX/XLS/ODS | calamine — proper cell types, multi-sheet support, Markdown tables |
@@ -330,7 +330,7 @@ Not in the original. Users can configure how much context the LLM receives:
 
 - **Slider from 4K to 1M tokens** — adapts to different LLM capabilities
 - **Proportional budget allocation** — larger windows get proportionally more wiki content
-- **60/20/5/15 split** — wiki pages / chat history / index / system prompt
+- **50/30/5/15 split** — wiki pages / chat history + system / index / response reserve
 
 ### 17. Cross-Platform Compatibility
 
@@ -341,7 +341,7 @@ The original is platform-agnostic (abstract pattern). We handle concrete cross-p
 - **macOS close-to-hide** — close button hides window (app stays running in background), click dock icon to restore, Cmd+Q to quit
 - **Windows/Linux close confirmation** — confirmation dialog before quitting to prevent accidental data loss
 - **Tauri v2** — native desktop on macOS, Windows, Linux
-- **GitHub Actions CI/CD** — automated builds for macOS (ARM + Intel), Windows (.msi), Linux (.deb / .AppImage)
+- **GitHub Actions CI/CD** — automated builds for macOS (ARM), Windows (.msi), Linux (.deb / .AppImage)
 
 ### 18. Other Additions
 
@@ -349,8 +349,8 @@ The original is platform-agnostic (abstract pattern). We handle concrete cross-p
 - **Settings persistence** — LLM provider, API key, model, context size, language saved via Tauri Store
 - **Obsidian config** — auto-generated `.obsidian/` directory with recommended settings
 - **Markdown rendering** — GFM tables with borders, proper code blocks, wikilink processing in chat and preview
-- **Multi-provider LLM support** — OpenAI, Anthropic, Google, Ollama, Custom — each with provider-specific streaming and headers
-- **15-minute timeout** — long ingest operations won't fail prematurely
+- **Multi-provider LLM support** — OpenAI, Anthropic, Google, Azure, Ollama, MiniMax, Claude Code, Codex CLI, Custom — each with provider-specific streaming and headers
+- **30-minute timeout** — long ingest operations won't fail prematurely
 - **dataVersion signaling** — graph and UI automatically refresh when wiki content changes
 
 ## Tech Stack
@@ -364,11 +364,11 @@ The original is platform-agnostic (abstract pattern). We handle concrete cross-p
 | Graph | sigma.js + graphology + ForceAtlas2 |
 | Search | Tokenized search + graph relevance + optional vector (LanceDB) |
 | Vector DB | LanceDB (Rust, embedded, optional) |
-| PDF | pdf-extract + optional MinerU cloud parser |
+| PDF | pdfium-render + optional MinerU cloud parser |
 | Office | docx-rs + calamine |
 | i18n | react-i18next |
 | State | Zustand |
-| LLM | Streaming fetch (OpenAI, Anthropic, Google, Ollama, Custom) |
+| LLM | Streaming fetch (OpenAI, Anthropic, Google, Azure, Ollama, MiniMax, Claude Code, Codex CLI, Custom) |
 | Web Search | Tavily, SerpApi, SearXNG JSON API |
 
 ## Installation
@@ -376,7 +376,7 @@ The original is platform-agnostic (abstract pattern). We handle concrete cross-p
 ### Pre-built Binaries
 
 Download from [Releases](https://github.com/nashsu/llm_wiki/releases):
-- **macOS**: `.dmg` (Apple Silicon + Intel)
+- **macOS**: `.dmg` (Apple Silicon)
 - **Windows**: `.msi`
 - **Linux**: `.deb` / `.AppImage`
 

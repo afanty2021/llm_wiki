@@ -59,7 +59,7 @@ npm run tauri build
 
 ### 前端测试 (Vitest)
 
-- **框架**: Vitest 4.x（配置在 `vitest.config.ts`）
+- **框架**: Vitest 4.x（配置在 `vite.config.ts`）
 - **规模**: 125+ 测试文件，覆盖 `src/lib/`、`src/components/`、`src/stores/`、`src/i18n/`
 - **分两类**:
   - **mock 测试**（默认）: 纯逻辑，不调真实 LLM —— `*.test.ts`
@@ -82,7 +82,7 @@ npm run test -- --watch
 
 ### 桌面端测试 (src-tauri)
 
-Rust 原生 `#[test]` / `#[tokio::test]`，约 155 个，位于 `src-tauri/src/` 各模块的 `mod tests`。
+Rust 原生 `#[test]` / `#[tokio::test]`，约 160 个，位于 `src-tauri/src/` 各模块的 `mod tests`。
 
 ```bash
 cd src-tauri && cargo test
@@ -94,9 +94,9 @@ cd src-tauri && cargo test
 
 | 层 | 内容 | 依赖 |
 |---|---|---|
-| `--lib` 单测 | ~180 个：SSE 解析、文档分块、review 解析、storage、auth 等 | 无 |
-| `--test integration` | ~68 个：auth / files / pages / reviews / ingest-queue / research / permissions 等 | PG + Redis |
-| `#[ignore]` | ~9 个：embedding / search / golden-recall / graph | 本地 omlx (@8001 bge-m3) 或预播种 project 249 |
+| `--lib` 单测 | ~198 个：SSE 解析、文档分块、review 解析、storage、auth 等 | 无 |
+| `--test integration` | ~93 个：auth / files / pages / reviews / ingest-queue / research / training / media / permissions 等 | PG + Redis |
+| `#[ignore]` | ~18 个：embedding / search / golden-recall / graph | 本地 omlx (@8001 bge-m3) 或预播种 project 249 |
 
 ```bash
 cd src-server

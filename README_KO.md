@@ -205,7 +205,7 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 1단계: 토큰화 검색
   - 영어: 단어 분리 + stop word 제거
   - 중국어: CJK bigram 토큰화(每个 → [每个, 个...])
-  - 제목 일치 보너스(+10점)
+  - 제목 일치는 본문보다 높은 가중치(제목 토큰 ×5, 본문 ×1, 제목 내 구절 +50점)
   - wiki/와 raw/sources/ 모두 검색
 
 1.5단계: 벡터 의미 검색(선택)
@@ -221,7 +221,7 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 
 3단계: 예산 제어
   - 설정 가능한 context window: 4K → 1M tokens
-  - 비례 할당: Wiki 페이지 60%, 채팅 기록 20%, index 5%, system 15%
+  - 비례 할당: Wiki 페이지 50%, 채팅 기록 + system 약 30%, index 5%, 응답 예약 15%
   - 페이지는 검색 + 그래프 관련성 합산 점수로 우선순위화
 
 4단계: 컨텍스트 조립
@@ -312,7 +312,7 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 
 | 형식 | 방식 |
 |------|------|
-| PDF | 파일 캐싱이 포함된 내장 pdf-extract(Rust); 표, 수식, 복잡한 레이아웃에는 선택적으로 MinerU 클라우드 파싱 사용 |
+| PDF | 파일 캐싱이 포함된 내장 pdfium-render(Rust); 표, 수식, 복잡한 레이아웃에는 선택적으로 MinerU 클라우드 파싱 사용 |
 | DOCX | docx-rs — headings, bold/italic, lists, tables → 구조화된 Markdown |
 | PPTX | ZIP + XML — slide-by-slide extraction with heading/list structure |
 | XLSX/XLS/ODS | calamine — proper cell types, multi-sheet support, Markdown tables |
@@ -338,7 +338,7 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 
 - **4K부터 1M tokens까지의 slider** — 다양한 LLM capability에 맞게 조정됩니다
 - **비례 예산 할당** — 더 큰 window는 비례해서 더 많은 Wiki 콘텐츠를 받습니다
-- **60/20/5/15 분할** — Wiki pages / chat history / index / system prompt
+- **50/30/5/15 분할** — Wiki pages / chat history + system / index / 응답 예약
 
 ### 17. 크로스 플랫폼 호환성
 
@@ -349,7 +349,7 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 - **macOS close-to-hide** — close button은 창을 숨깁니다(앱은 background에서 계속 실행). dock icon을 클릭하면 복원되고 Cmd+Q로 종료합니다
 - **Windows/Linux 종료 확인** — 실수로 데이터를 잃지 않도록 종료 전 확인 대화상자 표시
 - **Tauri v2** — macOS, Windows, Linux에서 native desktop 제공
-- **GitHub Actions CI/CD** — macOS(ARM + Intel), Windows(.msi), Linux(.deb / .AppImage) 자동 빌드
+- **GitHub Actions CI/CD** — macOS(ARM), Windows(.msi), Linux(.deb / .AppImage) 자동 빌드
 
 ### 18. 기타 추가 사항
 
@@ -357,8 +357,8 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 - **설정 영속성** — LLM provider, API key, model, context size, language가 Tauri Store에 저장됩니다
 - **Obsidian 설정** — 권장 설정이 포함된 `.obsidian/` 디렉터리 자동 생성
 - **Markdown 렌더링** — 테두리가 있는 GFM tables, 적절한 code blocks, chat과 preview의 wikilink processing
-- **다중 provider LLM 지원** — OpenAI, Anthropic, Google, Ollama, Custom. 각각 provider별 streaming과 header를 지원합니다
-- **15분 timeout** — 긴 인제스트 작업이 너무 일찍 실패하지 않습니다
+- **다중 provider LLM 지원** — OpenAI, Anthropic, Google, Azure, Ollama, MiniMax, Claude Code, Codex CLI, Custom. 각각 provider별 streaming과 header를 지원합니다
+- **30분 timeout** — 긴 인제스트 작업이 너무 일찍 실패하지 않습니다
 - **dataVersion signaling** — Wiki 콘텐츠가 변경되면 그래프와 UI가 자동 새로고침됩니다
 
 ## 기술 스택
@@ -372,11 +372,11 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 | Graph | sigma.js + graphology + ForceAtlas2 |
 | Search | Tokenized search + graph relevance + optional vector(LanceDB) |
 | Vector DB | LanceDB(Rust, embedded, optional) |
-| PDF | pdf-extract + 선택적 MinerU 클라우드 파서 |
+| PDF | pdfium-render + 선택적 MinerU 클라우드 파서 |
 | Office | docx-rs + calamine |
 | i18n | react-i18next |
 | State | Zustand |
-| LLM | Streaming fetch(OpenAI, Anthropic, Google, Ollama, Custom) |
+| LLM | Streaming fetch(OpenAI, Anthropic, Google, Azure, Ollama, MiniMax, Claude Code, Codex CLI, Custom) |
 | Web Search | Tavily, SerpApi, SearXNG JSON API |
 
 ## 설치
@@ -385,7 +385,7 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 
 [Releases](https://github.com/nashsu/llm_wiki/releases)에서 다운로드하세요.
 
-- **macOS**: `.dmg`(Apple Silicon + Intel)
+- **macOS**: `.dmg`(Apple Silicon)
 - **Windows**: `.msi`
 - **Linux**: `.deb` / `.AppImage`
 

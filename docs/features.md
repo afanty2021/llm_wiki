@@ -22,15 +22,15 @@
 
 ### 3. 多阶段检索管道
 
-- **Phase 1**: 分词搜索（英文单词分割 + 中文 CJK bigram，标题匹配 +10 分）
+- **Phase 1**: 分词搜索（英文单词分割 + 中文 CJK bigram，标题 token 权重 ×5、正文 ×1，标题短语命中 +50 分）
 - **Phase 1.5**: 向量语义搜索（可选，OpenAI 兼容端点，LanceDB 存储）
 - **Phase 2**: 图扩展（2-hop 遍历，衰减）
-- **Phase 3**: 预算控制（4K-1M tokens，60/20/5/15 分配）
+- **Phase 3**: 预算控制（4K-1M tokens，50/30/5/15 分配）
 - **Phase 4**: 上下文组装（编号页面，引用格式 [1], [2]）
 
 ### 4. Deep Research
 
-- **Web 搜索**: Tavily API，完整内容提取（无截断）
+- **Web 搜索**: Tavily / SerpApi / SearXNG，完整内容提取（无截断）
 - **多查询**: 每个主题多个 LLM 优化的搜索查询
 - **LLM 优化主题**: 从 Graph Insights 触发时，LLM 读取 overview.md + purpose.md
 - **用户确认**: 可编辑的主题和搜索查询确认对话框
@@ -49,7 +49,7 @@
 
 | 格式 | 提取方法 |
 |------|---------|
-| PDF | pdf-extract (Rust) + 文件缓存 |
+| PDF | pdfium-render (Rust) + 文件缓存 |
 | DOCX | docx-rs — 标题、粗体/斜体、列表、表格 → 结构化 Markdown |
 | PPTX | ZIP + XML — 逐页提取，标题/列表结构 |
 | XLSX/XLS/ODS | calamine — 正确的单元格类型，多表支持，Markdown 表格 |
@@ -70,15 +70,15 @@
 - **设置持久化**: LLM provider、API key、模型、上下文大小、语言
 - **Obsidian 兼容**: 自动生成 `.obsidian/` 目录
 - **Markdown 渲染**: GFM 表格、代码块、wikilink 处理
-- **多 provider LLM 支持**: OpenAI, Anthropic, Google, Ollama, MiniMax, Custom
-- **15 分钟超时**: 长时间摄取操作不会过早失败
+- **多 provider LLM 支持**: OpenAI, Anthropic, Google, Azure, Ollama, MiniMax, Claude Code, Codex CLI, Custom
+- **30 分钟超时**: 长时间摄取操作不会过早失败
 - **dataVersion 信号**: wiki 内容更改时自动刷新图和 UI
 - **级联删除**: 智能清理相关 wiki 页面，保留共享实体
 
 ### 9. 日志系统
 
 **阶段 1 — 基础设施**
-- **前端 Logger Facade**: `src/lib/logger.ts`（批处理：50ms / 100 条双阈值 + 级别过滤 + IPC 发送）
+- **前端 Logger Facade**: `src/lib/logger.ts`（批处理：50ms / 10 条双阈值 + 级别过滤 + IPC 发送）
 - **前端类型定义**: `src/lib/logger-types.ts`（LogLevel / LogEntry / LogFileEntry / LogDisplayEntry / ReadLogResponse）
 - **前端命令封装**: `src/commands/logging.ts`（7 个 Tauri 命令封装）
 - **后端 Tracing Layer**: `src-tauri/src/logging/`（types / router / manager / mod / config / notify_layer 六文件）
