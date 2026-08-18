@@ -1,10 +1,20 @@
 // tools/transcriber/__tests__/whisper.test.ts
 // 纯函数 + JSONL 状态机（真实 whisper 转写冒烟留 Task 15）
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parseWhisperJson, withinWindow, whisperArgs, loadState, saveState, nextPending, initLine } from "../src/whisper";
+
+// saveState 原子写断言需要观测 renameSync（ESM namespace 不可 spy，改 partial mock 记录调用）
+const h = vi.hoisted(() => ({ renameCalls: [] as Array<[string, string]> }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    renameSync: (from: string, to: string) => { h.renameCalls.push([from, to]); return actual.renameSync(from, to); },
+  };
+});
 
 const fixture = { transcription: [
   { offsets: { from: 30720, to: 33000 }, text: " 大家好" },
@@ -31,6 +41,13 @@ describe("withinWindow", () => {
     expect(withinWindow(new Date("2026-08-18T09:00:00"), "09:00-18:00")).toBe(true);
     expect(withinWindow(new Date("2026-08-18T18:00:00"), "09:00-18:00")).toBe(false);
     expect(withinWindow(new Date("2026-08-18T08:59:00"), "09:00-18:00")).toBe(false);
+  });
+  it("非法窗口串抛错（T15 评审遗留：缺端点/非数字/越界都不许静默当合法窗口）", () => {
+    expect(() => withinWindow(new Date(), "23:00")).toThrow(/非法窗口串/);       // 缺 "-" 端点
+    expect(() => withinWindow(new Date(), "23:00-")).toThrow(/非法窗口串/);      // 空端点
+    expect(() => withinWindow(new Date(), "ab:cd-08:00")).toThrow(/非法窗口串/); // 非数字
+    expect(() => withinWindow(new Date(), "25:00-08:00")).toThrow(/非法窗口串/); // 时越界
+    expect(() => withinWindow(new Date(), "23:00-08:60")).toThrow(/非法窗口串/); // 分越界
   });
 });
 describe("whisperArgs（命令构造，Task 10 已验证的调用形态）", () => {
@@ -63,6 +80,15 @@ describe("JSONL 状态机（断点续跑）", () => {
     expect(existsSync(jl)).toBe(true);
     expect(loadState(jl)).toEqual(lines);
   });
+  it("saveState 原子写（T15 评审遗留）：temp+rename，无 .tmp 残留，旧内容整体替换", () => {
+    const lines = [initLine("s-a", "aa000000")];
+    writeFileSync(jl, "旧内容半截写入\n");
+    h.renameCalls.length = 0;
+    saveState(jl, lines);
+    expect(h.renameCalls).toContainEqual([`${jl}.tmp`, jl]);
+    expect(existsSync(`${jl}.tmp`)).toBe(false);
+    expect(loadState(jl)).toEqual(lines);
+  });
   it("initLine：pending / tries 0", () => {
     expect(initLine("s-a", "aa000000")).toEqual({ slug: "s-a", wavSha: "aa000000", status: "pending", tries: 0 });
   });
@@ -83,5 +109,13 @@ describe("JSONL 状态机（断点续跑）", () => {
       { slug: "s-b", wavSha: "b", status: "pending" as const, tries: 0 },
     ];
     expect(nextPending(lines)?.slug).toBe("s-a");
+  });
+  it("nextPending：running 残留也接 tries 上限（tries>=2 不再续，T15 评审遗留）——否则坏文件崩两次后永久卡队列头", () => {
+    const lines = [
+      { slug: "s-a", wavSha: "a", status: "running" as const, tries: 2, error: "OOM" },
+      { slug: "s-b", wavSha: "b", status: "pending" as const, tries: 0 },
+    ];
+    expect(nextPending(lines)?.slug).toBe("s-b"); // 跳过耗尽的 running，取后面的 pending
+    expect(nextPending([lines[0]])).toBeUndefined();
   });
 });

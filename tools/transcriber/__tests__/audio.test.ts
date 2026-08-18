@@ -16,7 +16,7 @@ describe("audioArgs", () => {
     expect(audioArgs("playbackVideo", "/a/b.mov", "/o/b.mp4")).toEqual(
       expect.arrayContaining(["-c:v", "h264_videotoolbox", "-c:a", "aac"]));
     expect(audioArgs("playbackVideo", "/a/b.mov", "/o/b.mp4")).toEqual(
-      ["-y", "-i", "/a/b.mov", "-c:v", "h264_videotoolbox", "-c:a", "aac", "/o/b.mp4"]);
+      ["-y", "-i", "/a/b.mov", "-c:v", "h264_videotoolbox", "-c:a", "aac", "-movflags", "+faststart", "/o/b.mp4"]);
   });
   it("playbackAudio: 纯音频源 -vn 转 m4a（AAC）", () => {
     expect(audioArgs("playbackAudio", "/a/b.wma", "/o/b.m4a")).toEqual(

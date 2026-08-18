@@ -1,7 +1,7 @@
 // tools/transcriber/src/whisper.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,12 +24,16 @@ export function parseWhisperJson(raw: unknown): Segment[] {
 /**
  * 时间窗口判断，支持跨午夜（"23:00-08:00"）。分钟粒度：起点含、终点不含。
  * 管线约定：窗口外打印"窗口结束，明日续跑"并 exit 0（CLI 层在每个文件处理前检查）。
+ * 非法窗口串（缺端点/非数字/时>23/分>59）抛错——"23:00" 这类缺端点串若静默通过会被
+ * 当成跨午夜窗口只跑 23:00-23:59 一小时，排查成本高（T15 评审遗留收口）。
  */
 export function withinWindow(now: Date, windowStr: string): boolean {
-  const minutes = windowStr.split("-").map(part => {
-    const [h, m] = part.split(":").map(Number);
-    if (!Number.isFinite(h) || !Number.isFinite(m)) throw new Error(`非法窗口串: ${windowStr}`);
-    return h * 60 + m;
+  const parts = windowStr.split("-");
+  if (parts.length !== 2) throw new Error(`非法窗口串: ${windowStr}`);
+  const minutes = parts.map(part => {
+    const m = /^(\d{1,2}):(\d{1,2})$/.exec(part);
+    if (!m || +m[1] > 23 || +m[2] > 59) throw new Error(`非法窗口串: ${windowStr}`);
+    return +m[1] * 60 + +m[2];
   });
   const [f, t] = minutes;
   const cur = now.getHours() * 60 + now.getMinutes();
@@ -80,18 +84,22 @@ export function loadState(jlPath: string): StateLine[] {
     .map(l => JSON.parse(l) as StateLine);
 }
 
+/** 原子写（T15 评审遗留）：先写 temp 再 rename——并发读者（续跑诊断、tail -f）永不见半截 JSONL。 */
 export function saveState(jlPath: string, lines: StateLine[]): void {
-  writeFileSync(jlPath, lines.map(l => JSON.stringify(l)).join("\n") + "\n");
+  const tmp = `${jlPath}.tmp`;
+  writeFileSync(tmp, lines.map(l => JSON.stringify(l)).join("\n") + "\n");
+  renameSync(tmp, jlPath);
 }
 
 /**
  * 下一个待处理行：pending 优先；failed 且 tries<2 可重试（单文件最多 2 次尝试）；
- * 崩溃残留的 running 也视为可续——新进程能跑到这里即证明旧 runner 已死，不续会永久卡死队列。
+ * 崩溃残留的 running 也视为可续（但同样受 tries<2 上限——否则坏文件崩满两次后
+ * 残留 running 会永久卡死队列头，T15 评审遗留收口）。
  * done 一律跳过（断点续跑核心）。--force 重置由 CLI 层重建全部行为 pending。
  */
 export function nextPending(lines: StateLine[]): StateLine | undefined {
   return lines.find(l =>
     l.status === "pending" ||
-    l.status === "running" ||
+    (l.status === "running" && l.tries < 2) ||
     (l.status === "failed" && l.tries < 2));
 }

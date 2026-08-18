@@ -21,7 +21,8 @@ export function audioArgs(kind: AudioJob, input: string, output: string): string
     case "extract":
       return ["-y", "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", output];
     case "playbackVideo":
-      return ["-y", "-i", input, "-c:v", "h264_videotoolbox", "-c:a", "aac", output];
+      // -movflags +faststart：moov 前置——web 首播免整文件下载即可起播（T15 评审遗留）
+      return ["-y", "-i", input, "-c:v", "h264_videotoolbox", "-c:a", "aac", "-movflags", "+faststart", output];
     case "playbackAudio":
       return ["-y", "-i", input, "-vn", "-c:a", "aac", output];
   }

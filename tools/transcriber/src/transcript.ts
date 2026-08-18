@@ -33,7 +33,8 @@ export function mmss(s: number): string {
  */
 export function buildTranscriptMd(input: TranscriptInput): { md: string; chapters: Chapter[] } {
   const windows = new Map<number, Segment[]>();
-  for (const seg of input.segments) {
+  // 防御性排序（T15 评审遗留）：whisper -oj 理论有序，但坏输出/手改 JSON 乱序时章节也会保持时间升序
+  for (const seg of [...input.segments].sort((a, b) => a.startS - b.startS)) {
     const w = Math.floor(seg.startS / CHAPTER_WINDOW_S);
     const bucket = windows.get(w) ?? [];
     bucket.push(seg);

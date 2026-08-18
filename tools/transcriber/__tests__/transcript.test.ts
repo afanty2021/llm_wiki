@@ -48,6 +48,16 @@ describe("buildTranscriptMd", () => {
     expect(r.chapters).toEqual([]);
     expect([...r.md.matchAll(/\[\d{2}:\d{2}\]/g)]).toHaveLength(0);
   });
+  it("乱序 segments 防御性排序（T15 评审遗留）：章节仍按时间升序，不因输入乱序产生乱章", () => {
+    const shuffled: Segment[] = [
+      { startS: 620, endS: 650, text: "末段" },
+      { startS: 50, endS: 90, text: "首段" },
+      { startS: 400, endS: 450, text: "中段" },
+    ];
+    const r = buildTranscriptMd({ title: "乱序", segments: shuffled, sourcePath: "s.md", mediaSlug: "m", durationS: 650 });
+    expect(r.chapters.map(c => c.start_s)).toEqual([50, 400, 620]);
+    expect(r.chapters.map(c => c.label)).toEqual(["首段", "中段", "末段"]);
+  });
 });
 
 describe("mmss", () => {

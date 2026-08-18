@@ -68,6 +68,7 @@ tools/transcriber/models/
 tools/transcriber/out/bootstrap.env
 # ApiClient 持久化的 token 对（含长期 refresh token，600 权限），勿入库
 tools/transcriber/out/auth.json
+tools/transcriber/out/state.jsonl
 # 转写管线本地产物：内容寻址 wav 去重池与可播副本（大文件，可再生成）
 tools/transcriber/out/audio/
 tools/transcriber/out/playback/
