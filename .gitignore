@@ -66,3 +66,7 @@ tools/transcriber/out/manifest.json
 tools/transcriber/models/
 # bootstrap.sh 生成的本地凭据（密码），勿入库
 tools/transcriber/out/bootstrap.env
+# 转写管线本地产物：内容寻址 wav 去重池与可播副本（大文件，可再生成）
+tools/transcriber/out/audio/
+tools/transcriber/out/playback/
+tools/transcriber/out/transcripts/
