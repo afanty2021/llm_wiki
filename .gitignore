@@ -73,3 +73,5 @@ tools/transcriber/out/state.jsonl
 tools/transcriber/out/audio/
 tools/transcriber/out/playback/
 tools/transcriber/out/transcripts/
+tools/transcriber/out/*.txt
+tools/transcriber/out/bind-resp.json
