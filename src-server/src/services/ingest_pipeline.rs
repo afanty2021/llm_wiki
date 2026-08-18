@@ -448,6 +448,35 @@ async fn mark_file_ingested(
 
 // ── 主流程（A/B stub 版）──
 
+/// LLM 生成页路径守卫（Task 2 / spec §3.2-⑤ 防御）：path 是否落入 transcripts/ 命名空间。
+/// transcripts/ 前缀页由 transcriber CLI 写入（创建即嵌入），ingest step2 的 LLM 生成页
+/// 禁止写入该前缀——upsert 是 ON CONFLICT DO UPDATE，LLM 输出撞名即覆写 CLI 转写页。
+fn is_llm_generated_path(path: &str) -> bool {
+    path.starts_with("transcripts/")
+}
+
+/// upsert 循环单页写入结果——run_ingest_job 的计账模型（fold_page_write_outcomes 的输入）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PageWriteOutcome {
+    /// transcripts/ 命名空间守卫跳过（spec §3.2-⑤）：未写入，计账上视为已处理。
+    GuardSkipped,
+    /// upsert 成功落库。
+    Upserted,
+    /// upsert 失败。
+    UpsertFailed,
+}
+
+/// 折叠单页写入结果 → (pages_written, all_upserted)。纯函数抽出，供单测覆盖计账联动。
+/// item 失败条件是 `pages_written == 0 && pages_to_write > 0`——守卫跳过必须计入
+/// pages_written，否则"唯一生成页撞 transcripts/ 前缀"的源会被误标 failed；
+/// 同时守卫跳过不算 upsert 失败（all_upserted 保持 true → mark_file_ingested /
+/// review 插入照常：source 已处理，resume 不必重跑 LLM）。
+fn fold_page_write_outcomes(outcomes: &[PageWriteOutcome]) -> (usize, bool) {
+    let pages_written = outcomes.iter().filter(|o| **o != PageWriteOutcome::UpsertFailed).count();
+    let all_upserted = !outcomes.iter().any(|o| *o == PageWriteOutcome::UpsertFailed);
+    (pages_written, all_upserted)
+}
+
 /// ingest job 核心入口。A/B 未就绪前处理 .md 文件为纯文本（无 LLM）。
 pub async fn run_ingest_job(
     state: &AppState,
@@ -507,24 +536,32 @@ pub async fn run_ingest_job(
                 done_this_run += 1;
             } // 内容未变，已跳过
             Ok(Some(processed)) => {
-                let mut all_upserted = true;
                 let pages_to_write = processed.pages.len();
-                let mut pages_written = 0usize;
+                let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
                 for page in &processed.pages {
+                    // transcripts/ 命名空间守卫（spec §3.2-⑤ 防御）：该前缀页由 transcriber
+                    // CLI 写入（创建即嵌入），LLM 生成页禁止覆写。跳过计入 pages_written
+                    // （计账联动，见 fold_page_write_outcomes）→ 唯一页撞前缀仍判 done。
+                    if is_llm_generated_path(&page.path) {
+                        tracing::warn!(path = %page.path, source = %sp, "skip LLM page into transcripts/ namespace");
+                        outcomes.push(PageWriteOutcome::GuardSkipped);
+                        continue;
+                    }
                     match upsert_wiki_page(state, job.project_id, page).await {
                         Ok(path) => {
                             result.new_pages.push(path.clone());
-                            pages_written += 1;
                             if let Some(text) = page_content_for_embed(page) {
                                 collected.push((path, text));
                             }
+                            outcomes.push(PageWriteOutcome::Upserted);
                         }
                         Err(e) => {
                             result.warnings.push(format!("upsert {}: {}", sp, e));
-                            all_upserted = false;
+                            outcomes.push(PageWriteOutcome::UpsertFailed);
                         }
                     }
                 }
+                let (pages_written, all_upserted) = fold_page_write_outcomes(&outcomes);
                 // 仅在 wiki_pages 全部成功落库后才 mark_file_ingested（修复漏页问题：
                 // 若先 mark 后 upsert 失败，下次因 hash 命中会跳过，造成永久漏页）。
                 if all_upserted {
@@ -556,6 +593,8 @@ pub async fn run_ingest_job(
                 // #1 修正（code-review all-failed 回归）：仅当本次写了页面（或本就无页面可写）才计 done。
                 // 所有 upsert 失败（pages_to_write>0 但 pages_written==0）→ 标 failed、不计 done_this_run，
                 // 让 all-failed 守卫（done_this_run==0）正确触发 + resume 重试该 source（避免静默 succeeded_with_warnings）。
+                // Task 2 计账联动：transcripts/ 守卫跳过已计入 pages_written（fold_page_write_outcomes），
+                // "唯一生成页撞前缀"的源判 done 非 failed（跳过即已处理，非失败）。
                 if pages_written > 0 || pages_to_write == 0 {
                     let _ = ingest_queue::update_item_state(state, job.id, sp, "done", None).await;
                     done_this_run += 1;
@@ -1102,5 +1141,39 @@ mod tests {
         assert!(!is_context_limit_error(&LlmError::RateLimited));
         assert!(!is_context_limit_error(&LlmError::Timeout(120)));
         assert!(!is_context_limit_error(&LlmError::ConnectionFailed("reset by peer".into())));
+    }
+
+    // ── transcripts/ 命名空间守卫（Task 2 / spec §3.2-⑤ 防御）──
+
+    #[test]
+    fn llm_generated_page_path() {
+        assert!(is_llm_generated_path("transcripts/xx.md"), "transcripts/ 前缀页必须命中守卫");
+        assert!(!is_llm_generated_path("transcript-note.md"), "形似前缀但不带 transcripts/ 路径前缀，不命中");
+        assert!(!is_llm_generated_path("pages/xx.md"), "普通 LLM 生成页路径不命中");
+    }
+
+    #[test]
+    fn transcripts_guard_only_page_item_done_not_failed() {
+        // 边界（计账联动）：唯一生成页撞 transcripts/ 前缀 → 守卫跳过计入 pages_written
+        // → item 判 done 非 failed（item 失败条件 pages_written==0 && pages_to_write>0）。
+        let pages_to_write = 1usize;
+        let (pages_written, all_upserted) =
+            fold_page_write_outcomes(&[PageWriteOutcome::GuardSkipped]);
+        assert_eq!(pages_written, 1, "guard skip must count toward pages_written");
+        assert!(all_upserted, "guard skip is not an upsert failure (mark_file_ingested 仍执行)");
+        assert!(
+            pages_written > 0 || pages_to_write == 0,
+            "唯一页撞前缀必须 done 非 failed"
+        );
+        // 对照锚（既有语义回归）：唯一页真实 upsert 失败 → 计 0 → failed
+        let (w0, up0) = fold_page_write_outcomes(&[PageWriteOutcome::UpsertFailed]);
+        assert_eq!(w0, 0);
+        assert!(!up0);
+        assert!(!(w0 > 0 || pages_to_write == 0), "upsert 全失败仍须 failed");
+        // 混合：守卫跳过 + upsert 失败 → 计账上视为部分成功（与既有部分成功语义一致）
+        let (wm, upm) =
+            fold_page_write_outcomes(&[PageWriteOutcome::GuardSkipped, PageWriteOutcome::UpsertFailed]);
+        assert_eq!(wm, 1);
+        assert!(!upm);
     }
 }
