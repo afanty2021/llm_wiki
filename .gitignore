@@ -62,3 +62,5 @@ e2e-ui-*.png
 # Transcriber local config and generated manifest
 tools/transcriber/config.json
 tools/transcriber/out/manifest.json
+# bootstrap.sh 生成的本地凭据（密码），勿入库
+tools/transcriber/out/bootstrap.env
