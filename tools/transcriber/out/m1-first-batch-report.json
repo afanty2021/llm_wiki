@@ -1,0 +1,51 @@
+{
+  "startedHint": "见 state.jsonl mtime",
+  "files": 48,
+  "transcribed": 48,
+  "failed": 0,
+  "ingestJob": {
+    "id": "0892c518-d21a-432e-893f-51bf978a522d",
+    "status": "succeeded_with_warnings",
+    "failedItems": [
+      {
+        "path": "sources/transcripts/119-58676fdb.md",
+        "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Mary\\\",\\n      \\\"type\\\": \\\"Person\\\",\\n      \\\"des\""
+      },
+      {
+        "path": "sources/transcripts/123-3838e579.md",
+        "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Mary\\\",\\n      \\\"type\\\": \\\"Person\\\",\\n      \\\"des\""
+      },
+      {
+        "path": "sources/transcripts/127-9f1efb27.md",
+        "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"青少版新概念英语\\\",\\n      \\\"type\\\": \\\"Educational Mat\""
+      },
+      {
+        "path": "sources/transcripts/128-23b35f09.md",
+        "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Mary\\\",\\n      \\\"type\\\": \\\"Person\\\",\\n      \\\"des\""
+      },
+      {
+        "path": "sources/transcripts/132-63347618.md",
+        "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Jim Scrivener\\\",\\n      \\\"type\\\": \\\"Person\\\",\\n \""
+      },
+      {
+        "path": "sources/transcripts/134-65f347ed.md",
+        "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Mary\\\",\\n      \\\"type\\\": \\\"Person\\\",\\n      \\\"des\""
+      },
+      {
+        "path": "sources/transcripts/140-5aeebd08.md",
+        "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Mary\\\",\\n      \\\"type\\\": \\\"Person\\\",\\n      \\\"des\""
+      }
+    ]
+  },
+  "reconciliation": {
+    "intact": 48,
+    "overwrittenFixed": 0
+  },
+  "notes": [
+    "任务背景：T15 前实现者于 job 运行中被取消，本报告为收尾对账留档（终态轮询 + hash 对账 + report 代写），transcribe 未重跑。",
+    "ingest 终态 succeeded_with_warnings：48 items 中 7 项失败（任务前仅已知 119 一项，实跑后为 7 项）：119, 123, 127, 128, 132, 134, 140。全部为 step1 JSON parse failed（无有效 JSON 对象）——LLM 输出以合法形态 {\"entities\":[...]} 开头但整体不可解析（疑似输出截断/夹杂非 JSON 文本）。",
+    "建议：M2 前对 7 个失败 source 单独重试 ingest item，或调 provider 输出（加大 max_tokens / 强约束 JSON 输出格式）；转写页与 media_assets 均完整，仅知识抽取（step1）缺失。",
+    "对账方法：以服务端 sources/transcripts/<slug>.md（writeSource 原始字节）为基线，GET 页 transcripts/<slug>.md content sha256 比对；48/48 intact，无 LLM 覆写，无需重写。",
+    "media_assets 表总行数 57 = 本批 48 + t6_s1_* 集成测试遗留 9 行（slug 全局唯一约束，历史测试夹具，非本批写入）。"
+  ]
+}
