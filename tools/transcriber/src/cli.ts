@@ -158,6 +158,17 @@ export function isRescuableMedia(probe: { videoCodec: string | null; audioCodec:
 export const lineEligible = (l: StateLine | undefined): boolean =>
   l === undefined || l.status === "done" || nextPending([l]) !== undefined;
 
+/** 失败落行（M1 review r2：tries 只计转写失败）：
+ *  - 转写类（runTranscribe 抛错 / whisper json 解析失败 / 音频抽取失败）→ tries+1，
+ *    昂贵本地管线失败有配额（2 次即 exhaustedRetries，防无限重试坏件）；
+ *  - 写入类（writeSource / upsert / registerMediaAssets / 演示转码等）→ tries 不变：
+ *    写步骤幂等、下轮重试安全——否则 done 行一次 5xx 即 tries≥2 下轮被跳过，网络恢复后自愈失效。 */
+export const applyTranscribeFailure = (l: StateLine, error: string): StateLine =>
+  ({ ...l, status: "failed", tries: l.tries + 1, error: error.slice(0, 200) });
+
+export const applyWriteFailure = (l: StateLine, error: string): StateLine =>
+  ({ ...l, status: "failed", error: error.slice(0, 200) });
+
 // —— audit（全库审计；transcribe 主循环第一步复用——重跑兼作迁移健康检查）——
 
 async function runAudit(cfg: Config, concurrency: number): Promise<{ entries: ManifestEntry[]; summary: ManifestSummary }> {
@@ -360,20 +371,13 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       continue;
     }
     if (line && line.status === "done" && !args.force && existsSync(whisperJsonPath(line.slug))) {
-      // 复用路径逐文件容错（M1 评审 #3）：
-      // ① transcripts/<slug>.json 读取/解析失败 → 删该 json 降级为本轮重转写（走下方主路径，不标 failed）；
-      // ② registerMediaAssets 等网络错 → 记 failed 行（可重跑自愈），不冲出循环。
+      // 复用路径逐文件容错（M1 评审 #3；r2 收窄 catch 范域）：
+      // ① transcripts/<slug>.json 读取/解析失败 → 删该 json 降级为本轮重转写（走下方主路径，不标 failed）。
+      //    catch 只包 json 读/解析——demo 转码不得混入（转码错误删完好的 whisper json，M1 review r2）；
+      // ② demo 转码 / registerMediaAssets 等写入类失败 → 记 failed 行但 tries 不增
+      //    （applyWriteFailure，写步骤幂等、下轮重试自愈），不冲出循环。
       let segments: Segment[] | null = null;
-      let playback: string | undefined;
       try {
-        if (args.demoSlug === line.slug) {
-          const pb = playbackOutPath(outDir, line.slug, ".mp4");
-          if (!existsSync(pb)) {
-            console.log(`  演示件转码（videotoolbox，done 复用路径）：${base} → ${pb}`);
-            await transcodePlayback(entry.absPath, pb);
-          }
-          playback = pb;
-        }
         segments = parseWhisperJson(JSON.parse(readFileSync(whisperJsonPath(line.slug), "utf-8")));
       } catch (e) {
         rmSync(whisperJsonPath(line.slug), { force: true });
@@ -381,6 +385,15 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       }
       if (segments !== null) {
         try {
+          let playback: string | undefined;
+          if (args.demoSlug === line.slug) {
+            const pb = playbackOutPath(outDir, line.slug, ".mp4");
+            if (!existsSync(pb)) {
+              console.log(`  演示件转码（videotoolbox，done 复用路径）：${base} → ${pb}`);
+              await transcodePlayback(entry.absPath, pb);
+            }
+            playback = pb;
+          }
           const { md, chapters } = buildTranscriptMd({
             title, segments, sourcePath: `sources/transcripts/${line.slug}.md`,
             mediaSlug: line.slug, durationS: entry.durationS,
@@ -398,11 +411,12 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
           console.log(`[${i + 1}/${targets.length}] ${line.slug} — done 复用（断点续跑）`);
           continue;
         } catch (e) {
-          line.status = "failed"; line.tries++; line.error = String(e).slice(0, 200);
+          // 写入类失败（演示转码/登记）：tries 不增（M1 review r2），下轮重试自愈；whisper json 保留不删
+          Object.assign(line, applyWriteFailure(line, String(e)));
           saveState(statePath, lines);
           outcomes.push({ slug: line.slug, relPath: entry.relPath, status: "failed", durationS: entry.durationS, transcribeMs: 0, error: String(e).slice(0, 200) });
           failed++; processed++;
-          console.error(`[${i + 1}/${targets.length}] ${line.slug} done 复用登记失败（可重跑自愈）：${String(e).slice(0, 300)}`);
+          console.error(`[${i + 1}/${targets.length}] ${line.slug} done 复用写入失败（转码/登记，可重跑自愈）：${String(e).slice(0, 300)}`);
           continue;
         }
       }
@@ -416,7 +430,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       sha8 = await ensureWav(entry.absPath, tmpWav, line?.wavSha);
     } catch (e) {
       console.error(`[${i + 1}/${targets.length}] ${entry.relPath} 音频抽取失败：${String(e).slice(0, 200)}`);
-      if (line) { line.status = "failed"; line.tries++; line.error = String(e).slice(0, 200); saveState(statePath, lines); }
+      if (line) { Object.assign(line, applyTranscribeFailure(line, String(e))); saveState(statePath, lines); }
       outcomes.push({ slug: line?.slug ?? "", relPath: entry.relPath, status: "failed", durationS: entry.durationS, transcribeMs: 0, error: String(e).slice(0, 200) });
       failed++; processed++;
       continue;
@@ -435,10 +449,11 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
     }
     cur.slug = slug;
     cur.wavSha = sha8;
-    cur.status = "running"; cur.tries++; delete cur.error;
+    cur.status = "running"; delete cur.error; // tries 不在此预扣——只计转写失败（见 catch，M1 review r2）
     saveState(statePath, lines);
 
     const tFile = Date.now();
+    let whisperDone = false; // 转写阶段完成标志：其后（md 构建/写入/演示转码/登记）的失败均属写入类，不消耗 tries
     try {
       const jsonPath = whisperJsonPath(slug);
       if (!existsSync(jsonPath)) {
@@ -448,6 +463,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
         });
       }
       const segments = parseWhisperJson(JSON.parse(readFileSync(jsonPath, "utf-8")));
+      whisperDone = true;
       const sourcePath = `sources/transcripts/${slug}.md`;
       const pagePath = `transcripts/${slug}.md`;
       const { md, chapters } = buildTranscriptMd({ title, segments, sourcePath, mediaSlug: slug, durationS: entry.durationS });
@@ -477,11 +493,13 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       outcomes.push({ slug, relPath: entry.relPath, status: "done", durationS: entry.durationS, transcribeMs: ms, upsert });
       console.log(`[${i + 1}/${targets.length}] ${slug} — done（${(entry.durationS / 60).toFixed(1)}min 音频 / ${(ms / 60000).toFixed(1)}min 转写，upsert=${upsert}）`);
     } catch (e) {
-      cur.status = "failed"; cur.error = String(e).slice(0, 200);
+      // tries 只计转写失败（M1 review r2）：写入/登记类网络错幂等可重试、不消耗配额——
+      // 否则一次 5xx 即把行推向 exhaustedRetries，网络恢复后自愈失效
+      Object.assign(cur, whisperDone ? applyWriteFailure(cur, String(e)) : applyTranscribeFailure(cur, String(e)));
       saveState(statePath, lines);
       failed++; processed++;
       outcomes.push({ slug, relPath: entry.relPath, status: "failed", durationS: entry.durationS, transcribeMs: Date.now() - tFile, error: String(e).slice(0, 200) });
-      console.error(`[${i + 1}/${targets.length}] ${slug} 失败：${String(e).slice(0, 300)}`);
+      console.error(`[${i + 1}/${targets.length}] ${slug} 失败${whisperDone ? "（写入类，tries 未扣）" : ""}：${String(e).slice(0, 300)}`);
     }
   }
 

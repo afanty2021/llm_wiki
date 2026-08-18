@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv,
   parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible,
+  applyWriteFailure, applyTranscribeFailure,
 } from "../src/cli";
 import type { ManifestEntry } from "../src/manifest";
 import type { StateLine } from "../src/whisper";
@@ -114,5 +115,24 @@ describe("lineEligible（M1 评审 #4：主循环接 nextPending 的 tries 上�
   it("崩溃残留的 running 同样受 tries 上限（与 nextPending 一致）", () => {
     expect(lineEligible(mk({ status: "running", tries: 1 }))).toBe(true);
     expect(lineEligible(mk({ status: "running", tries: 2 }))).toBe(false);
+  });
+});
+
+describe("失败分类（M1 review r2：tries 只计转写失败，写入类不消耗）", () => {
+  const mk = (over: Partial<StateLine>): StateLine =>
+    ({ slug: "s", wavSha: "abcd1234", status: "pending", tries: 0, ...over });
+  it("注册网络错（写入类）标 failed 但 tries 不变——done 行（tries=1）下轮仍 eligible，自愈不失效", () => {
+    const after = applyWriteFailure(mk({ status: "done", tries: 1 }), "registerMediaAssets: 503");
+    expect(after.status).toBe("failed");
+    expect(after.tries).toBe(1);            // 写步骤幂等，不消耗配额
+    expect(lineEligible(after)).toBe(true); // 下轮仍可重试（非 exhaustedRetries）
+  });
+  it("转写失败两次 → tries=2 exhausted（不再 eligible，列 report）", () => {
+    let l = applyTranscribeFailure(mk({}), "whisper-cli exited 1");
+    expect(l.tries).toBe(1);
+    expect(lineEligible(l)).toBe(true);     // 第 1 次后仍可重试
+    l = applyTranscribeFailure(l, "whisper-cli exited 1");
+    expect(l.tries).toBe(2);
+    expect(lineEligible(l)).toBe(false);    // exhaustedRetries，--force 才重置
   });
 });

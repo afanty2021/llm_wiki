@@ -34,7 +34,7 @@ services:
     environment:
       DATABASE_URL: postgres://llmwiki:${DB_PASSWORD:-changeme}@db:5432/llmwiki
       REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET}
+      JWT__SECRET: ${JWT_SECRET}
       STORAGE_PATH: /data/storage
       HOST: 0.0.0.0
       PORT: 8080
