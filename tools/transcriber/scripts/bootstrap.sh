@@ -77,7 +77,7 @@ read_state() {
 }
 
 # --- 0. 服务可达性预检 ---------------------------------------------------------
-api GET /health >/dev/null || die "server 不可达（$BASE）：请先启动 src-server（cargo run）"
+api GET /health >/dev/null || die "server 不可达（${BASE}）：请先启动 src-server（cargo run）"
 
 # --- 1. 准备密码（env > state file > 生成）------------------------------------
 : "${ADMIN_PASSWORD:=$(read_state ADMIN_PASSWORD)}"
