@@ -228,16 +228,40 @@ async fn cache_step1_result(
 
 // ── 两步 LLM 调用（子系统 B provider 已就绪）──
 
-/// Step 1：分析单个 chunk → 结构化 JSON（entities / concepts / connections / contradictions）。
-async fn step1_analyze(
-    state: &AppState,
+/// step1 max_tokens 档位。原 12000 是首批 ingest 7/48 失败的根因（step1 JSON 截断）。
+const STEP1_MAX_TOKENS: u32 = 32000;
+/// 上下文超限时的降档档位（prompt+completion 超模型窗口 → 降 max_tokens 重试一次，不做无界重试）。
+const STEP1_FALLBACK_MAX_TOKENS: u32 = 16000;
+
+/// 判定 LlmError 是否为上下文超限（prompt+completion 超出模型窗口）。
+/// 只匹配 LlmError::ApiError（HTTP 错误体）——主流 provider 的 context 超限均以
+/// API 错误文案报告，例如：
+///   - OpenAI/vLLM: "This model's maximum context length is 32768 tokens. However, ..."
+///   - Anthropic:   "prompt is too long: 156213 tokens > 200000 maximum"
+/// 大小写不敏感子串匹配："context"（覆盖 "maximum context length" / "context_length_exceeded"）、
+/// "too long"、"max tokens"。误报代价仅为一次无害的 16000 降档重试，故取宽匹配。
+fn is_context_limit_error(e: &crate::services::llm_stream::LlmError) -> bool {
+    match e {
+        crate::services::llm_stream::LlmError::ApiError { body, .. } => {
+            let lower = body.to_lowercase();
+            lower.contains("context") || lower.contains("too long") || lower.contains("max tokens")
+        }
+        _ => false,
+    }
+}
+
+/// step1 单次 LLM 调用封装：构造 messages/ChatOpts（max_tokens=STEP1_MAX_TOKENS），
+/// 上下文超限时降档 STEP1_FALLBACK_MAX_TOKENS 重试一次（不做无界重试）。
+/// 返回 (响应文本, usage, 实际生效的 max_tokens)——生效档位供调用方按真实上限判截断。
+/// 抽为独立函数（provider 注入）以便对 ChatOpts / 重试语义做单元测试。
+async fn step1_chat(
+    provider: &dyn crate::services::llm_stream::StreamChatProvider,
     project_id: i32,
+    system: &str,
+    prompt: &str,
     text: &str,
-) -> Result<serde_json::Value, AppError> {
-    use crate::services::llm_stream::{self, ChatMessage, ChatOpts};
-    let provider = llm_stream::provider_for_project(state, project_id).await?;
-    let prompt = include_str!("prompts/step1_analyze.txt");
-    let system = "You analyze documents into structured knowledge for a personal wiki.";
+) -> Result<(String, Option<(u32, u32)>, u32), AppError> {
+    use crate::services::llm_stream::{ChatMessage, ChatOpts};
     let messages = vec![ChatMessage {
         role: "user".into(),
         content: format!("{}\n\n<document>\n{}\n</document>", prompt, text),
@@ -245,14 +269,43 @@ async fn step1_analyze(
     let opts = ChatOpts {
         model: provider.model_name().into(),
         temperature: 0.3,
-        max_tokens: 12000,
+        max_tokens: STEP1_MAX_TOKENS,
         system_prompt: Some(system.into()),
         timeout_secs: None,
     };
-    let (response, _) = provider
-        .chat_to_string(messages, opts)
-        .await
-        .map_err(|e| AppError::LlmApiError(format!("step1: {}", e)))?;
+    match provider.chat_to_string(messages.clone(), opts.clone()).await {
+        Ok((response, usage)) => Ok((response, usage, STEP1_MAX_TOKENS)),
+        Err(e) if is_context_limit_error(&e) => {
+            tracing::warn!(project_id, "ingest step1 context limit, retry with max_tokens 16000");
+            let mut retry_opts = opts;
+            retry_opts.max_tokens = STEP1_FALLBACK_MAX_TOKENS;
+            provider
+                .chat_to_string(messages, retry_opts)
+                .await
+                .map(|(response, usage)| (response, usage, STEP1_FALLBACK_MAX_TOKENS))
+                .map_err(|e| AppError::LlmApiError(format!("step1: {}", e)))
+        }
+        Err(e) => Err(AppError::LlmApiError(format!("step1: {}", e))),
+    }
+}
+
+/// Step 1：分析单个 chunk → 结构化 JSON（entities / concepts / connections / contradictions）。
+async fn step1_analyze(
+    state: &AppState,
+    project_id: i32,
+    text: &str,
+) -> Result<serde_json::Value, AppError> {
+    let provider = crate::services::llm_stream::provider_for_project(state, project_id).await?;
+    let prompt = include_str!("prompts/step1_analyze.txt");
+    let system = "You analyze documents into structured knowledge for a personal wiki.";
+    let (response, usage, effective_max_tokens) =
+        step1_chat(&*provider, project_id, system, prompt, text).await?;
+    if let Some((pt, ct)) = usage {
+        tracing::info!(project_id, prompt_tokens = pt, completion_tokens = ct, "ingest step1 usage");
+        if ct >= effective_max_tokens {
+            tracing::warn!(project_id, "ingest step1 likely truncated (completion>=max_tokens)");
+        }
+    }
     // 宽容解析：先直接 from_str；失败则抠最外层 {...}（兼容 Qwen3 thinking 残留、
     // markdown fence、前导文字）。与 llm_stream 的 enable_thinking=false 双保险。
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&response) {
@@ -893,5 +946,161 @@ mod tests {
         // 原始 (name) 形式应被替换；name 作为新前缀子串存在属正常。
         assert!(!result.contains("(page3_image1.png)"));
         assert!(!result.contains("(image2.jpg)"));
+    }
+
+    // ── step1_chat（ChatOpts 构造 / 上下文降档重试）──
+
+    use crate::services::llm_stream::{ChatOpts, LlmError, TokenDelta};
+    use async_trait::async_trait;
+    use futures::stream::{BoxStream, StreamExt};
+
+    /// 脚本化 mock provider：按 script 依次返回（Err = stream_chat 立即失败；
+    /// Ok = 按序 yield TokenDelta 流），并记录每次收到的 ChatOpts 供断言。
+    /// script 耗尽后再被调用会 panic（用于断言"无多余重试"）。
+    struct ScriptedProvider {
+        calls: std::sync::Mutex<Vec<ChatOpts>>,
+        script: std::sync::Mutex<
+            std::collections::VecDeque<Result<Vec<TokenDelta>, LlmError>>,
+        >,
+    }
+
+    impl ScriptedProvider {
+        fn new(script: Vec<Result<Vec<TokenDelta>, LlmError>>) -> Self {
+            Self {
+                calls: std::sync::Mutex::new(vec![]),
+                script: std::sync::Mutex::new(script.into()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::services::llm_stream::StreamChatProvider for ScriptedProvider {
+        async fn stream_chat(
+            &self,
+            _messages: Vec<crate::services::llm_stream::ChatMessage>,
+            opts: ChatOpts,
+        ) -> Result<BoxStream<'static, Result<TokenDelta, LlmError>>, LlmError> {
+            self.calls.lock().unwrap().push(opts);
+            let next = self
+                .script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted provider got more stream_chat calls than scripted");
+            match next {
+                Err(e) => Err(e),
+                Ok(deltas) => Ok(futures::stream::iter(deltas.into_iter().map(Ok::<_, LlmError>)).boxed()),
+            }
+        }
+        fn provider_type(&self) -> &'static str { "openai" }
+        fn model_name(&self) -> &str { "test-model" }
+    }
+
+    #[tokio::test]
+    async fn step1_chat_uses_max_tokens_32000() {
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("{\"entities\":[]}".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 5 },
+            TokenDelta::Done,
+        ])]);
+        let (text, usage, effective_max) =
+            step1_chat(&provider, 614, "sys", "prompt", "doc text").await.unwrap();
+        assert_eq!(text, "{\"entities\":[]}");
+        assert_eq!(usage, Some((10, 5)));
+        assert_eq!(effective_max, 32000);
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].max_tokens, 32000, "step1 ChatOpts.max_tokens must be 32000");
+        assert_eq!(calls[0].temperature, 0.3);
+        assert_eq!(calls[0].model, "test-model");
+        assert_eq!(calls[0].system_prompt.as_deref(), Some("sys"));
+        assert_eq!(calls[0].timeout_secs, None);
+    }
+
+    #[tokio::test]
+    async fn step1_chat_no_retry_on_other_errors() {
+        // 非上下文类错误（限流）必须直接失败，不触发降档重试。
+        let provider = ScriptedProvider::new(vec![Err(LlmError::RateLimited)]);
+        let err = step1_chat(&provider, 614, "sys", "prompt", "doc").await.unwrap_err();
+        assert!(matches!(err, AppError::LlmApiError(_)));
+        assert_eq!(provider.calls.lock().unwrap().len(), 1, "non-context error must not retry");
+    }
+
+    #[tokio::test]
+    async fn step1_chat_retries_once_at_16000_on_context_limit() {
+        // OpenAI/vLLM 风格的 context 超限错误体 → 恰好一次降档重试。
+        let provider = ScriptedProvider::new(vec![
+            Err(LlmError::ApiError {
+                status: 400,
+                body: "{\"error\":{\"message\":\"This model's maximum context length is 32768 tokens. However, you requested 34124 tokens\",\"type\":\"invalid_request_error\"}}".into(),
+            }),
+            Ok(vec![
+                TokenDelta::Text("{\"entities\":[]}".into()),
+                TokenDelta::Usage { prompt_tokens: 9000, completion_tokens: 800 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let (_text, usage, effective_max) =
+            step1_chat(&provider, 614, "sys", "prompt", "doc").await.unwrap();
+        assert_eq!(usage, Some((9000, 800)));
+        assert_eq!(effective_max, 16000);
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "context limit should trigger exactly one retry");
+        assert_eq!(calls[0].max_tokens, 32000);
+        assert_eq!(calls[1].max_tokens, 16000);
+        // 重试复用原请求（同 system_prompt / temperature）
+        assert_eq!(calls[1].system_prompt.as_deref(), Some("sys"));
+        assert_eq!(calls[1].temperature, 0.3);
+    }
+
+    #[tokio::test]
+    async fn step1_chat_no_unbounded_retry() {
+        // 降档重试仍失败（context 超限在 16000 下依旧不可满足）→ 直接失败，不再重试。
+        // script 只给 2 项：若实现错误地发起第 3 次调用，ScriptedProvider 会 panic 使测试失败。
+        let provider = ScriptedProvider::new(vec![
+            Err(LlmError::ApiError {
+                status: 400,
+                body: "prompt is too long: 156213 tokens > 200000 maximum".into(),
+            }),
+            Err(LlmError::ApiError {
+                status: 400,
+                body: "prompt is too long: 156213 tokens > 200000 maximum".into(),
+            }),
+        ]);
+        let err = step1_chat(&provider, 614, "sys", "prompt", "doc").await.unwrap_err();
+        assert!(matches!(err, AppError::LlmApiError(_)));
+        assert_eq!(provider.calls.lock().unwrap().len(), 2, "exactly one retry, no more");
+    }
+
+    #[test]
+    fn is_context_limit_error_matches_provider_bodies() {
+        // OpenAI / vLLM 文案（含 JSON 转义后的 error body）
+        assert!(is_context_limit_error(&LlmError::ApiError {
+            status: 400,
+            body: "{\"error\":{\"message\":\"This model's maximum context length is 32768 tokens. However, you requested 34124 tokens\",\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\"}}".into(),
+        }));
+        // Anthropic 文案
+        assert!(is_context_limit_error(&LlmError::ApiError {
+            status: 400,
+            body: "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 156213 tokens > 200000 maximum\"}}".into(),
+        }));
+        // 大小写不敏感
+        assert!(is_context_limit_error(&LlmError::ApiError {
+            status: 400,
+            body: "Maximum Context Length exceeded".into(),
+        }));
+    }
+
+    #[test]
+    fn is_context_limit_error_rejects_others() {
+        // 与 context 无关的 API 错误体
+        assert!(!is_context_limit_error(&LlmError::ApiError {
+            status: 400,
+            body: "{\"error\":{\"message\":\"Invalid value for 'temperature'\"}}".into(),
+        }));
+        // 非 ApiError 变体（限流 / 超时 / 连接失败等）
+        assert!(!is_context_limit_error(&LlmError::RateLimited));
+        assert!(!is_context_limit_error(&LlmError::Timeout(120)));
+        assert!(!is_context_limit_error(&LlmError::ConnectionFailed("reset by peer".into())));
     }
 }
