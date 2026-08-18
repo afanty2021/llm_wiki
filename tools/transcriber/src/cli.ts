@@ -319,6 +319,10 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
     // 已 done 且 segments 落盘 → 复用（按原 title/duration 重建 md，hash 与写入时一致），不重转写
     const line = byRel.get(entry.relPath);
     if (line && line.status === "done" && !args.force && existsSync(whisperJsonPath(line.slug))) {
+      if (args.demoSlug === line.slug && !existsSync(playbackOutPath(outDir, line.slug, ".mp4"))) {
+        console.log(`  演示件转码（videotoolbox，done 复用路径）：${base} → ${playbackOutPath(outDir, line.slug, ".mp4")}`);
+        await transcodePlayback(entry.absPath, playbackOutPath(outDir, line.slug, ".mp4"));
+      }
       const segments = parseWhisperJson(JSON.parse(readFileSync(whisperJsonPath(line.slug), "utf-8")));
       const { md } = buildTranscriptMd({
         title, segments, sourcePath: `sources/transcripts/${line.slug}.md`,
