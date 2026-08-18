@@ -128,3 +128,34 @@ async fn get_media(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_range;
+
+    #[test]
+    fn parse_range_inverted_start_gt_end_yields_416_sentinel() {
+        // start > end → 哨兵 (total, total-1)，调用方判 416（s >= total 分支）
+        assert_eq!(parse_range(Some("bytes=5-2"), 100), Some((100, 99)));
+    }
+
+    #[test]
+    fn parse_range_suffix_none_serves_full_200() {
+        // 后缀式 "bytes=-500"：a 为空 → parse 失败 → None（按全量 200，不支持后缀式）
+        assert_eq!(parse_range(Some("bytes=-500"), 100), None);
+    }
+
+    #[test]
+    fn parse_range_open_end_covers_rest_of_file() {
+        // "bytes=0-" 开区间 → 全量 (0, total-1)（206）
+        assert_eq!(parse_range(Some("bytes=0-"), 100), Some((0, 99)));
+        // end 超 total-1 → min 截断
+        assert_eq!(parse_range(Some("bytes=90-500"), 100), Some((90, 99)));
+    }
+
+    #[test]
+    fn parse_range_zero_total_is_none_regardless_of_header() {
+        assert_eq!(parse_range(Some("bytes=0-"), 0), None);
+        assert_eq!(parse_range(None, 0), None);
+    }
+}

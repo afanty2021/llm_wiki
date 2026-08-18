@@ -25,7 +25,7 @@
 
 ```bash
 nohup env \
-  TRAINING__PROJECT_ID=614 \
+  TRAINING__PROJECT_ID=<见 out/bootstrap.env> \
   TRAINING__ADMIN_TOKEN=<bootstrap.env> \
   MEDIA__SIGNING_KEY=<bootstrap.env> \
   AUTH__REGISTRATION_ENABLED=false \
@@ -124,9 +124,16 @@ com.docke 62448  TCP 127.0.0.1:6380 (LISTEN)   ← redis（Docker）
 
 ---
 
+## 偏差与决策（M1 终审补记）
+
+- **首批 48 个 transcript 为无 prompt 转写**：首批跑批时 `runTranscribe` 未传域词表（whisper `--prompt`），领域术语（自然拼读/双减等）命中率低于设计预期——终审复核代码发现，非本验收 ①-④ 断言项。**决策：不立即重转**——「带 prompt `--force` 重转首批（≈2-3h）」与「7 个 ingest step1 失败项重试」（§5 首条）合并为 **M2 前置待办一次执行**，避免两轮夜间窗口两次值守。代码修复已随终审收敛：cli.ts 的 runTranscribe 调用处补传 prompt（域词表：LT英语师训 课堂教学 班级管理 自然拼读 独立教师 双减 师训）。
+- **同类记录——CLI 重试语义**：transcribe 对每行**每轮单次尝试**（`tries` 自增，仅本轮内消费），**跨轮不设尝试上限**——节奏实际受操作者夜间窗口重启约束；上限/退避等语义收口推迟至 M4。
+
+---
+
 ## 5. 既有记录引用与遗留
 
 - **7 个 ingest 失败项**（验收前已存在，非本任务引入）：job `0892c518-d21a-432e-893f-51bf978a522d` → `succeeded_with_warnings`，48 items 中 41 done / 7 failed，全部同因 `step1 JSON parse failed`；slugs：119-58676fdb、123-3838e579、127-9f1efb27、128-23b35f09、132-63347618、134-65f347ed、140-5aeebd08。仅知识抽取缺失，**transcript 页与 media_assets 完整**（故本验收 ①② 不受影响——48 页均在库且已嵌入）。详见 `.superpowers/sdd/2026-08-17-training-m1-pipeline/task-15-report.md` 与 `tools/transcriber/out/m1-first-batch-report.json`（failedItems 全文 + M2 前重试建议）。
 - **向量命中模式**：embedding 服务（:8001 bge-m3-mlx-fp16）全程在线，未出现降级 keyword 模式；376/376 页有嵌入，三次查询 mode 均 hybrid。
-- **服务状态（验收后）**：src-server **PID 66615 保持运行**（env 含 TRAINING__PROJECT_ID=614 / AUTH__REGISTRATION_ENABLED=false / TRAINING__ADMIN_TOKEN / 新 JWT__SECRET / MEDIA__SIGNING_KEY）；日志 `src-server/logs/m1-acceptance-server.log`。注意：旧实例（PID 3854）env 中的 JWT__SECRET 为 config default，已被替换轮换——历史 token 全部失效属预期。
+- **服务状态（验收后）**：src-server **PID 66615 保持运行**（env 含 TRAINING__PROJECT_ID=<见 out/bootstrap.env> / AUTH__REGISTRATION_ENABLED=false / TRAINING__ADMIN_TOKEN / 新 JWT__SECRET / MEDIA__SIGNING_KEY）；日志 `src-server/logs/m1-acceptance-server.log`。注意：旧实例（PID 3854）env 中的 JWT__SECRET 为 config default，已被替换轮换——历史 token 全部失效属预期。
 - **秘密管理**：TRAINING__ADMIN_TOKEN / 新 JWT__SECRET / 密码均不入库（bootstrap.env gitignored；本档 URL 的 sig 截断展示）。

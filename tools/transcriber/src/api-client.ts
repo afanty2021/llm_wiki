@@ -192,7 +192,7 @@ export class ApiClient {
       refresh_token: this.refreshToken,
       expires_in: this.expiresIn,
       saved_at: new Date().toISOString(),
-    }, null, 2));
+    }, null, 2), { mode: 0o600 }); // 新建即 600（防 write→chmod 窗口期泄露）；已存在文件 mode 不生效 → chmodSync 兜底
     chmodSync(this.authPath, 0o600);
   }
 

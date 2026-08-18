@@ -2,7 +2,7 @@
 // Task 14：写入客户端——mock fetch 全分支覆盖（409-skip / 409-update / 401-refresh-rotate /
 // 双 401 重登录 / waitJob 终态停止 / 五步端点形状 / HMAC 向量）。
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -121,6 +121,20 @@ describe("authedFetch 401 → refresh 轮换", () => {
     const saved = JSON.parse(readFileSync(authPath, "utf-8"));
     expect(saved).toMatchObject({ access_token: "A", refresh_token: "R" });
     expect(mode600(authPath)).toBe(true);
+  });
+
+  it("persistAuth mode：新建路径首写即 600（writeFileSync mode，防 chmod 前窗口）；已存在 644 文件由 chmodSync 收紧", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json(200, { access_token: "A", refresh_token: "R" })));
+    // 新建路径：fresh temp 目录（tempAuthPath 保证不存在），mode 0o600 在创建时生效
+    const fresh = tempAuthPath();
+    await new ApiClient("http://x", { projectId: 1, authPath: fresh }).login("svc", "pw");
+    expect(mode600(fresh)).toBe(true);
+    // 已存在路径：预置 0o644——writeFileSync mode 对既有文件不生效，断言 chmodSync 兜底收紧
+    const existing = tempAuthPath();
+    writeFileSync(existing, "{}\n", { mode: 0o644 });
+    chmodSync(existing, 0o644);
+    await new ApiClient("http://x", { projectId: 1, authPath: existing }).login("svc", "pw");
+    expect(mode600(existing)).toBe(true);
   });
 });
 

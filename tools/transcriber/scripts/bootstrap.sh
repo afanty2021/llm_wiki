@@ -177,6 +177,8 @@ mkdir -p "$(dirname "$STATE_FILE")"
   echo "SVC_PASSWORD=$SVC_PASSWORD"
   echo "TEAM_ID=$TEAM_ID"
   echo "PROJECT_ID=$PROJ_ID"
+  # 空占位：CLI sign-media 读 bootstrap.MEDIA__SIGNING_KEY，与服务端同值时填入即可（免手工补键）
+  echo "MEDIA__SIGNING_KEY="
 } > "$STATE_FILE"
 chmod 600 "$STATE_FILE"
 
