@@ -194,6 +194,10 @@ fn validate(cfg: &AppConfig) -> anyhow::Result<()> {
     if cfg.jwt.secret.is_empty() || LEAKED_SECRETS.contains(&cfg.jwt.secret.as_str()) {
         anyhow::bail!("JWT_SECRET must be set to a secure value");
     }
+    // 签名纵深：HMAC-SHA256 密钥非空时至少 32 字节（有效强度）；空 = /media 功能未启用，放行
+    if !cfg.media.signing_key.is_empty() && cfg.media.signing_key.len() < 32 {
+        anyhow::bail!("MEDIA__SIGNING_KEY too short");
+    }
     Ok(())
 }
 
@@ -227,7 +231,22 @@ impl AppConfig {
         // Load from config directory and environment variables
         let builder = ConfigBuilder::builder()
             .add_source(File::with_name("config/default").required(false))
-            .add_source(Environment::default().separator("__"))
+            .add_source(
+                Environment::default()
+                    .separator("__")
+                    // 容器（prod compose）内无 config/default.json 且无挂载，Environment 是
+                    // 唯一配置源——必须能解析数字/布尔/列表，否则 DATABASE__MAX_CONNECTIONS="10"、
+                    // AUTH__REGISTRATION_ENABLED="false"、CORS__ALLOWED_ORIGINS（逗号串）全部
+                    // 反序列化失败（config 0.14 try_parsing=false 时一律按 String 交付）。
+                    // with_list_parse_key 必须圈定列表键：list_separator 一旦设置而未圈定，
+                    // 所有非标量 String 值都会被拆成单元素 Vec<String>（String 字段即炸）——
+                    // 仅 cors.allowed_origins 走列表，其余保持 String。
+                    // 已知取舍：纯数字/布尔字面量的 String 值会被解析成标量（compose 内不得
+                    // 出现纯数字的 String 配置值，如密码恰好全数字）。
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("cors.allowed_origins"),
+            )
             .build()?;
 
         let config: AppConfig = builder.try_deserialize()?;
@@ -424,5 +443,80 @@ mod tests {
         }"#;
         let cfg: AppConfig = serde_json::from_str(json).unwrap();
         assert!(cfg.embedding.is_none());
+    }
+
+    #[test]
+    fn media_signing_key_length_validated() {
+        // 签名纵深：非空 signing_key < 32 字节 → 启动即拒；32 字节放行；空 = 功能未启用放行
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "server": {"host": "0.0.0.0", "port": 8080},
+            "database": {"url": "postgres://x", "max_connections": 1},
+            "redis_url": "redis://x",
+            "jwt": {"secret": "x"},
+            "storage": {"path": "/tmp/x"},
+            "cors": {"allowed_origins": ["http://localhost"]}
+        }))
+        .expect("minimal AppConfig");
+        cfg.media.signing_key = "k".repeat(31);
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("MEDIA__SIGNING_KEY too short"));
+        cfg.media.signing_key = "k".repeat(32);
+        assert!(validate(&cfg).is_ok());
+        cfg.media.signing_key = String::new();
+        assert!(validate(&cfg).is_ok());
+    }
+
+    #[derive(Deserialize)]
+    struct EnvProbe {
+        allowed_origins: Vec<String>,
+        max_connections: u32,
+        registration_enabled: bool,
+        host: String,
+    }
+
+    #[test]
+    fn env_try_parsing_delivers_vec_u32_bool_and_keeps_string() {
+        // Step 4：Environment 源加 try_parsing + list_separator 后，容器 env 的
+        // 逗号串→Vec<String>、"10"→u32、"false"→bool；且未列入 list_parse_key 的键
+        // 保持 String（config 0.14.1：list_separator 一旦设置而无 with_list_parse_key，
+        // 所有 String 都会变单元素 Vec —— from_env 的 String 字段全部炸掉）。
+        // 独立前缀 T4CFG__ 隔离，避免与其他并行测试的 env 读写竞争。
+        std::env::set_var("T4CFG__ALLOWED_ORIGINS", "http://a.example,http://b.example");
+        std::env::set_var("T4CFG__MAX_CONNECTIONS", "10");
+        std::env::set_var("T4CFG__REGISTRATION_ENABLED", "false");
+        std::env::set_var("T4CFG__HOST", "0.0.0.0");
+        std::env::set_var("T4CFG__NUMERIC_LITERALS_BECOME_NUMBERS", "12345");
+        let probe: EnvProbe = ConfigBuilder::builder()
+            .add_source(
+                Environment::with_prefix("T4CFG")
+                    .separator("__")
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("allowed_origins"),
+            )
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(probe.allowed_origins, vec!["http://a.example", "http://b.example"]);
+        assert_eq!(probe.max_connections, 10);
+        assert!(!probe.registration_enabled);
+        assert_eq!(probe.host, "0.0.0.0", "non-list keys must stay String");
+        // 尖锐边（约束而非期望行为）：纯数字字符串被解析成数字——String 字段收到
+        // 纯数字值将无法反序列化，compose 内不得出现纯数字的 String 配置值。
+        let raw: serde_json::Value = ConfigBuilder::builder()
+            .add_source(
+                Environment::with_prefix("T4CFG")
+                    .separator("__")
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("allowed_origins"),
+            )
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(raw["numeric_literals_become_numbers"], serde_json::json!(12345));
+        assert!(raw["numeric_literals_become_numbers"].is_i64());
     }
 }

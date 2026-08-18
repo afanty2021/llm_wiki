@@ -85,6 +85,21 @@ async fn media_signing_and_range() {
         .await;
     r416.assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
 
+    // Step 3 签名纵深：exp 距 now 超过 30 天 → 403（即使签名本身有效）
+    let far = chrono::Utc::now().timestamp() + 30 * 86400 + 3600;
+    let far_sig = llm_wiki_server::utils::media_sign::sign_media(key, &slug, far);
+    server
+        .get(&format!("/media/{slug}?exp={far}&sig={far_sig}"))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    // 30 天内（贴上限 -1h，防边界抖动）→ 200
+    let near = chrono::Utc::now().timestamp() + 30 * 86400 - 3600;
+    let near_sig = llm_wiki_server::utils::media_sign::sign_media(key, &slug, near);
+    let rn = server
+        .get(&format!("/media/{slug}?exp={near}&sig={near_sig}"))
+        .await;
+    rn.assert_status(StatusCode::OK);
+
     // 清理 fixture（行 + 临时文件）
     let _ = sqlx::query("DELETE FROM media_assets WHERE slug = $1")
         .bind(&slug)

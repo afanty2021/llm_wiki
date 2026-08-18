@@ -19,6 +19,10 @@ pub struct MediaQuery {
     pub sig: String,
 }
 
+/// 签名纵深：exp 距 now 超过 30 天的票据一律拒绝（403）。签名无 not-before 概念，
+/// 超长有效期 = 一次泄露长期可用；30 天是媒体播放场景的宽裕上限。
+const MEDIA_SIG_MAX_LEEWAY_SECS: i64 = 30 * 86400;
+
 pub fn media_routes() -> Router<AppState> {
     Router::new().route("/media/:media_id", axum::routing::get(get_media))
 }
@@ -56,8 +60,10 @@ async fn get_media(
             "MEDIA__SIGNING_KEY not configured".into(),
         ));
     }
+    let now = chrono::Utc::now().timestamp();
     let ok = match &q {
-        Some(Query(q)) if q.exp > chrono::Utc::now().timestamp() => {
+        // 有效窗口：(now, now + 30d]——过期拒绝，且超远期（>30 天）同样拒绝（纵深）
+        Some(Query(q)) if q.exp > now && q.exp - now <= MEDIA_SIG_MAX_LEEWAY_SECS => {
             crate::utils::media_sign::verify_media_sig(key, &media_id, q.exp, &q.sig)
         }
         _ => false,

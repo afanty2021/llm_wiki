@@ -191,6 +191,30 @@ async fn media_assets_validation_and_atomicity() {
         .await
         .unwrap();
     assert_eq!(n, 0, "partial batch must not persist (tx rollback)");
+
+    // slug 超长（>200 chars）→ 400，且批量原子：不落库
+    let long_slug = "s".repeat(201);
+    let r = server
+        .post("/api/v1/training/media-assets")
+        .add_header("authorization", bearer(&admin))
+        .json(&json!({"items":[{"slug":long_slug,"media_ref":"/tmp/l.mp4","duration_s":10,"kind":"video","chapters":[]}]}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_assets WHERE slug = $1")
+        .bind(&long_slug)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "oversized slug must not persist");
+
+    // 边界内：slug 恰 200 chars → 200（VARCHAR(255) 内，业务上限本身合法）
+    let edge_slug = "e".repeat(200);
+    let r = server
+        .post("/api/v1/training/media-assets")
+        .add_header("authorization", bearer(&admin))
+        .json(&json!({"items":[{"slug":edge_slug,"media_ref":"/tmp/e.mp4","duration_s":10,"kind":"video","chapters":[]}]}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
 }
 
 // ============ Task 8：POST /api/v1/training/bind ============
@@ -291,14 +315,17 @@ async fn bind_lifecycle() {
     assert_eq!(fresh.status_code(), StatusCode::OK);
 }
 
-/// 超 50 chars 的 wecom_userid（含多字节 CJK）→ username 走 chars 截断合成，
-/// 不 panic、长度 ≤ 50、无重复建号。
+/// 超 44 chars（触发 username 截断分支）但 ≤ 64（Step 2 新上限内）的 wecom_userid
+/// （含多字节 CJK）→ username 走 chars 截断合成，不 panic、长度 ≤ 50、无重复建号。
+/// 注：原 M1 版用 74 chars 输入——Step 2 落 64 chars 上限后该域非法（400），
+/// 收缩到 (44, 64] 区间保持测试意图不变（截断分支 + 多字节安全）。
 #[tokio::test]
 async fn bind_truncates_long_wecom_userid_by_chars() {
     let (server, _state, _admin, _member) = training_fixture_with_config_project("bindlong").await;
     // "王a" 交替（多字节混排）+ unique 后缀：既保证任何按字节的截断都会切在多字节
-    // 字符中间，又保证重复运行时 wecom_userid 唯一；总长 > 44 chars 必走截断分支。
-    let wid = format!("{}{}", "王a".repeat(29), unique("lw"));
+    // 字符中间，又保证重复运行时 wecom_userid 唯一；40 + 后缀 ≈ 56 chars ∈ (44, 64]，
+    // 必走截断分支且不触发长度 400。
+    let wid = format!("{}{}", "王a".repeat(20), unique("lw"));
     let r = server
         .post("/api/v1/training/bind")
         .add_header("x-training-admin-token", "tok123")
@@ -353,4 +380,98 @@ async fn bind_fail_closed_on_missing_config() {
         .json(&json!({"wecom_userid": "whoever"}))
         .await;
     assert_eq!(r.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// Step 1（bind 并发竞态）：两个 bind 同时 in-flight（tokio::join!）打同一**新**
+/// wecom_userid。修复前：existing 查询不在事务内且 FOR UPDATE 锁不住 absent 行 →
+/// 双双 INSERT → 23505 → 一方 500。修复后（事务级 advisory lock）：均 200、同一
+/// user_id、单条 teacher_profiles/单合成账号；且未创建 personal team（M1 行为回归）。
+#[tokio::test]
+async fn bind_concurrent_same_wecom_userid_converges_on_one_account() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("bindrace").await;
+    let wid = unique("race");
+    let body = json!({"wecom_userid": wid, "display_name": "并发老师"});
+
+    async fn call(srv: &TestServer, b: &serde_json::Value) -> axum_test::TestResponse {
+        srv.post("/api/v1/training/bind")
+            .add_header("x-training-admin-token", "tok123")
+            .json(b)
+            .await
+    }
+    let (r1, r2) = tokio::join!(call(&server, &body), call(&server, &body));
+    assert_eq!(r1.status_code(), StatusCode::OK, "both concurrent binds must succeed");
+    assert_eq!(r2.status_code(), StatusCode::OK);
+    let v1 = r1.json::<serde_json::Value>();
+    let v2 = r2.json::<serde_json::Value>();
+    assert_eq!(v1["user"]["id"], v2["user"]["id"], "must converge on the same account");
+
+    // 只落一条 teacher_profiles 与一个合成账号（无半账号/无双号）
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM teacher_profiles WHERE wecom_userid = $1")
+        .bind(&wid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let n_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = $1")
+        .bind(format!("{}@wecom.local", wid))
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(n_users, 1);
+
+    // M1 行为回归：未创建 personal team——bound 用户只属于 LT team
+    let teams = server
+        .get("/api/v1/teams")
+        .add_header("authorization", format!("Bearer {}", v1["access_token"].as_str().unwrap()))
+        .await;
+    assert_eq!(teams.status_code(), StatusCode::OK);
+    let n = teams.json::<serde_json::Value>()["data"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap();
+    assert_eq!(n, 1, "bound user must belong to exactly the LT team, no personal team");
+}
+
+/// Step 2（长度校验矩阵）：wecom_userid >64 chars / display_name >100 chars → 400；
+/// 边界值（64 / 100）→ 200；被拒请求不落库。
+#[tokio::test]
+async fn bind_length_validation_matrix() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("bindlen").await;
+
+    // 65 chars → 400
+    let over_id = "a".repeat(65);
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": over_id}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+
+    // display_name 101 chars（CJK 按字符计）→ 400
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": unique("dn"), "display_name": "名".repeat(101)}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+
+    // 被拒的 wecom_userid 不落库
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM teacher_profiles WHERE wecom_userid = $1")
+        .bind(&over_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+
+    // 边界值合法：wecom_userid 恰 64、display_name 恰 100 → 200
+    // （重复运行走幂等路径同样 200，断言稳定）
+    let edge_id = "b".repeat(64);
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": edge_id, "display_name": "名".repeat(100)}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let uname = r.json::<serde_json::Value>()["user"]["username"].as_str().unwrap().to_string();
+    assert!(uname.chars().count() <= 50, "synthesized username must fit VARCHAR(50)");
 }
