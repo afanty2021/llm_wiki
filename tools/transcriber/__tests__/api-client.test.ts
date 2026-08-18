@@ -156,6 +156,7 @@ describe("五步其余端点形状", () => {
     expect(captured!.init!.method).toBe("POST");
     expect(bodyOf(captured!.init)).toEqual({ path: "sources/transcripts/s1.md", contents: "正文" });
     expect(headersOf(captured!.init).get("authorization")).toBe("Bearer a");
+    expect(headersOf(captured!.init).get("content-type")).toBe("application/json"); // T15 limit-1 真跑：axum Json extractor 415
   });
 
   it("registerMediaAssets → POST /training/media-assets {items} → imported", async () => {

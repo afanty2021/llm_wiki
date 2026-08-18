@@ -217,6 +217,11 @@ export class ApiClient {
   private async bearerFetch(url: string, init: RequestInit): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${this.accessToken}`);
+    // 带 body 的请求补 JSON content-type（服务端 axum Json extractor 415 硬要求；
+    // T15 limit-1 真跑抓到的集成缺口，mock 测试未断言请求头故 T14 未现）
+    if (init.body !== undefined && !headers.has("content-type")) {
+      headers.set("content-type", "application/json");
+    }
     return fetch(url, { ...init, headers });
   }
 
