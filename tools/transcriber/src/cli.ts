@@ -10,7 +10,7 @@ import { probeMedia } from "./probe";
 import { buildManifest, type ManifestRow, type ManifestEntry, type ManifestSummary } from "./manifest";
 import { extractAudio, transcodePlayback, sha256File, sha8Of, audioOutPath, playbackOutPath } from "./audio";
 import { slugFor } from "./slug";
-import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, type StateLine } from "./whisper";
+import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
 import { buildTranscriptMd } from "./transcript";
 import { ApiClient, sha256Hex, type MediaAssetItem } from "./api-client";
 
@@ -129,6 +129,35 @@ export function parseBootstrapEnv(raw: string): Record<string, string> {
   return out;
 }
 
+/** 服务端 item_states JSONB（[{path,status,error}]，snake_case）→ failed 项（M1 评审 #2）。
+ *  防御式解析：非数组/形状不符的元素直接跳过，绝不抛错（job 终态处理不容失败）。 */
+export function parseFailedItemStates(itemStates: unknown): Array<{ path: string; error?: string }> {
+  if (!Array.isArray(itemStates)) return [];
+  const out: Array<{ path: string; error?: string }> = [];
+  for (const it of itemStates) {
+    if (typeof it !== "object" || it === null) continue;
+    const o = it as Record<string, unknown>;
+    if (o.status !== "failed" || typeof o.path !== "string") continue;
+    out.push({ path: o.path, error: typeof o.error === "string" ? o.error : undefined });
+  }
+  return out;
+}
+
+/** 救援黑名单（M1 评审 #5）：jpg/png 等静帧图被 ffprobe 探出的 "video codec"（mjpeg/png/…），
+ *  实为单帧图像数据，不算媒体（归 ignored，不进 manifest）。 */
+export const RESCUE_CODEC_BLACKLIST = new Set(["mjpeg", "png", "bmp", "tiff", "gif"]);
+
+/** 救援判定：探出任一流才算媒体，且 videoCodec 命中静帧黑名单时不算（jpg 误登 video 的根源）。 */
+export function isRescuableMedia(probe: { videoCodec: string | null; audioCodec: string | null }): boolean {
+  if (probe.videoCodec && RESCUE_CODEC_BLACKLIST.has(probe.videoCodec.toLowerCase())) return false;
+  return (probe.videoCodec ?? probe.audioCodec) !== null;
+}
+
+/** 行是否还有尝试配额（M1 评审 #4，接 nextPending 同款语义消费）：
+ *  无行（新文件）可跑；done 走复用分支；pending 可跑；failed/running 残留需 tries<2。 */
+export const lineEligible = (l: StateLine | undefined): boolean =>
+  l === undefined || l.status === "done" || nextPending([l]) !== undefined;
+
 // —— audit（全库审计；transcribe 主循环第一步复用——重跑兼作迁移健康检查）——
 
 async function runAudit(cfg: Config, concurrency: number): Promise<{ entries: ManifestEntry[]; summary: ManifestSummary }> {
@@ -151,7 +180,8 @@ async function runAudit(cfg: Config, concurrency: number): Promise<{ entries: Ma
     });
     ignored.forEach((ig, i) => {
       const probe = probes[i];
-      if (probe && (probe.videoCodec ?? probe.audioCodec) !== null) {
+      // isRescuableMedia：mjpeg/png 等静帧 codec 不算媒体（jpg 误登 video 的修复，M1 评审 #5）
+      if (probe && isRescuableMedia(probe)) {
         rescued.push({
           absPath: ig.absPath,
           relPath: ig.absPath.slice(ig.root.length + 1),
@@ -241,7 +271,13 @@ function makeApiClient(bootstrap: Record<string, string>): { api: ApiClient; had
 /** 展示标题 = basename 去真扩展名（与 slug 同源的保守正则，防 "137. IBL…" 句点误剥）。 */
 const titleOf = (absPath: string): string => pathBasename(absPath).replace(/\.[A-Za-z0-9]{1,6}$/, "");
 
-/** 音频就绪（内容寻址去重）：已有 sha 则复用；否则抽到 tmp、算 sha、命中既有则弃 tmp 否则转正。 */
+/**
+ * 音频就绪（内容寻址去重）：已有 sha 且 wav 在 → 复用；否则抽到 tmp、算 sha、
+ * 命中既有则弃 tmp 否则转正。返回**实算** sha8。
+ * 漂移守卫（M1 评审 #4 双向）：state 记的 sha 与实算不符（源被改写）或 final wav
+ * 缺失（被清理）→ 一律按实算 sha 当新内容处理，由调用方更新行 wavSha/slug
+ * （新 slug 新转写），不再抛错卡死整轮。
+ */
 async function ensureWav(absPath: string, tmpWav: string, knownSha8?: string): Promise<string> {
   if (knownSha8) {
     const finalWav = audioOutPath(outDir, knownSha8);
@@ -249,9 +285,6 @@ async function ensureWav(absPath: string, tmpWav: string, knownSha8?: string): P
   }
   await extractAudio(absPath, tmpWav);
   const sha8 = sha8Of(await sha256File(tmpWav));
-  if (knownSha8 && sha8 !== knownSha8) {
-    throw new Error(`wav 指纹漂移：state 记 ${knownSha8} 实算 ${sha8}（源文件被迁移改写？）`);
-  }
   const finalWav = audioOutPath(outDir, sha8);
   if (existsSync(finalWav)) rmSync(tmpWav); // 同内容跨目录命中既有 wav（sha 去重，跳过保留双份）
   else renameSync(tmpWav, finalWav);
@@ -301,6 +334,8 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
 
   const outcomes: FileOutcome[] = [];
   const records: BatchRecord[] = [];
+  /** tries 耗尽跳过清单（M1 评审 #4：累计尝试 ≥2 仍 failed/running 残留 → 跳过并列 report，--force 才重置） */
+  const exhaustedRetries: Array<{ slug: string; relPath: string; tries: number; error?: string }> = [];
   let transcribed = 0, skipped = 0, failed = 0, transcribeMsTotal = 0, mediaS = 0, processed = 0;
 
   for (let i = 0; i < targets.length; i++) {
@@ -318,33 +353,60 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
 
     // 已 done 且 segments 落盘 → 复用（按原 title/duration 重建 md，hash 与写入时一致），不重转写
     const line = byRel.get(entry.relPath);
-    if (line && line.status === "done" && !args.force && existsSync(whisperJsonPath(line.slug))) {
-      let playback: string | undefined;
-      if (args.demoSlug === line.slug) {
-        const pb = playbackOutPath(outDir, line.slug, ".mp4");
-        if (!existsSync(pb)) {
-          console.log(`  演示件转码（videotoolbox，done 复用路径）：${base} → ${pb}`);
-          await transcodePlayback(entry.absPath, pb);
-        }
-        playback = pb;
-      }
-      const segments = parseWhisperJson(JSON.parse(readFileSync(whisperJsonPath(line.slug), "utf-8")));
-      const { md, chapters } = buildTranscriptMd({
-        title, segments, sourcePath: `sources/transcripts/${line.slug}.md`,
-        mediaSlug: line.slug, durationS: entry.durationS,
-      });
-      // 复用路径同样刷 media_assets（幂等 upsert，与主路径同一 items 构造）：
-      // 迁移期 absPath 漂移后 media_ref 过期 → /media 404，此处按重审计的最新 entry 刷新（M1 终审）
-      await api.registerMediaAssets([{
-        slug: line.slug, media_ref: entry.absPath, playback_path: playback,
-        duration_s: entry.durationS, codec: entry.videoCodec, kind: "video",
-        chapters, transcript_page_path: `transcripts/${line.slug}.md`, source_path: `sources/transcripts/${line.slug}.md`,
-      }]);
-      records.push({ slug: line.slug, pagePath: `transcripts/${line.slug}.md`, sourcePath: `sources/transcripts/${line.slug}.md`, expectedHash: sha256Hex(md), md });
-      outcomes.push({ slug: line.slug, relPath: entry.relPath, status: "skipped", durationS: entry.durationS, transcribeMs: 0 });
-      skipped++;
-      console.log(`[${i + 1}/${targets.length}] ${line.slug} — done 复用（断点续跑）`);
+    // tries 上限（M1 评审 #4，接 nextPending 语义）：failed/running 且 tries≥2 → 跳过不重试
+    if (line && !lineEligible(line)) {
+      exhaustedRetries.push({ slug: line.slug, relPath: entry.relPath, tries: line.tries, error: line.error });
+      console.warn(`[${i + 1}/${targets.length}] ${entry.relPath} — 尝试已耗尽（tries=${line.tries}），本轮跳过（--force 可重置重跑）`);
       continue;
+    }
+    if (line && line.status === "done" && !args.force && existsSync(whisperJsonPath(line.slug))) {
+      // 复用路径逐文件容错（M1 评审 #3）：
+      // ① transcripts/<slug>.json 读取/解析失败 → 删该 json 降级为本轮重转写（走下方主路径，不标 failed）；
+      // ② registerMediaAssets 等网络错 → 记 failed 行（可重跑自愈），不冲出循环。
+      let segments: Segment[] | null = null;
+      let playback: string | undefined;
+      try {
+        if (args.demoSlug === line.slug) {
+          const pb = playbackOutPath(outDir, line.slug, ".mp4");
+          if (!existsSync(pb)) {
+            console.log(`  演示件转码（videotoolbox，done 复用路径）：${base} → ${pb}`);
+            await transcodePlayback(entry.absPath, pb);
+          }
+          playback = pb;
+        }
+        segments = parseWhisperJson(JSON.parse(readFileSync(whisperJsonPath(line.slug), "utf-8")));
+      } catch (e) {
+        rmSync(whisperJsonPath(line.slug), { force: true });
+        console.warn(`⚠ ${line.slug} done 复用读转写 json 失败（${String(e).slice(0, 160)}）——已删缓存 json，本轮重转写`);
+      }
+      if (segments !== null) {
+        try {
+          const { md, chapters } = buildTranscriptMd({
+            title, segments, sourcePath: `sources/transcripts/${line.slug}.md`,
+            mediaSlug: line.slug, durationS: entry.durationS,
+          });
+          // 复用路径同样刷 media_assets（幂等 upsert，与主路径同一 items 构造）：
+          // 迁移期 absPath 漂移后 media_ref 过期 → /media 404，此处按重审计的最新 entry 刷新（M1 终审）
+          await api.registerMediaAssets([{
+            slug: line.slug, media_ref: entry.absPath, playback_path: playback,
+            duration_s: entry.durationS, codec: entry.videoCodec, kind: "video",
+            chapters, transcript_page_path: `transcripts/${line.slug}.md`, source_path: `sources/transcripts/${line.slug}.md`,
+          }]);
+          records.push({ slug: line.slug, pagePath: `transcripts/${line.slug}.md`, sourcePath: `sources/transcripts/${line.slug}.md`, expectedHash: sha256Hex(md), md });
+          outcomes.push({ slug: line.slug, relPath: entry.relPath, status: "skipped", durationS: entry.durationS, transcribeMs: 0 });
+          skipped++;
+          console.log(`[${i + 1}/${targets.length}] ${line.slug} — done 复用（断点续跑）`);
+          continue;
+        } catch (e) {
+          line.status = "failed"; line.tries++; line.error = String(e).slice(0, 200);
+          saveState(statePath, lines);
+          outcomes.push({ slug: line.slug, relPath: entry.relPath, status: "failed", durationS: entry.durationS, transcribeMs: 0, error: String(e).slice(0, 200) });
+          failed++; processed++;
+          console.error(`[${i + 1}/${targets.length}] ${line.slug} done 复用登记失败（可重跑自愈）：${String(e).slice(0, 300)}`);
+          continue;
+        }
+      }
+      // segments===null（json 已删）→ 落到下方主路径本轮重转写
     }
 
     // 新行或重跑：先抽音频（sha 去重）→ 定 slug → 状态 running → 转写 → 五步写入
@@ -360,6 +422,11 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       continue;
     }
     const slug = slugFor(base, sha8);
+    // 漂移按新内容处理（M1 评审 #4）：源变/wav 缺失重抽后实算 sha 与 state 记录不符 →
+    // 更新该行 wavSha/slug（下方 cur.slug/cur.wavSha 赋值），走新 slug 新转写，不抛错
+    if (line?.wavSha && sha8 !== line.wavSha) {
+      console.warn(`⚠ ${entry.relPath} wav 指纹漂移（state 记 ${line.wavSha} 实算 ${sha8}）——按新内容处理（新 slug 新转写）`);
+    }
 
     let cur = byRel.get(entry.relPath);
     if (!cur) {
@@ -443,6 +510,13 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
   console.log(`job ${jobId} 已入队，轮询至终态…`);
   const job = await api.waitJob(jobId);
   console.log(`job 终态：${job.status}${job.error ? `（${job.error.slice(0, 200)}）` : ""}`);
+  // item 级失败可见（M1 评审 #2）：succeeded_with_warnings 也会掩盖单 source 失败，
+  // 从 item_states（[{path,status,error}]）解析 failed 项——任一 failed 则 report 列出且非零退出
+  const failedSources = parseFailedItemStates(job.item_states);
+  if (failedSources.length > 0) {
+    console.error(`✗ ingest item 级失败 ${failedSources.length} 个（job=${job.status}）：`);
+    for (const f of failedSources) console.error(`    ${f.path}${f.error ? `（${f.error.slice(0, 200)}）` : ""}`);
+  }
   await reconcile("job后");
 
   const finishedAt = new Date();
@@ -452,6 +526,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
     startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(),
     files: targets.length, transcribed, skipped, failed,
     jobStatus: job.status, jobId,
+    failedSources, exhaustedRetries,
     durationMinutes, transcribeMinutes,
     mediaHours: Math.round(mediaS / 36) / 100,
     realtimeFactor: transcribeMsTotal > 0 ? Math.round((mediaS * 1000 / transcribeMsTotal) * 10) / 10 : null,
@@ -463,9 +538,11 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
     perFile: outcomes, warnings,
   };
   writeFileSync(join(outDir, "m1-first-batch-report.json"), JSON.stringify(report, null, 2));
-  console.log(JSON.stringify({ files: report.files, transcribed, skipped, failed, jobStatus: job.status, durationMinutes, transcribeMinutes, realtimeFactor: report.realtimeFactor, warnings: warnings.length }, null, 2));
+  console.log(JSON.stringify({ files: report.files, transcribed, skipped, failed, jobStatus: job.status, failedSources: failedSources.length, exhaustedRetries: exhaustedRetries.length, durationMinutes, transcribeMinutes, realtimeFactor: report.realtimeFactor, warnings: warnings.length }, null, 2));
   console.log(`报告已写 out/m1-first-batch-report.json`);
-  if (failed > 0 || job.status === "failed") process.exit(1);
+  // 任一 item failed（或 job failed / 本轮有 failed 文件）→ 非零退出（M1 评审 #2）；
+  // succeeded_withwarnings 且 0 failed → 0
+  if (failed > 0 || failedSources.length > 0 || job.status === "failed") process.exit(1);
 }
 
 // —— sign-media：本地 HMAC（与 Task 7 服务端同算法），输出可直接播放的完整 URL ——

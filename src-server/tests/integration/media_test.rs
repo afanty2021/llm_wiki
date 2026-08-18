@@ -15,6 +15,7 @@ fn unique(tag: &str) -> String {
 
 /// 注入 MEDIA__SIGNING_KEY 后建 app（同库同 Redis），返回 (server, state)。
 async fn media_fixture() -> (TestServer, llm_wiki_server::AppState) {
+    crate::ensure_test_jwt_secret();
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.media.signing_key = "test_media_key_32bytes______________".to_string();
     let (app, state) = llm_wiki_server::create_app(cfg).await.unwrap();

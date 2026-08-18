@@ -21,8 +21,18 @@ mod media_test;
 use axum::Router;
 use llm_wiki_server::AppState;
 
+/// default.json 的 jwt.secret 已出库置空（M1 评审 #1：靠 env 注入倒逼非默认值）。
+/// 测试二进制在 from_env 前统一注入非黑名单 secret；若外部已设置（本地调试覆盖）则不覆盖。
+/// 同一二进制内并发测试 set 的是同一常量值，无实际竞争。
+pub fn ensure_test_jwt_secret() {
+    if std::env::var("JWT__SECRET").unwrap_or_default().is_empty() {
+        std::env::set_var("JWT__SECRET", "integration_test_secret_not_for_prod_32b");
+    }
+}
+
 /// 构建测试 app（连 live DB 5433 + Redis 6380，配置来自 config/default.json）。
 pub async fn setup_test_app() -> (Router, AppState) {
+    ensure_test_jwt_secret();
     let config = llm_wiki_server::AppConfig::from_env().expect("Failed to load test config");
     llm_wiki_server::create_app(config)
         .await

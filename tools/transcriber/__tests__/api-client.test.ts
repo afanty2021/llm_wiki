@@ -158,6 +158,22 @@ describe("waitJob 轮询", () => {
       expect(calls).toBe(2);
     }
   });
+
+  it("终态返回携带 item_states（snake_case [{path,status,error}]，M1 评审 #2——此前被丢弃）", async () => {
+    const itemStates = [
+      { path: "sources/transcripts/a.md", status: "done", error: null },
+      { path: "sources/transcripts/b.md", status: "failed", error: "embedding timeout" },
+    ];
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => json(200, {
+      id: "j1", project_id: 1, status: calls++ === 0 ? "running" : "succeeded_with_warnings",
+      item_states: itemStates,
+    })));
+    const c = new ApiClient("http://x", { accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null", pollIntervalMs: 0 });
+    const job = await c.waitJob("j1");
+    expect(job.status).toBe("succeeded_with_warnings");
+    expect(job.item_states).toEqual(itemStates);
+  });
 });
 
 describe("五步其余端点形状", () => {

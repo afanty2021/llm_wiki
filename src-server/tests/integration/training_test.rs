@@ -99,6 +99,7 @@ async fn training_fixture_with_config_project(
     assert_eq!(m2.status_code(), StatusCode::CREATED);
 
     // 「改 config 后 create_app」（T3 模式）：TRAINING__PROJECT_ID 进程内不可变，经 config 注入
+    crate::ensure_test_jwt_secret();
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.training.project_id = Some(project_id);
     cfg.training.admin_token = "tok123".to_string();
@@ -340,6 +341,7 @@ async fn bind_fail_closed_on_missing_config() {
     assert_eq!(r.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
 
     // 有 admin_token、无 project_id → 500
+    crate::ensure_test_jwt_secret();
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.training.admin_token = "tok123".to_string();
     cfg.training.project_id = None;

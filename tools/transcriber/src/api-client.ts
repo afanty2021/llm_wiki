@@ -55,6 +55,9 @@ export interface JobStatus {
   progress?: number;
   error?: string | null;
   result?: unknown;
+  /** item 级状态（服务端 JobResponse 的 JSONB 数组 [{path,status,error}]，snake_case；
+   *  waitJob 终态返回时携带——CLI 层解析 failed 项驱动非零退出（M1 评审 #2））。 */
+  item_states?: unknown;
 }
 
 interface WikiPageDTO {

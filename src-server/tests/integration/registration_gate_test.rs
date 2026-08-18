@@ -6,6 +6,7 @@ use axum_test::TestServer;
 #[tokio::test]
 async fn register_rejected_when_disabled() {
     // 改 config 后 create_app 模式（本任务首次建立，T6/T8 复用）
+    crate::ensure_test_jwt_secret();
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.auth.registration_enabled = false;
     // create_app 返回 (Router, AppState) 元组——须解构，T6/T7/T8 复用此模式

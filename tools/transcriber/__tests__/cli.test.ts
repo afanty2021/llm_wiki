@@ -2,8 +2,12 @@
 // transcribe/sign-media 子命令的纯函数部分：参数解析 / 首批过滤 / bootstrap.env 解析
 // （主循环 IO 编排由 Task 15 真跑验收；模块顶部 invokedAsScript 守卫保证 import 无副作用）
 import { describe, it, expect } from "vitest";
-import { parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv } from "../src/cli";
+import {
+  parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv,
+  parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible,
+} from "../src/cli";
 import type { ManifestEntry } from "../src/manifest";
+import type { StateLine } from "../src/whisper";
 
 describe("parseTranscribeArgs", () => {
   it("默认 window=23:00-08:00，无 limit/force/demoSlug", () => {
@@ -52,5 +56,63 @@ describe("parseBootstrapEnv", () => {
   });
   it("空串 → 空对象（调用方决定是否 fail）", () => {
     expect(parseBootstrapEnv("")).toEqual({});
+  });
+});
+
+describe("parseFailedItemStates（M1 评审 #2：ingest item 级失败可见）", () => {
+  it("服务端 JSONB 形状 [{path,status,error}] → 仅取 failed 项（含 error）", () => {
+    expect(parseFailedItemStates([
+      { path: "sources/transcripts/a.md", status: "done", error: null },
+      { path: "sources/transcripts/b.md", status: "failed", error: "embedding timeout" },
+      { path: "sources/transcripts/c.md", status: "skipped", error: null },
+    ])).toEqual([{ path: "sources/transcripts/b.md", error: "embedding timeout" }]);
+  });
+  it("succeeded_with_warnings 且 0 failed → 空（CLI 据此 exit 0）", () => {
+    expect(parseFailedItemStates([{ path: "a.md", status: "done", error: null }])).toEqual([]);
+  });
+  it("防御式：非数组 / 非对象元素 / 缺 path / status 非 failed 均跳过，不抛错", () => {
+    expect(parseFailedItemStates(undefined)).toEqual([]);
+    expect(parseFailedItemStates(null)).toEqual([]);
+    expect(parseFailedItemStates({})).toEqual([]);
+    expect(parseFailedItemStates([42, "x", null, { status: "failed" }, { path: "a.md", status: "failed", error: 7 }]))
+      .toEqual([{ path: "a.md", error: undefined }]);
+  });
+});
+
+describe("isRescuableMedia（M1 评审 #5：静帧 codec 黑名单）", () => {
+  it("真视频/纯音频可救援", () => {
+    expect(isRescuableMedia({ videoCodec: "hevc", audioCodec: "aac" })).toBe(true);
+    expect(isRescuableMedia({ videoCodec: null, audioCodec: "aac" })).toBe(true);
+  });
+  it("jpg/png 等静帧 codec（mjpeg/png/bmp/tiff/gif）不算媒体——归 ignored", () => {
+    for (const codec of ["mjpeg", "png", "bmp", "tiff", "gif"]) {
+      expect(isRescuableMedia({ videoCodec: codec, audioCodec: null })).toBe(false);
+    }
+    expect(RESCUE_CODEC_BLACKLIST.has("mjpeg")).toBe(true);
+  });
+  it("大写 codec 名同样命中（防御 toLowerCase）", () => {
+    expect(isRescuableMedia({ videoCodec: "MJPEG", audioCodec: null })).toBe(false);
+  });
+  it("双流皆无 → 不可救援", () => {
+    expect(isRescuableMedia({ videoCodec: null, audioCodec: null })).toBe(false);
+  });
+});
+
+describe("lineEligible（M1 评审 #4：主循环接 nextPending 的 tries 上限语义）", () => {
+  const mk = (over: Partial<StateLine>): StateLine =>
+    ({ slug: "s", wavSha: "abcd1234", status: "pending", tries: 0, ...over });
+  it("无行（新文件）/ done / pending 可处理", () => {
+    expect(lineEligible(undefined)).toBe(true);
+    expect(lineEligible(mk({ status: "done", tries: 1 }))).toBe(true);
+    expect(lineEligible(mk({ status: "pending", tries: 5 }))).toBe(true);
+  });
+  it("failed 且 tries<2 可重试；tries≥2 跳过（列 report，不再无限重试）", () => {
+    expect(lineEligible(mk({ status: "failed", tries: 1 }))).toBe(true);
+    expect(lineEligible(mk({ status: "failed", tries: 2 }))).toBe(false);
+    expect(lineEligible(mk({ status: "failed", tries: 3 }))).toBe(false);
+  });
+  it("崩溃残留的 running 同样受 tries 上限（与 nextPending 一致）", () => {
+    expect(lineEligible(mk({ status: "running", tries: 1 }))).toBe(true);
+    expect(lineEligible(mk({ status: "running", tries: 2 }))).toBe(false);
   });
 });

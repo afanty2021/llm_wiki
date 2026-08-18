@@ -9,7 +9,7 @@
   },
   "redis_url": "redis://localhost:6380",
   "jwt": {
-    "secret": "907986fb3f032f9f8df33a4e8f3760d903e778bdbb03633d85ef837bccef4d55",
+    "secret": "",
     "access_token_ttl": 300,
     "refresh_token_ttl": 604800
   },

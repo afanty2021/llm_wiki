@@ -291,6 +291,7 @@ async fn team_visibility_forbidden() {
 }
 
 fn derive_test_key() -> String {
+    crate::ensure_test_jwt_secret();
     let cfg = llm_wiki_server::AppConfig::from_env().expect("config");
     let secret = cfg.jwt_secret();
     let mut key = [0u8; 32];

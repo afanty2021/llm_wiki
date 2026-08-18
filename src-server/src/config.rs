@@ -181,9 +181,12 @@ pub struct MediaConfig {
 /// 已泄露/占位 secret 黑名单：命中即拒绝启动
 /// - "your-super-secret-key-change-this": 模板占位符
 /// - "test_secret_for_development_32bytes!": 2026-08 已提交进 git，视为泄露
+/// - "907986fb...": 2026-08 dev 64-hex secret 曾提交进 git（M1 评审 #1），视为泄露
 const LEAKED_SECRETS: &[&str] = &[
     "your-super-secret-key-change-this",
     "test_secret_for_development_32bytes!", // 2026-08 已提交进 git，视为泄露
+    // 2026-08 dev 64-hex secret 已提交进 git（M1 评审 #1），视为泄露自新
+    "907986fb3f032f9f8df33a4e8f3760d903e778bdbb03633d85ef837bccef4d55",
 ];
 
 /// 校验必填配置（jwt secret 非空且不在黑名单）
@@ -356,8 +359,8 @@ mod tests {
     #[test]
     fn test_embedding_config_loaded() {
         // config/default.json 含 embedding 段；cargo test cwd = src-server
-        // 旧 dev secret 已入黑名单（Task 6 才轮换 default.json），此处经 env 覆盖注入
-        // 非黑名单 secret（Environment 源优先于 File 源；本测试是 lib 测试二进制中唯一
+        // default.json 的 jwt.secret 已出库置空（M1 评审 #1），此处经 env 覆盖注入
+        // 非 leaked secret（Environment 源优先于 File 源；本测试是 lib 测试二进制中唯一
         // from_env 调用方，无并发 env 竞争）
         std::env::set_var("JWT__SECRET", "unit-test-secret-override-not-leaked");
         let cfg = AppConfig::from_env().expect("from_env");
@@ -403,6 +406,9 @@ mod tests {
         cfg.jwt.secret = "test_secret_for_development_32bytes!".to_string();
         let err = validate(&cfg).unwrap_err();
         assert!(err.to_string().contains("JWT_SECRET"));
+        // 2026-08 曾入库的 dev 64-hex secret 同样命中黑名单（M1 评审 #1 自新）
+        cfg.jwt.secret = "907986fb3f032f9f8df33a4e8f3760d903e778bdbb03633d85ef837bccef4d55".to_string();
+        assert!(validate(&cfg).is_err());
     }
 
     #[test]
