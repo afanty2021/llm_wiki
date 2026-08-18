@@ -62,5 +62,7 @@ e2e-ui-*.png
 # Transcriber local config and generated manifest
 tools/transcriber/config.json
 tools/transcriber/out/manifest.json
+# whisper.cpp GGML 模型文件（≈1.6GB/个），本地下载，勿入库
+tools/transcriber/models/
 # bootstrap.sh 生成的本地凭据（密码），勿入库
 tools/transcriber/out/bootstrap.env
