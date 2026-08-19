@@ -15,8 +15,8 @@ import {
   type ApiReviewsResponse,
   type ApiSearchResult,
 } from "./api-client.js"
+import { VERSION } from "./version.js"
 
-const VERSION = "0.4.20"
 const DEFAULT_PROJECT_ID = "current"
 const MAX_TEXT_BYTES = 120_000
 

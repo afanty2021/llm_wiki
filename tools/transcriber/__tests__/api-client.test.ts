@@ -2,11 +2,12 @@
 // Task 14：写入客户端——mock fetch 全分支覆盖（409-skip / 409-update / 401-refresh-rotate /
 // 双 401 重登录 / waitJob 终态停止 / 五步端点形状 / HMAC 向量）。
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { ApiClient, signMedia } from "../src/api-client";
+import { ApiClient, signMedia, parseFrontmatter, WAIT_JOB_DEFAULT_TIMEOUT_MS, WAIT_JOB_RETRY_BACKOFF_MS } from "../src/api-client";
+import { buildTranscriptMd } from "../src/transcript";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
@@ -218,6 +219,150 @@ describe("五步其余端点形状", () => {
     const c = new ApiClient("http://x", { accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null" });
     expect(await c.verifyTranscriptIntact("transcripts/t.md", sha256(md))).toBe(true);
     expect(await c.verifyTranscriptIntact("transcripts/t.md", sha256("tampered"))).toBe(false);
+  });
+});
+
+describe("waitJob 总超时 + 有界重试（M2 前置）", () => {
+  /** 退避经注入 sleepFn 录制——测试绝不真等 5s/15s/60s。 */
+  const recordingSleep = (log: number[]) => async (ms: number): Promise<void> => { log.push(ms); };
+
+  it("默认契约：总超时 4h；退避表 5s/15s/60s（3 次重试）", () => {
+    expect(WAIT_JOB_DEFAULT_TIMEOUT_MS).toBe(4 * 60 * 60 * 1000);
+    expect([...WAIT_JOB_RETRY_BACKOFF_MS]).toEqual([5_000, 15_000, 60_000]);
+  });
+
+  it("单次非 2xx：500×2 → 第 3 次成功（退避 5s/15s 走注入 sleep）", async () => {
+    const statuses = [500, 500, 200];
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const s = statuses[Math.min(calls++, statuses.length - 1)];
+      return s === 200 ? json(200, { id: "j1", status: "succeeded" }) : json(s, { error: "boom" });
+    }));
+    const sleeps: number[] = [];
+    const c = new ApiClient("http://x", {
+      accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null",
+      pollIntervalMs: 0, sleepFn: recordingSleep(sleeps),
+    });
+    expect((await c.waitJob("j1")).status).toBe("succeeded");
+    expect(calls).toBe(3);
+    expect(sleeps).toEqual([5_000, 15_000]); // 仅退避两次，成功后不再睡
+  });
+
+  it("重试配额（3）耗尽 → 抛最后 ApiError（HTTP 500）", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => { calls++; return json(500, { error: "down" }); }));
+    const sleeps: number[] = [];
+    const c = new ApiClient("http://x", {
+      accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null",
+      pollIntervalMs: 0, sleepFn: recordingSleep(sleeps),
+    });
+    await expect(c.waitJob("j9")).rejects.toThrow(/HTTP 500/);
+    expect(calls).toBe(4);          // 首发 1 + 重试 3
+    expect(sleeps).toEqual([5_000, 15_000, 60_000]);
+  });
+
+  it("总超时：一直 running → 抛错带 job_id（不再静默无限轮询）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json(200, { id: "job-xyz", status: "running" })));
+    const c = new ApiClient("http://x", {
+      accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null",
+      pollIntervalMs: 5, // 真实短睡（默认 sleep），几轮后越过 deadline
+    });
+    await expect(c.waitJob("job-xyz", { timeoutMs: 30 })).rejects.toThrow(/job-xyz/);
+    await expect(c.waitJob("job-xyz", { timeoutMs: 30 })).rejects.toThrow(/timed out/);
+  });
+
+  it("非 2xx 重试不重置终态语义：500 → 200 failed 仍原样返回（failed 是终态不是异常）", async () => {
+    const statuses = [500, 200];
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const s = statuses[Math.min(calls++, statuses.length - 1)];
+      return s === 200 ? json(200, { id: "j1", status: "failed", error: "item err" }) : json(s, {});
+    }));
+    const c = new ApiClient("http://x", {
+      accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null",
+      pollIntervalMs: 0, sleepFn: async () => {},
+    });
+    expect((await c.waitJob("j1")).status).toBe("failed");
+  });
+});
+
+describe("tryRefresh 守卫（M2 前置：网络/JSON 异常吞掉返回 false，对齐 tryRelogin）", () => {
+  it("refresh 200 但 body 畸形（非 JSON）→ 返回 false：不崩、不持久化垃圾、上层按 401 走", async () => {
+    const authPath = tempAuthPath();
+    let pageCalls = 0, refreshCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      if (u.pathname === "/api/v1/auth/refresh") {
+        refreshCalls++;
+        return new Response("not json at all", { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (u.pathname.endsWith("/pages")) return pageCalls++ === 0 ? json(401, {}) : json(201, {});
+      return json(500, {});
+    }));
+    const c = new ApiClient("http://x", { accessToken: "a", refreshToken: "r", projectId: 1, authPath });
+    await expect(c.upsertTranscriptPage("transcripts/t.md", "---\ntitle: t\n---\nb")).rejects.toThrow(/HTTP 401/);
+    expect(refreshCalls).toBe(1);
+    expect(pageCalls).toBe(1);                 // refresh false 后未带旧 token 重放
+    expect(existsSync(authPath)).toBe(false);  // 畸形 body 未被持久化
+  });
+
+  it("refresh 网络级异常（fetch 抛错）→ 同样吞掉返回 false", async () => {
+    let pageCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const u = new URL(String(url));
+      if (u.pathname === "/api/v1/auth/refresh") throw new TypeError("fetch failed: ECONNREFUSED");
+      if (u.pathname.endsWith("/pages")) return pageCalls++ === 0 ? json(401, {}) : json(201, {});
+      return json(500, {});
+    }));
+    const c = new ApiClient("http://x", { accessToken: "a", refreshToken: "r", projectId: 1, authPath: "/dev/null" });
+    await expect(c.upsertTranscriptPage("transcripts/t.md", "---\ntitle: t\n---\nb")).rejects.toThrow(/HTTP 401/);
+    expect(pageCalls).toBe(1);
+  });
+});
+
+describe("parseFrontmatter 直测（M2 前置：mcp/transcriber 共用的 T13 形态）", () => {
+  it("T13 形态：type/sources/media_slug/duration_s 四字段原样解析", () => {
+    const md = [
+      "---",
+      'title: "Lesson 3: Phonics？"',
+      "type: transcript",
+      "media_slug: abc12345",
+      "duration_s: 1234",
+      "sources:",
+      "  - sources/transcripts/abc12345.md",
+      "---",
+      "## [00:00] hi",
+      "",
+      "[00:00] hello world",
+    ].join("\n");
+    expect(parseFrontmatter(md)).toEqual({
+      title: "Lesson 3: Phonics？",   // 双引号标量走 JSON.parse（吸收 ：/？ 等 YAML 敏感字符）
+      type: "transcript",
+      media_slug: "abc12345",
+      duration_s: 1234,               // 纯数字 → number
+      sources: ["sources/transcripts/abc12345.md"], // `sources:` + 缩进 `- item` 列表
+    });
+  });
+
+  it("与 buildTranscriptMd 产出对账（round-trip：写入端 ⇄ 解析端锁同一形状）", () => {
+    const { md } = buildTranscriptMd({
+      title: "T: 感叹！问？",
+      segments: [{ startS: 0, endS: 4, text: " hello " }, { startS: 320, endS: 330, text: "world" }],
+      sourcePath: "sources/transcripts/abcd1234.md",
+      mediaSlug: "abcd1234",
+      durationS: 620,
+    });
+    const fm = parseFrontmatter(md);
+    expect(fm.type).toBe("transcript");
+    expect(fm.sources).toEqual(["sources/transcripts/abcd1234.md"]);
+    expect(fm.media_slug).toBe("abcd1234");
+    expect(fm.duration_s).toBe(620);
+    expect(fm.title).toBe("T: 感叹！问？");
+  });
+
+  it("退化：无 frontmatter → {}（type 缺失 → 服务端记为 concept 语义）", () => {
+    expect(parseFrontmatter("正文，无 frontmatter")).toEqual({});
+    expect(parseFrontmatter("---\nkey: 但无闭合\n")).toEqual({}); // 无闭合 --- 不算 frontmatter
   });
 });
 

@@ -1,7 +1,7 @@
 // tools/transcriber/__tests__/cli.test.ts
-// transcribe/sign-media 子命令的纯函数部分：参数解析 / 首批过滤 / bootstrap.env 解析
+// transcribe/sign-media 子命令的纯函数部分：参数解析（含缺值校验）/ 首批过滤 / bootstrap.env 解析
 // （主循环 IO 编排由 Task 15 真跑验收；模块顶部 invokedAsScript 守卫保证 import 无副作用）
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv,
   parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible,
@@ -21,6 +21,39 @@ describe("parseTranscribeArgs", () => {
   it("非法窗口串在解析期即抛（fail fast，不等 48 个文件跑一半）", () => {
     expect(() => parseTranscribeArgs(["--window", "25:00-08:00"])).toThrow(/非法窗口串/);
     expect(() => parseTranscribeArgs(["--window", "23:00"])).toThrow(/非法窗口串/);
+  });
+});
+
+describe("参数缺值校验（M2 前置：末位缺值报错退出，不再静默默认）", () => {
+  afterEach(() => vi.restoreAllMocks());
+  /** fail() 走 console.error + process.exit(1)——桩掉两者并断言退出码与错误消息。 */
+  const expectFailExit1 = (argv: string[], msgRe: RegExp) => {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation(m => errors.push(String(m)));
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("EXIT_NOW"); });
+    expect(() => parseTranscribeArgs(argv)).toThrow("EXIT_NOW");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors.some(e => msgRe.test(e))).toBe(true);
+  };
+
+  it("--window 结尾缺值 → 报错退出（此前静默回落默认窗口 23:00-08:00）", () => {
+    expectFailExit1(["--window"], /--window 需带值/);
+  });
+  it("--window 后跟下一 flag → 视为缺值报错（此前把 --force 当窗口串报格式错）", () => {
+    expectFailExit1(["--window", "--force", "00:00-23:59"], /--window 需带值/);
+  });
+  it("--demo-slug 结尾缺值 → 报错退出（此前静默当未传）", () => {
+    expectFailExit1(["--window", "00:00-23:59", "--demo-slug"], /--demo-slug 需带值/);
+  });
+  it("--demo-slug 后跟下一 flag → 视为缺值报错（此前 demoSlug=\"--force\" 静默错配）", () => {
+    expectFailExit1(["--demo-slug", "--force"], /--demo-slug 需带值/);
+  });
+  it("--limit 结尾缺值 → 同规则报错（值型 flag 统一走缺值校验）", () => {
+    expectFailExit1(["--limit"], /--limit 需带值/);
+  });
+  it("合法传参不受影响：三个值型 flag 均有值时照常解析", () => {
+    expect(parseTranscribeArgs(["--window", "00:00-23:59", "--limit", "3", "--demo-slug", "s1"]))
+      .toEqual({ window: "00:00-23:59", limit: 3, force: false, demoSlug: "s1" });
   });
 });
 

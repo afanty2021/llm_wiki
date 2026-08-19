@@ -93,9 +93,14 @@ export interface TranscribeArgs {
 }
 
 export function parseTranscribeArgs(argv: string[]): TranscribeArgs {
+  // 值型 flag 末位缺值（下一 token 是 flag 或结尾）→ 报错退出，不再静默默认
+  // （M2 前置：此前 "--window" 结尾静默回落 23:00-08:00、"--demo-slug --force" 把 flag 当 slug）
   const val = (flag: string): string | undefined => {
     const i = argv.indexOf(flag);
-    return i >= 0 ? argv[i + 1] : undefined;
+    if (i < 0) return undefined;
+    const next = argv[i + 1];
+    if (next === undefined || next.startsWith("--")) fail(`${flag} 需带值（收到 ${next ?? "无值"}）`);
+    return next;
   };
   const window = val("--window") ?? "23:00-08:00";
   withinWindow(new Date(), window); // 非法窗口串在此即抛（fail fast，别等 48 个文件跑一半）

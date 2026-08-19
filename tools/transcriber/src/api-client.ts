@@ -78,6 +78,8 @@ export interface ApiClientOptions {
   password?: string;
   /** waitJob 轮询间隔 ms，默认 2000（测试传 0）。 */
   pollIntervalMs?: number;
+  /** 等待函数注入（默认 setTimeout sleep）——测试注入录制桩，避免真实退避 5s/15s/60s。 */
+  sleepFn?: (ms: number) => Promise<void>;
   /** 媒体签名 key（缺省读 MEDIA__SIGNING_KEY）。 */
   mediaSigningKey?: string;
 }
@@ -130,6 +132,18 @@ export function parseFrontmatter(md: string): Record<string, unknown> {
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+/** waitJob 总超时默认 4h（M2 前置：防 ingest job 卡住时 CLI 静默无限轮询）。 */
+export const WAIT_JOB_DEFAULT_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+/** waitJob 单次非 2xx 的退避表（3 次重试：5s/15s/60s——M2 前置）。 */
+export const WAIT_JOB_RETRY_BACKOFF_MS = [5_000, 15_000, 60_000] as const;
+
+export interface WaitJobOptions {
+  /** 总超时 ms，默认 {@link WAIT_JOB_DEFAULT_TIMEOUT_MS}（4h）；超时抛错带 job_id。 */
+  timeoutMs?: number;
+  /** 单次非 2xx 的有界重试次数（默认退避表长度 3；重试配额为整轮累计，非连续计数）。 */
+  retryOn5xx?: number;
+}
+
 export class ApiClient {
   private accessToken: string;
   private refreshToken: string;
@@ -138,6 +152,7 @@ export class ApiClient {
   private password?: string;
   private expiresIn?: number;
   private readonly pollIntervalMs: number;
+  private readonly doSleep: (ms: number) => Promise<void>;
 
   constructor(
     public readonly baseUrl: string,
@@ -149,6 +164,7 @@ export class ApiClient {
     this.username = opts.username;
     this.password = opts.password;
     this.pollIntervalMs = opts.pollIntervalMs ?? 2000;
+    this.doSleep = opts.sleepFn ?? sleep;
   }
 
   get projectId(): number {
@@ -237,13 +253,19 @@ export class ApiClient {
 
   private async tryRefresh(): Promise<boolean> {
     if (!this.refreshToken) return false;
-    const res = await this.plainFetch("/api/v1/auth/refresh", {
-      method: "POST",
-      body: JSON.stringify({ refresh_token: this.refreshToken }),
-    });
-    if (!res.ok) return false;
-    this.applyAuth((await res.json()) as AuthTokens);
-    return true;
+    try {
+      const res = await this.plainFetch("/api/v1/auth/refresh", {
+        method: "POST",
+        body: JSON.stringify({ refresh_token: this.refreshToken }),
+      });
+      if (!res.ok) return false;
+      this.applyAuth((await res.json()) as AuthTokens);
+      return true;
+    } catch {
+      // 网络/畸形 JSON/缺 token 字段等异常一律吞掉返回 false（对齐 tryRelogin），
+      // 交由上层按 401 继续凭证链或原样返回（M2 前置：refresh 崩溃不再冲断写入步骤）
+      return false;
+    }
   }
 
   private async tryRelogin(): Promise<boolean> {
@@ -322,14 +344,30 @@ export class ApiClient {
     return j.job_id;
   }
 
-  /** ⑤ 轮询 GET /api/v1/ingest/jobs/:id 至终态（首次立即查，之后按 pollIntervalMs）。 */
-  async waitJob(jobId: string): Promise<JobStatus> {
+  /** ⑤ 轮询 GET /api/v1/ingest/jobs/:id 至终态（首次立即查，之后按 pollIntervalMs）。
+   *  M2 前置健壮化：
+   *  - 总超时（默认 {@link WAIT_JOB_DEFAULT_TIMEOUT_MS} 4h）——超时抛错带 job_id，防静默无限轮询；
+   *  - 单次非 2xx 有界重试（默认 3 次，退避 5s/15s/60s）——配额为整轮累计而非连续计数
+   *    （长任务中多次瞬时 5xx 也受同一上限约束）；配额尽后非 2xx 照常抛 ApiError。 */
+  async waitJob(jobId: string, opts: WaitJobOptions = {}): Promise<JobStatus> {
+    const timeoutMs = opts.timeoutMs ?? WAIT_JOB_DEFAULT_TIMEOUT_MS;
+    const maxRetries = opts.retryOn5xx ?? WAIT_JOB_RETRY_BACKOFF_MS.length;
+    const deadline = Date.now() + timeoutMs;
     const url = `/api/v1/ingest/jobs/${jobId}`;
+    let retries = 0;
     for (;;) {
+      if (Date.now() >= deadline) {
+        throw new Error(`waitJob timed out after ${timeoutMs}ms: job ${jobId} 未到终态`);
+      }
       const res = await this.authedFetch(url);
+      if (!res.ok && retries < maxRetries) {
+        await this.doSleep(WAIT_JOB_RETRY_BACKOFF_MS[Math.min(retries, WAIT_JOB_RETRY_BACKOFF_MS.length - 1)]);
+        retries++;
+        continue;
+      }
       const job = await this.parseJson<JobStatus>(res, `job status ${jobId}`);
       if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
-      await sleep(this.pollIntervalMs);
+      await this.doSleep(this.pollIntervalMs);
     }
   }
 
