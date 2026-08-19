@@ -18,6 +18,7 @@ mod registration_gate_test;
 mod training_test;
 mod learning_api_test;
 mod media_test;
+mod t_page_test;
 
 use axum::Router;
 use llm_wiki_server::AppState;

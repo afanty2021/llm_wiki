@@ -372,6 +372,14 @@ describe("signMedia（Task 7 服务端同算法）", () => {
     expect(signMedia("k", "m", 123)).toBe("3d2dc485f29e280c2a5dbf7988b55d23378e06aa891b1df1372714ca19f2fed9");
   });
 
+  it("三段式（Task 9 fp）：HMAC-SHA256(key, `${media_id}:${exp}:${fp}`)——与 Rust sign_media_with_fp 向量一致", () => {
+    // 预计算向量 ×2（Rust media_sign.rs tests 同值双锁）：
+    // HMAC-SHA256("k", "m:123:abcdef0123456789")
+    expect(signMedia("k", "m", 123, "abcdef0123456789")).toBe("6ff287af43e5e25e63cc640d715c5ba4c2fa7be0256e84783d23f2b9aa03d7cf");
+    // HMAC-SHA256("k", "media-slug-1:1700000000:0011223344556677")
+    expect(signMedia("k", "media-slug-1", 1700000000, "0011223344556677")).toBe("453dc8bd833a447601595d6b4f80507beb8e52b78221e4138e7317233a143c4e");
+  });
+
   it("signMediaUrl 输出 ${base}/media/<slug>?exp=..&sig=..（T15 sign-media 消费）", () => {
     const c = new ApiClient("http://127.0.0.1:8080", { accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null", mediaSigningKey: "k" });
     const u = new URL(c.signMediaUrl("slug-1", 12));
@@ -380,6 +388,17 @@ describe("signMedia（Task 7 服务端同算法）", () => {
     const sig = u.searchParams.get("sig")!;
     expect(sig).toBe(signMedia("k", "slug-1", exp));
     expect(exp).toBeGreaterThan(Math.floor(Date.now() / 1000) + 11 * 3600);
+    expect(u.searchParams.get("fp")).toBeNull(); // 无 fp → 两段式，URL 不附 fp
+  });
+
+  it("signMediaUrl 带 fp：URL 附 &fp= 且 sig 为三段式（/t/ 落地页同形票据）", () => {
+    const c = new ApiClient("http://127.0.0.1:8080", { accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null", mediaSigningKey: "k" });
+    const u = new URL(c.signMediaUrl("slug-1", 12, undefined, "abcdef0123456789"));
+    const exp = Number(u.searchParams.get("exp"));
+    expect(u.searchParams.get("fp")).toBe("abcdef0123456789");
+    expect(u.searchParams.get("sig")).toBe(signMedia("k", "slug-1", exp, "abcdef0123456789"));
+    // 与两段式不同值（消息不同必然不同）
+    expect(u.searchParams.get("sig")).not.toBe(signMedia("k", "slug-1", exp));
   });
 
   it("缺 key → 报错（fail fast，不发无签名 URL）", () => {

@@ -1,5 +1,7 @@
 //! Task 7：GET /media/:media_id（顶级路由，HMAC 签名 + Range 流式）。
 //! 鉴权不落 JWT 体系：`?exp=<unix>&sig=<hex>`，sig = HMAC-SHA256(key, "{media_id}:{exp}")。
+//! Task 9：`?fp=<16 hex>`（/t/ 落地页签发的 link fingerprint）→ 三段式消息
+//! "{media_id}:{exp}:{fp}" 优先、两段式回落（M1 兼容期，见 utils/media_sign.rs）。
 
 use axum::{
     extract::{Path, Query, State},
@@ -17,6 +19,9 @@ use crate::{AppError, AppState};
 pub struct MediaQuery {
     pub exp: i64,
     pub sig: String,
+    /// Task 9 fingerprint（sha256(plan_link token) 前 16 hex）：带 fp → 优先三段式
+    /// 验签（"{media_id}:{exp}:{fp}"），失败回落两段式；缺省 → 两段式（M1 兼容期）。
+    pub fp: Option<String>,
 }
 
 /// 签名纵深：exp 距 now 超过 30 天的票据一律拒绝（403）。签名无 not-before 概念，
@@ -64,7 +69,7 @@ async fn get_media(
     let ok = match &q {
         // 有效窗口：(now, now + 30d]——过期拒绝，且超远期（>30 天）同样拒绝（纵深）
         Some(Query(q)) if q.exp > now && q.exp - now <= MEDIA_SIG_MAX_LEEWAY_SECS => {
-            crate::utils::media_sign::verify_media_sig(key, &media_id, q.exp, &q.sig)
+            crate::utils::media_sign::verify_media_sig(key, &media_id, q.exp, &q.sig, q.fp.as_deref())
         }
         _ => false,
     };
