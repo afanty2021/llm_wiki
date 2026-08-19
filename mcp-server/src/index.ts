@@ -7,18 +7,34 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js"
+import { pathToFileURL } from "node:url"
 import {
   LlmWikiApiClient,
+  resolveApiForm,
   type ApiFileNode,
+  type ApiForm,
   type ApiGraphNode,
   type ApiReviewItem,
   type ApiReviewsResponse,
-  type ApiSearchResult,
 } from "./api-client.js"
+import {
+  DEFAULT_PUBLIC_T_BASE,
+  MAX_TEXT_BYTES,
+  TeacherCredentialStore,
+  ToolArgumentError,
+  createSrcServerHandlers,
+  formatSearchResults,
+  srcServerToolDefinitions,
+  trainingToolDefinitions,
+  truncateText,
+  type SrcToolHandler,
+  type ToolDefinition,
+} from "./training.js"
 import { VERSION } from "./version.js"
 
 const DEFAULT_PROJECT_ID = "current"
-const MAX_TEXT_BYTES = 120_000
+
+const apiForm = resolveApiForm(process.env)
 
 const client = new LlmWikiApiClient()
 
@@ -27,8 +43,9 @@ const server = new Server(
   { capabilities: { tools: {} } },
 )
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
+/** 桌面形态的 8 个工具（行为不变；src-server 形态下不注册后 6 个）。 */
+function desktopToolDefinitions(): ToolDefinition[] {
+  return [
     {
       name: "llm_wiki_status",
       description: "Check whether the LLM Wiki desktop local API is reachable and list the current project.",
@@ -128,12 +145,64 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
-  ],
+  ]
+}
+
+/**
+ * ListTools 工具集（按形态过滤）：
+ * - desktop：8 个桌面工具（既有行为不变）
+ * - src-server：8 个 teacher_tutor_* + 重写的 llm_wiki_search / llm_wiki_read_file；
+ *   其余 6 个桌面工具（status/projects/files/reviews/graph/rescan）不注册。
+ */
+export function buildTools(form: ApiForm = apiForm): ToolDefinition[] {
+  if (form === "src-server") {
+    return [...srcServerToolDefinitions(), ...trainingToolDefinitions()]
+  }
+  return desktopToolDefinitions()
+}
+
+let srcHandlers: Map<string, SrcToolHandler> | null = null
+
+function getSrcHandlers(): Map<string, SrcToolHandler> {
+  if (!srcHandlers) {
+    const store = new TeacherCredentialStore({
+      client,
+      storePath: process.env.TEACHER_STORE_PATH,
+      adminToken: process.env.TRAINING__ADMIN_TOKEN,
+    })
+    srcHandlers = createSrcServerHandlers({
+      client,
+      store,
+      getProjectId: resolveTrainingProjectId,
+      getPublicTBase: () => (process.env.PUBLIC_T_BASE ?? DEFAULT_PUBLIC_T_BASE).trim() || DEFAULT_PUBLIC_T_BASE,
+    })
+  }
+  return srcHandlers
+}
+
+function resolveTrainingProjectId(): number {
+  const raw = (process.env.TRAINING__PROJECT_ID ?? "").trim()
+  const projectId = Number(raw)
+  if (raw === "" || !Number.isInteger(projectId)) {
+    throw new Error("TRAINING__PROJECT_ID must be set to a numeric project id in src-server form")
+  }
+  return projectId
+}
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: buildTools(),
 }))
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = asObject(request.params.arguments ?? {})
   try {
+    if (apiForm === "src-server") {
+      const handler = getSrcHandlers().get(request.params.name)
+      if (!handler) {
+        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`)
+      }
+      return await handler(args)
+    }
     switch (request.params.name) {
       case "llm_wiki_status": {
         const [health, projects] = await Promise.all([
@@ -197,6 +266,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (err) {
     if (err instanceof McpError) throw err
+    if (err instanceof ToolArgumentError) {
+      throw new McpError(ErrorCode.InvalidParams, err.message)
+    }
     throw new McpError(
       ErrorCode.InternalError,
       err instanceof Error ? err.message : String(err),
@@ -252,20 +324,6 @@ function enumArg<T extends string>(value: unknown, allowed: readonly T[], fallba
   return typeof value === "string" && allowed.includes(value as T) ? value as T : fallback
 }
 
-function truncateText(value: string, maxBytes: number): string {
-  const bytes = Buffer.byteLength(value, "utf8")
-  if (bytes <= maxBytes) return value
-  let out = ""
-  let used = 0
-  for (const ch of value) {
-    const size = Buffer.byteLength(ch, "utf8")
-    if (used + size > maxBytes) break
-    out += ch
-    used += size
-  }
-  return `${out}\n\n[truncated: ${bytes - used} bytes omitted]`
-}
-
 function formatFileTree(files: ApiFileNode[], truncated = false): string {
   if (files.length === 0) return "No files found."
   const lines: string[] = truncated
@@ -279,28 +337,6 @@ function formatFileTree(files: ApiFileNode[], truncated = false): string {
     }
   }
   walk(files, 0)
-  return lines.join("\n")
-}
-
-function formatSearchResults(query: string, search: { results: ApiSearchResult[]; mode?: string; tokenHits?: number; vectorHits?: number }): string {
-  const { results } = search
-  if (results.length === 0) return `No results for "${query}".`
-  const meta = [
-    search.mode ? `Mode: ${search.mode}` : null,
-    typeof search.tokenHits === "number" ? `Token hits: ${search.tokenHits}` : null,
-    typeof search.vectorHits === "number" ? `Vector hits: ${search.vectorHits}` : null,
-  ].filter(Boolean)
-  const lines = [`# Search results for "${query}"`, ...(meta.length > 0 ? [meta.join(" | ")] : []), ""]
-  results.forEach((result, index) => {
-    lines.push(`## ${index + 1}. ${result.title}`)
-    lines.push(`Path: ${result.path}`)
-    lines.push(`Score: ${result.score.toFixed(6)}${typeof result.vectorScore === "number" ? ` | Vector score: ${result.vectorScore.toFixed(6)}` : ""}`)
-    if (result.snippet) lines.push(`Snippet: ${result.snippet}`)
-    if (result.images && result.images.length > 0) {
-      lines.push(`Images: ${result.images.map((image) => image.url).join(", ")}`)
-    }
-    lines.push("")
-  })
   return lines.join("\n")
 }
 
@@ -366,12 +402,28 @@ function formatGraph(nodes: ApiGraphNode[], edges: Array<{ source: string; targe
 }
 
 async function main(): Promise<void> {
+  if (apiForm === "src-server" && !process.env.LLM_WIKI_API_BASE_URL?.trim()) {
+    console.error("warning: LLM_WIKI_API_FORM=src-server requires LLM_WIKI_API_BASE_URL to be set explicitly (e.g. http://127.0.0.1:8080)")
+  }
   const transport = new StdioServerTransport()
   await server.connect(transport)
-  console.error(`LLM Wiki MCP server v${VERSION} connected to ${process.env.LLM_WIKI_API_BASE_URL ?? "http://127.0.0.1:19828"}`)
+  console.error(`LLM Wiki MCP server v${VERSION} (${apiForm} form) connected to ${process.env.LLM_WIKI_API_BASE_URL ?? "http://127.0.0.1:19828"}`)
 }
 
-main().catch((err) => {
-  console.error("Failed to start LLM Wiki MCP server:", err)
-  process.exit(1)
-})
+// 仅作为可执行入口时启动 stdio transport（被测试 import 时不副作用）
+const invokedDirectly = (() => {
+  const entry = process.argv[1]
+  if (!entry) return false
+  try {
+    return import.meta.url === pathToFileURL(entry).href
+  } catch {
+    return false
+  }
+})()
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error("Failed to start LLM Wiki MCP server:", err)
+    process.exit(1)
+  })
+}
