@@ -79,3 +79,4 @@ tools/transcriber/out/register-resp.json
 tools/transcriber/out/search-*.json
 # 验收演示页（内含限时限验签 URL，本地播放验证用）
 tools/transcriber/out/media-demo.html
+tools/transcriber/out/h264-cache/
