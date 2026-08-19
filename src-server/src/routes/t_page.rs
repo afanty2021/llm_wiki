@@ -323,8 +323,15 @@ a.ts { color: #1a56b0; text-decoration: none; font-variant-numeric: tabular-nums
                     if let Some(url) = signed_urls.get(&item.target_ref) {
                         // URL 内 slug 已百分号编码、sig/fp/exp 为 hex/数字；再过一次
                         // 属性转义作双保险（对上述字符集为 no-op）
+                        // playsinline 三连：iOS WKWebView（企微/微信）无 playsinline 拒绝内联播放，
+                        // 安卓 X5 需 x5-playsinline（2026-08-19 真机排障实证）
+                        let inline_attrs = if tag == "video" {
+                            " playsinline webkit-playsinline x5-playsinline"
+                        } else {
+                            ""
+                        };
                         html.push_str(&format!(
-                            "<{tag} controls preload=\"metadata\" src=\"{}\"></{tag}>\n",
+                            "<{tag}{inline_attrs} controls preload=\"metadata\" src=\"{}\"></{tag}>\n",
                             html_escape(url)
                         ));
                     } else {
@@ -964,7 +971,7 @@ mod tests {
             wiki_content: None,
         }];
         let mut assets = BTreeMap::new();
-        let mut mv = media_view("audio", vec![], None);
+        let mut mv = media_view("video", vec![], None);
         mv.summary_pages = vec![TSummaryPage {
             path: "concepts/x.md".into(),
             title: Some("<i>摘要标题</i>".into()),
@@ -978,7 +985,11 @@ mod tests {
         assert!(html.contains("id=\"item-3-summary\""), "summary details block");
         assert!(html.contains("&lt;i&gt;摘要标题&lt;/i&gt;"), "summary title escaped");
         assert!(html.contains("摘要正文"));
-        assert!(html.contains("<audio"), "audio kind renders audio element");
+        assert!(html.contains("<video"), "video kind renders video element");
+        assert!(
+            html.contains("playsinline webkit-playsinline x5-playsinline"),
+            "video carries inline-playback attrs for iOS WKWebView / Android X5"
+        );
     }
 
     #[test]
