@@ -177,41 +177,60 @@ OUR_ROUTES = [
     {"name": "lt-tutor-wecom", "platform": "wecom",
      "profile": "lt-tutor", "enabled": True},                  # 特异性 0：吃掉其余全部 wecom
 ]
-OUR_NAMES = {r["name"] for r in OUR_ROUTES}
+
+MARKER = "# ── lt-tutor multiplex gateway（由 docs/superpowers/deploy/lt-tutor-deploy.sh 管理）──\n"
 
 raw = open(target).read()
 cfg = yaml.safe_load(raw)
 if not isinstance(cfg, dict):
     sys.exit("FATAL: 主 config 顶层不是 mapping")
 
-gw = cfg.get("gateway")
+# 每次都渲染最新的托管块（marker + gateway 节）
+dumped = yaml.safe_dump(OUR_ROUTES, sort_keys=False, allow_unicode=True, default_flow_style=False)
+indented = "".join("  " + line + "\n" for line in dumped.rstrip("\n").splitlines())
+fresh_block = MARKER + "gateway:\n  multiplex_profiles: true\n  profile_routes:\n" + indented
 
-if gw is None:
-    # 主 config 尚无顶层 gateway 键 → 追加式合并（不重排/不重写既有内容，仅文件尾追加块）
+has_gateway = "gateway" in cfg and cfg.get("gateway") is not None
+has_marker = MARKER in raw
+
+if not has_gateway and not has_marker:
+    # 首次 apply：主 config 尚无顶层 gateway 键 → 追加式（原字节原样保留，仅尾部追加托管块）
     sep = "" if raw.endswith("\n") else "\n"
-    dumped = yaml.safe_dump(OUR_ROUTES, sort_keys=False, allow_unicode=True, default_flow_style=False)
-    indented = "".join("  " + line + "\n" for line in dumped.rstrip("\n").splitlines())
-    block = (
-        "# ── lt-tutor multiplex gateway（由 docs/superpowers/deploy/lt-tutor-deploy.sh 管理）──\n"
-        "gateway:\n"
-        "  multiplex_profiles: true\n"
-        "  profile_routes:\n"
-        + indented
-    )
-    new_text = raw + sep + block
-    strategy = "append（主 config 原字节原样保留，尾部追加 gateway 块）"
+    new_text = raw + sep + fresh_block
+    strategy = "append（无 gateway 键 → 原 557 行字节不动，尾部追加托管块）"
+elif has_marker:
+    # 重跑 apply：托管块感知的文本替换——只替换 marker 起的托管块，
+    # 文件其余字节（含全部注释/托管块标记）逐字节保留。绝不走整文件 safe_dump（会剥注释）。
+    start = raw.index(MARKER)
+    pos = start + len(MARKER)
+    glines = raw[pos:].splitlines(keepends=True)
+    # 托管块结构固定为：marker 行 → 顶层 "gateway:" 行 → 缩进/注释行。
+    # 块自身的 "gateway:" 属于托管块；其后首个“其他顶层键”才是块结束。
+    if not glines or glines[0].rstrip("\r\n") != "gateway:":
+        sys.exit("FATAL: 托管标记后未紧跟 gateway: 键——托管块结构异常，中止（未写盘）")
+    pos += len(glines[0])
+    content_end = pos
+    for line in glines[1:]:
+        # 顶层键（列 0 非注释非空行）即托管块结束；块内注释/缩进行都属于托管块
+        if line.strip() and not line.startswith((" ", "\t", "#")):
+            break
+        pos += len(line)
+        if line.strip():
+            content_end = pos
+    new_text = raw[:start] + fresh_block + raw[content_end:]
+    strategy = "managed-block replace（重跑 → 仅替换本脚本托管块，其余字节含注释逐字节保留）"
 else:
-    # 已有 gateway 键 → pyyaml 合并（幂等：先剔除同名旧路由再放新序）
-    if not isinstance(gw, dict):
-        sys.exit("FATAL: 主 config gateway 键不是 mapping")
-    gw = dict(gw)
-    kept = [r for r in (gw.get("profile_routes") or [])
-            if not (isinstance(r, dict) and r.get("name") in OUR_NAMES)]
-    gw["multiplex_profiles"] = True
-    gw["profile_routes"] = kept + OUR_ROUTES
-    cfg2 = dict(cfg); cfg2["gateway"] = gw
-    new_text = yaml.safe_dump(cfg2, sort_keys=False, allow_unicode=True, default_flow_style=False, width=4096)
-    strategy = "merge（已存在 gateway 键 → pyyaml 全量合并，剔除同名旧路由保证幂等）"
+    # gateway 键存在但无托管标记（用户手写 / hermes config set 产物）→
+    # 任意布局下做文本手术不安全，整文件重写又会剥离注释 → 中止并输出明确指令
+    msg = ("ABORT: 主 config 已存在 gateway 键但无本脚本托管标记。"
+           "为避免整文件重写剥离注释，apply 已中止（未写盘）。"
+           "请手工将 gateway.multiplex_profiles=true 与 gateway.profile_routes 两条路由"
+           "（见 docs/superpowers/deploy/lt-tutor-deploy.sh 或 dry-run 输出）并入既有 gateway 块，"
+           "或移除既有 gateway 键后重跑 apply。")
+    if mode == "dry":
+        print(f"[merge-strategy] {msg}")
+        sys.exit(0)
+    sys.exit(msg)
 
 # 校验 1: 结果是合法 YAML 且无重复顶层键
 reloaded = yaml.safe_load(new_text)
@@ -388,10 +407,13 @@ do_apply() {
   stage_profile_dir
 
   section "4/4 写部署状态（供 rollback）"
-  cat > "${STATE_FILE}" <<EOF
+  # 原子写：tmp + 同目录 mv（rename），中途崩溃不留半截 JSON（rollback 亦有兜底容错）
+  local tmp_state="${STATE_FILE}.tmp.$$"
+  cat > "${tmp_state}" <<EOF
 {"applied_at": "$(date -u +%FT%TZ)", "backup": "${rollback_backup}", "last_backup": "${backup}", "profile_dir": "${PROFILE_DIR}", "routes": ["owner-wecom-keep", "lt-tutor-wecom"]}
 EOF
-  chmod 600 "${STATE_FILE}"
+  chmod 600 "${tmp_state}"
+  mv -f "${tmp_state}" "${STATE_FILE}"
   c_ok "状态: ${STATE_FILE}"
 
   section "完成 — 重启指引（需 USER 确认后手动执行；本脚本不重启）"
@@ -411,7 +433,9 @@ do_rollback() {
 
   local backup=""
   if [[ -f "${STATE_FILE}" ]]; then
-    backup=$("${PY}" -c "import json,sys;print(json.load(open('${STATE_FILE}'))['backup'])")
+    # 状态文件可能损坏（截断 JSON/残留 tmp）——绝不能因此杀死 rollback；
+    # 读失败即置空，落到下方 ls -t 时间戳备份兜底。与 do_apply 的同款读取保护一致。
+    backup=$("${PY}" -c "import json;print(json.load(open('${STATE_FILE}')).get('backup',''))" 2>/dev/null || true)
   fi
   if [[ -z "${backup}" || ! -f "${backup}" ]]; then
     backup=$(ls -t "${MAIN_CONFIG}".backup.* 2>/dev/null | head -1 || true)
