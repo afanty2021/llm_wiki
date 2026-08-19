@@ -4,8 +4,11 @@
 //! - M2 批1（Task 7，均 require_auth + user_id=claims.sub，token 即本人）：
 //!   GET/PUT /profile（教师档案；onboarding_state 仅 pending→surveyed）、
 //!   POST /events（仅 event_type="ask"，其余 400）、GET /progress（plans 概览 + 最近 20 事件）
+//! - M2 批2（Task 8）：POST/GET /plans、GET /plans/:id、POST /plans/:id/link
+//!   （7d plan_link JWT 重签）、POST /items/:id/complete（单调投影）、
+//!   POST /progress/rebuild（事件重放重建投影，M2 调试）
 
-use axum::{extract::State, http::HeaderMap, routing::{get, post}, Json, Router};
+use axum::{extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, routing::{get, post}, Json, Router};
 use chrono::Duration as ChronoDuration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -22,6 +25,11 @@ pub fn training_routes() -> Router<AppState> {
         .route("/profile", get(get_profile).put(update_profile))
         .route("/events", post(create_event))
         .route("/progress", get(get_progress))
+        .route("/progress/rebuild", post(rebuild_progress))
+        .route("/plans", post(create_plan).get(list_plans))
+        .route("/plans/:id", get(get_plan))
+        .route("/plans/:id/link", post(regen_plan_link))
+        .route("/items/:id/complete", post(complete_item))
 }
 
 #[derive(Deserialize)]
@@ -557,4 +565,437 @@ async fn get_progress(
     .await?;
 
     Ok(Json(ProgressResponse { plans, recent_events }))
+}
+
+// ============ Task 8（M2 批2）：plans / items / link / complete / rebuild ============
+
+/// plan 视图（创建响应 / GET /plans/:id / 列表同形展开）。
+#[derive(Serialize, sqlx::FromRow)]
+pub struct PlanResponse {
+    pub id: i32,
+    pub title: String,
+    pub reason: Option<String>,
+    pub origin: String,
+    pub period_key: Option<String>,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+const PLAN_SELECT: &str =
+    "SELECT id, title, reason, origin, period_key, status, created_at FROM learning_plans";
+
+/// item 视图（创建即 pending/completed_at NULL）。
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ItemResponse {
+    pub id: i32,
+    pub plan_id: i32,
+    pub kind: String,
+    pub target_ref: String,
+    pub timecode_start_s: Option<i32>,
+    pub timecode_end_s: Option<i32>,
+    pub label: String,
+    pub sort_order: i32,
+    pub status: String,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+const ITEM_SELECT: &str = "SELECT id, plan_id, kind, target_ref, timecode_start_s, timecode_end_s, \
+     label, sort_order, status, completed_at FROM learning_items";
+
+#[derive(Deserialize)]
+pub struct PlanItemInput {
+    pub kind: String,
+    pub target_ref: String,
+    pub timecode_start_s: Option<i32>,
+    pub timecode_end_s: Option<i32>,
+    pub label: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreatePlanRequest {
+    pub title: String,
+    pub reason: Option<String>,
+    pub origin: String,
+    pub period_key: Option<String>,
+    pub items: Vec<PlanItemInput>,
+}
+
+/// plan_link token TTL：7 天（brief；T6 typ 隔离后的 /t/ 落地页凭证）。
+const PLAN_LINK_TTL_DAYS: i64 = 7;
+
+fn plan_link_for(state: &AppState, user_id: i32, plan_id: i32) -> Result<String, AppError> {
+    let token = crate::utils::generate_plan_link_token(
+        user_id,
+        plan_id,
+        state.config.jwt_secret(),
+        ChronoDuration::days(PLAN_LINK_TTL_DAYS),
+    )?;
+    Ok(format!("/t/{token}"))
+}
+
+/// target_ref 合法性（逐条 400，事务外预检——被拒请求零半写）：
+/// - 绝对路径（"/" 前缀）→ 400（防文件系统越界引用）；
+/// - kind wiki_page：transcripts/ 前缀放行（transcriber 命名空间，页可能未同步），
+///   其余必须在 wiki_pages 存在——project 取 `state.training.project_id` 配置
+///   （None → 500 配置缺失，不硬编码）；不存在的相对路径 → 400；
+/// - kind media：必须在 media_assets.slug 存在，否则 400；
+/// - 其他 kind → 400。
+async fn validate_plan_items(state: &AppState, items: &[PlanItemInput]) -> Result<(), AppError> {
+    let project_id = state.config.training.project_id;
+    for it in items {
+        if it.kind != "wiki_page" && it.kind != "media" {
+            return Err(AppError::BadRequest(format!("invalid item kind: {}", it.kind)));
+        }
+        if it.target_ref.trim().is_empty() {
+            return Err(AppError::BadRequest("target_ref is empty".into()));
+        }
+        if it.target_ref.starts_with('/') {
+            return Err(AppError::BadRequest(format!(
+                "target_ref must not be an absolute path: {}...",
+                it.target_ref.chars().take(32).collect::<String>()
+            )));
+        }
+        if it.label.chars().count() > 200 {
+            return Err(AppError::BadRequest("item label exceeds 200 characters".into()));
+        }
+        match it.kind.as_str() {
+            "wiki_page" => {
+                if it.target_ref.starts_with("transcripts/") {
+                    continue; // 命名空间页由 transcriber 写入，允许暂不在 wiki_pages
+                }
+                let pid = project_id.ok_or_else(|| {
+                    AppError::InternalError("TRAINING__PROJECT_ID not configured".into())
+                })?;
+                let exists: Option<i32> =
+                    sqlx::query_scalar("SELECT 1 FROM wiki_pages WHERE project_id = $1 AND path = $2")
+                        .bind(pid)
+                        .bind(&it.target_ref)
+                        .fetch_optional(&state.db)
+                        .await?;
+                if exists.is_none() {
+                    return Err(AppError::BadRequest(format!(
+                        "wiki_page target_ref not found: {}...",
+                        it.target_ref.chars().take(64).collect::<String>()
+                    )));
+                }
+            }
+            "media" => {
+                let exists: Option<i32> =
+                    sqlx::query_scalar("SELECT 1 FROM media_assets WHERE slug = $1")
+                        .bind(&it.target_ref)
+                        .fetch_optional(&state.db)
+                        .await?;
+                if exists.is_none() {
+                    return Err(AppError::BadRequest(format!(
+                        "media target_ref (slug) not found: {}...",
+                        it.target_ref.chars().take(64).collect::<String>()
+                    )));
+                }
+            }
+            _ => unreachable!("kind checked above"),
+        }
+    }
+    Ok(())
+}
+
+/// POST /api/v1/training/plans — 创建学习计划（access，本人）。
+/// 事务：plan + items + plan_created 事件原子落库；响应 201 {plan, items, link}。
+///
+/// period_key 幂等（并发安全）：`ON CONFLICT (user_id, origin, period_key)
+/// WHERE period_key IS NOT NULL DO NOTHING RETURNING id`——部分唯一索引
+/// idx_plans_period 仲裁并发，输家 RETURNING 无行 → **同事务**回查 SELECT
+/// 返回既有 plan 及其 items → 200（不追加/不覆盖；plan_created 不重记）。
+/// READ COMMITTED 下 DO NOTHING 阻塞至 winner 提交，随后语句快照可见该行，
+/// 并发同 period_key 创建收敛到同一 id，绝不 500。
+async fn create_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreatePlanRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let claims = require_auth(&state, &headers).await?;
+    let user_id: i32 = claims.sub.parse()?;
+
+    // 入参校验（400 早退，零半写）：origin 枚举、title/period_key 长度（列宽，
+    // chars 计数）、target_ref 合法性（见 validate_plan_items）。
+    if req.origin != "chat" && req.origin != "weekly" {
+        return Err(AppError::BadRequest(format!(
+            "invalid origin: {} (expected 'chat' or 'weekly')",
+            req.origin
+        )));
+    }
+    if req.title.trim().is_empty() {
+        return Err(AppError::BadRequest("title is empty".into()));
+    }
+    if req.title.chars().count() > 200 {
+        return Err(AppError::BadRequest("title exceeds 200 characters".into()));
+    }
+    if let Some(pk) = &req.period_key {
+        if pk.chars().count() > 20 {
+            return Err(AppError::BadRequest("period_key exceeds 20 characters".into()));
+        }
+    }
+    validate_plan_items(&state, &req.items).await?;
+
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
+
+    let inserted: Option<(i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "INSERT INTO learning_plans (user_id, title, reason, origin, period_key) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (user_id, origin, period_key) WHERE period_key IS NOT NULL DO NOTHING \
+         RETURNING id, created_at",
+    )
+    .bind(user_id)
+    .bind(req.title.trim())
+    .bind(&req.reason)
+    .bind(&req.origin)
+    .bind(&req.period_key)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (plan, items, created_new) = if let Some((plan_id, created_at)) = inserted {
+        // 新建：items 批次 + plan_created 事件（同事务）
+        let mut items = Vec::with_capacity(req.items.len());
+        for (i, it) in req.items.iter().enumerate() {
+            let item_id: i32 = sqlx::query_scalar(
+                "INSERT INTO learning_items \
+                   (plan_id, kind, target_ref, timecode_start_s, timecode_end_s, label, sort_order) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+            )
+            .bind(plan_id)
+            .bind(&it.kind)
+            .bind(&it.target_ref)
+            .bind(it.timecode_start_s)
+            .bind(it.timecode_end_s)
+            .bind(&it.label)
+            .bind(i as i32)
+            .fetch_one(&mut *tx)
+            .await?;
+            items.push(ItemResponse {
+                id: item_id,
+                plan_id,
+                kind: it.kind.clone(),
+                target_ref: it.target_ref.clone(),
+                timecode_start_s: it.timecode_start_s,
+                timecode_end_s: it.timecode_end_s,
+                label: it.label.clone(),
+                sort_order: i as i32,
+                status: "pending".into(),
+                completed_at: None,
+            });
+        }
+        sqlx::query(
+            "INSERT INTO learning_events (user_id, event_type, payload) \
+             VALUES ($1, 'plan_created', $2)",
+        )
+        .bind(user_id)
+        .bind(serde_json::json!({
+            "plan_id": plan_id,
+            "origin": req.origin,
+            "period_key": req.period_key,
+            "item_count": req.items.len(),
+        }))
+        .execute(&mut *tx)
+        .await?;
+        (
+            PlanResponse {
+                id: plan_id,
+                title: req.title.trim().to_string(),
+                reason: req.reason.clone(),
+                origin: req.origin.clone(),
+                period_key: req.period_key.clone(),
+                status: "active".into(),
+                created_at,
+            },
+            items,
+            true,
+        )
+    } else {
+        // period_key 撞既有（含并发 winner）：同事务回查既有 plan，原样返回（200）
+        let plan = sqlx::query_as::<_, PlanResponse>(&format!(
+            "{PLAN_SELECT} WHERE user_id = $1 AND origin = $2 AND period_key = $3"
+        ))
+        .bind(user_id)
+        .bind(&req.origin)
+        .bind(&req.period_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| {
+            // 不可达：DO NOTHING 无行 ⇒ 唯一索引上必有（已提交的）仲裁行
+            AppError::InternalError(
+                "period_key conflict but existing plan not found (index/row divergence)".into(),
+            )
+        })?;
+        let items = sqlx::query_as::<_, ItemResponse>(&format!(
+            "{ITEM_SELECT} WHERE plan_id = $1 ORDER BY sort_order, id"
+        ))
+        .bind(plan.id)
+        .fetch_all(&mut *tx)
+        .await?;
+        (plan, items, false)
+    };
+
+    tx.commit().await.map_err(AppError::from)?;
+    let link = plan_link_for(&state, user_id, plan.id)?;
+    let status = if created_new {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(serde_json::json!({ "plan": plan, "items": items, "link": link })),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ListPlansQuery {
+    pub status: Option<String>,
+}
+
+/// 列表行：plan 字段 + items 聚合计数（LEFT JOIN，无 item 的 plan total=0）。
+#[derive(Serialize)]
+pub struct PlanListItem {
+    #[serde(flatten)]
+    pub plan: PlanResponse,
+    pub items: ItemCounts,
+}
+
+/// GET /api/v1/training/plans?status= — 本人的计划列表（created_at DESC）。
+/// status 可选（active|archived，其余 400）；跨用户不可达（token 即本人）。
+async fn list_plans(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ListPlansQuery>,
+) -> Result<Json<Vec<PlanListItem>>, AppError> {
+    let claims = require_auth(&state, &headers).await?;
+    let user_id: i32 = claims.sub.parse()?;
+    if let Some(st) = &q.status {
+        if st != "active" && st != "archived" {
+            return Err(AppError::BadRequest(format!(
+                "invalid status filter: {st} (expected 'active' or 'archived')"
+            )));
+        }
+    }
+
+    let sql = format!(
+        "SELECT p.id, p.title, p.reason, p.origin, p.period_key, p.status, p.created_at, \
+                COUNT(i.id) AS total, \
+                COUNT(i.id) FILTER (WHERE i.status = 'viewed') AS viewed, \
+                COUNT(i.id) FILTER (WHERE i.status = 'completed') AS completed \
+         FROM learning_plans p \
+         LEFT JOIN learning_items i ON i.plan_id = p.id \
+         WHERE p.user_id = $1 {} \
+         GROUP BY p.id \
+         ORDER BY p.created_at DESC, p.id DESC",
+        if q.status.is_some() { "AND p.status = $2" } else { "" }
+    );
+    let mut query = sqlx::query_as::<_, (i32, String, Option<String>, String, Option<String>, String, chrono::DateTime<chrono::Utc>, i64, i64, i64)>(&sql)
+        .bind(user_id);
+    if let Some(st) = &q.status {
+        query = query.bind(st);
+    }
+    let rows = query.fetch_all(&state.db).await?;
+    let plans = rows
+        .into_iter()
+        .map(|(id, title, reason, origin, period_key, status, created_at, total, viewed, completed)| {
+            PlanListItem {
+                plan: PlanResponse { id, title, reason, origin, period_key, status, created_at },
+                items: ItemCounts { total, viewed, completed },
+            }
+        })
+        .collect();
+    Ok(Json(plans))
+}
+
+/// GET /api/v1/training/plans/:id — 计划详情（归属：plan.user_id 必须 = token 本人，
+/// 否则一律 404——不区分「不存在/不归属」，防探测泄漏）。
+async fn get_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(plan_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let claims = require_auth(&state, &headers).await?;
+    let user_id: i32 = claims.sub.parse()?;
+    let plan = sqlx::query_as::<_, PlanResponse>(&format!("{PLAN_SELECT} WHERE id = $1 AND user_id = $2"))
+        .bind(plan_id)
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::ResourceNotFound("Plan not found".into()))?;
+    let items = sqlx::query_as::<_, ItemResponse>(&format!(
+        "{ITEM_SELECT} WHERE plan_id = $1 ORDER BY sort_order, id"
+    ))
+    .bind(plan_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(serde_json::json!({ "plan": plan, "items": items })))
+}
+
+/// POST /api/v1/training/plans/:id/link — 重签 plan_link（7d）。
+/// 归属同 get_plan（不属 → 404）；每次签发全新 token（iat/exp 刷新，
+/// 旧 token 不失效——JWT 无服务端状态，安全模型与 access/refresh 一致）。
+async fn regen_plan_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(plan_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let claims = require_auth(&state, &headers).await?;
+    let user_id: i32 = claims.sub.parse()?;
+    let owned: Option<i32> =
+        sqlx::query_scalar("SELECT id FROM learning_plans WHERE id = $1 AND user_id = $2")
+            .bind(plan_id)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if owned.is_none() {
+        return Err(AppError::ResourceNotFound("Plan not found".into()));
+    }
+    let link = plan_link_for(&state, user_id, plan_id)?;
+    Ok(Json(serde_json::json!({ "link": link })))
+}
+
+/// POST /api/v1/training/items/:id/complete — 完成条目（access，归属链
+/// item→plan.user_id，不属/不存在 → 404）。事务内调 projection::complete_item：
+/// 记 complete 事件（事件即事实）+ 单调 UPDATE（completed 不回退、completed_at
+/// 不重置）→ 二次完成幂等 200。
+async fn complete_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(item_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let claims = require_auth(&state, &headers).await?;
+    let user_id: i32 = claims.sub.parse()?;
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
+    let owned: Option<i32> = sqlx::query_scalar(
+        "SELECT i.id FROM learning_items i JOIN learning_plans p ON i.plan_id = p.id \
+         WHERE i.id = $1 AND p.user_id = $2",
+    )
+    .bind(item_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if owned.is_none() {
+        return Err(AppError::ResourceNotFound("Item not found".into()));
+    }
+    crate::services::projection::complete_item(&mut tx, item_id, user_id).await?;
+    tx.commit().await.map_err(AppError::from)?;
+    Ok(Json(serde_json::json!({ "item_id": item_id, "status": "completed" })))
+}
+
+/// POST /api/v1/training/progress/rebuild — 事件重放重建本人 items 投影
+/// （access，仅本人；M2 调试用）。单事务：清零 + 按 item 级事件重放原子完成。
+async fn rebuild_progress(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let claims = require_auth(&state, &headers).await?;
+    let user_id: i32 = claims.sub.parse()?;
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
+    let stats = crate::services::projection::rebuild(&mut tx, user_id).await?;
+    tx.commit().await.map_err(AppError::from)?;
+    Ok(Json(serde_json::json!({
+        "cleared": stats.cleared,
+        "viewed": stats.viewed,
+        "completed": stats.completed,
+    })))
 }
