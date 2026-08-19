@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cloudflare.cloudflared</string>
+
+    <!-- T15 创建 tunnel `lt-training` 后此 plist 才能真正跑通（T16 加载）。
+         --no-autoupdate：禁自升级，行为确定。凭据走 ~/.cloudflared/（tunnel create 落盘）。 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/cloudflared</string>
+        <string>--no-autoupdate</string>
+        <string>tunnel</string>
+        <string>run</string>
+        <string>lt-training</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/berton/.cloudflared</string>
+
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+        <string>Background</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- 与 src-server 同参数（仿 ai.hermes.gateway.plist）：30s 节流复活 + 25s 优雅退出。 -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ExitTimeOut</key>
+    <integer>25</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/berton/Library/Logs/wiki-launchd/cloudflared.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/berton/Library/Logs/wiki-launchd/cloudflared.err.log</string>
+</dict>
+</plist>

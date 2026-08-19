@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>wiki.src-server</string>
+
+    <!-- launchd 不继承登录 shell PATH（cargo/Clang 不可见），必须用绝对二进制路径。
+         首启前先在 src-server/ 完成 `cargo build --release`（避免 launchd 触发整仓编译风暴）。 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/berton/Github/kb-obsidian/llm_wiki/src-server/target/release/llm-wiki-server</string>
+    </array>
+
+    <!-- cwd 必须是 src-server/：config/default.json 与 .env（dotenvy）均按相对路径加载。
+         注意 .env 的 JWT__SECRET 是黑名单占位符——dotenvy 不覆盖已存在的环境变量，
+         plist EnvironmentVariables 内联的正式 secret 优先级更高，启动校验因此放行。 -->
+    <key>WorkingDirectory</key>
+    <string>/Users/berton/Github/kb-obsidian/llm_wiki/src-server</string>
+
+    <!-- launchd 不 source .env——运行期 env 逐键内联（密钥来自 tools/transcriber/out/bootstrap.env）。
+         `__` 是 config crate Environment separator（嵌套键），SERVER__PORT=18081 形态可整体覆盖端口。
+         AUTH__REGISTRATION_ENABLED=false：生产保持关闭（default.json 的 true 是 dev 遗留，env 覆盖之）。
+         PATH 需含 /opt/homebrew/bin：文件解析 shell 出 pdftotext（poppler）。 -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>JWT__SECRET</key>
+        <string>__JWT_SECRET__</string>
+        <key>MEDIA__SIGNING_KEY</key>
+        <string>__MEDIA_SIGNING_KEY__</string>
+        <key>TRAINING__ADMIN_TOKEN</key>
+        <string>__TRAINING_ADMIN_TOKEN__</string>
+        <key>TRAINING__PROJECT_ID</key>
+        <string>__TRAINING_PROJECT_ID__</string>
+        <key>SERVER__HOST</key>
+        <string>127.0.0.1</string>
+        <key>SERVER__PORT</key>
+        <string>8080</string>
+        <key>AUTH__REGISTRATION_ENABLED</key>
+        <string>false</string>
+    </dict>
+
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+        <string>Background</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- ThrottleInterval 30：崩溃进程最快 30s 复活一次，防 crash-loop 风暴
+         （仿 ai.hermes.gateway.plist 先例）；ExitTimeOut 25：SIGTERM 后 25s 宽限再 SIGKILL。 -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ExitTimeOut</key>
+    <integer>25</integer>
+
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+
+    <!-- 服务自身轮转日志仍在 src-server/logs/（config logging.dir）；
+         这里只收 stdout/stderr 兜底（启动失败排查入口）。 -->
+    <key>StandardOutPath</key>
+    <string>/Users/berton/Library/Logs/wiki-launchd/src-server.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/berton/Library/Logs/wiki-launchd/src-server.err.log</string>
+</dict>
+</plist>
