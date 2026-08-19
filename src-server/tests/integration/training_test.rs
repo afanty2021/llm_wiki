@@ -475,3 +475,42 @@ async fn bind_length_validation_matrix() {
     let uname = r.json::<serde_json::Value>()["user"]["username"].as_str().unwrap().to_string();
     assert!(uname.chars().count() <= 50, "synthesized username must fit VARCHAR(50)");
 }
+
+/// Task 6 集成冒烟：bind 产出的 access token（内部带 typ="access"）调认证端点 → 200；
+/// 同 secret 签的 plan_link token 调同一 /api 端点 → 401（typ 隔离，/t/ 凭证不可当 API 凭证）。
+#[tokio::test]
+async fn bind_access_token_typ_isolation_smoke() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("typiso").await;
+    let wid = unique("t6w");
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": wid, "display_name": "冒烟老师"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let v = r.json::<serde_json::Value>();
+    let access = v["access_token"].as_str().unwrap().to_string();
+    let uid = v["user"]["id"].as_i64().unwrap() as i32;
+
+    // bind 的 access token（新路径，typ=access）→ 认证端点 200
+    let me = server
+        .get("/api/v1/users/me")
+        .add_header("authorization", bearer(&access))
+        .await;
+    assert_eq!(me.status_code(), StatusCode::OK, "bind access token must pass require_auth");
+
+    // 同 secret 的 plan_link token → 同一 /api 端点 401
+    let secret = state.config.jwt_secret().to_string();
+    let plan_link = llm_wiki_server::utils::generate_plan_link_token(
+        uid,
+        999, // plan 是否存在是路由层（Task 9）的事，这里只验证 /api 侧拒绝
+        &secret,
+        chrono::Duration::hours(1),
+    )
+    .unwrap();
+    let denied = server
+        .get("/api/v1/users/me")
+        .add_header("authorization", bearer(&plan_link))
+        .await;
+    assert_eq!(denied.status_code(), StatusCode::UNAUTHORIZED, "plan_link token must not work as an API credential");
+}
