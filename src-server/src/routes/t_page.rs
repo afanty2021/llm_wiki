@@ -1,6 +1,13 @@
 //! Task 9：/t/ 落地页（顶级路由，plan_link token 凭证，教师移动端）。
+//! Task 9b：/s/ 短链现签跳转（`GET /s/:code` → 303 `/t/<现签 token>`）。
 //!
-//! 三端点：
+//! 四端点：
+//! - `GET /s/:code`（Task 9b）：查 short_links → 无 → 404；命中 → 现签 7d
+//!   plan_link token → 303 See Other Location `/t/<token>`。无鉴权（capability
+//!   URL，与 /t/:token 同信任模型）；不记事件（纯跳转，view 由 /t/ 落地记）；
+//!   Location 只含服务端现签的 JWT（字符集 [A-Za-z0-9_\-.]），无用户输入反射
+//!   ——防响应头注入。短码不过期（plan 存活期间链接永不失效，撤销 = 删行/删 plan，
+//!   FK 级联）。
 //! - `GET /t/:token`：验签（typ 不符/过期/垃圾 → 403 友好页，401/403 不泄漏是哪种）；
 //!   plan 不存在/不归属 → 404；**同事务**记 view 事件（payload 携带简化 ua，
 //!   不改投影——view 只是渲染信号，含预取噪声）→ 200 HTML；
@@ -22,10 +29,11 @@ use std::collections::BTreeMap;
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
+use chrono::Duration as ChronoDuration;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -34,6 +42,11 @@ use crate::{AppError, AppState};
 /// /t/ 页内签发的媒体票据 TTL：12h（单次学习会话宽裕上限；远小于
 /// media.rs 的 30 天验签纵深上限，票据寿命贴着落地页使用场景收窄）。
 const T_MEDIA_TTL_SECS: i64 = 12 * 3600;
+
+/// /s/ 跳转现签 plan_link token TTL：7 天（Task 8 brief 原值；Task 9b 起
+/// 签发点从 training.rs 移至此处——短码不过期，每次点击现签新 7d token，
+/// plan 存活期间链接永不失效）。
+const PLAN_LINK_TTL_DAYS: i64 = 7;
 
 /// view 事件 payload 的 ua 截断长度（「ua 简化」：整段 UA 落库只留前 120 chars）。
 const UA_MAX_CHARS: usize = 120;
@@ -46,6 +59,7 @@ pub fn t_routes() -> Router<AppState> {
         .route("/t/:token", get(get_t_page))
         .route("/t/:token/seen", post(post_seen))
         .route("/t/:token/complete", post(post_complete))
+        .route("/s/:code", get(get_s_redirect))
 }
 
 // ============ 渲染数据视图（纯函数入参，lib 可测） ============
@@ -493,6 +507,41 @@ pub struct SeenBody {
 #[derive(Deserialize)]
 pub struct CompleteBody {
     pub item_id: i64,
+}
+
+/// GET /s/:code — 短链现签跳转（Task 9b，plan_create / plans/:id/link 吐出的
+/// 10-char 短码在此兑现）。
+/// - 无鉴权：capability URL，与 /t/:token 同信任模型（知码即有权看）；
+/// - 查 short_links：无行 → 404（纯 JSON 错误，无需 HTML——教师拿到 404 即知
+///   链接失效，回到企微要新链；plan 删除时 FK 级联删行，code 随之失效）；
+/// - 命中 → **现签** 7d plan_link token（generate_plan_link_token 原路径不变，
+///   /s/ 只是把「签发时机」从 plan 创建推迟到点击——故短码本身无需过期列：
+///   plan 存活期间链接永不失效）；
+/// - 303 See Other（GET-after-redirect 语义最安全；浏览器/预取器均按 GET 跟进）；
+/// - SECURITY：Location 只含服务端现签的 JWT（字符集 [A-Za-z0-9_\-.]，无 CR/LF/
+///   引号），路径里的 :code 仅作 DB 查键、**不反射**进响应——无响应头注入面；
+/// - 不记 view 事件：纯跳转，view 由浏览器落地 /t/:token 时记（媒体 fp 也锚定
+///   /t/ token，跳转后页面自洽）。
+async fn get_s_redirect(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+) -> Result<Redirect, AppError> {
+    let row: Option<(i32, i32)> =
+        sqlx::query_as("SELECT user_id, plan_id FROM short_links WHERE code = $1")
+            .bind(&code)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((user_id, plan_id)) = row else {
+        return Err(AppError::ResourceNotFound("Short link not found".into()));
+    };
+    let token = crate::utils::generate_plan_link_token(
+        user_id,
+        plan_id,
+        state.config.jwt_secret(),
+        ChronoDuration::days(PLAN_LINK_TTL_DAYS),
+    )?;
+    let location = format!("/t/{token}");
+    Ok(Redirect::to(&location))
 }
 
 /// GET /t/:token — 验签 → 同事务 view 事件 + 数据装载 → 200 HTML。

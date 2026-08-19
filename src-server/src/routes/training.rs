@@ -4,9 +4,14 @@
 //! - M2 批1（Task 7，均 require_auth + user_id=claims.sub，token 即本人）：
 //!   GET/PUT /profile（教师档案；onboarding_state 仅 pending→surveyed）、
 //!   POST /events（仅 event_type="ask"，其余 400）、GET /progress（plans 概览 + 最近 20 事件）
-//! - M2 批2（Task 8）：POST/GET /plans、GET /plans/:id、POST /plans/:id/link
-//!   （7d plan_link JWT 重签）、POST /items/:id/complete（单调投影）、
-//!   POST /progress/rebuild（事件重放重建投影，M2 调试）
+//! - M2 批2（Task 8）：POST/GET /plans、GET /plans/:id、POST /plans/:id/link、
+//!   POST /items/:id/complete（单调投影）、POST /progress/rebuild（事件重放重建投影，M2 调试）
+//! - Task 9b：plans/link 响应的 link 字段改吐 `/s/<code>` 10 字符短链（同事务落
+//!   short_links 表）。结构性根治：实测 LLM 转发 164-char `/t/<JWT>` 两次中途
+//!   省略号截断致死链（SKILL 硬规则约束不住模型行为）——10 字符短码对任何
+//!   模型/聊天应用的截断免疫。短码不过期（capability URL，与 /t/ token 同信任
+//!   模型）：plan 存活期间每次点击由 GET /s/:code 现签新 7d /t/ token，链接
+//!   永不失效；撤销 = 删 short_links 行或删 plan（FK 级联）。
 
 use axum::{extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, routing::{get, post}, Json, Router};
 use chrono::Duration as ChronoDuration;
@@ -620,17 +625,55 @@ pub struct CreatePlanRequest {
     pub items: Vec<PlanItemInput>,
 }
 
-/// plan_link token TTL：7 天（brief；T6 typ 隔离后的 /t/ 落地页凭证）。
-const PLAN_LINK_TTL_DAYS: i64 = 7;
+/// plan_link token TTL 已随 /t/ 签发点移至 t_page.rs（`PLAN_LINK_TTL_DAYS`，
+/// 7d）：Task 9b 起 /t/ token 不再由本路由签发——GET /s/:code 跳转时现签，
+/// plan/link 响应只吐 `/s/<code>` 短链。
 
-fn plan_link_for(state: &AppState, user_id: i32, plan_id: i32) -> Result<String, AppError> {
-    let token = crate::utils::generate_plan_link_token(
-        user_id,
-        plan_id,
-        state.config.jwt_secret(),
-        ChronoDuration::days(PLAN_LINK_TTL_DAYS),
-    )?;
-    Ok(format!("/t/{token}"))
+/// /s/ 短码长度：10 字符 url-safe [a-zA-Z0-9]（62^10 ≈ 8.4e17 空间）。
+/// 对外可分享链路的截断免疫下限（/t/ 164-char JWT 被模型省略号截断的事故根因）。
+const SHORT_LINK_CODE_LEN: usize = 10;
+
+/// 生成 10-char url-safe 短码（rand Alphanumeric——与 bind 的 rand 随机同源，
+/// 字符集刻意不含 `-_`：纯字母数字在任何聊天应用/手抄场景零歧义）。
+fn generate_short_link_code() -> String {
+    use rand::distributions::Alphanumeric;
+    use rand::Rng;
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(SHORT_LINK_CODE_LEN)
+        .map(char::from)
+        .collect()
+}
+
+/// 生成短码并**同事务**落 short_links 行，返回 "/s/<code>"。
+/// 碰撞处理：`ON CONFLICT (code) DO NOTHING RETURNING code`——冲突不中断事务
+/// （裸 INSERT 23505 会置 aborted），无行返回则换码重试；62^10 空间下碰撞
+/// 概率 ~0，5 次上限纯防御。ON CONFLICT 仲裁模式同 create_plan 的 period_key。
+/// tx 参数取 `&mut PgConnection`（projection.rs 同款——Transaction 经 `&mut *tx`
+/// 解引用传入，避免具体生命周期类型）。
+async fn insert_short_link(
+    tx: &mut sqlx::PgConnection,
+    user_id: i32,
+    plan_id: i32,
+) -> Result<String, AppError> {
+    for _ in 0..5 {
+        let code = generate_short_link_code();
+        let inserted: Option<String> = sqlx::query_scalar(
+            "INSERT INTO short_links (code, plan_id, user_id) VALUES ($1, $2, $3) \
+             ON CONFLICT (code) DO NOTHING RETURNING code",
+        )
+        .bind(&code)
+        .bind(plan_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(c) = inserted {
+            return Ok(format!("/s/{c}"));
+        }
+    }
+    Err(AppError::InternalError(
+        "short link code collision after 5 attempts (62^10 space — statistically impossible)".into(),
+    ))
 }
 
 /// target_ref 合法性（逐条 400，事务外预检——被拒请求零半写）：
@@ -699,12 +742,15 @@ async fn validate_plan_items(state: &AppState, items: &[PlanItemInput]) -> Resul
 }
 
 /// POST /api/v1/training/plans — 创建学习计划（access，本人）。
-/// 事务：plan + items + plan_created 事件原子落库；响应 201 {plan, items, link}。
+/// 事务：plan + items + plan_created 事件 + short_links 短码原子落库；
+/// 响应 201 {plan, items, link}，link 为 `/s/<code>`（10-char 短链；短码不过期，
+/// 点击由 GET /s/:code 现签 7d /t/ token 跳转——plan 存活期间链接永不失效）。
 ///
 /// period_key 幂等（并发安全）：`ON CONFLICT (user_id, origin, period_key)
 /// WHERE period_key IS NOT NULL DO NOTHING RETURNING id`——部分唯一索引
 /// idx_plans_period 仲裁并发，输家 RETURNING 无行 → **同事务**回查 SELECT
-/// 返回既有 plan 及其 items → 200（不追加/不覆盖；plan_created 不重记）。
+/// 返回既有 plan 及其 items → 200（不追加/不覆盖；plan_created 不重记——
+/// 但 9b 短码照常现签：capability 行只增不减，两枚 code 均可跳转）。
 /// READ COMMITTED 下 DO NOTHING 阻塞至 winner 提交，随后语句快照可见该行，
 /// 并发同 period_key 创建收敛到同一 id，绝不 500。
 async fn create_plan(
@@ -834,8 +880,11 @@ async fn create_plan(
         (plan, items, false)
     };
 
+    // 短码同事务落库（Task 9b）：plan/items/plan_created/short_links 原子——
+    // 响应里的 link 是 `/s/<code>`（10-char 截断免疫；短码不过期，点击由
+    // GET /s/:code 现签 7d /t/ token——plan 存活期间链接永不失效）。
+    let link = insert_short_link(&mut *tx, user_id, plan.id).await?;
     tx.commit().await.map_err(AppError::from)?;
-    let link = plan_link_for(&state, user_id, plan.id)?;
     let status = if created_new {
         StatusCode::CREATED
     } else {
@@ -931,9 +980,12 @@ async fn get_plan(
     Ok(Json(serde_json::json!({ "plan": plan, "items": items })))
 }
 
-/// POST /api/v1/training/plans/:id/link — 重签 plan_link（7d）。
-/// 归属同 get_plan（不属 → 404）；每次签发全新 token（iat/exp 刷新，
-/// 旧 token 不失效——JWT 无服务端状态，安全模型与 access/refresh 一致）。
+/// POST /api/v1/training/plans/:id/link — 重签分享链接，响应 `{"link": "/s/<code>"}`。
+/// 归属同 get_plan（不属 → 404）；每次签发全新短码行（旧 code/旧 /t/ token 均不
+/// 失效——capability URL 无服务端吊销状态，安全模型与 access/refresh 一致；
+/// 撤销 = 删 short_links 行或删 plan）。短码不过期：点击由 GET /s/:code 现签
+/// 新 7d /t/ token，故本端点在 Task 9b 后语义上已无「刷新窗口」必要（/s/ 永活），
+/// 保留为兼容入口（MCP/Hermes 既有调用）。
 async fn regen_plan_link(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -941,16 +993,18 @@ async fn regen_plan_link(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let claims = require_auth(&state, &headers).await?;
     let user_id: i32 = claims.sub.parse()?;
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
     let owned: Option<i32> =
         sqlx::query_scalar("SELECT id FROM learning_plans WHERE id = $1 AND user_id = $2")
             .bind(plan_id)
             .bind(user_id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&mut *tx)
             .await?;
     if owned.is_none() {
         return Err(AppError::ResourceNotFound("Plan not found".into()));
     }
-    let link = plan_link_for(&state, user_id, plan_id)?;
+    let link = insert_short_link(&mut *tx, user_id, plan_id).await?;
+    tx.commit().await.map_err(AppError::from)?;
     Ok(Json(serde_json::json!({ "link": link })))
 }
 
@@ -998,4 +1052,26 @@ async fn rebuild_progress(
         "viewed": stats.viewed,
         "completed": stats.completed,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 短码形状（lib 纯函数）：恰 10 字符、纯 [a-zA-Z0-9]、多次采样互异
+    /// （62^10 空间随机；积分路径的落库/跳转见 t_page_test 矩阵 7）。
+    #[test]
+    fn short_link_code_shape() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let code = generate_short_link_code();
+            assert_eq!(code.len(), SHORT_LINK_CODE_LEN, "exactly {SHORT_LINK_CODE_LEN} chars");
+            assert!(
+                code.chars().all(|c| c.is_ascii_alphanumeric()),
+                "url-safe alnum only: {code}"
+            );
+            seen.insert(code);
+        }
+        assert_eq!(seen.len(), 100, "100 samples all distinct (collision ~0 at 62^10)");
+    }
 }

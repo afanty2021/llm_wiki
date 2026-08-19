@@ -1,9 +1,14 @@
 //! Task 9：/t/ 落地页三端点（GET /t/:token、POST seen、POST complete）+ /media fp 签名。
+//! Task 9b：/s/ 短链现签跳转（GET /s/:code → 303 /t/<现签 token>，结构性根治
+//! LLM 截断 /t/ 长链）。
 //! 矩阵（brief Step 1）：错 typ（access token）403、过期 403（友好页不泄漏原因）、
 //! plan 不存在/不归属 404、HTML 含 plan 标题与 items、XSS 敌意 fixture 不出原样标签、
 //! seen 空 body 无 content-type → 200 页面级事件（Option 提取器）、view 事件落库且
 //! 不改投影、seen 页面级/项级、complete 伪造 item_id 400、/media 带 fp 签名 206 +
 //! 旧两段式兼容 206。
+//! 矩阵 9b：plan 创建/重签响应 link 为 /s/<10 alnum>；GET /s/:code → 303 +
+//! Location /t/ey…（JWT 头）；跟进 Location → 200 HTML 含标题；未知 code → 404；
+//! capability 语义（无鉴权仍跳转、plan 删除级联 404）；/s/ 纯跳转不记 view。
 //! fixture 模式：training 段 + media 签名键经「改 config 后 create_app」注入
 //! （learning_api_test / media_test 同款）；slug/用户名 unique() 隔离。
 
@@ -127,6 +132,22 @@ async fn seed_media_asset(
     path
 }
 
+/// 解析 API 返回的 /s/<code> 短链：GET /s/:code → 303 + Location /t/<token>，
+/// 返回 (code, token)。plan/link 端点自此只吐短链（Task 9b），/t/ 系测试经此取 token。
+async fn resolve_short_link(server: &TestServer, link: &str) -> (String, String) {
+    let code = link.strip_prefix("/s/").expect("link is /s/<code>").to_string();
+    let r = server.get(&format!("/s/{code}")).await;
+    assert_eq!(r.status_code(), StatusCode::SEE_OTHER, "GET /s/:code must 303");
+    let loc = r
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .expect("Location header")
+        .to_string();
+    let token = loc.strip_prefix("/t/").expect("Location is /t/<token>").to_string();
+    (code, token)
+}
+
 /// 建一个带 wiki+media 双项的 plan（page/slug 需先由调用方播种），返回
 /// (link_token, plan_id, wiki_item_id, media_item_id)。
 async fn make_plan(
@@ -157,7 +178,7 @@ async fn make_plan(
     assert_eq!(r.status_code(), StatusCode::CREATED, "plan create must succeed");
     let v = r.json::<serde_json::Value>();
     let link = v["link"].as_str().unwrap().to_string();
-    let token = link.strip_prefix("/t/").expect("link is /t/<token>").to_string();
+    let (_code, token) = resolve_short_link(server, &link).await;
     let plan_id = v["plan"]["id"].as_i64().unwrap();
     let wiki_item = v["items"][0]["id"].as_i64().unwrap();
     let media_item = v["items"][1]["id"].as_i64().unwrap();
@@ -298,7 +319,7 @@ async fn t_page_renders_html_and_records_view_without_projection() {
         .await;
     assert_eq!(r.status_code(), StatusCode::CREATED);
     let v = r.json::<serde_json::Value>();
-    let token = v["link"].as_str().unwrap().strip_prefix("/t/").unwrap().to_string();
+    let (_code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
     let plan_id = v["plan"]["id"].as_i64().unwrap();
     let wiki_item = v["items"][0]["id"].as_i64().unwrap();
     let media_item = v["items"][1]["id"].as_i64().unwrap();
@@ -466,7 +487,7 @@ async fn t_page_seen_beacon_dual_granularity() {
         .await;
     assert_eq!(r.status_code(), StatusCode::CREATED);
     let v = r.json::<serde_json::Value>();
-    let token = v["link"].as_str().unwrap().strip_prefix("/t/").unwrap().to_string();
+    let (_code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
     let plan_id = v["plan"]["id"].as_i64().unwrap() as i32;
     let item1 = v["items"][0]["id"].as_i64().unwrap() as i32;
     let item2 = v["items"][1]["id"].as_i64().unwrap() as i32;
@@ -613,7 +634,7 @@ async fn t_page_complete_membership_and_idempotency() {
         .await;
     assert_eq!(r.status_code(), StatusCode::CREATED);
     let v = r.json::<serde_json::Value>();
-    let token = v["link"].as_str().unwrap().strip_prefix("/t/").unwrap().to_string();
+    let (_code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
     let item1 = v["items"][0]["id"].as_i64().unwrap() as i32;
 
     // 合法 complete → 200 + completed
@@ -741,4 +762,135 @@ async fn media_fp_signature_and_legacy_compat() {
         .execute(&state.db)
         .await;
     let _ = std::fs::remove_file(&path);
+}
+
+/// ============ 矩阵 7（Task 9b）：/s/ 短链现签跳转 ============
+///
+/// 背景：实测 LLM（Hermes lt-tutor）转发 164-char `/t/<JWT>` 两次中途省略号截断
+/// → 死链。结构性根治：对外只吐 10-char `/s/<code>`（截断免疫），点击由服务端
+/// 303 现签跳转 `/t/<token>`。
+/// - 响应形状：POST /plans 与 POST /plans/:id/link 的 link 均为 `/s/<10 alnum>`；
+/// - GET /s/:code → 303 SEE_OTHER + Location `/t/ey…`（JWT 头 base64）；跟进
+///   Location → 200 HTML 含 plan 标题（完整闭环）；
+/// - 未知 code → 404；超长 code（>16 列宽）→ 同 404；
+/// - capability 语义：无任何鉴权头仍跳转（与 /t/:token 同信任模型）；撤销 =
+///   删 plan（FK ON DELETE CASCADE 级联删 short_links 行）→ 404；
+/// - /s/ 是纯跳转：不记 view 事件（view 由浏览器落地 /t/ 时记，下一断言验证
+///   只有落地后才出现 view）；
+/// - code 不过期：short_links 无过期列，语义上「plan 存活期间链接永不失效，
+///   每次点击现签新 7d token」（此处仅验证再次点击仍 303，TTL 断言见 jwt 单测）。
+#[tokio::test]
+async fn s_short_link_redirect_matrix() {
+    let (server, state) = t_fixture("s").await;
+    let (teacher, uid) = bind_teacher(&server, &unique("w")).await;
+
+    let page_path = format!("concepts/s-{}.md", unique("pg"));
+    seed_wiki_page(&state, &page_path, "短链页", "内容", json!([])).await;
+
+    // 1. 创建响应：link = /s/<code>，code 恰 10 字符纯字母数字
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&json!({"title": "短链跳转计划", "origin": "chat", "period_key": null,
+                      "items": [{"kind": "wiki_page", "target_ref": page_path, "label": "l"}]}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v = r.json::<serde_json::Value>();
+    let link = v["link"].as_str().expect("link field").to_string();
+    assert!(link.starts_with("/s/"), "link must be /s/<code>: {link}");
+    let code = link.strip_prefix("/s/").unwrap();
+    assert_eq!(code.len(), 10, "code is exactly 10 chars: {code}");
+    assert!(
+        code.chars().all(|c| c.is_ascii_alphanumeric()),
+        "code is url-safe alnum: {code}"
+    );
+
+    // 2. GET /s/:code → 303 + Location /t/ey…（且 /s/ 本身不记 view 事件）
+    let r = server.get(&format!("/s/{code}")).await;
+    assert_eq!(r.status_code(), StatusCode::SEE_OTHER, "GET /s/:code must 303 See Other");
+    let loc = r
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .expect("Location header")
+        .to_string();
+    assert!(loc.starts_with("/t/ey"), "Location must be /t/<JWT> (starts 'ey'): {loc}");
+    let n_view: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM learning_events WHERE user_id = $1 AND event_type = 'view'",
+    )
+    .bind(uid as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(n_view, 0, "/s/ is a pure redirect: no view event until /t/ landing");
+
+    // 3. 跟进 Location → 200 HTML 含 plan 标题（view 此时才落库）
+    let r = server.get(&loc).await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let html = r.text();
+    assert!(html.contains("短链跳转计划"), "followed /t/ page contains plan title");
+    let n_view: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM learning_events WHERE user_id = $1 AND event_type = 'view'",
+    )
+    .bind(uid as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(n_view, 1, "view recorded exactly once on /t/ landing");
+
+    // 4. POST /plans/:id/link 重签：同样吐 /s/ 短链，且现签 token 指向同一 plan
+    let plan_id = v["plan"]["id"].as_i64().unwrap();
+    let r = server
+        .post(&format!("/api/v1/training/plans/{plan_id}/link"))
+        .add_header("authorization", bearer(&teacher))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let link2 = r.json::<serde_json::Value>()["link"].as_str().unwrap().to_string();
+    assert!(link2.starts_with("/s/"), "regen link must be /s/<code>: {link2}");
+    let code2 = link2.strip_prefix("/s/").unwrap();
+    assert_eq!(code2.len(), 10);
+    assert!(code2.chars().all(|c| c.is_ascii_alphanumeric()));
+    let r = server.get(&link2).await;
+    assert_eq!(r.status_code(), StatusCode::SEE_OTHER, "regen code redirects too");
+    let loc2 = r.headers().get("location").and_then(|v| v.to_str().ok()).unwrap().to_string();
+    let (_uid2, plid2) = llm_wiki_server::utils::verify_plan_link_token(
+        loc2.strip_prefix("/t/").unwrap(),
+        state.config.jwt_secret(),
+    )
+    .unwrap();
+    assert_eq!(plid2, plan_id as i32, "redirect token targets the same plan");
+
+    // 5. 未知 code / 超长 code → 404（列宽 16 之外必不存在）
+    let r = server.get("/s/zzzzzzzzzz").await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "unknown code 404");
+    let r = server.get("/s/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "over-length code 404");
+
+    // 6. capability 语义：无任何鉴权头仍 303（同 /t/:token 信任模型）；
+    //    撤销 = 删 plan → FK 级联删 short_links → 404
+    let rows_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM short_links WHERE plan_id = $1",
+    )
+    .bind(plan_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert!(rows_before >= 2, "create + regen both left short_link rows");
+    sqlx::query("DELETE FROM learning_plans WHERE id = $1")
+        .bind(plan_id as i32)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let rows_after: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM short_links WHERE plan_id = $1",
+    )
+    .bind(plan_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(rows_after, 0, "plan delete cascades short_links (revocation)");
+    for c in [&code, code2] {
+        let r = server.get(&format!("/s/{c}")).await;
+        assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "revoked code {c} must 404");
+    }
 }

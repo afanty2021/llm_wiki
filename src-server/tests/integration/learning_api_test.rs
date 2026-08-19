@@ -505,10 +505,19 @@ async fn plan_create_roundtrip_link_and_get() {
     let item0 = items[0]["id"].as_i64().unwrap();
     let item1 = items[1]["id"].as_i64().unwrap();
 
-    // link 可验签：(user_id, plan_id) 与创建者/计划一致（T6 typ=plan_link token）
+    // link 为 /s/<code>（Task 9b：对外只吐 10-char 短链，/t/ 由 GET /s/:code
+    // 303 现签跳转）；短码本身不过期（capability URL，plan 存活期间每次点击
+    // 现签新 7d token）。经跳转取回 token 验签：(user_id, plan_id) 与创建者/计划一致
+    // （T6 typ=plan_link token）。
     let link = v["link"].as_str().expect("link field").to_string();
-    assert!(link.starts_with("/t/"), "link must be /t/<token>: {link}");
-    let token = link.strip_prefix("/t/").unwrap();
+    assert!(link.starts_with("/s/"), "link must be /s/<code>: {link}");
+    let code = link.strip_prefix("/s/").unwrap();
+    assert_eq!(code.len(), 10, "code is exactly 10 chars: {code}");
+    assert!(code.chars().all(|c| c.is_ascii_alphanumeric()), "code url-safe alnum: {code}");
+    let r = server.get(&link).await;
+    assert_eq!(r.status_code(), StatusCode::SEE_OTHER, "GET /s/:code must 303");
+    let loc = r.headers().get("location").and_then(|v| v.to_str().ok()).unwrap().to_string();
+    let token = loc.strip_prefix("/t/").expect("Location is /t/<token>");
     let (uid, plid) =
         llm_wiki_server::utils::verify_plan_link_token(token, state.config.jwt_secret()).unwrap();
     assert_eq!(uid, teacher_id as i32);
@@ -571,18 +580,22 @@ async fn plan_create_roundtrip_link_and_get() {
         .await;
     assert_eq!(r.status_code(), StatusCode::NOT_FOUND);
 
-    // POST /plans/:id/link 重签：可验签得 (user_id, plan_id)。
-    // 注：不断言 token 必然不同——plan_link claims 无 iat/jti，exp 为秒粒度，
-    // 同秒内重签的 HS256 输出逐字节相同（确定性签名，语义上仍是有效重签：
-    // 重签的意义在刷新 7d 窗口，而非字节级新 token）。
+    // POST /plans/:id/link 重签：同样吐 /s/ 短链（Task 9b），跳转现签 token 可验得
+    // (user_id, plan_id)。注：不断言 token 必然不同——plan_link claims 无 iat/jti，
+    // exp 为秒粒度，同秒内重签的 HS256 输出逐字节相同（确定性签名，语义上仍是有效
+    // 重签：短码不过期，点击即现签 7d 窗口）。
     let r = server
         .post(&format!("/api/v1/training/plans/{plan_id}/link"))
         .add_header("authorization", bearer(&teacher))
         .await;
     assert_eq!(r.status_code(), StatusCode::OK);
     let link2 = r.json::<serde_json::Value>()["link"].as_str().unwrap().to_string();
-    assert!(link2.starts_with("/t/"), "re-signed link must be /t/<token>: {link2}");
-    let token2 = link2.strip_prefix("/t/").unwrap();
+    assert!(link2.starts_with("/s/"), "re-signed link must be /s/<code>: {link2}");
+    assert_eq!(link2.strip_prefix("/s/").unwrap().len(), 10, "regen code 10 chars");
+    let r = server.get(&link2).await;
+    assert_eq!(r.status_code(), StatusCode::SEE_OTHER);
+    let loc2 = r.headers().get("location").and_then(|v| v.to_str().ok()).unwrap().to_string();
+    let token2 = loc2.strip_prefix("/t/").unwrap();
     let (uid2, plid2) =
         llm_wiki_server::utils::verify_plan_link_token(token2, state.config.jwt_secret()).unwrap();
     assert_eq!((uid2, plid2), (teacher_id as i32, plan_id as i32));
@@ -645,7 +658,7 @@ async fn plan_period_key_idempotent_second_create_returns_existing() {
     assert_eq!(v2["plan"]["id"], plan_id, "same plan id");
     assert_eq!(v2["plan"]["title"], "分数教学补强", "existing title preserved");
     assert_eq!(v2["items"].as_array().unwrap().len(), 1, "items not appended");
-    assert!(v2["link"].as_str().unwrap().starts_with("/t/"), "existing plan also gets a link");
+    assert!(v2["link"].as_str().unwrap().starts_with("/s/"), "existing plan also gets a /s/ link");
 
     // plan_created 只记一次；items 行数仍 1
     let n: i64 = sqlx::query_scalar(
