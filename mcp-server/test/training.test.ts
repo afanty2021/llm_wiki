@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { test } from "node:test"
 
 import { LlmWikiApiClient, resolveApiForm } from "../src/api-client.js"
 import { TeacherCredentialStore, createSrcServerHandlers, joinTLink } from "../src/training.js"
-import { buildTools } from "../src/index.js"
+import { assertSrcServerEnv, buildTools } from "../src/index.js"
 
 // 全部 mock 驱动：不依赖任何 live src-server。
 const BASE = "http://127.0.0.1:8080"
@@ -169,6 +169,24 @@ test("store: 首次建档走 bind——请求形状 + 文件 600 / 目录 700", 
   assert.equal(statSync(storePath).mode & 0o777, 0o600, "teachers.json must be chmod 600")
   assert.equal(statSync(path.join(dir, "nested")).mode & 0o777, 0o700, "store dir must be chmod 700")
   assert.deepEqual(JSON.parse(readFileSync(storePath, "utf8")).t9, { refreshToken: "ref-rotated", userId: 9 })
+})
+
+test("store: 持久化原子写——无临时文件残留，内容/权限完好", async (t) => {
+  const dir = tempDir("atomic")
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const storePath = path.join(dir, "teachers.json")
+
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/bind`, then: () => ({ body: authBody() }) },
+  ], [])
+
+  const store = new TeacherCredentialStore({ baseUrl: BASE, storePath, fetchImpl, adminToken: "adm-secret" })
+  assert.equal(await store.getAccess("t7"), "acc-1")
+
+  const leftovers = readdirSync(dir).filter((f) => f !== "teachers.json")
+  assert.deepEqual(leftovers, [], "no temp file residue next to teachers.json")
+  assert.equal(statSync(storePath).mode & 0o777, 0o600)
+  assert.deepEqual(JSON.parse(readFileSync(storePath, "utf8")).t7, { refreshToken: "ref-rotated", userId: 7 })
 })
 
 test("store: refresh 失败（401）回落 bind 并轮换", async (t) => {
@@ -495,4 +513,19 @@ test("desktop 形态：保持 8 个桌面工具且无 teacher_tutor_*", () => {
     "llm_wiki_status",
   ].sort())
   assert.ok(names.every((name) => !name.startsWith("teacher_tutor_")))
+})
+
+test("src-server 形态缺失 LLM_WIKI_API_BASE_URL → 启动 fail-fast；显式设置/桌面形态不抛", () => {
+  assert.throws(
+    () => assertSrcServerEnv({ LLM_WIKI_API_FORM: "src-server" }),
+    /LLM_WIKI_API_BASE_URL/,
+  )
+  assert.throws(
+    () => assertSrcServerEnv({ LLM_WIKI_API_FORM: "src-server", LLM_WIKI_API_BASE_URL: "   " }),
+    /LLM_WIKI_API_BASE_URL/,
+  )
+  assert.doesNotThrow(() =>
+    assertSrcServerEnv({ LLM_WIKI_API_FORM: "src-server", LLM_WIKI_API_BASE_URL: "http://127.0.0.1:8080" }))
+  assert.doesNotThrow(() => assertSrcServerEnv({}))
+  assert.doesNotThrow(() => assertSrcServerEnv({ LLM_WIKI_API_BASE_URL: undefined }))
 })

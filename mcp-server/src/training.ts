@@ -9,7 +9,7 @@
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
  *   project_id 取 env TRAINING__PROJECT_ID；token 全部由 store 注入，绝不进工具返回值。
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 
@@ -136,9 +136,18 @@ export class TeacherCredentialStore {
     const dir = path.dirname(this.storePath)
     mkdirSync(dir, { recursive: true })
     chmodSync(dir, 0o700)
-    // mode 选项受 umask 影响，写后显式 chmod 保证 600
-    writeFileSync(this.storePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 })
-    chmodSync(this.storePath, 0o600)
+    // 原子写：先写同目录临时文件（同样 600），再 rename 替换（POSIX 同目录 rename 原子）。
+    // 直接 writeFileSync 目标路径会在中途崩溃/磁盘满时留下截断 JSON，loadStore 吞解析错
+    // 返回 {} → 全部教师各触发一次 bind + 服务端轮换。临时文件名含 pid+时间戳防并发互踩。
+    const tmpPath = `${this.storePath}.tmp-${process.pid}-${Date.now()}`
+    writeFileSync(tmpPath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 })
+    chmodSync(tmpPath, 0o600)
+    try {
+      renameSync(tmpPath, this.storePath)
+    } catch (err) {
+      rmSync(tmpPath, { force: true })
+      throw err
+    }
   }
 }
 

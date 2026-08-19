@@ -189,6 +189,23 @@ function resolveTrainingProjectId(): number {
   return projectId
 }
 
+/**
+ * src-server 形态下 LLM_WIKI_API_BASE_URL 必须显式设置（brief 要求；
+ * 否则回退桌面默认 19828，错误会在工具调用时以迷惑形态浮现）→ 启动即 fail-fast。
+ * desktop 形态不受影响。
+ */
+export function assertSrcServerEnv(
+  env: { LLM_WIKI_API_FORM?: string; LLM_WIKI_API_BASE_URL?: string } = process.env,
+): void {
+  if (resolveApiForm(env) === "src-server" && !env.LLM_WIKI_API_BASE_URL?.trim()) {
+    throw new Error(
+      "LLM_WIKI_API_FORM=src-server requires LLM_WIKI_API_BASE_URL to be set explicitly "
+      + "(e.g. LLM_WIKI_API_BASE_URL=http://127.0.0.1:8080); "
+      + "unset LLM_WIKI_API_FORM to use the desktop form",
+    )
+  }
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: buildTools(),
 }))
@@ -402,9 +419,7 @@ function formatGraph(nodes: ApiGraphNode[], edges: Array<{ source: string; targe
 }
 
 async function main(): Promise<void> {
-  if (apiForm === "src-server" && !process.env.LLM_WIKI_API_BASE_URL?.trim()) {
-    console.error("warning: LLM_WIKI_API_FORM=src-server requires LLM_WIKI_API_BASE_URL to be set explicitly (e.g. http://127.0.0.1:8080)")
-  }
+  assertSrcServerEnv()
   const transport = new StdioServerTransport()
   await server.connect(transport)
   console.error(`LLM Wiki MCP server v${VERSION} (${apiForm} form) connected to ${process.env.LLM_WIKI_API_BASE_URL ?? "http://127.0.0.1:19828"}`)
