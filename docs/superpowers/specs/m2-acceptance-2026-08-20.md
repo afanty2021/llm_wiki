@@ -72,3 +72,17 @@ cargo lib 242/242 + integration 98/98（含 /s/ 矩阵；环境性 flake 均经 
 ## 8. M3+ 待办指针
 
 问卷编排/overview/周报 cron/灰度/重启演练（M3）；按需转码缓存（M4，安卓 only）；身份会话级绑定（M3 优先级上调）；Hermes 侧 lazy-install 阻塞事件循环 + uv 镜像配置（上游问题，留档）。
+
+## 9. 评审 r3（5 路专项，2026-08-20）处置
+
+| # | 发现 | 处置 |
+|---|---|---|
+| 1 | /s/、/t/ 不校验 plan.status（泄露即永久） | ✅ 已修（15759e93）：/s/、/t/ 页面、seen/complete beacon 四面 `status='active'` 门禁——归档即一键吊销；8 例集成矩阵 |
+| 2 | is_context_limit_error 漏匹配 max_tokens 下划线变体 | ✅ 已修（同批）：匹配表 + 单测 |
+| 4 | mcp plan_link 空 link 无守卫 + fixture 旧契约 | ✅ 已修（同批）：守卫 + /s/ fixture + 空链拒绝用例（28 测试） |
+| 5 | CLI waitJob 超时丢报告 | ✅ 已修（同批）：runIngestPhase 抽取 + wait_failed 假终态 + 3 用例（125 测试） |
+| 3 | spec 落后落地事实 | ✅ spec v6：/s/ 凭证层、MCP 主 config 位置+default 工具面、step1 双防线、隧道单 hostname、omlx 内存依赖 |
+| 6 | compose "真实可启动"无留痕 | ✅ 复验通过并留档（deploy/compose-smoke-2026-08-20.md）——复验揪出宿主插值名单下划线真 bug，已修 |
+| 7 | 安卓真机"必做"未执行 | ⏳ 待 USER 设备（iPhone 已过；安卓 H.264 可播性仍是推断，M4 决策数据缺口） |
+
+**低于 80 项**：按评审建议整体后移 M3 批次（items 上限/非对象 JSON 缓存/MCP 单实例约束/事件表速率限制/registration fail-open/.env.example 漂移/retryOn5xx 名实/healthSrc 死代码/deploy.sh PUBLIC_T_BASE 默认值漂移+rollback 原子化/集成 teardown/并发测试加固/architecture.md 补 learning 域/409 文案）。M3 计划需带入：**身份会话级绑定（结构性，优先级最高）**。

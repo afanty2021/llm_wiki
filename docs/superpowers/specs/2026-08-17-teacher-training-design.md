@@ -1,7 +1,7 @@
 # LT 教师培训系统改造设计（llm_wiki × Hermes × 企业微信）
 
 **日期**: 2026-08-17
-**版本**: v5（v4 评审修订 4 项 + 8 项低分措辞收敛；设计冻结，进入 M0 实施，见 §12）
+**版本**: v6（v5 冻结版实施 M0-M2 后的落地事实回写：/s/ 短链凭证模型、MCP 主 config 声明位置、step1 双重防线、隧道单 hostname、omlx 内存依赖——2026-08-20 评审 #3 收编）
 **状态**: 已冻结
 **路径分类**: Architectural（多子系统，M0-M4 五个里程碑，约 4.5 周）
 
@@ -92,7 +92,7 @@
 1. **扫描分类**（以 manifest 为准）：直收音频；视频抽音频；文档不走转写
 2. **去重**：16kHz mono wav SHA-256 内容去重
 3. **规范化与按需转码**：ffmpeg 抽音频（slug = 净化 basename + wavSha8，**内容寻址**——迁移中 relPath 漂移不影响 slug/transcript/asset 幂等）；播放副本 = **按需转码缓存**（videotoolbox 硬编，老师点开才转、只缓存实际消费、可淘汰——**批量预转废弃**：全库 HEVC 化后全量 H.264 副本体积 2-3 倍会吃掉迁移省下的磁盘；M1 仅转验收演示件）
-4. **转写**：whisper.cpp（Metal）+ ggml large-v3-turbo 主引擎（PyTorch 20250625 含 turbo 作 fallback）；language 强制 zh；`--prompt` 注入 LT 域词表；JSONL 断点续跑，单文件重试 2 次
+4. **转写**：whisper.cpp（Metal）+ ggml large-v3-turbo 主引擎（step1 分析调 LLM 侧：max_tokens 32000 + context 超限降档 16000 重试 + **解析失败自动重试一次**——本地 omlx 内存压力下提前 EOS 半截 JSON 的瞬态兜底，2026-08-19 夜 5/48 实证；配套服务端三防线见 §6）（PyTorch 20250625 含 turbo 作 fallback）；language 强制 zh；`--prompt` 注入 LT 域词表；JSONL 断点续跑，单文件重试 2 次
 5. **产物写入（五步，全经 REST，凭证见 §3.3）**：
    - ① transcript 源文件落项目 storage（现有 ingest 输入边界）
    - ② **transcript 页**：`POST /pages`，path 确定性派生 **`transcripts/<slug>.md`**，type: transcript，含 `[mm:ss]`；创建即嵌入（实测确认）。**409 策略**（POST 对已存在 path 返回 Conflict，实测确认）：续跑先 GET——hash 一致跳过，不一致走 If-Match PUT 更新
@@ -163,9 +163,9 @@ learning_events
 | `GET /overview` | 管理员服务 token | 15 人进度总览 JSON |
 | `GET/PUT /profile` | 老师 access token | 问卷与 interests 回写 |
 | `POST /events` | 老师 access token | 仅 event_type='ask' |
-| `POST /plans` | 老师 access token | 创建清单（事务内写 plan_created 事件）；响应返回整单 `/t/:token` 链接 |
+| `POST /plans` | 老师 access token | 创建清单（事务内写 plan_created 事件）；响应返回整单 `/s/:code` 短链（v6：替代直发 /t/ 长链——LLM 转发 164 字符 JWT 两次截断致死链，实测 structural 修复） |
 | `GET /plans` `GET /plans/:id` | 老师 access token | **资源归属校验：plan.user_id == token 用户，否则 404** |
-| `POST /plans/:id/link` | 老师 access token | 补签整单链接（同归属校验） |
+| `POST /plans/:id/link` | 老师 access token | 重发整单短链（同归属校验） |
 | `POST /items/:id/complete` | 老师 access token | **归属链校验：item→plan.user_id == token 用户**（mark_complete 由 LLM 产出裸 id，防跨用户完成）；单调守卫 |
 | `GET /progress` | 老师 access token | 个人汇总 |
 
@@ -173,7 +173,8 @@ learning_events
 
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
-| `GET /t/:token` | plan_link token（绑 plan_id，TTL 7 天） | 落地页 HTML；渲染事务记 view 事件 |
+| `GET /s/:code` | 短链码（10 字符 ~60bit 随机，capability URL） | 303 → 现签 7 天 /t/ token（每次点击新签）；**仅 status=active 的 plan**（归档即吊销，v6） |
+| `GET /t/:token` | plan_link token（绑 plan_id，TTL 7 天） | 落地页 HTML；渲染事务记 view 事件；**仅 status=active 的 plan**（v6） |
 | `POST /t/:token/seen` | 同上 | beacon：body 可选 item_id（双粒度规则见 §4.1） |
 | `POST /t/:token/complete` | 同上 | body {item_id}，校验 ∈ 该 plan |
 | `GET /media/:media_id` | 签名 URL（HMAC 消息 = media_id + exp + **当次 plan_link 指纹**，exp ≤12h） | Range 流式；media_id 即 media_assets.slug（字符串，消歧）；受众绑定：URL 随清单链接失效而失效 |
@@ -183,7 +184,8 @@ learning_events
 **凭证模型（三层，JWT 带 `typ`，`require_auth` 增加 typ 校验）**：
 - access/refresh（300s/7d，refresh 一次性旋转）：老师与服务账号持有，MCP/CLI 持久化每次新 refresh；MCP 并发刷新 **single-flight**（合并为单次，防旋转竞态丢 token）
 - plan_link：一链一清单，TTL 7 天；到期 /plans/:id/link 重发
-- /media 签名：渲染时现签，HMAC 消息含当次 plan_link 指纹——纯时限 bearer 升级为受众绑定凭证（未成年人影像的"转发即失效"），`<video>` 与 Range 天然可用
+- /s/ 短链（v6 新增层）：plan 存活期内**永活**的 capability URL，点击时现签 7 天 plan_link；泄露止血 = `UPDATE learning_plans SET status='archived'`（/s/、/t/、beacon 三面同判 active）
+- /media 签名：渲染时现签，HMAC 消息含当次 plan_link 指纹（受众绑定；12h 时限为主要失效边界；plan 归档后新渲染停止——存量 URL 至多再流 12h，v6 口径）
 - 管理员服务 token：`TRAINING__ADMIN_TOKEN`（32B hex，常数时间比较），**仅护 /bind 与 /overview**
 
 ### 4.3 落地页 `/t/:token`（M2 交付）
@@ -209,6 +211,8 @@ get_progress / record_ask
 ```
 凭证持有：wecom_userid → (access, refresh) 加密映射，按会话注入；**刷新 single-flight**；/bind 与管理员服务 token 只在 MCP 配置；凭证零进 LLM 上下文。
 
+**MCP 声明位置（v6 实测修正）**：Hermes 0.19 启动 discovery 只读主 config（profile 作用域 contextvar 不传播到 discovery 路径）——`mcp_servers.llm-wiki-training` 声明于 `~/.hermes/config.yaml` 主 config（deploy.sh 托管块）；**代价：default profile 会话也可见 10 个 training 工具**，身份伪造残余风险面扩大，M3 会话级身份绑定优先级上调。教师侧工具白名单仍由 lt-tutor profile 的 `platform_toolsets.wecom: [skills]` 门控（实测"执行 ls"零工具可调）。
+
 ### 5.2 SKILL.md 对话编排（prompt，非状态机）
 新用户（pending）→ 问卷 3-4 问 → upsert_profile(surveyed) → 首个清单；答疑 = kb_search 多查询 + record_ask + read_page 时间戳定位 → 带引用回答；清单生成 = profile + 问题 + 图谱邻居 → create_plan → 整单链接；完成确认 = 对齐 list_plans → mark_complete。
 
@@ -222,13 +226,14 @@ get_progress / record_ask
 
 | 项 | 措施 | 里程碑 |
 |---|---|---|
-| 公网入口 | cloudflared tunnel：api → src-server、cb → hermes 回调（8645，GET 验证握手同隧道）；自动 TLS，不开入站端口 | M2 |
+| 公网入口 | cloudflared tunnel：api.xiaoluedu.top → src-server（**单 hostname**——wecom 为 websocket 出站模式无回调路由，cb 入口裁撤，v6）；自动 TLS，不开入站端口 | M2 |
 | 监听收敛 | src-server host 改 127.0.0.1；hermes callback 显式绑 127.0.0.1 | M1 |
 | 密钥轮换 | 新 JWT secret 经 `JWT__SECRET` 注入；dev secret 失效化，视为已泄露 | M1 |
 | 密钥供给 | 全部经环境变量、不入 git：`JWT__SECRET`、`TRAINING__ADMIN_TOKEN`、`TRAINING__PROJECT_ID`、`MEDIA__SIGNING_KEY`（/media HMAC） | M1 |
 | 数据库 | compose 端口绑 127.0.0.1；容器 `restart: unless-stopped` | M1 |
 | 注册关闭 | `auth.registration_enabled` 默认 false；svc-transcriber 关闭前创建；此后 /bind 唯一建号 | M1 |
-| 常驻保活 | launchd KeepAlive：cloudflared、hermes gateway、src-server；Docker Desktop 自启 | M2 |
+| 常驻保活 | launchd KeepAlive：cloudflared、hermes gateway、src-server、omlx-8001、iogpu-wired-limit(42GB)；Docker Desktop 登录项自启 | M2 |
+| omlx 内存依赖（v6 新增） | 本地 LLM（Qwen3.6-35B + bge-m3）在默认 37.4GB Metal 上限下批量 ingest 会触碰水位 → 提前 EOS 半截 JSON；三防线：iogpu wired_limit 42GB 开机 daemon + Qwen pinned/KV 4bit + 客户端 step1 解析重试 | M2 |
 | 日志脱敏 | /t/、/media 路径与 query 脱敏（现状写全量 URI） | M2 |
 | 遗留鉴权缺口 | /ingest/jobs/:id 加项目绑定鉴权（经 check_project_access；不用 admin token——其范围已收窄至 /bind 与 /overview） | M2 |
 
