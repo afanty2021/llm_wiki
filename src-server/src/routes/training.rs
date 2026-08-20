@@ -984,11 +984,11 @@ async fn get_plan(
 }
 
 /// POST /api/v1/training/plans/:id/link — 重签分享链接，响应 `{"link": "/s/<code>"}`。
-/// 归属同 get_plan（不属 → 404）；每次签发全新短码行（旧 code/旧 /t/ token 均不
-/// 失效——capability URL 无服务端吊销状态，安全模型与 access/refresh 一致；
-/// 撤销 = 删 short_links 行或删 plan）。短码不过期：点击由 GET /s/:code 现签
-/// 新 7d /t/ token，故本端点在 Task 9b 后语义上已无「刷新窗口」必要（/s/ 永活），
-/// 保留为兼容入口（MCP/Hermes 既有调用）。
+/// 归属同 get_plan（不属 → 404）；**仅 status='active' 的 plan**（归档 → 404，r3 复审：
+/// 归档后不应再铸出必 404 的死链短码）。撤销语义：归档 plan 即一键吊销全部既有
+/// /s/ 短码与 /t/ 渲染（t_page 侧同判 active）；删 plan 级联删除 short_links 行。
+/// 短码不过期：点击由 GET /s/:code 现签新 7d /t/ token，故本端点在 Task 9b 后
+/// 语义上已无「刷新窗口」必要（/s/ 永活），保留为兼容入口（MCP/Hermes 既有调用）。
 async fn regen_plan_link(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -998,7 +998,7 @@ async fn regen_plan_link(
     let user_id: i32 = claims.sub.parse()?;
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
     let owned: Option<i32> =
-        sqlx::query_scalar("SELECT id FROM learning_plans WHERE id = $1 AND user_id = $2")
+        sqlx::query_scalar("SELECT id FROM learning_plans WHERE id = $1 AND user_id = $2 AND status = 'active'")
             .bind(plan_id)
             .bind(user_id)
             .fetch_optional(&mut *tx)

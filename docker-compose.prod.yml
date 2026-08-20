@@ -51,7 +51,7 @@ services:
       TRAINING__ADMIN_TOKEN: ${TRAINING__ADMIN_TOKEN:-}
       # Option<i32> 不能收空串（try_parsing 下 "" 非数字 → 反序列化失败）；
       # 0 不存在（SERIAL 自 1 起）→ 未配置时 bind fail closed（500），不误绑
-      TRAINING__PROJECT_ID: ${TRAINING_PROJECT_ID:-0}
+      TRAINING__PROJECT_ID: ${PROJECT_ID}
       MEDIA__SIGNING_KEY: ${MEDIA__SIGNING_KEY:-}
       # RUST_LOG 已删：日志级别走 LOGGING__LEVEL（config），RUST_LOG 从不被读取（死键）
     ports:

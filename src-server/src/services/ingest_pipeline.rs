@@ -240,8 +240,8 @@ const STEP1_FALLBACK_MAX_TOKENS: u32 = 16000;
 ///   - Anthropic:   "prompt is too long: 156213 tokens > 200000 maximum"
 /// 大小写不敏感子串匹配："context"（覆盖 "maximum context length" / "context_length_exceeded"）、
 /// "too long"、"max tokens"、"max_tokens"（OpenAI 兼容网关的下划线变体，如
-/// "max_tokens is too large for this model" / "This model supports at most X
-/// tokens"）。误报代价仅为一次无害的 16000 降档重试，故取宽匹配。
+/// "max_tokens is too large for this model"）。误报代价仅为一次无害的
+/// 16000 降档重试，故取宽匹配。
 fn is_context_limit_error(e: &crate::services::llm_stream::LlmError) -> bool {
     match e {
         crate::services::llm_stream::LlmError::ApiError { body, .. } => {

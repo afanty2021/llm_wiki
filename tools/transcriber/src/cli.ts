@@ -588,7 +588,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
   const report = {
     startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(),
     files: targets.length, transcribed, skipped, failed,
-    jobStatus: job.status, jobId,
+    jobStatus: job.status, jobId, jobError: job.error ?? null,
     failedSources, exhaustedRetries,
     durationMinutes, transcribeMinutes,
     mediaHours: Math.round(mediaS / 36) / 100,
