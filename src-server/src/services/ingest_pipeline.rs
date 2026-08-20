@@ -298,26 +298,49 @@ async fn step1_analyze(
     let provider = crate::services::llm_stream::provider_for_project(state, project_id).await?;
     let prompt = include_str!("prompts/step1_analyze.txt");
     let system = "You analyze documents into structured knowledge for a personal wiki.";
-    let (response, usage, effective_max_tokens) =
-        step1_chat(&*provider, project_id, system, prompt, text).await?;
-    if let Some((pt, ct)) = usage {
-        tracing::info!(project_id, prompt_tokens = pt, completion_tokens = ct, "ingest step1 usage");
-        if ct >= effective_max_tokens {
-            tracing::warn!(project_id, "ingest step1 likely truncated (completion>=max_tokens)");
+    step1_analyze_via(&*provider, project_id, system, prompt, text).await
+}
+
+/// step1 的 LLM 调用 + 宽容解析（provider 注入，便于对重试语义做单元测试——同 step1_chat 模式）。
+/// 两次解析（直接 + fuzzy）均失败时自动重试一次完整 LLM 调用（瞬态模型输出兜底：
+/// 本地 omlx 内存压力下可能提前 EOS 输出半截 JSON 且 finish_reason=stop，重发同样请求即恢复）。
+/// 仅针对解析失败重试；LLM 传输错误沿用 step1_chat 既有语义（立即失败）。
+async fn step1_analyze_via(
+    provider: &dyn crate::services::llm_stream::StreamChatProvider,
+    project_id: i32,
+    system: &str,
+    prompt: &str,
+    text: &str,
+) -> Result<serde_json::Value, AppError> {
+    let (mut response, mut usage, mut effective_max_tokens) =
+        step1_chat(provider, project_id, system, prompt, text).await?;
+    for attempt in 1..=2 {
+        if attempt > 1 {
+            tracing::warn!(project_id, "step1 parse failed, retrying once (transient model output)");
+            let (r, u, m) = step1_chat(provider, project_id, system, prompt, text).await?;
+            response = r;
+            usage = u;
+            effective_max_tokens = m;
         }
-    }
-    // 宽容解析：先直接 from_str；失败则抠最外层 {...}（兼容 Qwen3 thinking 残留、
-    // markdown fence、前导文字）。与 llm_stream 的 enable_thinking=false 双保险。
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&response) {
-        return Ok(v);
-    }
-    if let Some(v) = extract_json_object(&response) {
-        tracing::warn!("step1: 直接 JSON 解析失败，fuzzy 提取兜底成功");
-        return Ok(v);
+        if let Some((pt, ct)) = usage {
+            tracing::info!(project_id, prompt_tokens = pt, completion_tokens = ct, "ingest step1 usage");
+            if ct >= effective_max_tokens {
+                tracing::warn!(project_id, "ingest step1 likely truncated (completion>=max_tokens)");
+            }
+        }
+        // 宽容解析：先直接 from_str；失败则抠最外层 {...}（兼容 Qwen3 thinking 残留、
+        // markdown fence、前导文字）。与 llm_stream 的 enable_thinking=false 双保险。
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&response) {
+            return Ok(v);
+        }
+        if let Some(v) = extract_json_object(&response) {
+            tracing::warn!("step1: 直接 JSON 解析失败，fuzzy 提取兜底成功");
+            return Ok(v);
+        }
     }
     let head: String = response.chars().take(80).collect();
     Err(AppError::LlmApiError(format!(
-        "step1 JSON parse failed（无有效 JSON 对象）| head: {:?}",
+        "step1 JSON parse failed（无有效 JSON 对象，retried once）| head: {:?}",
         head
     )))
 }
@@ -1109,6 +1132,76 @@ mod tests {
         let err = step1_chat(&provider, 614, "sys", "prompt", "doc").await.unwrap_err();
         assert!(matches!(err, AppError::LlmApiError(_)));
         assert_eq!(provider.calls.lock().unwrap().len(), 2, "exactly one retry, no more");
+    }
+
+    // ── step1 解析失败自动重试一次（瞬态模型输出兜底）──
+
+    /// 提前 EOS 的半截 JSON：合法前缀、在字符串值内部截断（无闭合 `}`）。
+    /// 直接 from_str 与 extract_json_object fuzzy 均无法恢复——复现 2026-08-18
+    /// 夜间 5/48 失败样本的形态（本地 omlx 内存压力 → finish_reason=stop 但内容不全）。
+    const PARTIAL_JSON: &str =
+        "{\"entities\":[{\"name\":\"Karpathy\",\"summary\":\"partial summary cut mid-stri";
+
+    #[tokio::test]
+    async fn step1_analyze_parse_retry_recovers_transient_partial_json() {
+        // 第一次：半截 JSON（解析失败）；第二次：完整合法 JSON → 成功。
+        // script 恰好 2 项：若实现不重试（1 次调用后直接报错）或重试超过一次（第 3 次调用 panic），测试都会失败。
+        let provider = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text(PARTIAL_JSON.into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 40 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text(
+                    "{\"entities\":[{\"name\":\"E1\"}],\"connections\":[],\"contradictions\":[]}".into(),
+                ),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 50 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let v = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap();
+        assert_eq!(v["entities"][0]["name"], "E1", "retry 响应必须是最终解析结果");
+        assert_eq!(
+            provider.calls.lock().unwrap().len(),
+            2,
+            "解析失败必须恰好重试一次 LLM 调用"
+        );
+        // 重试是全新的 step1_chat（同入参）：system_prompt / temperature / max_tokens 保持一致
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls[0].system_prompt, calls[1].system_prompt);
+        assert_eq!(calls[0].temperature, calls[1].temperature);
+        assert_eq!(calls[0].max_tokens, calls[1].max_tokens);
+    }
+
+    #[tokio::test]
+    async fn step1_analyze_parse_retry_gives_up_after_one_retry() {
+        // 两次都是半截 JSON → 失败；错误信息须提及 retried once；恰好 2 次调用（无第三次）。
+        let provider = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text(PARTIAL_JSON.into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 40 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text(PARTIAL_JSON.into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 40 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let err = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap_err();
+        match err {
+            AppError::LlmApiError(msg) => assert!(
+                msg.contains("retried once"),
+                "错误信息必须注明已重试一次，实际: {msg}"
+            ),
+            other => panic!("expected LlmApiError, got {:?}", other),
+        }
+        assert_eq!(
+            provider.calls.lock().unwrap().len(),
+            2,
+            "重试失败后不得有第三次调用"
+        );
     }
 
     #[test]
