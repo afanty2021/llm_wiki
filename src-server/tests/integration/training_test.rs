@@ -530,6 +530,328 @@ async fn bind_length_validation_matrix() {
     assert!(uname.chars().count() <= 50, "synthesized username must fit VARCHAR(50)");
 }
 
+// ============ M3 Task 3：GET /training/overview + weekly period_key 自算 ============
+
+use chrono::Datelike as _;
+
+static T3_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// unique() 同构，前缀 t3_（Task 3 数据隔离，防重复跑撞唯一约束）。
+fn unique_t3(tag: &str) -> String {
+    let n = T3_COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("t3_{}_{}_{}", tag, std::process::id(), n)
+}
+
+/// bind 一名教师（返回 (access_token, user_id)）；profile 随之落 pending。
+async fn bind_t3_teacher(server: &TestServer, wid: &str, name: &str) -> (String, i64) {
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": wid, "display_name": name}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let v = r.json::<serde_json::Value>();
+    (
+        v["access_token"].as_str().unwrap().to_string(),
+        v["user"]["id"].as_i64().unwrap(),
+    )
+}
+
+/// 当前 ISO 周串（与服务端同法：本地时区 iso_week，`YYYY-Www` 周数两位补零）。
+fn t3_iso_week_now() -> String {
+    let iw = chrono::Local::now().iso_week();
+    format!("{:04}-W{:02}", iw.year(), iw.week())
+}
+
+fn t3_parse_ts(v: &serde_json::Value) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(v.as_str().expect("timestamp as string"))
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}
+
+/// 共享 live DB（5433）：overview 列出全库 teacher_profiles，不断言总数，
+/// 按 wecom_userid 定位本测试教师（其他测试的 t6_/t7_ 教师同时在列属预期）。
+fn t3_find_teacher<'a>(teachers: &'a [serde_json::Value], wid: &str) -> &'a serde_json::Value {
+    teachers
+        .iter()
+        .find(|t| t["wecom_userid"] == wid)
+        .unwrap_or_else(|| panic!("teacher {wid} missing from overview"))
+}
+
+/// 鉴权矩阵：无 token → 401、错 token → 401（require_training_admin，同 /bind）；
+/// 正确 token → 200 且形状正确（teachers 数组 + generated_at 字符串）。
+#[tokio::test]
+async fn overview_requires_training_admin_token() {
+    let (server, _state, _admin, _member) = training_fixture_with_config_project("ovauth").await;
+
+    // 无 token → 401
+    let r = server.get("/api/v1/training/overview").await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    // 错 token → 401
+    let r = server
+        .get("/api/v1/training/overview")
+        .add_header("x-training-admin-token", "wrong")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    // 正确 token → 200（形状：teachers 数组 + generated_at 字符串）
+    let r = server
+        .get("/api/v1/training/overview")
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let v = r.json::<serde_json::Value>();
+    assert!(v["teachers"].as_array().is_some(), "teachers must be an array");
+    assert!(v["generated_at"].as_str().is_some(), "generated_at must be a string");
+}
+
+/// 聚合矩阵：两教师（A 有 plan+events、B 空）——
+/// A：plans_total=全期 plan 数、items 全期按状态精确计数、items_7d 仅近 7 天
+///   创建的 plan 的 items（注入 created_at 的既有模式：旧 plan 出窗、新 plan 在窗）、
+///   last_active_at=最新任意事件、last_ask_at=最新 ask 事件；
+/// B：无数据教师也在列——plans_total=0、items/items_7d 全零、last_* 为 null。
+#[tokio::test]
+async fn overview_aggregates_plans_items_events_per_teacher() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("ovagg").await;
+
+    let wid_a = unique_t3("ova");
+    let wid_b = unique_t3("ovb");
+    let (tok_a, uid_a) = bind_t3_teacher(&server, &wid_a, "甲老师").await;
+    let _b = bind_t3_teacher(&server, &wid_b, "乙老师").await;
+
+    // A 完成 onboarding（pending→surveyed，走既有 PUT /profile）
+    let r = server
+        .put("/api/v1/training/profile")
+        .add_header("authorization", bearer(&tok_a))
+        .json(&json!({"onboarding_state": "surveyed"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+
+    // 播种（learning_api_test 同款注入 created_at）：plan_old 10 天前（出 7d 窗）
+    // 2 items（pending/completed）；plan_new 1 天前（7d 窗内）2 items（viewed/completed）
+    let now = chrono::Utc::now();
+    let plan_old: i32 = sqlx::query_scalar(
+        "INSERT INTO learning_plans (user_id, title, origin, period_key, created_at) \
+         VALUES ($1, $2, 'chat', NULL, $3) RETURNING id",
+    )
+    .bind(uid_a as i32)
+    .bind("旧计划（出7d窗）")
+    .bind(now - chrono::Duration::days(10))
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    for (i, status) in ["pending", "completed"].iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO learning_items (plan_id, kind, target_ref, label, sort_order, status) \
+             VALUES ($1, 'wiki_page', $2, $3, $4, $5)",
+        )
+        .bind(plan_old)
+        .bind(format!("pages/t3-old-{i}.md"))
+        .bind(format!("old-{i}"))
+        .bind(i as i32)
+        .bind(status)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+    let _plan_new: i32 = sqlx::query_scalar(
+        "INSERT INTO learning_plans (user_id, title, origin, period_key, created_at) \
+         VALUES ($1, $2, 'chat', NULL, $3) RETURNING id",
+    )
+    .bind(uid_a as i32)
+    .bind("新计划（7d窗内）")
+    .bind(now - chrono::Duration::days(1))
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    for (i, status) in ["viewed", "completed"].iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO learning_items (plan_id, kind, target_ref, label, sort_order, status) \
+             VALUES ($1, 'wiki_page', $2, $3, $4, $5)",
+        )
+        .bind(_plan_new)
+        .bind(format!("pages/t3-new-{i}.md"))
+        .bind(format!("new-{i}"))
+        .bind(i as i32)
+        .bind(status)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+    // 事件：ask 2 小时前、view 30 分钟前（last_active 取任意最新、last_ask 仅 ask）
+    sqlx::query(
+        "INSERT INTO learning_events (user_id, event_type, payload, created_at) \
+         VALUES ($1, 'ask', $2, $3)",
+    )
+    .bind(uid_a as i32)
+    .bind(json!({"q": "分数怎么讲"}))
+    .bind(now - chrono::Duration::hours(2))
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO learning_events (user_id, event_type, payload, created_at) \
+         VALUES ($1, 'view', $2, $3)",
+    )
+    .bind(uid_a as i32)
+    .bind(json!({"p": "pages/t3-new-0.md"}))
+    .bind(now - chrono::Duration::minutes(30))
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let r = server
+        .get("/api/v1/training/overview")
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let v = r.json::<serde_json::Value>();
+    assert!(v["generated_at"].as_str().is_some());
+    let teachers = v["teachers"].as_array().expect("teachers array");
+
+    // A：全期 items=4（1 viewed/2 completed），7d 窗 items=2（1 viewed/1 completed）
+    let ta = t3_find_teacher(teachers, &wid_a);
+    assert_eq!(ta["display_name"], "甲老师");
+    assert_eq!(ta["onboarding_state"], "surveyed");
+    assert_eq!(ta["plans_total"], 2);
+    assert_eq!(ta["items"], json!({"total": 4, "viewed": 1, "completed": 2}));
+    assert_eq!(ta["items_7d"], json!({"total": 2, "viewed": 1, "completed": 1}));
+    let la = t3_parse_ts(&ta["last_active_at"]);
+    let lk = t3_parse_ts(&ta["last_ask_at"]);
+    assert!(
+        (la - (now - chrono::Duration::minutes(30))).num_seconds().abs() <= 1,
+        "last_active_at = latest event of any type"
+    );
+    assert!(
+        (lk - (now - chrono::Duration::hours(2))).num_seconds().abs() <= 1,
+        "last_ask_at = latest ask event"
+    );
+
+    // B：空教师也在列，全零 / null
+    let tb = t3_find_teacher(teachers, &wid_b);
+    assert_eq!(tb["display_name"], "乙老师");
+    assert_eq!(tb["onboarding_state"], "pending");
+    assert_eq!(tb["plans_total"], 0);
+    assert_eq!(tb["items"], json!({"total": 0, "viewed": 0, "completed": 0}));
+    assert_eq!(tb["items_7d"], json!({"total": 0, "viewed": 0, "completed": 0}));
+    assert_eq!(tb["last_active_at"], serde_json::Value::Null);
+    assert_eq!(tb["last_ask_at"], serde_json::Value::Null);
+}
+
+/// period_key 三分支（origin=weekly）：
+/// ① 省略 → 201 落库值 == 服务端自算当周串（周界竞态由 before/after 双值兜底）；
+///   显式给出 == 当周（即 ① 的落库值）→ 通过校验且撞唯一索引走幂等 200 返既有；
+/// ② 给错周（格式合法但 ≠ 当周）→ 400 且 body 含 expected_period_key；
+/// ③ 格式非法（非 YYYY-Www）→ 400；被拒请求零落库。
+/// 另证 origin=chat 不受周校验影响（period_key 可选透传，现状不变）。
+#[tokio::test]
+async fn weekly_plan_period_key_server_computed_and_validated() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("pk3").await;
+    let wid = unique_t3("pkw");
+    let (teacher, uid) = bind_t3_teacher(&server, &wid, "周老师").await;
+
+    // transcripts/ 前缀免实体页（transcriber 命名空间，learning_api_test 同款）
+    let tr = format!("transcripts/t3-{}.md", unique_t3("tr"));
+    let mk = |pk: Option<&str>| {
+        json!({"title": "M3 周计划", "reason": "周报 cron 生成", "origin": "weekly",
+               "period_key": pk,
+               "items": [{"kind": "wiki_page", "target_ref": tr.clone(), "label": "a"}]})
+    };
+
+    // ① 省略 → 201，落库 = 服务端自算当周
+    let pk_before = t3_iso_week_now();
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&mk(None))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED, "omitted period_key self-computes and creates");
+    let v = r.json::<serde_json::Value>();
+    let plan_id = v["plan"]["id"].as_i64().unwrap();
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT period_key FROM learning_plans WHERE id = $1")
+            .bind(plan_id as i32)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    let pk_after = t3_iso_week_now();
+    assert!(
+        stored == Some(pk_before.clone()) || stored == Some(pk_after.clone()),
+        "stored period_key must be the server-computed current ISO week \
+         (got {stored:?}, before={pk_before}, after={pk_after})"
+    );
+    assert_eq!(v["plan"]["period_key"], json!(stored), "response reflects the computed key");
+
+    // 显式给出 == 当周（= ① 落库值）→ 校验通过；撞唯一索引 → 幂等 200 同 plan id
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&mk(stored.as_deref()))
+        .await;
+    if r.status_code() == StatusCode::OK {
+        assert_eq!(r.json::<serde_json::Value>()["plan"]["id"], plan_id, "idempotent re-create");
+    } else {
+        // 唯一合法的非 200：测试恰跨 ISO 周界（服务端当周翻页 ≠ ① 的落库值）
+        assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+        assert_ne!(t3_iso_week_now(), stored.clone().unwrap(), "400 only legal on week flip");
+    }
+
+    // ② 给错周（格式合法但 ≠ 当周）→ 400 且 body 含 expected_period_key（供 agent 改口重试）
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&mk(Some("1999-W01")))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "wrong week must 400");
+    let body = r.text();
+    assert!(
+        body.contains("expected_period_key"),
+        "400 body must carry expected_period_key: {body}"
+    );
+    assert!(
+        body.contains(&pk_after) || body.contains(&t3_iso_week_now()),
+        "expected_period_key value = current week: {body}"
+    );
+
+    // ③ 格式非法（非 YYYY-Www 形状）→ 400
+    for bad in ["2026-W3", "2026W34", "2026-W345", "x026-W34"] {
+        let r = server
+            .post("/api/v1/training/plans")
+            .add_header("authorization", bearer(&teacher))
+            .json(&mk(Some(bad)))
+            .await;
+        assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "invalid format must 400: {bad}");
+    }
+
+    // 被拒零落库：教师名下仍只有 ① 的那一条 weekly plan
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM learning_plans WHERE user_id = $1 AND origin = 'weekly'",
+    )
+    .bind(uid as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(n, 1, "rejected creates leave no weekly plans");
+
+    // origin=chat 行为不变：period_key 可选透传，错周字符串也原样落库（不做周校验）
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&json!({"title": "chat 计划", "origin": "chat", "period_key": "1999-W01",
+                      "items": [{"kind": "wiki_page", "target_ref": tr, "label": "c"}]}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let chat_id = r.json::<serde_json::Value>()["plan"]["id"].as_i64().unwrap();
+    let stored_chat: Option<String> =
+        sqlx::query_scalar("SELECT period_key FROM learning_plans WHERE id = $1")
+            .bind(chat_id as i32)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(stored_chat.as_deref(), Some("1999-W01"), "chat passthrough unchanged");
+}
+
 /// Task 6 集成冒烟：bind 产出的 access token（内部带 typ="access"）调认证端点 → 200；
 /// 同 secret 签的 plan_link token 调同一 /api 端点 → 401（typ 隔离，/t/ 凭证不可当 API 凭证）。
 #[tokio::test]

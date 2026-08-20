@@ -12,9 +12,12 @@
 //!   模型/聊天应用的截断免疫。短码不过期（capability URL，与 /t/ token 同信任
 //!   模型）：plan 存活期间每次点击由 GET /s/:code 现签新 7d /t/ token，链接
 //!   永不失效；撤销 = 删 short_links 行或删 plan（FK 级联）。
+//! - M3 Task 3：GET /overview（管理总览逐教师聚合，require_training_admin）+
+//!   plans 创建 origin="weekly" 分支的 period_key 服务端自算（省略→自算落库；
+//!   格式合法但≠当周→400 含 expected_period_key；格式非法→400）。
 
 use axum::{extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, routing::{get, post}, Json, Router};
-use chrono::Duration as ChronoDuration;
+use chrono::{Datelike as _, Duration as ChronoDuration};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -35,6 +38,7 @@ pub fn training_routes() -> Router<AppState> {
         .route("/plans/:id", get(get_plan))
         .route("/plans/:id/link", post(regen_plan_link))
         .route("/items/:id/complete", post(complete_item))
+        .route("/overview", get(get_overview))
 }
 
 #[derive(Deserialize)]
@@ -328,6 +332,132 @@ async fn bind(
         refresh_token,
         expires_in: access_ttl_secs,
         user,
+    }))
+}
+
+// ============ M3 Task 3：GET /api/v1/training/overview（管理总览） ============
+
+/// overview 直读行（单条聚合 SQL）。三个**预聚合子查询**分别算 plans/items 全期、
+/// items_7d、事件时间——若平铺 JOIN（plans×items）×（7d plans×items）×events，
+/// 行间笛卡尔积会虚增全部 COUNT；子查询按 user_id 各自 GROUP BY 后再 LEFT JOIN，
+/// 教师侧无扇出（每教师恰一行）。
+#[derive(sqlx::FromRow)]
+struct OverviewRow {
+    wecom_userid: String,
+    display_name: Option<String>,
+    onboarding_state: String,
+    plans_total: i64,
+    items_total: i64,
+    items_viewed: i64,
+    items_completed: i64,
+    items_7d_total: i64,
+    items_7d_viewed: i64,
+    items_7d_completed: i64,
+    last_active_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_ask_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// items_7d 口径（评审 sub-80）：learning_items 无 created_at 列，代理口径 =
+/// **近 7 天创建的 plan 的 items**（子查询 p7：`learning_plans.created_at >=
+/// NOW() - INTERVAL '7 days'` 再 JOIN items 按状态计数）——"本周新建清单里的
+/// 条目"，与周报语义自洽。
+const OVERVIEW_SQL: &str = "\
+SELECT tp.wecom_userid, tp.display_name, tp.onboarding_state, \
+       COALESCE(pi.plans_total, 0) AS plans_total, \
+       COALESCE(pi.items_total, 0) AS items_total, \
+       COALESCE(pi.items_viewed, 0) AS items_viewed, \
+       COALESCE(pi.items_completed, 0) AS items_completed, \
+       COALESCE(p7.items_total, 0) AS items_7d_total, \
+       COALESCE(p7.items_viewed, 0) AS items_7d_viewed, \
+       COALESCE(p7.items_completed, 0) AS items_7d_completed, \
+       ev.last_active_at, ev.last_ask_at \
+FROM teacher_profiles tp \
+LEFT JOIN ( \
+  SELECT p.user_id, \
+         COUNT(DISTINCT p.id) AS plans_total, \
+         COUNT(i.id) AS items_total, \
+         COUNT(i.id) FILTER (WHERE i.status = 'viewed') AS items_viewed, \
+         COUNT(i.id) FILTER (WHERE i.status = 'completed') AS items_completed \
+  FROM learning_plans p \
+  LEFT JOIN learning_items i ON i.plan_id = p.id \
+  GROUP BY p.user_id \
+) pi ON pi.user_id = tp.user_id \
+LEFT JOIN ( \
+  SELECT p.user_id, \
+         COUNT(i.id) AS items_total, \
+         COUNT(i.id) FILTER (WHERE i.status = 'viewed') AS items_viewed, \
+         COUNT(i.id) FILTER (WHERE i.status = 'completed') AS items_completed \
+  FROM learning_plans p \
+  LEFT JOIN learning_items i ON i.plan_id = p.id \
+  WHERE p.created_at >= NOW() - INTERVAL '7 days' \
+  GROUP BY p.user_id \
+) p7 ON p7.user_id = tp.user_id \
+LEFT JOIN ( \
+  SELECT user_id, \
+         MAX(created_at) AS last_active_at, \
+         MAX(created_at) FILTER (WHERE event_type = 'ask') AS last_ask_at \
+  FROM learning_events \
+  GROUP BY user_id \
+) ev ON ev.user_id = tp.user_id \
+ORDER BY tp.wecom_userid";
+
+/// 单教师总览条目（items 复用 ItemCounts：全期 / 近 7 天创建的 plan 的 items）。
+#[derive(Serialize)]
+pub struct TeacherOverview {
+    pub wecom_userid: String,
+    pub display_name: Option<String>,
+    pub onboarding_state: String,
+    pub plans_total: i64,
+    pub items: ItemCounts,
+    pub items_7d: ItemCounts,
+    pub last_active_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_ask_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Serialize)]
+pub struct OverviewResponse {
+    pub teachers: Vec<TeacherOverview>,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// GET /api/v1/training/overview — 管理总览（require_training_admin，同 /bind；
+/// svc-wecom 管理端 / 周报 cron 消费）。全库教师逐人聚合：档案字段 + plans_total
+/// + items（全期，按 learning_items.status 精确计数）+ items_7d（口径见
+/// OVERVIEW_SQL 注释）+ last_active_at（最新任意事件）/ last_ask_at（最新 ask）。
+/// **无数据教师也列出**（LEFT JOIN 预聚合子查询，空态全 0 / null）。单条语句即
+/// 单一快照；generated_at 为处理时刻。
+async fn get_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<OverviewResponse>, AppError> {
+    require_training_admin(&state, &headers)?;
+    let rows = sqlx::query_as::<_, OverviewRow>(OVERVIEW_SQL)
+        .fetch_all(&state.db)
+        .await?;
+    let teachers = rows
+        .into_iter()
+        .map(|r| TeacherOverview {
+            wecom_userid: r.wecom_userid,
+            display_name: r.display_name,
+            onboarding_state: r.onboarding_state,
+            plans_total: r.plans_total,
+            items: ItemCounts {
+                total: r.items_total,
+                viewed: r.items_viewed,
+                completed: r.items_completed,
+            },
+            items_7d: ItemCounts {
+                total: r.items_7d_total,
+                viewed: r.items_7d_viewed,
+                completed: r.items_7d_completed,
+            },
+            last_active_at: r.last_active_at,
+            last_ask_at: r.last_ask_at,
+        })
+        .collect();
+    Ok(Json(OverviewResponse {
+        teachers,
+        generated_at: chrono::Utc::now(),
     }))
 }
 
@@ -744,6 +874,31 @@ async fn validate_plan_items(state: &AppState, items: &[PlanItemInput]) -> Resul
     Ok(())
 }
 
+/// 当前 ISO 周（服务器本地时区）：`YYYY-Www`，周数两位补零（如 2026-W34）。
+/// `iso_week().year()` 是 ISO 周历年——跨年周（如 2027-01-03 ∈ 2026-W53）不取
+/// 日历年，否则跨年周会算错一年。
+fn current_period_key() -> String {
+    let iw = chrono::Local::now().iso_week();
+    format!("{:04}-W{:02}", iw.year(), iw.week())
+}
+
+/// period_key 形状校验（weekly 分支）：`YYYY-Www` = 4 位年 + "-W" + 恰 2 位周。
+/// 只验形状不验周值范围（01-53）——周值合法性由「必须 == 当周」比对兜底
+/// （如 2026-W99 形状合法但必 ≠ 当周 → 走 mismatch 400 同样被拒）。
+/// 纯 ASCII 判定，字节索引安全。
+fn is_period_key_format(pk: &str) -> bool {
+    let b = pk.as_bytes();
+    b.len() == 8
+        && b[0].is_ascii_digit()
+        && b[1].is_ascii_digit()
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit()
+        && b[4] == b'-'
+        && b[5] == b'W'
+        && b[6].is_ascii_digit()
+        && b[7].is_ascii_digit()
+}
+
 /// POST /api/v1/training/plans — 创建学习计划（access，本人）。
 /// 事务：plan + items + plan_created 事件 + short_links 短码原子落库；
 /// 响应 201 {plan, items, link}，link 为 `/s/<code>`（10-char 短链；短码不过期，
@@ -756,6 +911,12 @@ async fn validate_plan_items(state: &AppState, items: &[PlanItemInput]) -> Resul
 /// 但 9b 短码照常现签：capability 行只增不减，两枚 code 均可跳转）。
 /// READ COMMITTED 下 DO NOTHING 阻塞至 winner 提交，随后语句快照可见该行，
 /// 并发同 period_key 创建收敛到同一 id，绝不 500。
+///
+/// period_key 权威源（M3 Task 3，仅 origin=="weekly"）：**服务端自算当周**。
+/// LLM 手算 ISO 周（年界归属/周一起始）是易错算术，错一字符即绕开上方唯一
+/// 索引的幂等语义 → `DO NOTHING` 静默失效、重复建单。省略 → 自算落库；
+/// 显式给出且格式合法但 ≠ 当周 → 400（message 含 `expected_period_key=...`，
+/// agent 改口重试）；格式非法 → 400。origin=="chat" 现状不变（可选透传）。
 async fn create_plan(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -783,6 +944,31 @@ async fn create_plan(
             return Err(AppError::BadRequest("period_key exceeds 20 characters".into()));
         }
     }
+    // period_key 三分支（仅 weekly；见 create_plan 文档注释的权威源说明）。
+    // 空白串视同省略（JSON null/""/缺省对"未给出"语义等价——LLM 显然没算周，
+    // 自算兜底优于 400 来回）；trim 后非空才进入格式/当周校验。
+    let period_key = if req.origin == "weekly" {
+        let expected = current_period_key();
+        match req.period_key.as_deref().map(str::trim) {
+            None | Some("") => Some(expected),
+            Some(pk) => {
+                if !is_period_key_format(pk) {
+                    return Err(AppError::BadRequest(format!(
+                        "invalid period_key format: {pk} (expected YYYY-Www, e.g. 2026-W34)"
+                    )));
+                }
+                if pk != expected {
+                    return Err(AppError::BadRequest(format!(
+                        "period_key mismatch: got {pk}, expected_period_key={expected} \
+                         (server computes the current ISO week; omit period_key or retry with it)"
+                    )));
+                }
+                Some(pk.to_string())
+            }
+        }
+    } else {
+        req.period_key.clone()
+    };
     validate_plan_items(&state, &req.items).await?;
 
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
@@ -797,7 +983,7 @@ async fn create_plan(
     .bind(req.title.trim())
     .bind(&req.reason)
     .bind(&req.origin)
-    .bind(&req.period_key)
+    .bind(&period_key)
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -840,7 +1026,7 @@ async fn create_plan(
         .bind(serde_json::json!({
             "plan_id": plan_id,
             "origin": req.origin,
-            "period_key": req.period_key,
+            "period_key": period_key,
             "item_count": req.items.len(),
         }))
         .execute(&mut *tx)
@@ -851,7 +1037,7 @@ async fn create_plan(
                 title: req.title.trim().to_string(),
                 reason: req.reason.clone(),
                 origin: req.origin.clone(),
-                period_key: req.period_key.clone(),
+                period_key: period_key.clone(),
                 status: "active".into(),
                 created_at,
             },
@@ -865,7 +1051,7 @@ async fn create_plan(
         ))
         .bind(user_id)
         .bind(&req.origin)
-        .bind(&req.period_key)
+        .bind(&period_key)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| {
@@ -1076,5 +1262,44 @@ mod tests {
             seen.insert(code);
         }
         assert_eq!(seen.len(), 100, "100 samples all distinct (collision ~0 at 62^10)");
+    }
+
+    /// period_key 形状（lib 纯函数）：恰 `YYYY-Www`（4 位年 + "-W" + 恰 2 位周）
+    /// 通过；缺横杠/一位周/三位周/非数字年/小写 w/空白/空串拒绝。
+    #[test]
+    fn period_key_format_shape() {
+        for ok in ["2026-W34", "1999-W01", "2026-W53", "0001-W01"] {
+            assert!(is_period_key_format(ok), "valid: {ok}");
+        }
+        for bad in [
+            "2026-W3",     // 一位周
+            "2026W34",     // 缺横杠
+            "2026-W345",   // 三位周
+            "x026-W34",    // 年非数字
+            "2026-w34",    // 小写 w
+            " 2026-W34",   // 前导空白
+            "2026-W34 ",   // 尾随空白
+            "",            // 空串
+        ] {
+            assert!(!is_period_key_format(bad), "invalid: {bad:?}");
+        }
+    }
+
+    /// 当前周串 == 独立按 chrono 本地时区 ISO 周计算（含 ISO 周历年语义）。
+    /// 周界竞态（测试恰跨周翻页）重试兜底：三次全不一致才判失败。
+    #[test]
+    fn current_period_key_matches_chrono_iso_week() {
+        use chrono::Datelike as _;
+        for _ in 0..3 {
+            let pk = current_period_key();
+            let iw = chrono::Local::now().iso_week();
+            let expect = format!("{:04}-W{:02}", iw.year(), iw.week());
+            if pk == expect {
+                assert_eq!(pk.len(), 8);
+                assert_eq!(&pk[4..6], "-W", "dash + W at fixed offsets");
+                return;
+            }
+        }
+        panic!("current_period_key never matched chrono iso_week across 3 attempts (week flip race?)");
     }
 }

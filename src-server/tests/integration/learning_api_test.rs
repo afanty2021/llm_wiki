@@ -23,6 +23,17 @@ fn bearer(token: &str) -> String {
     format!("Bearer {}", token)
 }
 
+/// 当前 ISO 周串（与服务端 weekly period_key 自算同法：本地时区，`YYYY-Www`
+/// 周数两位补零）。M3 Task 3 起 origin="weekly" 的 period_key 必须等于当周
+/// （服务端权威源，错周/格式非法 400）——本文件经 **API** 建 weekly plan 的
+/// 测试一律动态取当周（硬编码周串自次周起恒 400）；经 SQL 直插的播种类
+/// 不经 API 校验，硬编码串仍可用。
+fn current_iso_week() -> String {
+    use chrono::Datelike as _;
+    let iw = chrono::Local::now().iso_week();
+    format!("{:04}-W{:02}", iw.year(), iw.week())
+}
+
 /// 建 owner→team→project（app1）后，用「改 config 后 create_app」注入 training 段
 /// 得最终 server；再 bind 一名教师（profile 随之落 pending）。
 /// 另注册一名普通用户（无 profile）。返回 (server, state, teacher_token, teacher_id, plain_token)。
@@ -621,10 +632,12 @@ async fn plan_period_key_idempotent_second_create_returns_existing() {
     let (server, state, teacher, teacher_id, _plain) = learning_fixture("pkey").await;
     let page_path = format!("concepts/idem-{}.md", unique("pg"));
     seed_wiki_page(&state, &page_path).await;
+    // M3：weekly period_key 服务端自算当周（错周 400）——动态取当周保幂等语义可测
+    let pk = current_iso_week();
 
     let first = plan_body(
         "weekly",
-        Some("2026-W33"),
+        Some(&pk),
         json!([{"kind": "wiki_page", "target_ref": page_path, "label": "a"}]),
     );
     let r = server
@@ -640,7 +653,7 @@ async fn plan_period_key_idempotent_second_create_returns_existing() {
     // 二次（不同标题/items）→ 200 同 id，内容保持既有
     let second = plan_body(
         "weekly",
-        Some("2026-W33"),
+        Some(&pk),
         json!([
             {"kind": "wiki_page", "target_ref": page_path, "label": "x"},
             {"kind": "wiki_page", "target_ref": page_path, "label": "y"}
@@ -676,7 +689,8 @@ async fn plan_period_key_idempotent_second_create_returns_existing() {
         .unwrap();
     assert_eq!(n_items, 1);
 
-    // 同 period_key 不同 origin → 不冲突（索引含 origin），201 新 plan
+    // 同 period_key 不同 origin → 不冲突（索引含 origin），201 新 plan。
+    // origin=chat 不做周校验（M3 仅 weekly 自算）——任意串（含非当周）原样透传
     let mut other = plan_body(
         "chat",
         Some("2026-W33"),
@@ -710,7 +724,9 @@ async fn plan_period_key_concurrent_converges_without_500() {
     let (server, state, teacher, teacher_id, _plain) = learning_fixture("conc").await;
     let page_path = format!("concepts/conc-{}.md", unique("pg"));
     seed_wiki_page(&state, &page_path).await;
-    let pk = unique("wk"); // ≤20 chars：t8_wk_{pid}_{n}
+    // M3：weekly period_key 必须等于服务端自算当周（格式非法/错周均 400）——
+    // 动态取当周（unique() 任意串过不了新校验）；4 个并发请求共用同一 key
+    let pk = current_iso_week();
 
     // TestServer 非 Clone，但请求方法取 &self——4 个借用同一 server 的 future 并发打点
     let bodies: Vec<serde_json::Value> = (0..4)
