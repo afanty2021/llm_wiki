@@ -18,6 +18,11 @@ import {
   type ApiReviewsResponse,
 } from "./api-client.js"
 import {
+  IdentityMismatchError,
+  IdentityUnavailableError,
+  extractRequestMeta,
+} from "./identity.js"
+import {
   DEFAULT_PUBLIC_T_BASE,
   MAX_TEXT_BYTES,
   TeacherCredentialStore,
@@ -212,13 +217,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = asObject(request.params.arguments ?? {})
+  // Hermes（T1 补丁）随 tools/call 注入的会话身份 _meta：低层 setRequestHandler 的
+  // request.params._meta 直接可取（SDK CallToolRequestSchema 的 _meta 为 $loose zod
+  // 对象，hermes_* 键透传不剥离——r2 评审实测结论，identity.test.ts 有链路断言）。
+  const meta = extractRequestMeta(request.params._meta)
   try {
     if (apiForm === "src-server") {
       const handler = getSrcHandlers().get(request.params.name)
       if (!handler) {
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`)
       }
-      return await handler(args)
+      return await handler(args, meta)
     }
     switch (request.params.name) {
       case "llm_wiki_status": {
@@ -283,6 +292,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (err) {
     if (err instanceof McpError) throw err
+    if (err instanceof IdentityMismatchError || err instanceof IdentityUnavailableError) {
+      // 身份硬拒：stderr 留痕（Step 4 对抗实测可查），错误原样回传客户端——不降级不重试
+      console.error(`[identity] rejected tools/call ${request.params.name}: ${err.message}`)
+      throw new McpError(
+        err instanceof IdentityMismatchError ? ErrorCode.InvalidParams : ErrorCode.InvalidRequest,
+        err.message,
+      )
+    }
     if (err instanceof ToolArgumentError) {
       throw new McpError(ErrorCode.InvalidParams, err.message)
     }

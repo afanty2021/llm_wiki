@@ -93,7 +93,7 @@ function makeHandlers(fetchImpl: typeof fetch, opts: { tbase?: string } = {}) {
 }
 
 function toolText(result: { content: Array<{ type: string; text: string }> }): string {
-  assert.equal(result.content.length, 1)
+  // 首块 = 原负载（identity 硬闸后 src-server 工具会在尾部追加 identity_source 块，见 identity.test.ts）
   assert.equal(result.content[0]?.type, "text")
   return result.content[0]!.text
 }

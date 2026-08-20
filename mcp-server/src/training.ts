@@ -8,6 +8,9 @@
  * - 10 个 src-server 工具：8 个 teacher_tutor_* + 重写的 llm_wiki_search /
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
  *   project_id 取 env TRAINING__PROJECT_ID；token 全部由 store 注入，绝不进工具返回值。
+ * - 身份硬闸（M3 T2）：10 工具统一入口先 resolveIdentity(meta, args.wecom_userid)——
+ *   wecom 会话身份（Hermes 注入的 _meta）优先，参数身份仅系统模式可用；返回值追加
+ *   identity_source（"user"|"system"）。详见 identity.ts。
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
@@ -18,6 +21,16 @@ import {
   type ApiAuthResponse,
   type ApiSearchResult,
 } from "./api-client.js"
+import {
+  IdentityMode,
+  MetaLike,
+  resolveIdentity,
+  ToolArgumentError,
+} from "./identity.js"
+
+// ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
+// 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
+export { ToolArgumentError }
 
 export const DEFAULT_TEACHER_STORE_PATH = path.join(homedir(), ".llm-wiki-mcp", "teachers.json")
 export const DEFAULT_PUBLIC_T_BASE = "http://127.0.0.1:8080"
@@ -153,8 +166,6 @@ export class TeacherCredentialStore {
 
 // ── 工具定义与 handler ──
 
-export class ToolArgumentError extends Error {}
-
 export interface ToolDefinition {
   name: string
   description: string
@@ -168,7 +179,7 @@ export interface ToolDefinition {
 
 export type ToolOutput = { content: Array<{ type: "text"; text: string }> }
 
-export type SrcToolHandler = (args: Record<string, unknown>) => Promise<ToolOutput>
+export type SrcToolHandler = (args: Record<string, unknown>, meta?: MetaLike) => Promise<ToolOutput>
 
 export interface SrcServerHandlerDeps {
   client: LlmWikiApiClient
@@ -181,7 +192,7 @@ export interface SrcServerHandlerDeps {
 
 const wecomUseridProperty = {
   type: "string",
-  description: "教师的企业微信 userid（访问凭证由服务端凭证库注入，无需也不可传入 token）",
+  description: "教师的企业微信 userid。正常会话无需提供（身份已由系统会话锁定）；仅系统调用（cron/运维/cli）必须显式提供；若提供与会话身份不符将被拒绝（凭证由服务端凭证库注入，无需也不可传入 token）",
 }
 
 /** src-server 形态下重写的 2 个通用工具（project_id 来自 env，token 经 store 注入）。 */
@@ -197,7 +208,7 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
           query: { type: "string", description: "Search query." },
           limit: { type: "number", description: "Maximum results (server clamps 1..50, default 20)." },
         },
-        required: ["wecom_userid", "query"],
+        required: ["query"],
         additionalProperties: false,
       },
     },
@@ -210,7 +221,7 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
           wecom_userid: wecomUseridProperty,
           path: { type: "string", description: "Project-relative file path, for example wiki/index.md." },
         },
-        required: ["wecom_userid", "path"],
+        required: ["path"],
         additionalProperties: false,
       },
     },
@@ -226,7 +237,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: { wecom_userid: wecomUseridProperty },
-        required: ["wecom_userid"],
         additionalProperties: false,
       },
     },
@@ -244,7 +254,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           interests: { type: "array", items: { type: "string" }, description: "兴趣点" },
           onboarding_state: { type: "string", enum: ["pending", "surveyed"] },
         },
-        required: ["wecom_userid"],
         additionalProperties: false,
       },
     },
@@ -257,7 +266,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           wecom_userid: wecomUseridProperty,
           payload: { type: "object", description: "提问上下文（缺省 {}）" },
         },
-        required: ["wecom_userid"],
         additionalProperties: false,
       },
     },
@@ -289,7 +297,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
             },
           },
         },
-        required: ["wecom_userid", "title", "origin", "items"],
+        required: ["title", "origin", "items"],
         additionalProperties: false,
       },
     },
@@ -302,7 +310,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           wecom_userid: wecomUseridProperty,
           status: { type: "string", enum: ["active", "archived"] },
         },
-        required: ["wecom_userid"],
         additionalProperties: false,
       },
     },
@@ -315,7 +322,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           wecom_userid: wecomUseridProperty,
           item_id: { type: "number", description: "learning_items.id" },
         },
-        required: ["wecom_userid", "item_id"],
+        required: ["item_id"],
         additionalProperties: false,
       },
     },
@@ -328,7 +335,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           wecom_userid: wecomUseridProperty,
           plan_id: { type: "number", description: "learning_plans.id" },
         },
-        required: ["wecom_userid", "plan_id"],
+        required: ["plan_id"],
         additionalProperties: false,
       },
     },
@@ -338,7 +345,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: { wecom_userid: wecomUseridProperty },
-        required: ["wecom_userid"],
         additionalProperties: false,
       },
     },
@@ -357,6 +363,17 @@ function textResult(text: string): ToolOutput {
 
 function jsonResult(value: unknown): ToolOutput {
   return textResult(JSON.stringify(value, null, 2))
+}
+
+/**
+ * 工具返回值追加 identity_source（content 数组追加一块 text，文本 `identity_source: "user"`）。
+ * 其余形状不变：原 content[0] 逐字节保留（JSON 载荷可照常解析；文本工具原文不动），
+ * 顶层数组载荷（plan_list）也无需改形状。客户端按 MCP 惯例拼接 text 块即对模型可见。
+ */
+function withIdentitySource(result: ToolOutput, mode: IdentityMode): ToolOutput {
+  return {
+    content: [...result.content, { type: "text" as const, text: `identity_source: ${JSON.stringify(mode)}` }],
+  }
 }
 
 function stringArg(value: unknown, name: string): string {
@@ -415,31 +432,34 @@ async function callWithAccess<T>(
 export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string, SrcToolHandler> {
   const handlers = new Map<string, SrcToolHandler>()
 
-  handlers.set("llm_wiki_search", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("llm_wiki_search", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const query = stringArg(args.query, "query")
     const limit = optionalNumberArg(args.limit, "limit")
-    const search = await callWithAccess(deps, wecomUserid, (token) =>
+    const search = await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.searchSrc(deps.getProjectId(), query, { limit, token }))
-    return textResult(formatSearchResults(query, search))
+    return withIdentitySource(textResult(formatSearchResults(query, search)), ident.mode)
   })
 
-  handlers.set("llm_wiki_read_file", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("llm_wiki_read_file", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const relPath = stringArg(args.path, "path")
-    const { path: filePath, content } = await callWithAccess(deps, wecomUserid, (token) =>
+    const { path: filePath, content } = await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.readFileSrc(deps.getProjectId(), relPath, { token }))
-    return textResult(`# ${filePath}\n\n${truncateText(content, MAX_TEXT_BYTES)}`)
+    return withIdentitySource(
+      textResult(`# ${filePath}\n\n${truncateText(content, MAX_TEXT_BYTES)}`),
+      ident.mode,
+    )
   })
 
-  handlers.set("teacher_tutor_profile_get", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
-    return jsonResult(await callWithAccess(deps, wecomUserid, (token) =>
-      deps.client.trainingProfileGet(token)))
+  handlers.set("teacher_tutor_profile_get", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingProfileGet(token))), ident.mode)
   })
 
-  handlers.set("teacher_tutor_profile_put", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("teacher_tutor_profile_put", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const body: Record<string, unknown> = {}
     const display_name = optionalStringArg(args.display_name, "display_name")
     const subject = optionalStringArg(args.subject, "subject")
@@ -456,19 +476,19 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     if (Object.keys(body).length === 0) {
       throw new ToolArgumentError("at least one profile field is required")
     }
-    return jsonResult(await callWithAccess(deps, wecomUserid, (token) =>
-      deps.client.trainingProfilePut(token, body)))
+    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingProfilePut(token, body))), ident.mode)
   })
 
-  handlers.set("teacher_tutor_record_ask", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("teacher_tutor_record_ask", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const payload = args.payload !== undefined ? args.payload : {}
-    return jsonResult(await callWithAccess(deps, wecomUserid, (token) =>
-      deps.client.trainingEventAsk(token, payload)))
+    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingEventAsk(token, payload))), ident.mode)
   })
 
-  handlers.set("teacher_tutor_plan_create", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("teacher_tutor_plan_create", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const body: Record<string, unknown> = {
       title: stringArg(args.title, "title"),
       origin: stringArg(args.origin, "origin"),
@@ -494,35 +514,35 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     if (reason !== undefined) body.reason = reason
     if (period_key !== undefined) body.period_key = period_key
 
-    const response = await callWithAccess(deps, wecomUserid, (token) =>
+    const response = await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.trainingPlanCreate(token, body))
     // link 升级为完整 URL（PUBLIC_T_BASE + /t/<token>）
     if (typeof response.link === "string" && response.link !== "") {
       response.link = joinTLink(deps.getPublicTBase(), response.link)
     }
-    return jsonResult(response)
+    return withIdentitySource(jsonResult(response), ident.mode)
   })
 
-  handlers.set("teacher_tutor_plan_list", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("teacher_tutor_plan_list", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const status = optionalStringArg(args.status, "status")
-    return jsonResult(await callWithAccess(deps, wecomUserid, (token) =>
-      deps.client.trainingPlanList(token, status)))
+    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingPlanList(token, status))), ident.mode)
   })
 
-  handlers.set("teacher_tutor_item_complete", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("teacher_tutor_item_complete", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const itemId = optionalNumberArg(args.item_id, "item_id")
     if (itemId === undefined) throw new ToolArgumentError("item_id is required")
-    return jsonResult(await callWithAccess(deps, wecomUserid, (token) =>
-      deps.client.trainingItemComplete(token, itemId)))
+    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingItemComplete(token, itemId))), ident.mode)
   })
 
-  handlers.set("teacher_tutor_plan_link", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
+  handlers.set("teacher_tutor_plan_link", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const planId = optionalNumberArg(args.plan_id, "plan_id")
     if (planId === undefined) throw new ToolArgumentError("plan_id is required")
-    const response = await callWithAccess(deps, wecomUserid, (token) =>
+    const response = await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.trainingPlanLink(token, planId))
     // link 空值守卫（评审 #4）：与 plan_create 同形状校验——服务端未回 link
     // （响应形状意外/网关截断）时抛清晰错误，绝不把裸 base URL 当可用链接发给 LLM。
@@ -531,13 +551,13 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
         `teacher_tutor_plan_link: server returned no link for plan ${planId} (got ${JSON.stringify(response)})`,
       )
     }
-    return jsonResult({ link: joinTLink(deps.getPublicTBase(), response.link) })
+    return withIdentitySource(jsonResult({ link: joinTLink(deps.getPublicTBase(), response.link) }), ident.mode)
   })
 
-  handlers.set("teacher_tutor_progress", async (args) => {
-    const wecomUserid = stringArg(args.wecom_userid, "wecom_userid")
-    return jsonResult(await callWithAccess(deps, wecomUserid, (token) =>
-      deps.client.trainingProgress(token)))
+  handlers.set("teacher_tutor_progress", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingProgress(token))), ident.mode)
   })
 
   return handlers
