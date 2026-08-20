@@ -2,6 +2,16 @@
 
 ## 📋变更记录 (Changelog)
 
+### 2026-08-20 - LT 师训系统 M2（learning 域 + 企微通道 + 基础设施）
+- ✅ **服务端 learning 域**：migration 014（plans/items/events + period_key 部分唯一）、JWT typ 隔离（access/plan_link 互斥）、training API（profile/events/progress/plans/link/complete + 事件投影：单调守卫/幂等/归属 404）
+- ✅ **/t/ 教师落地页**：view 事件同事务、seen 双粒度 beacon（Option\<Json\> 空 body 兼容）、XSS 五字符转义先转义后 linkify、媒体签名 fingerprint 三段式（Rust/TS 双锁向量）、`playsinline` 三连（iOS 企微 WebView 必需）、**/s/ 短链**（303 现签跳转，根治 LLM 转发截断）
+- ✅ **MCP teacher-tutor 工具组**：src-server 形态 10 工具、TeacherCredentialStore（600/原子写/single-flight/bind 自愈）、BASE_URL fail-fast
+- ✅ **Hermes 企微通道**：lt-tutor profile（platform_toolsets 白名单）、owner keep-route 路由防劫持、SKILL.md 四流程 + 身份硬规则 + 对抗 dry-run、deploy.sh 四态（含字节级回滚）
+- ✅ **基础设施**：/ingest 项目鉴权 + /t,/media,/s 日志脱敏、launchd 保活（src-server/cloudflared/omlx-8001/iogpu-42GB）、重启自愈链（Docker 登录项 + unless-stopped）
+- ✅ **前置收编**：step1 max_tokens 32000 + usage/截断日志 + 解析失败自动重试（瞬态兜底）、transcripts/ 命名空间守卫、bind advisory lock、compose prod 真实可启动（try_parsing/with_list_parse_key）、夜窗重转 48/48 + ingest 48/48（首批全量）
+- 🧪 cargo lib 242 + integration 98 · vitest 123 · mcp node --test 27 · E2E live 全链（iPhone 真机播放/完成投影/白名单拒绝/鉴权矩阵）
+- 📈 验收：`docs/superpowers/specs/m2-acceptance-2026-08-20.md`（偏差与残余风险逐项披露）
+
 ### 2026-06-15 - 日志系统阶段 2/3 完成 + 级别持久化
 - ✅ **阶段 2 — 请求追踪传播 + Error 桌面通知**
   - 前端 `invokeTraced` 封装（`src/lib/invoke-traced.ts`，自动注入 UUID v4 trace_id，空串防御）

@@ -108,3 +108,7 @@
 - **Tauri 命令** (7 个): `send_log` / `get_log_level` / `set_log_level` / `get_log_files` / `read_log_file` / `clear_logs` / `export_logs`
 - **测试**: 前端 1415 + 后端 logging 35 个自动化测试全通过
 
+
+### 10. LT 师训系统（M2，2026-08-20）
+
+教师经企业微信使用知识库的培训子系统：`src-server` learning 域（学习清单/条目/事件三表 + 投影）、`/t/` 移动端落地页（视频章节跳转/Transcript 阅读/完成按钮，`/s/` 短链分发）、`mcp-server` teacher-tutor 工具组（per-teacher 凭证持有/single-flight 自愈）、Hermes lt-tutor profile 企微接入（SKILL 四流程编排 + 工具白名单 + 身份硬规则）。详见 `docs/superpowers/specs/2026-08-17-teacher-training-design.md` 与 `m2-acceptance-2026-08-20.md`。
