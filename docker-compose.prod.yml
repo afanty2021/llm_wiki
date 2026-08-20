@@ -50,7 +50,8 @@ services:
       AUTH__REGISTRATION_ENABLED: "false"
       TRAINING__ADMIN_TOKEN: ${TRAINING__ADMIN_TOKEN:-}
       # Option<i32> 不能收空串（try_parsing 下 "" 非数字 → 反序列化失败）；
-      # 0 不存在（SERIAL 自 1 起）→ 未配置时 bind fail closed（500），不误绑
+      # 故不给默认值：宿主未 export PROJECT_ID 时 compose up 渲染空串 →
+      # 容器启动即失败（fail-closed 且比运行期 500 更早暴露）
       TRAINING__PROJECT_ID: ${PROJECT_ID}
       MEDIA__SIGNING_KEY: ${MEDIA__SIGNING_KEY:-}
       # RUST_LOG 已删：日志级别走 LOGGING__LEVEL（config），RUST_LOG 从不被读取（死键）
