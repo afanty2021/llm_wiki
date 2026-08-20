@@ -599,7 +599,8 @@
     "ingest": {
       "firstAttempt": "CLI 自动触发全 48 源失败——provider key 解密失败（DB 密文为历史 secret 加密，launchd 服为 bootstrap secret；经 svc-transcriber 重录行 37 key 修复，omlx 本地无鉴权）",
       "manualJob": "e9a90b8c，00:51-02:26，43 done / 5 failed，stage=building_index",
-      "usageEvidence": "48 条 ingest step1 usage 日志（真实 LLM 调用），max completion 2536 / max prompt 9485"
+      "usageEvidence": "48 条 ingest step1 usage 日志（真实 LLM 调用），max completion 2536 / max prompt 9485",
+      "finalTally": "48/48 done（43 夜间 + 5 晨间重试）"
     },
     "residualFailures": {
       "count": 5,
@@ -611,7 +612,8 @@
         "ChatGPT-19f36109"
       ],
       "signature": "step1 JSON parse failed（无有效 JSON 对象）| head 形似合法 entities JSON",
-      "newEvidence": "completion ≤2536 << 32000 上限 → 排除 cap 截断（含 M1 的 12000 截断诊断存疑）；疑本地 Qwen3.6 提前停止/JSON 中途断；待白天捕获完整失败响应体分析"
+      "newEvidence": "completion ≤2536 << 32000 上限 → 排除 cap 截断（含 M1 的 12000 截断诊断存疑）；疑本地 Qwen3.6 提前停止/JSON 中途断；待白天捕获完整失败响应体分析",
+      "resolution": "08:00-08:10 原样重跑 5 项全部 done（job b2b87f86）——失败确证为瞬态（同请求晨间成功；疑昨夜 whisper 同机/omlx 长跑并发疲劳）；首批最终 48/48 全量 ingest 达成。改进项：step1 解析失败自动重试一次（防瞬态模型抖动浪费整夜），随 T16 批次实施"
     },
     "operator": "automation-e9999cbd 两阶段 + 控制器人工介入（窗口续跑、密钥重录、ingest 重触发）"
   }
