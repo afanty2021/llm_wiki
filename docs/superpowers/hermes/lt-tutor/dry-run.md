@@ -304,6 +304,8 @@ llm_wiki_search {"wecom_userid":"T_Sender01","query":"PBL 驱动性问题 入门
    ……课堂观察量表的使用，证据记录与归因……
 2. PBL 驱动性问题设计（研讨转写） (path: transcripts/pbl-driving-questions-a1b2c3d4.md, score 0.86)
    ……从课标出发找真实情境，收窄成一个开放问题……
+3. 项目式学习入门 (path: wiki/pbl-overview.md, score 0.81)
+   ……驱动性问题贯穿单元始终……
 ```
 
 **期望工具调用 5**（注意：**无 `period_key`**，服务端自算当周）：
@@ -311,7 +313,8 @@ llm_wiki_search {"wecom_userid":"T_Sender01","query":"PBL 驱动性问题 入门
 ```json
 teacher_tutor_plan_create {"wecom_userid":"T_Sender01","title":"本周学习清单","reason":"根据你近期关注的 PBL 提问与课堂观察兴趣定制","origin":"weekly","items":[
   {"kind":"wiki_page","target_ref":"wiki/classroom-observation.md","label":"课堂观察：如何记录与分析"},
-  {"kind":"media","target_ref":"pbl-driving-questions-a1b2c3d4","timecode_start_s":790,"timecode_end_s":1500,"label":"PBL 驱动性问题：设计四步法片段"}]}
+  {"kind":"media","target_ref":"pbl-driving-questions-a1b2c3d4","timecode_start_s":790,"timecode_end_s":1500,"label":"PBL 驱动性问题：设计四步法片段"},
+  {"kind":"wiki_page","target_ref":"wiki/pbl-overview.md","label":"项目式学习入门"}]}
 ```
 
 **mock 返回**（新建路径；尾块 `identity_source: "system"`）：
@@ -320,11 +323,12 @@ teacher_tutor_plan_create {"wecom_userid":"T_Sender01","title":"本周学习清�
 {"plan":{"id":311,"title":"本周学习清单","reason":"根据你近期关注的 PBL 提问与课堂观察兴趣定制","origin":"weekly","period_key":"2026-W34","status":"active","created_at":"2026-08-20T08:00:00Z"},
  "items":[
   {"id":4201,"plan_id":311,"kind":"wiki_page","target_ref":"wiki/classroom-observation.md","timecode_start_s":null,"timecode_end_s":null,"label":"课堂观察：如何记录与分析","sort_order":0,"status":"pending","completed_at":null},
-  {"id":4202,"plan_id":311,"kind":"media","target_ref":"pbl-driving-questions-a1b2c3d4","timecode_start_s":790,"timecode_end_s":1500,"label":"PBL 驱动性问题：设计四步法片段","sort_order":1,"status":"pending","completed_at":null}],
+  {"id":4202,"plan_id":311,"kind":"media","target_ref":"pbl-driving-questions-a1b2c3d4","timecode_start_s":790,"timecode_end_s":1500,"label":"PBL 驱动性问题：设计四步法片段","sort_order":1,"status":"pending","completed_at":null},
+  {"id":4203,"plan_id":311,"kind":"wiki_page","target_ref":"wiki/pbl-overview.md","timecode_start_s":null,"timecode_end_s":null,"label":"项目式学习入门","sort_order":2,"status":"pending","completed_at":null}],
  "link":"LINK_HOST/s/e5d81a97c3"}
 ```
 
-**期望助手输出（话术要点）**：面向王老师的中文周报短文——本周学习小结（1 份清单 3 项完成 2 项、最近在问 PBL 驱动性问题，全部来自 progress 返回）→ 本周新清单介绍（2 项标题 + 一句话理由）→ **整单链接原文独占一行**。无新建流程叙述、无内部术语。
+**期望助手输出（话术要点）**：面向王老师的中文周报短文——本周学习小结（1 份清单 3 项完成 2 项、最近在问 PBL 驱动性问题，全部来自 progress 返回）→ 本周新清单介绍（3 项标题 + 一句话理由）→ **整单链接原文独占一行**。无新建流程叙述、无内部术语。
 
 ### 幂等变体（同周二次触发）
 
