@@ -5,10 +5,11 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv,
   parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible,
-  applyWriteFailure, applyTranscribeFailure,
+  applyWriteFailure, applyTranscribeFailure, runIngestPhase, transcribeExitCode,
 } from "../src/cli";
 import type { ManifestEntry } from "../src/manifest";
 import type { StateLine } from "../src/whisper";
+import type { JobStatus } from "../src/api-client";
 
 describe("parseTranscribeArgs", () => {
   it("默认 window=23:00-08:00，无 limit/force/demoSlug", () => {
@@ -167,5 +168,84 @@ describe("失败分类（M1 review r2：tries 只计转写失败，写入类不�
     l = applyTranscribeFailure(l, "whisper-cli exited 1");
     expect(l.tries).toBe(2);
     expect(lineEligible(l)).toBe(false);    // exhaustedRetries，--force 才重置
+  });
+});
+
+describe("runIngestPhase / transcribeExitCode（评审 #5：waitJob 超时不丢报告）", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const records = [
+    { slug: "s1", pagePath: "transcripts/s1.md", sourcePath: "sources/transcripts/s1.md", expectedHash: "h1", md: "# s1" },
+    { slug: "s2", pagePath: "transcripts/s2.md", sourcePath: "sources/transcripts/s2.md", expectedHash: "h2", md: "# s2" },
+  ];
+  const mkApi = (over: {
+    triggerIngest?: (sourcePaths: string[]) => Promise<string>;
+    waitJob?: (jobId: string) => Promise<JobStatus>;
+  } = {}) => {
+    const verifyCalls: Array<{ pagePath: string }> = [];
+    return {
+      triggerIngest: vi.fn(over.triggerIngest ?? (async (_paths: string[]) => "job-42")),
+      waitJob: vi.fn(over.waitJob ?? (async (_jobId: string): Promise<JobStatus> => {
+        throw new Error("waitJob not stubbed");
+      })),
+      verifyTranscriptIntact: vi.fn(async (pagePath: string, _expectedHash: string): Promise<boolean> => {
+        verifyCalls.push({ pagePath });
+        return true;
+      }),
+      upsertTranscriptPage: vi.fn(async (_pagePath: string, _md: string) => "updated" as const),
+      verifyCalls,
+    };
+  };
+
+  it("waitJob 抛出（超时/重试耗尽）→ wait_failed 假终态返回，不再上抛；job 后对账仍尽力执行", async () => {
+    const errors: string[] = [];
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(m => errors.push(String(m)));
+    const api = mkApi({ waitJob: vi.fn().mockRejectedValue(new Error("waitJob timed out after 14400000ms: job job-42 未到终态")) });
+    const result = await runIngestPhase(api, records);
+
+    // wait_failed 假终态：报告字段（jobStatus/jobId/failedSources）仍可组装
+    expect(result.jobId).toBe("job-42");
+    expect(result.job.status).toBe("wait_failed");
+    expect(result.job.error).toContain("timed out");
+    expect(result.failedSources).toEqual([]);            // item_states 缺失 → 防御式空
+    expect(result.warnings).toEqual([]);
+    // 对账两阶段都跑了（ingest前 + job 后——超时不跳过 best-effort）：2 records × 2 phases
+    expect(api.verifyTranscriptIntact).toHaveBeenCalledTimes(4);
+    // CLI 据此非零退出（报告照写 + exit 1 的判定输入）
+    expect(transcribeExitCode(0, result.failedSources, result.job.status)).toBe(1);
+    expect(errors.some(e => e.includes("wait_failed"))).toBe(true);
+  });
+
+  it("waitJob 正常终态 → 形状直通 + item 级 failed 解析（happy path 不变）", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const job: JobStatus = {
+      id: "job-42", project_id: 7, status: "succeeded_with_warnings",
+      item_states: [
+        { path: "sources/transcripts/s1.md", status: "done", error: null },
+        { path: "sources/transcripts/s2.md", status: "failed", error: "embedding timeout" },
+      ],
+    };
+    const api = mkApi({ waitJob: vi.fn().mockResolvedValue(job) });
+
+    const result = await runIngestPhase(api, records);
+
+    expect(result.jobId).toBe("job-42");
+    expect(result.job).toBe(job);                          // 同一对象直通，无包装
+    expect(result.failedSources).toEqual([{ path: "sources/transcripts/s2.md", error: "embedding timeout" }]);
+    expect(api.verifyTranscriptIntact).toHaveBeenCalledTimes(4);
+    expect(transcribeExitCode(0, result.failedSources, result.job.status)).toBe(1);
+  });
+
+  it("transcribeExitCode 判定矩阵：failed 文件 / failed source / job failed / wait_failed → 1；干净轮 → 0", () => {
+    expect(transcribeExitCode(0, [], "succeeded")).toBe(0);
+    expect(transcribeExitCode(0, [], "succeeded_with_warnings")).toBe(0);
+    expect(transcribeExitCode(1, [], "succeeded")).toBe(1);                      // 本轮有 failed 文件
+    expect(transcribeExitCode(0, [{ path: "a.md" }], "succeeded_with_warnings")).toBe(1); // item 级 failed
+    expect(transcribeExitCode(0, [], "failed")).toBe(1);                          // job failed
+    expect(transcribeExitCode(0, [], "wait_failed")).toBe(1);                     // 评审 #5：等待失败必非零
   });
 });

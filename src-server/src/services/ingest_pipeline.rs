@@ -239,12 +239,17 @@ const STEP1_FALLBACK_MAX_TOKENS: u32 = 16000;
 ///   - OpenAI/vLLM: "This model's maximum context length is 32768 tokens. However, ..."
 ///   - Anthropic:   "prompt is too long: 156213 tokens > 200000 maximum"
 /// 大小写不敏感子串匹配："context"（覆盖 "maximum context length" / "context_length_exceeded"）、
-/// "too long"、"max tokens"。误报代价仅为一次无害的 16000 降档重试，故取宽匹配。
+/// "too long"、"max tokens"、"max_tokens"（OpenAI 兼容网关的下划线变体，如
+/// "max_tokens is too large for this model" / "This model supports at most X
+/// tokens"）。误报代价仅为一次无害的 16000 降档重试，故取宽匹配。
 fn is_context_limit_error(e: &crate::services::llm_stream::LlmError) -> bool {
     match e {
         crate::services::llm_stream::LlmError::ApiError { body, .. } => {
             let lower = body.to_lowercase();
-            lower.contains("context") || lower.contains("too long") || lower.contains("max tokens")
+            lower.contains("context")
+                || lower.contains("too long")
+                || lower.contains("max tokens")
+                || lower.contains("max_tokens")
         }
         _ => false,
     }
@@ -1220,6 +1225,12 @@ mod tests {
         assert!(is_context_limit_error(&LlmError::ApiError {
             status: 400,
             body: "Maximum Context Length exceeded".into(),
+        }));
+        // 下划线变体（评审 #2）：OpenAI 兼容网关报 "max_tokens is too large for
+        // this model"——不含空格版 "max tokens" 也不含 "context"，必须单独命中
+        assert!(is_context_limit_error(&LlmError::ApiError {
+            status: 400,
+            body: "{\"error\":{\"message\":\"max_tokens is too large for this model\",\"type\":\"invalid_request_error\"}}".into(),
         }));
     }
 

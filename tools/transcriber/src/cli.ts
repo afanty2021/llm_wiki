@@ -12,7 +12,7 @@ import { extractAudio, transcodePlayback, sha256File, sha8Of, audioOutPath, play
 import { slugFor } from "./slug";
 import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
 import { buildTranscriptMd } from "./transcript";
-import { ApiClient, sha256Hex, type MediaAssetItem } from "./api-client";
+import { ApiClient, sha256Hex, type MediaAssetItem, type JobStatus } from "./api-client";
 
 const execFileAsync = promisify(execFile);
 
@@ -173,6 +173,71 @@ export const applyTranscribeFailure = (l: StateLine, error: string): StateLine =
 
 export const applyWriteFailure = (l: StateLine, error: string): StateLine =>
   ({ ...l, status: "failed", error: error.slice(0, 200) });
+
+/** 终局退出码（M1 评审 #2 + 评审 #5）：任一文件 failed / 任一 source failed /
+ *  job failed / waitJob 失败（wait_failed：超时/重试耗尽）→ 1，否则 0。 */
+export function transcribeExitCode(
+  failedFiles: number,
+  failedSources: ReadonlyArray<unknown>,
+  jobStatus: string,
+): number {
+  return failedFiles > 0 || failedSources.length > 0 || jobStatus === "failed" || jobStatus === "wait_failed"
+    ? 1
+    : 0;
+}
+
+/** ingest 收尾（评审 #5 抽为可注入函数）：触发 → 等 job 终态 → item 级失败解析 → job 后对账。
+ *  waitJob 抛出（4h 总超时 / 3 次重试耗尽）不得让整轮报告丢失——捕获后以
+ *  { status: "wait_failed", error } 形状继续走完（对账尽力 + 报告照写 + 非零退出）。
+ *  触发失败（triggerIngest 抛出）仍是硬失败：未入队即无终态可言，维持原上抛语义。 */
+export async function runIngestPhase(
+  api: Pick<ApiClient, "triggerIngest" | "waitJob" | "verifyTranscriptIntact" | "upsertTranscriptPage">,
+  records: BatchRecord[],
+): Promise<{
+  jobId: string;
+  job: JobStatus;
+  failedSources: Array<{ path: string; error?: string }>;
+  warnings: string[];
+}> {
+  const warnings: string[] = [];
+  const reconcile = async (phase: string): Promise<void> => {
+    for (const r of records) {
+      if (await api.verifyTranscriptIntact(r.pagePath, r.expectedHash)) continue;
+      const msg = `${phase} 覆写告警：${r.pagePath} 服务端 hash 不符（疑似 LLM 页覆写），重写…`;
+      console.warn(`⚠ ${msg}`);
+      warnings.push(msg);
+      const up = await api.upsertTranscriptPage(r.pagePath, r.md); // 服务端内容不同 → If-Match PUT
+      warnings.push(`${phase} 已重写 ${r.pagePath}（upsert=${up}）`);
+    }
+  };
+
+  await reconcile("ingest前");
+  const sourcePaths = records.map(r => r.sourcePath);
+  console.log(`触发 ingest：${sourcePaths.length} 个 source…`);
+  const jobId = await api.triggerIngest(sourcePaths);
+  console.log(`job ${jobId} 已入队，轮询至终态…`);
+  let job: JobStatus;
+  try {
+    job = await api.waitJob(jobId);
+  } catch (e) {
+    // 评审 #5：超时/重试耗尽不丢报告——以 wait_failed 假终态继续（报告 jobStatus=
+    // wait_failed + error 全文，CLI 据此非零退出），job 后对账仍尽力执行
+    const err = String(e);
+    console.error(`✗ 等待 job 终态失败（超时/重试耗尽）：${err.slice(0, 300)}——报告仍会写出（jobStatus=wait_failed）`);
+    job = { id: jobId, project_id: 0, status: "wait_failed", error: err };
+  }
+  console.log(`job 终态：${job.status}${job.error ? `（${job.error.slice(0, 200)}）` : ""}`);
+  // item 级失败可见（M1 评审 #2）：succeeded_with_warnings 也会掩盖单 source 失败，
+  // 从 item_states（[{path,status,error}]）解析 failed 项——任一 failed 则 report 列出且非零退出
+  // （wait_failed 时 item_states 缺失 → parseFailedItemStates 防御式返回 []）
+  const failedSources = parseFailedItemStates(job.item_states);
+  if (failedSources.length > 0) {
+    console.error(`✗ ingest item 级失败 ${failedSources.length} 个（job=${job.status}）：`);
+    for (const f of failedSources) console.error(`    ${f.path}${f.error ? `（${f.error.slice(0, 200)}）` : ""}`);
+  }
+  await reconcile("job后");
+  return { jobId, job, failedSources, warnings };
+}
 
 // —— audit（全库审计；transcribe 主循环第一步复用——重跑兼作迁移健康检查）——
 
@@ -514,33 +579,8 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
   }
 
   // —— 全部完成：ingest 前对账 → 触发 → 等 job → 终态后对账（覆写则重写+告警）——
-  const warnings: string[] = [];
-  const reconcile = async (phase: string): Promise<void> => {
-    for (const r of records) {
-      if (await api.verifyTranscriptIntact(r.pagePath, r.expectedHash)) continue;
-      const msg = `${phase} 覆写告警：${r.pagePath} 服务端 hash 不符（疑似 LLM 页覆写），重写…`;
-      console.warn(`⚠ ${msg}`);
-      warnings.push(msg);
-      const up = await api.upsertTranscriptPage(r.pagePath, r.md); // 服务端内容不同 → If-Match PUT
-      warnings.push(`${phase} 已重写 ${r.pagePath}（upsert=${up}）`);
-    }
-  };
-
-  await reconcile("ingest前");
-  const sourcePaths = records.map(r => r.sourcePath);
-  console.log(`触发 ingest：${sourcePaths.length} 个 source…`);
-  const jobId = await api.triggerIngest(sourcePaths);
-  console.log(`job ${jobId} 已入队，轮询至终态…`);
-  const job = await api.waitJob(jobId);
-  console.log(`job 终态：${job.status}${job.error ? `（${job.error.slice(0, 200)}）` : ""}`);
-  // item 级失败可见（M1 评审 #2）：succeeded_with_warnings 也会掩盖单 source 失败，
-  // 从 item_states（[{path,status,error}]）解析 failed 项——任一 failed 则 report 列出且非零退出
-  const failedSources = parseFailedItemStates(job.item_states);
-  if (failedSources.length > 0) {
-    console.error(`✗ ingest item 级失败 ${failedSources.length} 个（job=${job.status}）：`);
-    for (const f of failedSources) console.error(`    ${f.path}${f.error ? `（${f.error.slice(0, 200)}）` : ""}`);
-  }
-  await reconcile("job后");
+  // （runIngestPhase：waitJob 超时/重试耗尽时以 wait_failed 假终态返回，报告不丢——评审 #5）
+  const { jobId, job, failedSources, warnings } = await runIngestPhase(api, records);
 
   const finishedAt = new Date();
   const durationMinutes = Math.round((finishedAt.getTime() - startedAt.getTime()) / 6000) / 10;
@@ -563,9 +603,9 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
   writeFileSync(join(outDir, "m1-first-batch-report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ files: report.files, transcribed, skipped, failed, jobStatus: job.status, failedSources: failedSources.length, exhaustedRetries: exhaustedRetries.length, durationMinutes, transcribeMinutes, realtimeFactor: report.realtimeFactor, warnings: warnings.length }, null, 2));
   console.log(`报告已写 out/m1-first-batch-report.json`);
-  // 任一 item failed（或 job failed / 本轮有 failed 文件）→ 非零退出（M1 评审 #2）；
-  // succeeded_withwarnings 且 0 failed → 0
-  if (failed > 0 || failedSources.length > 0 || job.status === "failed") process.exit(1);
+  // 任一 item failed（或 job failed / wait_failed / 本轮有 failed 文件）→ 非零退出
+  // （M1 评审 #2 + 评审 #5）；succeeded_withwarnings 且 0 failed → 0
+  if (transcribeExitCode(failed, failedSources, job.status) !== 0) process.exit(1);
 }
 
 // —— sign-media：本地 HMAC（与 Task 7 服务端同算法），输出可直接播放的完整 URL ——

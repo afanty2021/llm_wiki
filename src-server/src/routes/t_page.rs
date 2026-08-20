@@ -533,11 +533,17 @@ async fn get_s_redirect(
     State(state): State<AppState>,
     Path(code): Path<String>,
 ) -> Result<Redirect, AppError> {
-    let row: Option<(i32, i32)> =
-        sqlx::query_as("SELECT user_id, plan_id FROM short_links WHERE code = $1")
-            .bind(&code)
-            .fetch_optional(&state.db)
-            .await?;
+    // plan.status 门禁（评审 #1）：归档 plan 的短链一并失效（404，与未知 code 同
+    // 语义）——归档即止血，教师侧拿 404 回企微要新链，而非继续可跳转。
+    let row: Option<(i32, i32)> = sqlx::query_as(
+        "SELECT s.user_id, s.plan_id FROM short_links s \
+         WHERE s.code = $1 \
+           AND EXISTS (SELECT 1 FROM learning_plans p \
+                       WHERE p.id = s.plan_id AND p.status = 'active')",
+    )
+    .bind(&code)
+    .fetch_optional(&state.db)
+    .await?;
     let Some((user_id, plan_id)) = row else {
         return Err(AppError::ResourceNotFound("Short link not found".into()));
     };
@@ -571,13 +577,17 @@ async fn get_t_page(
 
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
-    // plan 归属（不属/不存在 → 404；提前 return → tx drop 回滚，view 不落库）
-    let plan: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT title, reason FROM learning_plans WHERE id = $1 AND user_id = $2")
-            .bind(plan_id)
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    // plan 归属（不属/不存在 → 404；提前 return → tx drop 回滚，view 不落库）。
+    // status='active' 门禁（评审 #1）：归档 plan 的 /t/ 同样 404（与归属 miss 同
+    // 语义，不泄漏归档与不存在的区别）。
+    let plan: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT title, reason FROM learning_plans \
+         WHERE id = $1 AND user_id = $2 AND status = 'active'",
+    )
+    .bind(plan_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let Some((title, reason)) = plan else {
         return Err(AppError::ResourceNotFound("Plan not found".into()));
     };
@@ -737,12 +747,15 @@ async fn post_seen(
         crate::utils::verify_plan_link_token(&token, state.config.jwt_secret())?;
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
-    let owned: Option<i32> =
-        sqlx::query_scalar("SELECT id FROM learning_plans WHERE id = $1 AND user_id = $2")
-            .bind(plan_id)
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    // 归属 + status 门禁（评审 #1）：归档 plan 不再接受任何 beacon（404）。
+    let owned: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM learning_plans \
+         WHERE id = $1 AND user_id = $2 AND status = 'active'",
+    )
+    .bind(plan_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if owned.is_none() {
         return Err(AppError::ResourceNotFound("Plan not found".into()));
     }
@@ -780,12 +793,15 @@ async fn post_complete(
         crate::utils::verify_plan_link_token(&token, state.config.jwt_secret())?;
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
-    let owned: Option<i32> =
-        sqlx::query_scalar("SELECT id FROM learning_plans WHERE id = $1 AND user_id = $2")
-            .bind(plan_id)
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    // 归属 + status 门禁（评审 #1，与 post_seen 一致）：归档 plan 拒收 complete。
+    let owned: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM learning_plans \
+         WHERE id = $1 AND user_id = $2 AND status = 'active'",
+    )
+    .bind(plan_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if owned.is_none() {
         return Err(AppError::ResourceNotFound("Plan not found".into()));
     }

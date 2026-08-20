@@ -764,6 +764,100 @@ async fn media_fp_signature_and_legacy_compat() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// ============ 矩阵 8（评审 #1）：plan 归档 → /s/、/t/、beacon 全线 404 ============
+///
+/// 背景：/s/ 与 /t/ 原先不校验 plan.status——plan 归档后短链/token 仍可跳转、
+/// beacon 仍可记账，归档无法止血。修法：三处查询统一加 status='active' 门禁
+/// （/s/ EXISTS 子查询、/t/ plan 装载、seen/complete 归属检查），归档 plan 与
+/// 「不存在/不归属」同语义 404，不泄漏归档状态区别。
+#[tokio::test]
+async fn archived_plan_short_link_and_t_page_404() {
+    let (server, state) = t_fixture("arch").await;
+    let (teacher, uid) = bind_teacher(&server, &unique("w")).await;
+
+    let page_path = format!("concepts/ar-{}.md", unique("pg"));
+    seed_wiki_page(&state, &page_path, "归档页", "内容", json!([])).await;
+    let body = json!({
+        "title": "待归档计划", "origin": "chat", "period_key": null,
+        "items": [{"kind": "wiki_page", "target_ref": page_path, "label": "i1"}]
+    });
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&body)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v = r.json::<serde_json::Value>();
+    let (code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
+    let plan_id = v["plan"]["id"].as_i64().unwrap() as i32;
+    let item1 = v["items"][0]["id"].as_i64().unwrap() as i32;
+
+    // 归档前 sanity：/t/ 可达（区别于归档后的 404）
+    let r = server.get(&format!("/t/{token}")).await;
+    assert_eq!(r.status_code(), StatusCode::OK, "active plan /t/ must render");
+
+    // 归档（API 层等价物：UPDATE status='archived'）
+    sqlx::query("UPDATE learning_plans SET status = 'archived' WHERE id = $1")
+        .bind(plan_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+    // 1. /s/<code> → 404（与未知 code 同语义，不泄漏归档区别）
+    let r = server.get(&format!("/s/{code}")).await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "archived plan /s/ must 404");
+
+    // 2. /t/<token> → 404：归档前签发的 token 不能复活归档 plan；
+    //    且新签 token（手工 generate_plan_link_token）同样 404
+    let r = server.get(&format!("/t/{token}")).await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "archived plan /t/ must 404");
+    let fresh = llm_wiki_server::utils::generate_plan_link_token(
+        uid as i32, plan_id, state.config.jwt_secret(), chrono::Duration::hours(1),
+    )
+    .unwrap();
+    let r = server.get(&format!("/t/{fresh}")).await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "freshly-signed token for archived plan must 404");
+
+    // 3. POST seen / complete → 404（归档 plan 不接受任何 beacon 记账）
+    let r = server
+        .post(&format!("/t/{token}/seen"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "archived plan seen must 404");
+    let r = server
+        .post(&format!("/t/{token}/complete"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "archived plan complete must 404");
+
+    // 4. 零写：归档后的 seen/complete/view 事件都不落库，item 投影不动
+    let n_ev: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM learning_events \
+         WHERE user_id = $1 AND event_type IN ('seen','complete')",
+    )
+    .bind(uid as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(n_ev, 0, "archived plan must not record seen/complete events");
+    let n_view: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM learning_events WHERE user_id = $1 AND event_type = 'view'",
+    )
+    .bind(uid as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(n_view, 1, "only the pre-archive GET recorded a view");
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item1)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "pending", "archived plan items untouched");
+}
+
 /// ============ 矩阵 7（Task 9b）：/s/ 短链现签跳转 ============
 ///
 /// 背景：实测 LLM（Hermes lt-tutor）转发 164-char `/t/<JWT>` 两次中途省略号截断

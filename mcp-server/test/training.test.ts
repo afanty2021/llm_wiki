@@ -376,7 +376,7 @@ test("teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、it
     { when: (c) => c.url === `${BASE}/api/v1/training/profile` && c.method === "PUT", then: () => ({ body: { ...profileBody, onboarding_state: "surveyed" } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/events`, then: () => ({ body: { id: 9 } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/plans?status=active`, then: () => ({ body: [] }) },
-    { when: (c) => c.url === `${BASE}/api/v1/training/plans/3/link`, then: () => ({ body: { link: "/t/lk" } }) },
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans/3/link`, then: () => ({ body: { link: "/s/abcdefghij" } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/items/12/complete`, then: () => ({ body: { item_id: 12, status: "completed" } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/progress`, then: () => ({ body: { plans: [], recent_events: [] } }) },
   ], calls)
@@ -415,7 +415,7 @@ test("teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、it
   assert.equal(completeCall.method, "POST")
 
   const link = await handlers.get("teacher_tutor_plan_link")!({ wecom_userid: "t1", plan_id: 3 })
-  assert.equal(JSON.parse(toolText(link)).link, `${BASE}/t/lk`)
+  assert.equal(JSON.parse(toolText(link)).link, `${BASE}/s/abcdefghij`)
   const linkCall = calls.find((c) => c.url === `${BASE}/api/v1/training/plans/3/link`)!
   assert.equal(linkCall.method, "POST")
 
@@ -429,12 +429,12 @@ test("teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、it
   }
 })
 
-test("teacher_tutor_plan_create: POST /plans 透传 + 返回含完整 /t/ 链接", async () => {
+test("teacher_tutor_plan_create: POST /plans 透传 + 返回含完整 /s/ 短链", async () => {
   const calls: RecordedCall[] = []
   const fetchImpl = mockFetch([
     {
       when: (c) => c.url === `${BASE}/api/v1/training/plans`,
-      then: () => ({ body: { plan: { id: 5, title: "第 1 周计划" }, items: [], link: "/t/tok123" } }),
+      then: () => ({ body: { plan: { id: 5, title: "第 1 周计划" }, items: [], link: "/s/0123456789" } }),
     },
   ], calls)
 
@@ -461,9 +461,26 @@ test("teacher_tutor_plan_create: POST /plans 透传 + 返回含完整 /t/ 链接
   })
 
   const payload = JSON.parse(toolText(result))
-  assert.equal(payload.link, "https://t.example.com/t/tok123")
+  assert.equal(payload.link, "https://t.example.com/s/0123456789")
   assert.equal(payload.plan.id, 5)
   assert.ok(!toolText(result).includes("acc-tool"), "access token must never appear in tool output")
+})
+
+// ── 评审 #4：plan_link 空 link 守卫 ──
+
+test("teacher_tutor_plan_link: 服务端未回 link 时抛错，不输出裸 base URL", async () => {
+  // link 缺失 / null / 空串：响应形状意外时抛清晰错误，绝不 join 成裸 base 死链
+  for (const bad of [undefined, null, ""]) {
+    const calls: RecordedCall[] = []
+    const fetchImpl = mockFetch([
+      { when: (c) => c.url === `${BASE}/api/v1/training/plans/7/link`, then: () => ({ body: { plan_id: 7, link: bad } }) },
+    ], calls)
+    const handlers = makeHandlers(fetchImpl)
+    await assert.rejects(
+      handlers.get("teacher_tutor_plan_link")!({ wecom_userid: "t1", plan_id: 7 }),
+      /returned no link/,
+    )
+  }
 })
 
 test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {

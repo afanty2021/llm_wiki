@@ -524,6 +524,13 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     if (planId === undefined) throw new ToolArgumentError("plan_id is required")
     const response = await callWithAccess(deps, wecomUserid, (token) =>
       deps.client.trainingPlanLink(token, planId))
+    // link 空值守卫（评审 #4）：与 plan_create 同形状校验——服务端未回 link
+    // （响应形状意外/网关截断）时抛清晰错误，绝不把裸 base URL 当可用链接发给 LLM。
+    if (typeof response.link !== "string" || response.link === "") {
+      throw new Error(
+        `teacher_tutor_plan_link: server returned no link for plan ${planId} (got ${JSON.stringify(response)})`,
+      )
+    }
     return jsonResult({ link: joinTLink(deps.getPublicTBase(), response.link) })
   })
 
