@@ -32,10 +32,10 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 | `teacher_tutor_profile_get` | 会话开始/档案状态未知时判断新老用户；读画像 | 无 | 档案：`subject` / `grade_levels` / `goals` / `interests` / `onboarding_state`；未建档时报错（404） |
 | `teacher_tutor_profile_put` | 问卷完成后写档案 | `subject` / `grade_levels` / `goals` / `interests` / `onboarding_state`（仅 `pending`→`surveyed`），只传要改的字段 | 更新后的完整档案 |
 | `teacher_tutor_record_ask` | 每次老师提问后记录一次 | `payload`（对象，至少含 `question`，可附实际用的查询词） | 提问事件确认 |
-| `teacher_tutor_plan_create` | 生成学习清单 | `title`、`reason`、`origin`（固定 `"chat"`）、`items`（3-5 个：`kind`=`"wiki_page"` 或 `"media"`、`target_ref`、`label`，媒体项可带 `timecode_start_s` / `timecode_end_s`）、可选 `period_key` 幂等键 | `{plan, items, link}`；`link` 为可直接分享的完整 `/t/` 链接，items 含各条目 `id` |
+| `teacher_tutor_plan_create` | 生成学习清单 | `title`、`reason`、`origin`（固定 `"chat"`）、`items`（3-5 个：`kind`=`"wiki_page"` 或 `"media"`、`target_ref`、`label`，媒体项可带 `timecode_start_s` / `timecode_end_s`）、可选 `period_key` 幂等键 | `{plan, items, link}`；`link` 为可直接分享的完整 `/s/` 短链，items 含各条目 `id` |
 | `teacher_tutor_plan_list` | 完成确认前对齐计划；查看现有清单 | 可选 `status`（`"active"` / `"archived"`） | 计划数组（新→旧；每条含 `id` / `title` / 计数 `items:{total,viewed,completed}`，**不含条目 id**） |
 | `teacher_tutor_item_complete` | 记录条目完成 | `item_id`（只能来自 `plan_create` 返回的条目 `id`，勿猜） | 完成确认（幂等） |
-| `teacher_tutor_plan_link` | `/t/` 链接过期（7 天有效）时重签 | `plan_id` | 新的完整链接 |
+| `teacher_tutor_plan_link` | 老师反馈清单链接打不开时取新链接（`/s/` 短链长期有效；打不开多半是隧道/网络问题） | `plan_id` | 新的完整 `/s/` 短链 |
 | `teacher_tutor_progress` | 老师问"我的进度/学得怎么样" | 无 | 全部计划（含条目计数）+ 最近学习事件 |
 | `llm_wiki_search` | 答疑、生成清单前检索知识库 | `query`、可选 `limit`（建议 5） | 结果列表：`path` / `title` / `snippet` / `score` |
 | `llm_wiki_read_file` | 取页面全文：定位片段时间戳、深度阅读 | `path`（search 结果中的 `path`） | 页面全文 |
@@ -73,9 +73,9 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 ## 6. 流程 4：完成确认 · 链接重签 · 进度
 
 1. 老师报完成（"第 2 项看完了""那个提问技巧的视频看完了"）→ **先 `teacher_tutor_plan_list` 对齐**：确认是哪个计划、共几项、已完成几项。`item_id` **只能**取自本会话 `plan_create` 返回的条目 `id`（plan_list 只含计数，不含条目 id）——按 `label` / 顺序把老师说的项对上号，再 `teacher_tutor_item_complete`。
-2. **对不上号就不记**：条目指代不清时先向老师确认是哪一项；本会话拿不到条目 `id` 时，引导老师在 `/t/` 页面上点"完成"按钮（必要时先 `teacher_tutor_plan_link` 重签链接），**绝不猜测或编造 `item_id`**。
+2. **对不上号就不记**：条目指代不清时先向老师确认是哪一项；本会话拿不到条目 `id` 时，引导老师在 `/t/` 页面上点"完成"按钮（必要时先 `teacher_tutor_plan_link` 取新链接），**绝不猜测或编造 `item_id`**。
 3. 完成后确认 + 提示剩余项；全部完成时给予鼓励，可提议按最新兴趣生成下一单。
-4. `/t/` 链接打不开（7 天有效）→ `teacher_tutor_plan_link` 重签并回复新链接（**原样完整**转发，同样受 §1 硬规则约束）。
+4. 清单链接**长期有效**（`/s/` 短链永活，点开时系统现签短期凭证）；老师反馈打不开时多半是隧道/网络问题 → `teacher_tutor_plan_link` 取新链接并回复（**原样完整**转发，同样受 §1 硬规则约束）。
 5. 老师问整体进度 → `teacher_tutor_progress`，用自然语言汇总（几份清单、完成多少、最近在学什么），不罗列字段名。
 
 ## 7. 通用回复规范

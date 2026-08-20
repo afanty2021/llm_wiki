@@ -263,7 +263,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "teacher_tutor_plan_create",
-      description: "创建学习计划（返回 {plan, items, link}，link 为可直接分享的完整 /t/ 链接）。period_key 幂等：同 (user, origin, period_key) 重复创建返回既有计划。",
+      description: "创建学习计划（返回 {plan, items, link}，link 为可直接分享的完整 /s/ 短链——短链永活，点开时系统现签短期凭证）。period_key 幂等：同 (user, origin, period_key) 重复创建返回既有计划。",
       inputSchema: {
         type: "object",
         properties: {
@@ -321,7 +321,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "teacher_tutor_plan_link",
-      description: "重签计划的 /t/ 分享链接（7 天有效，返回完整 URL）。",
+      description: "取计划的全新 /s/ 短链（短链永活、点开时系统现签短期凭证；旧链打不开多为隧道/网络问题。返回完整 URL）。",
       inputSchema: {
         type: "object",
         properties: {
