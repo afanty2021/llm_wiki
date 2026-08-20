@@ -104,3 +104,10 @@ launchctl bootout gui/$(id -u)/com.cloudflare.cloudflared
 - **CORS**：default.json 只放行 `localhost:1420/5173`；tunnel 域名对外访问需把 `https://<tunnel-host>` 加进 `CORS__ALLOWED_ORIGINS`（plist env 加一行即可，注意逗号串列表语义）。
 - **二进制更新**：launchd 跑的是 release 产物快照，rebuild 后需 `launchctl kickstart -k gui/$(id -u)/wiki.src-server`（或 bootout+bootstrap）才吃到新二进制。
 - `.env` 的 `JWT__SECRET` 是黑名单占位符：仅当 plist env 缺失时才会被 dotenvy 采用并触发启动拒绝——内联 env 在位即安全。
+
+## iogpu wired limit（2026-08-20）
+
+- `/Library/LaunchDaemons/wiki.iogpu-wired-limit.plist`（root:wheel 644）：开机一次 `sysctl iogpu.wired_limit_mb=43008`（42GB，48GB 机器）。
+- 动因：omlx 35B+bge-m3 夜间 ingest 在默认 37.4GB Metal 上限下每 ~10s 触碰 soft/hard 水位 → 提前 EOS 半截 JSON（2026-08-19 夜 5/48 失败实证）；客户端已有 step1 解析重试兜底（43816ffa），此项为减少瞬态概率的服务端加固。
+- 生效核验：`sysctl iogpu.wired_limit_mb` → 43008；日志 `/var/log/iogpu-wired-limit.log`。
+- 回滚：`sudo launchctl bootout system /Library/LaunchDaemons/wiki.iogpu-wired-limit.plist && sudo rm /Library/LaunchDaemons/wiki.iogpu-wired-limit.plist`（运行值重启后自动回默认）。
