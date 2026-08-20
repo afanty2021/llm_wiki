@@ -161,6 +161,60 @@ async fn media_assets_matrix() {
     assert_eq!(n, 1, "upsert must not duplicate rows");
 }
 
+/// Task 16a 回归：playback_path 的 COALESCE upsert 语义。
+/// 常规 transcribe CLI 重跑发 `playback_path: None`（或省略字段），不得清空
+/// demo/人工补登的转码覆盖值（2026-08-19 线上事故：3 条 H.264 覆盖被 NULL）。
+/// Some(B) 再覆盖仍生效——demo 模式重复注册保持最后写入胜出。
+#[tokio::test]
+async fn media_assets_upsert_preserves_playback_path() {
+    let (server, state, admin, _member) = training_fixture_with_config_project("pbk").await;
+    let slug = unique("s3");
+    let upsert = |playback_path: Option<&str>, media_ref: &str| {
+        let item = match playback_path {
+            Some(p) => json!({"slug":slug,"media_ref":media_ref,"playback_path":p,"duration_s":60,"kind":"video","chapters":[]}),
+            None => json!({"slug":slug,"media_ref":media_ref,"duration_s":60,"kind":"video","chapters":[]}),
+        };
+        server
+            .post("/api/v1/training/media-assets")
+            .add_header("authorization", bearer(&admin))
+            .json(&json!({"items":[item]}))
+    };
+
+    // 1) 首次注册带覆盖值 A → 落库 Some(A)
+    let r = upsert(Some("/transcoded/a_h264.mp4"), "/tmp/a.mov").await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+
+    // 2) CLI 重跑发 None → 既有覆盖值 A 保留（不被 NULL 掉）
+    let r = upsert(None, "/tmp/a2.mov").await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let pb: Option<String> =
+        sqlx::query_scalar("SELECT playback_path FROM media_assets WHERE slug = $1")
+            .bind(&slug)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(pb.as_deref(), Some("/transcoded/a_h264.mp4"), "None must not wipe existing override");
+
+    // 3) Some(B) 再注册 → 覆盖为 B（demo 模式重复注册仍生效）
+    let r = upsert(Some("/transcoded/b_h264.mp4"), "/tmp/a2.mov").await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let pb: Option<String> =
+        sqlx::query_scalar("SELECT playback_path FROM media_assets WHERE slug = $1")
+            .bind(&slug)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(pb.as_deref(), Some("/transcoded/b_h264.mp4"));
+
+    // 其他列不受 COALESCE 影响：media_ref 照常被最后一次导入覆盖
+    let mr: String = sqlx::query_scalar("SELECT media_ref FROM media_assets WHERE slug = $1")
+        .bind(&slug)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(mr, "/tmp/a2.mov");
+}
+
 #[tokio::test]
 async fn media_assets_validation_and_atomicity() {
     let (server, state, admin, _member) = training_fixture_with_config_project("valid").await;

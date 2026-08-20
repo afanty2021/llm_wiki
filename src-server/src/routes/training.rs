@@ -85,10 +85,13 @@ async fn import_media_assets(
                 it.slug.chars().take(32).collect::<String>()
             )));
         }
+        // playback_path 用 COALESCE：常规 transcribe CLI 发 None，不得清空 demo/人工
+        // 补登的转码覆盖值（Some 才覆盖——demo 模式注册逻辑不变）；其余列照常覆盖。
         sqlx::query(
             "INSERT INTO media_assets (slug, media_ref, playback_path, duration_s, codec, kind, chapters, transcript_page_path, source_path) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
-             ON CONFLICT (slug) DO UPDATE SET media_ref=EXCLUDED.media_ref, playback_path=EXCLUDED.playback_path, \
+             ON CONFLICT (slug) DO UPDATE SET media_ref=EXCLUDED.media_ref, \
+               playback_path=COALESCE(EXCLUDED.playback_path, media_assets.playback_path), \
                duration_s=EXCLUDED.duration_s, codec=EXCLUDED.codec, kind=EXCLUDED.kind, chapters=EXCLUDED.chapters, \
                transcript_page_path=EXCLUDED.transcript_page_path, source_path=EXCLUDED.source_path, updated_at=NOW()",
         )
