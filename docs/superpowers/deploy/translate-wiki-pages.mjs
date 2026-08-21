@@ -33,6 +33,10 @@
 // - 可恢复：重跑跳过 completed；可回滚：备份 jsonl 仓外。
 // - 串行逐页（omlx 内存压力前科，不并发）；LLM 失败重试 2 次；507/Cannot load
 //   快速终止（不落恒等映射、不空烧重试）。
+// - 思考模式（Fix round 3）：LLM 调用恒带 chat_template_kwargs.enable_thinking=false
+//   （Pass1 标题 + Pass2 正文共用 llm()）——Qwen serving 否则会以纯文本吐
+//   "Here's a thinking process:" 前导+prompt 回显当正文（非 <think> 标签，stripThink
+//   救不了）。双保险：PUT 前输出闸，译文含 thinking 痕迹或还原后残留 ⟦/⟧ → 拒写记 FAIL。
 //
 // 禁改范围（本脚本天然遵守）：transcripts/%（转写页，中文）、wiki/index|log|overview.md
 // （reserved，ingest 重建）、learning_plans/learning_items（本脚本只碰 wiki_pages，经 API）。
@@ -46,6 +50,7 @@ import { fileURLToPath } from "node:url";
 import {
   ZH_RATIO_SKIP, zhRatio, isChinesePage, buildLinkCtx, detectTitleCollisions,
   selectTranslationTargets, maskWikilinks, unmaskWikilinks, rewriteLinksInBody,
+  hasThinkingLeakOrSlotResidue,
 } from "./lib/translate-core.mjs";
 
 // ── CLI ──
@@ -227,7 +232,13 @@ async function llm(messages, { temperature = 0.2, maxTokens = 8192 } = {}) {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer local" },
         signal: controller.signal,
-        body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, stream: false }),
+        // enable_thinking:false 关 Qwen 思考模式——本 serving 否则会以纯文本吐
+        // "Here's a thinking process:" 前导+prompt 回显当正文（非 <think> 标签，
+        // stripThink 救不了；同 normalize-wiki-paths.mjs 已修坑。Fix round 3）
+        body: JSON.stringify({
+          model, messages, temperature, max_tokens: maxTokens, stream: false,
+          chat_template_kwargs: { enable_thinking: false },
+        }),
       });
       clearTimeout(timer);
       if (!res.ok) {
@@ -364,6 +375,11 @@ async function composePageUpdate(page, ctx) {
   ].join("\n");
   const translated = await llm([{ role: "system", content: sys }, { role: "user", content: masked }]);
   const newBody = unmaskWikilinks(translated, slots, ctx);
+  // 输出闸（Fix round 3）：thinking 痕迹 / 还原后残留 ⟦⟧ → throw 拒写（与占位符丢失
+  // 同一失败路径：fail-safe 不落库、progress.failed 记 FAIL、可重跑补）
+  if (hasThinkingLeakOrSlotResidue(newBody)) {
+    throw new Error("译文含 thinking 痕迹或残留占位符 ⟦/⟧（输出闸拒写，疑思考模式泄漏）");
+  }
 
   const newContent = fmText !== null
     ? `---\n${rewriteFrontmatterTitle(fmText, newTitle)}\n---\n\n${newBody.replace(/^\s+/, "")}\n`

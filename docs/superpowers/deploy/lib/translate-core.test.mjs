@@ -14,6 +14,7 @@
 //  ③ 悬空链接：目标不在页表 → 原样
 //  ④ 占位符容错：丢失/乱序/LLM 部分改写 → 拒写（throw）或按容错链还原
 // 加：zhRatio 边界 + 目标页过滤（transcripts/reserved/中文占比排除）。
+// 加 ⑤ 输出闸（Fix round 3）：译文含 thinking 痕迹 / 残留 ⟦⟧ 占位符字符 → 拒写。
 
 import assert from "node:assert/strict";
 
@@ -26,7 +27,7 @@ import {
   zhRatio, isChinesePage, normKey, pathStem,
   buildLinkCtx, resolveTargetPath, renderWikilink,
   maskWikilinks, unmaskWikilinks, rewriteLinksInBody,
-  detectTitleCollisions, selectTranslationTargets,
+  detectTitleCollisions, selectTranslationTargets, hasThinkingLeakOrSlotResidue,
 } from "./translate-core.mjs";
 
 // ── 测试夹具：迷你页表（concepts/entities + 保留页 + 转写页） ──
@@ -205,6 +206,43 @@ describe("④ 占位符容错 unmaskWikilinks", () => {
     const { masked, slots } = maskWikilinks(body);
     assert.equal(masked, "\u27e6C0\u27e7");
     assert.equal(unmaskWikilinks(masked, slots, ctx), body);
+  });
+});
+
+// ══ ⑤ 输出闸（Fix round 3）：thinking 痕迹 / 残留占位符字符 → 拒写 ══
+// 根因复盘：Qwen serving 思考模式偶发以纯文本吐 "Here's a thinking process:" 前导 +
+// prompt 回显当正文（非 <think> 标签，stripThink 救不了），且正文占位符未还原——
+// live 污染 concepts/ccq.md、concepts/class-motto.md 两页。
+describe("⑤ 输出闸 hasThinkingLeakOrSlotResidue", () => {
+  test("译文含 ⟦ 或 ⟧（还原后残留占位符字符）→ true 拒写", () => {
+    assert.equal(hasThinkingLeakOrSlotResidue("正文残留 \u27e6WL9\u27e7 幻觉序号"), true);
+    assert.equal(hasThinkingLeakOrSlotResidue("只有右括号 \u27e7"), true);
+  });
+
+  test("thinking 痕迹前导（实测污染形态 + 大小写变体）→ true 拒写", () => {
+    assert.equal(hasThinkingLeakOrSlotResidue("Here's a thinking process:\n\n1.  **Analyze User Input:**"), true);
+    assert.equal(hasThinkingLeakOrSlotResidue("here's a THINKING PROCESS"), true);
+    assert.equal(hasThinkingLeakOrSlotResidue("Thinking Process: 首先分析……"), true);
+  });
+
+  test("干净译文（含正常还原的 [[slug|标签]] 链接）/ 空串 / null → false 放行", () => {
+    assert.equal(hasThinkingLeakOrSlotResidue("# 合作学习\n\n参见 [[kwl-chart|KWL图表]]。"), false);
+    assert.equal(hasThinkingLeakOrSlotResidue(""), false);
+    assert.equal(hasThinkingLeakOrSlotResidue(null), false);
+  });
+
+  test("全链路：LLM 泄漏 thinking 前导但占位符齐全 → unmask 放行，闸兜底拒写", () => {
+    const { masked, slots } = maskWikilinks("[[KWL Chart]] 正文");
+    const polluted = `Here's a thinking process:\n${masked}`;
+    const out = unmaskWikilinks(polluted, slots, ctx); // 占位符都在，unmask 不报错
+    assert.ok(hasThinkingLeakOrSlotResidue(out), "闸捕获 thinking 前导");
+  });
+
+  test("全链路：LLM 幻觉多吐 ⟦WL9⟧（unmask 容错不还原）→ 闸兜底拒写", () => {
+    const { masked, slots } = maskWikilinks("[[KWL Chart]]");
+    const out = unmaskWikilinks(`${masked} 幻觉 \u27e6WL9\u27e7`, slots, ctx);
+    assert.ok(out.includes("[[kwl-chart|KWL图表]]"));
+    assert.ok(hasThinkingLeakOrSlotResidue(out), "闸捕获残留占位符");
   });
 });
 

@@ -173,6 +173,17 @@ export function unmaskWikilinks(translated, slots, ctx) {
   return out;
 }
 
+// ── 输出闸（Fix round 3）：译文污染防护，纯谓词（调用方 throw 拒写） ──
+/** Qwen serving 思考模式泄漏特征：以纯文本吐 "Here's a thinking process:" 前导 +
+ *  prompt 回显当正文（非 <think> 标签，主脚本 stripThink 救不了；实测污染
+ *  concepts/ccq.md、concepts/class-motto.md 两页，同 normalize-wiki-paths.mjs 已踩坑）。 */
+const THINKING_LEAK_RE = /here's a thinking process|thinking process:/i;
+/** 译文含 thinking 痕迹，或 unmask 还原后仍残留 ⟦/⟧ 占位符字符（还原后不应有任何
+ *  占位符字符——含幻觉序号 ⟦WLn⟧ 等 unmask 容错链不还原的形态）→ true，调用方拒写
+ *  （与占位符丢失同一失败路径：fail-safe 不落库、progress.failed 记 FAIL、可重跑补）。 */
+export const hasThinkingLeakOrSlotResidue = (s) =>
+  THINKING_LEAK_RE.test(String(s ?? "")) || /[\u27e6\u27e7]/.test(String(s ?? ""));
+
 /** 确定性链接改写（修复 pass 用，不经 LLM）：全部 [[...]] 按别名形式重写，fence 不动。 */
 export function rewriteLinksInBody(body, ctx) {
   const { masked, slots } = maskWikilinks(body);
