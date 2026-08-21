@@ -140,6 +140,20 @@ graph TD
 
 ---
 
+## 🎓 LT 师训 learning 域（src-server，M2 起）
+
+教师经企业微信使用知识库的培训子系统，运行在 `src-server`（Web 服务端）而非桌面端：
+
+- **三表 + 投影**：`learning_plans` / `learning_items` / `learning_events` 三表是事实源（事件即事实），`services/projection.rs` 把 seen/complete 事件单调投影到 `learning_items.status`（pending < viewed < completed，completed 永不回退，可事件重放重建）；
+- **/t/ 与 /s/**：`/t/:token` 移动端落地页（plan_link JWT 凭证，视频章节跳转/Transcript 阅读/完成按钮 beacon）；`/s/:code` 10 字符短链现签跳转（303 → 现签 7d token，短码不过期，对 LLM 转发截断免疫）。归档 plan（status='archived'）即吊销：/s/、/t/ 与事件写入一律 404；
+- **/media 签名**：落地页媒体经 `slug + exp + sig + fp` 签名 URL 播放（fp = sha256(token) 前 16 hex，票据 TTL 12h）；
+- **MCP**：`mcp-server` teacher-tutor 工具组（档案/建单/进度等，per-teacher 凭证持有 + single-flight 自愈）；
+- **Hermes**：lt-tutor profile 企微接入（SKILL 四流程编排 + 工具白名单 + 身份硬规则）。
+
+详见 `docs/superpowers/specs/2026-08-17-teacher-training-design.md` 与 [features.md §10](features.md)。
+
+---
+
 ## 📂 项目目录结构
 
 ```

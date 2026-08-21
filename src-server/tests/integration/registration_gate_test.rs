@@ -20,3 +20,22 @@ async fn register_rejected_when_disabled() {
     // "Permission denied"；具体原因 "registration disabled" 走 tracing::warn 日志。
     assert!(resp.text().contains("Permission denied"));
 }
+
+/// Task 6（r3）：default.json 翻 registration_enabled=false（fail-closed）后，
+/// setup_test_app 必须注入 registration_enabled=true 再 create_app——否则测试
+/// 二进制（from_env 无 dotenv，直读 default.json）27 处 register_user 全 403。
+#[tokio::test]
+async fn register_still_enabled_via_setup_test_app() {
+    let (app, _state) = crate::setup_test_app().await;
+    let server = TestServer::new(app).unwrap();
+    let uname = format!("t6gate_{}", std::process::id());
+    let resp = server
+        .post("/api/v1/auth/register")
+        .json(&serde_json::json!({
+            "username": uname,
+            "email": format!("{uname}@t6.com"),
+            "password": "secret123"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "setup_test_app must re-enable registration for tests");
+}

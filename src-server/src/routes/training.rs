@@ -246,6 +246,9 @@ async fn bind(
         // 兜底（belt-and-braces）：advisory lock 之外的残余 23505（如 hashtextextended
         // 碰撞、绕过路由的并发路径）映射 409 而非 500；提前 return → tx drop 回滚，
         // 不留半账号，重 bind 幂等自愈走既有档案路径。模式见 llm_providers.rs create_provider。
+        // 409 文案中性（Task 6 r3）：该 23505 可能来自 users（username/email 占用）或
+        // teacher_profiles（wecom_userid 已绑定）任一约束——「已被占用或已绑定」不向
+        // 调用方泄漏具体命中哪张表。
         let row: Result<i32, sqlx::Error> = sqlx::query_scalar(
             "INSERT INTO users (username, email, password_hash, full_name) \
              VALUES ($1, $2, $3, $4) RETURNING id",
@@ -259,7 +262,7 @@ async fn bind(
         let row: i32 = match row {
             Ok(r) => r,
             Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                return Err(AppError::Conflict("wecom_userid already bound".into()));
+                return Err(AppError::Conflict("已被占用或已绑定".into()));
             }
             Err(e) => return Err(AppError::from(e)),
         };
@@ -284,7 +287,8 @@ async fn bind(
         match profile {
             Ok(_) => {}
             Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                return Err(AppError::Conflict("wecom_userid already bound".into()));
+                // 中性文案（Task 6 r3，与 users 分支同串）：不泄漏具体命中哪张表的唯一约束
+                return Err(AppError::Conflict("已被占用或已绑定".into()));
             }
             Err(e) => return Err(AppError::from(e)),
         }
@@ -899,6 +903,10 @@ fn is_period_key_format(pk: &str) -> bool {
         && b[7].is_ascii_digit()
 }
 
+/// items 数量上限（Task 6 r3）：一批清单条目上限 50——防 LLM 失控生成超长清单
+/// （DB 无约束，一条 400 早退比落库 200 条垃圾再人工清理便宜得多）。
+const PLAN_ITEMS_MAX: usize = 50;
+
 /// POST /api/v1/training/plans — 创建学习计划（access，本人）。
 /// 事务：plan + items + plan_created 事件 + short_links 短码原子落库；
 /// 响应 201 {plan, items, link}，link 为 `/s/<code>`（10-char 短链；短码不过期，
@@ -943,6 +951,14 @@ async fn create_plan(
         if pk.chars().count() > 20 {
             return Err(AppError::BadRequest("period_key exceeds 20 characters".into()));
         }
+    }
+    // items 上限（Task 6 r3）：>50 → 400 早退（零半写，validate_plan_items 之前
+    // 的纯内存检查先挡掉最离谱的请求）。
+    if req.items.len() > PLAN_ITEMS_MAX {
+        return Err(AppError::BadRequest(format!(
+            "items exceeds {PLAN_ITEMS_MAX} entries (got {})",
+            req.items.len()
+        )));
     }
     // period_key 三分支（仅 weekly；见 create_plan 文档注释的权威源说明）。
     // 空白串视同省略（JSON null/""/缺省对"未给出"语义等价——LLM 显然没算周，
@@ -1198,7 +1214,9 @@ async fn regen_plan_link(
 }
 
 /// POST /api/v1/training/items/:id/complete — 完成条目（access，归属链
-/// item→plan.user_id，不属/不存在 → 404）。事务内调 projection::complete_item：
+/// item→plan.user_id，不属/不存在 → 404；**plan 必须 status='active'**——归档 plan
+/// → 404（Task 6 r3 / r3 Minor #4：归档 = 吊销，事件写入与 /s/、/t/ 门禁语义一致，
+/// 归档后不得再记 complete 事件）。事务内调 projection::complete_item：
 /// 记 complete 事件（事件即事实）+ 单调 UPDATE（completed 不回退、completed_at
 /// 不重置）→ 二次完成幂等 200。
 async fn complete_item(
@@ -1211,7 +1229,7 @@ async fn complete_item(
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
     let owned: Option<i32> = sqlx::query_scalar(
         "SELECT i.id FROM learning_items i JOIN learning_plans p ON i.plan_id = p.id \
-         WHERE i.id = $1 AND p.user_id = $2",
+         WHERE i.id = $1 AND p.user_id = $2 AND p.status = 'active'",
     )
     .bind(item_id)
     .bind(user_id)

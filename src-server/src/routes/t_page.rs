@@ -17,6 +17,10 @@
 //! - `POST /t/:token/complete`：body `{item_id}`，校验 ∈ plan（伪造 → 400）后
 //!   projection::complete_item（单调、幂等）。
 //!
+//! **限流（Task 6 r3）**：`/s/:code` 30 次/分钟（key=code）、`/t/` 的 seen/
+//! complete beacon 60 次/分钟（key=sha256(token) 前 16 hex，两端点共桶）——
+//! AppState.limiter（services/rate_limit.rs），超限 `TooManyRequests` → 429。
+//!
 //! **XSS 防线（存储型，本文件的安全核心）**：label 由 LLM 从老师消息生成、
 //! title/reason/content 来自 wiki——全部是不可信输入。`render_t_page` 对所有
 //! 插值内容先做 5 字符 HTML 转义（`& < > " '`），**先转义后 linkify**
@@ -533,6 +537,11 @@ async fn get_s_redirect(
     State(state): State<AppState>,
     Path(code): Path<String>,
 ) -> Result<Redirect, AppError> {
+    // 限流（Task 6 r3）：30 次/分钟，key=code。放最前（先于 DB）——爆表请求
+    // 连短链查询都不该消耗 DB。超限 → TooManyRequests → 429。
+    if !state.limiter.short_link.check(&code) {
+        return Err(AppError::TooManyRequests);
+    }
     // plan.status 门禁（评审 #1）：归档 plan 的短链一并失效（404，与未知 code 同
     // 语义）——归档即止血，教师侧拿 404 回企微要新链，而非继续可跳转。
     let row: Option<(i32, i32)> = sqlx::query_as(
@@ -743,6 +752,11 @@ async fn post_seen(
     Path(token): Path<String>,
     body: Option<Json<SeenBody>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // 限流（Task 6 r3）：beacon 60 次/分钟，key=sha256(token) 前 16 hex
+    // （与 complete 共桶——一个 /t/ 会话的全部 beacon 共用预算）。先于验签/DB。
+    if !state.limiter.beacon.check(&crate::services::rate_limit::beacon_key(&token)) {
+        return Err(AppError::TooManyRequests);
+    }
     let (user_id, plan_id) =
         crate::utils::verify_plan_link_token(&token, state.config.jwt_secret())?;
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
@@ -789,6 +803,10 @@ async fn post_complete(
     Path(token): Path<String>,
     Json(body): Json<CompleteBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // 限流（Task 6 r3）：与 seen 共桶（60 次/分钟，key=token 指纹）。
+    if !state.limiter.beacon.check(&crate::services::rate_limit::beacon_key(&token)) {
+        return Err(AppError::TooManyRequests);
+    }
     let (user_id, plan_id) =
         crate::utils::verify_plan_link_token(&token, state.config.jwt_secret())?;
     let mut tx = state.db.begin().await.map_err(AppError::from)?;

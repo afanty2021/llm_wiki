@@ -22,7 +22,7 @@ pub use db::{create_pool, create_redis_pool, DbPool, RedisPoolType as RedisPool}
 pub use error::{
     AppError, IntoAppError, ERR_AUTH_INVALID, ERR_AUTH_EXPIRED, ERR_PERMISSION_DENIED,
     ERR_RESOURCE_NOT_FOUND, ERR_VALIDATION_FAILED, ERR_DATABASE_ERROR, ERR_FILE_UPLOAD_FAILED,
-    ERR_LLM_API_ERROR, ERR_INTERNAL_ERROR, ERR_CONFLICT,
+    ERR_LLM_API_ERROR, ERR_INTERNAL_ERROR, ERR_CONFLICT, ERR_TOO_MANY_REQUESTS,
 };
 pub use routes::WikiPage;
 
@@ -35,6 +35,10 @@ pub struct AppState {
     pub storage: Arc<dyn services::storage::StorageBackend>,
     pub vector_store: Arc<dyn services::vector_store::VectorStore>,
     pub job_events: broadcast::Sender<JobEvent>,
+    /// t_page 三端点限流（Task 6 r3）：/s/ 30/min（key=code）+ beacon 60/min
+    /// （key=token 指纹，seen/complete 共桶）。两档规格组合为一个字段，内含
+    /// 两个 TokenBucketLimiter（services/rate_limit.rs）。
+    pub limiter: Arc<services::rate_limit::PageRateLimits>,
 }
 
 pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
@@ -69,6 +73,8 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
 
     let (job_events, _job_events_rx) = broadcast::channel::<JobEvent>(64);
 
+    let limiter = Arc::new(services::rate_limit::PageRateLimits::new());
+
     let state = AppState {
         db,
         redis,
@@ -77,6 +83,7 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
         storage,
         vector_store,
         job_events,
+        limiter,
     };
 
     // 构建 CORS 中间件层

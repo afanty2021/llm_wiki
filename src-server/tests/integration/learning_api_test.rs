@@ -68,11 +68,14 @@ async fn learning_fixture(
     assert_eq!(proj.status_code(), StatusCode::CREATED);
     let project_id = proj.json::<serde_json::Value>()["id"].as_i64().unwrap() as i32;
 
-    // 「改 config 后 create_app」（T3 模式，training_test 同款）
+    // 「改 config 后 create_app」（T3 模式，training_test 同款）。
+    // registration_enabled 同 setup_test_app 显式 true（Task 6 r3：default.json 已翻
+    // false，本 fixture 的 app2 也要注册 plain 用户——from_env 直读 default.json）
     crate::ensure_test_jwt_secret();
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.training.project_id = Some(project_id);
     cfg.training.admin_token = "tok123".to_string();
+    cfg.auth.registration_enabled = true;
     let (app2, state) = llm_wiki_server::create_app(cfg).await.unwrap();
     let server = TestServer::new(app2).unwrap();
 

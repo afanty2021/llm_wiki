@@ -35,12 +35,26 @@ describe("withinWindow", () => {
     expect(withinWindow(new Date("2026-08-18T06:00:00"), "23:00-08:00")).toBe(true);
     expect(withinWindow(new Date("2026-08-18T12:00:00"), "23:00-08:00")).toBe(false);
   });
-  it("窗口边界：起点含、终点不含；非跨午夜窗口同规则", () => {
+  it("窗口边界：起点含、终点含（Task 6 r3：一行两处端点均改为闭区间）；非跨午夜窗口同规则", () => {
     expect(withinWindow(new Date("2026-08-18T23:00:00"), "23:00-08:00")).toBe(true);
-    expect(withinWindow(new Date("2026-08-18T08:00:00"), "23:00-08:00")).toBe(false);
+    expect(withinWindow(new Date("2026-08-18T08:00:00"), "23:00-08:00")).toBe(true);  // 跨午夜端点整点 → 含端为 true
+    expect(withinWindow(new Date("2026-08-18T08:01:00"), "23:00-08:00")).toBe(false);
     expect(withinWindow(new Date("2026-08-18T09:00:00"), "09:00-18:00")).toBe(true);
-    expect(withinWindow(new Date("2026-08-18T18:00:00"), "09:00-18:00")).toBe(false);
+    expect(withinWindow(new Date("2026-08-18T18:00:00"), "09:00-18:00")).toBe(true);  // 直区间端点整点 → 含端为 true
+    expect(withinWindow(new Date("2026-08-18T18:01:00"), "09:00-18:00")).toBe(false);
     expect(withinWindow(new Date("2026-08-18T08:59:00"), "09:00-18:00")).toBe(false);
+  });
+  it("单分钟窗口 23:59-23:59 在 23:59:30 → true（分钟粒度：同分即两端皆命中）", () => {
+    expect(withinWindow(new Date("2026-08-18T23:59:30"), "23:59-23:59")).toBe(true);
+    expect(withinWindow(new Date("2026-08-18T23:58:30"), "23:59-23:59")).toBe(false);
+    expect(withinWindow(new Date("2026-08-19T00:00:00"), "23:59-23:59")).toBe(false);  // f==t 非跨午夜分支：cur > t
+  });
+  it("跨午夜窗 23:00-02:00：01:30 → true 且 02:00:00 整 → true（第二处端点）；02:01 → false", () => {
+    expect(withinWindow(new Date("2026-08-19T01:30:00"), "23:00-02:00")).toBe(true);
+    expect(withinWindow(new Date("2026-08-19T02:00:00"), "23:00-02:00")).toBe(true);  // 第二处 cur<t 的端点：02:00 整仍在窗内
+    expect(withinWindow(new Date("2026-08-19T02:01:00"), "23:00-02:00")).toBe(false);
+    expect(withinWindow(new Date("2026-08-18T23:00:00"), "23:00-02:00")).toBe(true);
+    expect(withinWindow(new Date("2026-08-18T12:00:00"), "23:00-02:00")).toBe(false);
   });
   it("非法窗口串抛错（T15 评审遗留：缺端点/非数字/越界都不许静默当合法窗口）", () => {
     expect(() => withinWindow(new Date(), "23:00")).toThrow(/非法窗口串/);       // 缺 "-" 端点

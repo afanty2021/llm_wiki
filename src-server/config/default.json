@@ -20,7 +20,7 @@
     "allowed_origins": ["http://localhost:1420", "http://localhost:5173"]
   },
   "auth": {
-    "registration_enabled": true
+    "registration_enabled": false
   },
   "embedding": {
     "base_url": "http://localhost:8001/v1",

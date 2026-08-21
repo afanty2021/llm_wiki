@@ -22,7 +22,8 @@ export function parseWhisperJson(raw: unknown): Segment[] {
 }
 
 /**
- * 时间窗口判断，支持跨午夜（"23:00-08:00"）。分钟粒度：起点含、终点不含。
+ * 时间窗口判断，支持跨午夜（"23:00-08:00"）。分钟粒度：起点含、终点含（Task 6 r3：
+ * 直区间与跨午夜两处端点均改为闭区间——"23:59-23:59" 这类单分钟窗口不再恒 false）。
  * 管线约定：窗口外打印"窗口结束，明日续跑"并 exit 0（CLI 层在每个文件处理前检查）。
  * 非法窗口串（缺端点/非数字/时>23/分>59）抛错——"23:00" 这类缺端点串若静默通过会被
  * 当成跨午夜窗口只跑 23:00-23:59 一小时，排查成本高（T15 评审遗留收口）。
@@ -37,7 +38,7 @@ export function withinWindow(now: Date, windowStr: string): boolean {
   });
   const [f, t] = minutes;
   const cur = now.getHours() * 60 + now.getMinutes();
-  return f <= t ? cur >= f && cur < t : cur >= f || cur < t; // f > t 即跨午夜
+  return f <= t ? cur >= f && cur <= t : cur >= f || cur <= t; // f > t 即跨午夜
 }
 
 export interface TranscribeOpts {

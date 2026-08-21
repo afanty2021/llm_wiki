@@ -155,7 +155,9 @@ fn parse_admin_usernames(s: &str) -> Vec<String> {
     s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
 }
 
-/// 注册开关（AUTH__REGISTRATION_ENABLED；默认 false，生产保持关闭，dev/test 由 default.json 显式开启）
+/// 注册开关（AUTH__REGISTRATION_ENABLED；默认 false——config/default.json 亦为 false
+/// （Task 6 r3 fail-closed）。dev 由 src-server/.env 显式 true 开启；集成测试由
+/// tests/integration/mod.rs 的 setup_test_app 注入 true（测试二进制不读 .env））
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct AuthConfig {
     #[serde(default)]

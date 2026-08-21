@@ -190,7 +190,8 @@ fn replace_image_paths(text: &str, project_id: i32, images: &[(String, Vec<u8>)]
 
 const CACHE_TTL: u64 = 7 * 24 * 3600;   // 7 天
 
-/// 命中缓存返回 step1 分析 JSON；miss / redis 故障 → None（容错，不致命）。
+/// 命中缓存返回 step1 分析 JSON；miss / redis 故障 / **缓存值为非对象**（Task 6 r3：
+/// 旧版本可能已把 "[]"/"null" 形态写进缓存——非对象视同 miss，重跑真实分析）→ None。
 async fn check_step1_cache(state: &AppState, content_hash: &str) -> Option<serde_json::Value> {
     let mut redis = state.redis.get().await.ok()?;
     let key = format!("ingest:cache:{}", content_hash);
@@ -199,7 +200,9 @@ async fn check_step1_cache(state: &AppState, content_hash: &str) -> Option<serde
         .query_async(&mut *redis)
         .await
         .ok()?;
-    cached.and_then(|s| serde_json::from_str(&s).ok())
+    cached
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .filter(|v| v.is_object())
 }
 
 /// 把 step1 分析结果序列化后写 redis，TTL 7 天。
@@ -335,12 +338,21 @@ async fn step1_analyze_via(
         }
         // 宽容解析：先直接 from_str；失败则抠最外层 {...}（兼容 Qwen3 thinking 残留、
         // markdown fence、前导文字）。与 llm_stream 的 enable_thinking=false 双保险。
+        // **形状校验（Task 6 r3）**：合法 JSON 但非对象（"[]"/"null"/标量——serde 能
+        // 解析的形态）与解析失败同路径：不返回、走重试；绝不放行非对象进 step2 /
+        // step1 缓存（一次放行 = 同 content-hash 永久污染）。
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&response) {
-            return Ok(v);
-        }
-        if let Some(v) = extract_json_object(&response) {
+            if v.is_object() {
+                return Ok(v);
+            }
+            tracing::warn!(
+                project_id,
+                "step1 JSON is not an object (got {}), treating as parse failure",
+                type_of_value(&v)
+            );
+        } else if let Some(v) = extract_json_object(&response) {
             tracing::warn!("step1: 直接 JSON 解析失败，fuzzy 提取兜底成功");
-            return Ok(v);
+            return Ok(v); // extract_json_object 只产出最外层 {...}，必为对象
         }
     }
     let head: String = response.chars().take(80).collect();
@@ -348,6 +360,18 @@ async fn step1_analyze_via(
         "step1 JSON parse failed（无有效 JSON 对象，retried once）| head: {:?}",
         head
     )))
+}
+
+/// serde_json::Value 的形状名（日志用：非对象拒绝时说明拿到的是 array/null/标量）。
+fn type_of_value(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
 }
 
 /// 从文本抠出最外层 `{...}` 并解析。处理 Qwen3 thinking 链、```json fence、前导文字。
@@ -756,7 +780,16 @@ async fn process_source_path(
             v
         };
         let merged = merge_analyses(&analyses);
-        cache_step1_result(state, &content_hash, &merged).await?;
+        // is_object 才入缓存（Task 6 r3 belt-and-braces）：step1_analyze_via 已在解析
+        // 层拒绝非对象，此处守卫防未来新增调用方绕过形状校验把非对象写进 7 天缓存。
+        if merged.is_object() {
+            cache_step1_result(state, &content_hash, &merged).await?;
+        } else {
+            tracing::warn!(
+                project_id,
+                "step1 merged result is not an object, skipping cache write"
+            );
+        }
         merged
     };
 
@@ -1207,6 +1240,74 @@ mod tests {
             2,
             "重试失败后不得有第三次调用"
         );
+    }
+
+    // ── step1 非对象 JSON（"[]"/"null"/标量）不缓存、不返回（Task 6 r3 收编）──
+    // serde_json 能解析非对象合法 JSON（数组/null/数字）：一旦放行会被写入 step1
+    // 缓存并永久污染同 content-hash 的后续 run（step2 拿到畸形 analysis）。要求：
+    // 非对象与解析失败同路径——重试一次真实 LLM 调用，恢复对象则用重试结果；
+    // 两次均非对象 → 报错；任何情况下不返回、不缓存非对象。
+
+    #[tokio::test]
+    async fn step1_analyze_nonobject_json_retries_and_recovers() {
+        // 第一次 "[]"（合法 JSON 数组但非对象）→ 按解析失败重试；第二次合法对象 → 成功。
+        let provider = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text("[]".into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 5 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text(
+                    "{\"entities\":[{\"name\":\"E1\"}],\"connections\":[],\"contradictions\":[]}".into(),
+                ),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 50 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let v = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap();
+        assert!(v.is_object(), "must never return a non-object step1 result");
+        assert_eq!(v["entities"][0]["name"], "E1", "retry 响应必须是最终结果");
+        assert_eq!(
+            provider.calls.lock().unwrap().len(),
+            2,
+            "非对象必须触发恰好一次真实重试（不得静默放行）"
+        );
+    }
+
+    #[tokio::test]
+    async fn step1_analyze_nonobject_json_all_variants_rejected() {
+        // "[]" / "null" / "42" / "\"text\""：两轮全非对象 → 报错（与解析失败同路径，
+        // 错误含 retried once）；恰好 2 次调用；绝不返回非对象。
+        for bad in ["[]", "null", "42", "\"text\""] {
+            let provider = ScriptedProvider::new(vec![
+                Ok(vec![
+                    TokenDelta::Text(bad.into()),
+                    TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 5 },
+                    TokenDelta::Done,
+                ]),
+                Ok(vec![
+                    TokenDelta::Text(bad.into()),
+                    TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 5 },
+                    TokenDelta::Done,
+                ]),
+            ]);
+            let err = step1_analyze_via(&provider, 614, "sys", "prompt", "doc")
+                .await
+                .unwrap_err();
+            match err {
+                AppError::LlmApiError(msg) => assert!(
+                    msg.contains("retried once"),
+                    "非对象两轮失败须与解析失败同路径报错（{bad}）: {msg}"
+                ),
+                other => panic!("expected LlmApiError for {bad}, got {:?}", other),
+            }
+            assert_eq!(
+                provider.calls.lock().unwrap().len(),
+                2,
+                "非对象 {bad} 恰好一次重试，无第三次"
+            );
+        }
     }
 
     #[test]
