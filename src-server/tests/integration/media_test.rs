@@ -106,4 +106,6 @@ async fn media_signing_and_range() {
         .execute(&state.db)
         .await;
     let _ = std::fs::remove_file(&path);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }

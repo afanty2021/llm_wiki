@@ -253,6 +253,8 @@ async fn t_page_token_typ_expiry_and_ownership() {
     .unwrap();
     assert_eq!(n, 0);
     let _ = uid_a;
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// ============ 矩阵 2：渲染 + view 事件（不改投影） ============
@@ -393,6 +395,8 @@ async fn t_page_renders_html_and_records_view_without_projection() {
     .await
     .unwrap();
     assert_eq!(n, 2);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// ============ 矩阵 3：XSS 敌意 fixture ============
@@ -460,6 +464,8 @@ async fn t_page_xss_hostile_fixtures_neutralized() {
     // [mm:ss] 在已转义文本上仍 linkify（时间戳跳转可用）
     assert!(html.contains("data-start=\"42\""), "[00:42] linkified to 42s");
     assert!(html.contains("data-start=\"10\""), "[00:10] linkified to 10s");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// ============ 矩阵 4：seen 双粒度 + Option 提取器 ============
@@ -607,6 +613,8 @@ async fn t_page_seen_beacon_dual_granularity() {
     assert_eq!(r.status_code(), StatusCode::FORBIDDEN);
     let r = server.post("/t/garbage/seen").await;
     assert_eq!(r.status_code(), StatusCode::FORBIDDEN);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// ============ 矩阵 5：complete（∈ plan 校验 + 幂等） ============
@@ -708,6 +716,8 @@ async fn t_page_complete_membership_and_idempotency() {
         .json(&json!({"item_id": item1}))
         .await;
     assert_eq!(r.status_code(), StatusCode::FORBIDDEN);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// ============ 矩阵 6：/media fp 三段式签名 + 两段式兼容 ============
@@ -762,6 +772,8 @@ async fn media_fp_signature_and_legacy_compat() {
         .execute(&state.db)
         .await;
     let _ = std::fs::remove_file(&path);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// ============ 矩阵 8（评审 #1）：plan 归档 → /s/、/t/、beacon 全线 404 ============
@@ -856,6 +868,8 @@ async fn archived_plan_short_link_and_t_page_404() {
         .await
         .unwrap();
     assert_eq!(st, "pending", "archived plan items untouched");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// ============ 矩阵 7（Task 9b）：/s/ 短链现签跳转 ============
@@ -987,4 +1001,6 @@ async fn s_short_link_redirect_matrix() {
         let r = server.get(&format!("/s/{c}")).await;
         assert_eq!(r.status_code(), StatusCode::NOT_FOUND, "revoked code {c} must 404");
     }
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }

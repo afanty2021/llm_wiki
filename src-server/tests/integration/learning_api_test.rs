@@ -123,6 +123,8 @@ async fn auth_required_for_all_four_endpoints() {
             .await;
         assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED, "{desc}");
     }
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
 }
 
 /// 矩阵：仅 event_type="ask" 落库；其他（含 DB CHECK 允许但 API 不收的
@@ -191,6 +193,8 @@ async fn ask_event_persisted_and_other_types_rejected() {
         .await
         .unwrap();
     assert_eq!(n, 2);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// 矩阵：无档案用户 GET/PUT → 404；绑定教师 PUT→GET 往返（可变字段）；
@@ -313,6 +317,8 @@ async fn profile_not_found_then_put_get_roundtrip() {
         .add_header("authorization", bearer(&plain))
         .await;
     assert_eq!(r.status_code(), StatusCode::NOT_FOUND);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
 }
 
 /// 矩阵：progress 空态（plans/recent_events 均空数组）；有数据态——
@@ -418,6 +424,8 @@ async fn progress_empty_then_populated() {
     assert_eq!(evs[0]["event_type"], "ask");
     assert!(evs[0]["created_at"].is_string(), "created_at serialized as string");
     assert!(evs[0]["id"].is_i64());
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 // ============ Task 8：plans / items / link / complete + 事件投影 ============
@@ -625,6 +633,8 @@ async fn plan_create_roundtrip_link_and_get() {
         .add_header("authorization", bearer(&plain))
         .await;
     assert_eq!(r.status_code(), StatusCode::NOT_FOUND);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// period_key 幂等：同 (user, origin, period_key) 二次创建 → 200 且返回既有 plan
@@ -719,6 +729,8 @@ async fn plan_period_key_idempotent_second_create_returns_existing() {
             .await;
         assert_eq!(r.status_code(), StatusCode::CREATED, "NULL period_key never conflicts ({t})");
     }
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// 并发收敛：4 个并发同 period_key 创建 → 恰一个 201、其余 200、同 plan id、无 500。
@@ -787,6 +799,8 @@ async fn plan_period_key_concurrent_converges_without_500() {
         .await
         .unwrap();
     assert_eq!(n_items, 1, "loser items must not append");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// 归属链 404：B 的 token 访 A 的 plan（GET/link/complete）→ 404；
@@ -869,6 +883,8 @@ async fn ownership_chain_404_cross_user() {
     .await
     .unwrap();
     assert_eq!(n, 0);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// 单调 + 幂等 + 重建：complete 落 completed/completed_at；二次 complete 200 且
@@ -1058,6 +1074,8 @@ async fn complete_monotonic_idempotent_and_rebuild() {
             .unwrap();
     let at_r = at_r.expect("completed_at replayed from events");
     assert!(at_r <= at, "replayed completed_at (first complete event) must not be later than original");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// target_ref / body 校验 400 矩阵：非法 kind、绝对路径、wiki_page 不存在、
@@ -1132,4 +1150,6 @@ async fn target_ref_and_body_validation_400() {
         .json(&plan_body("chat", None, json!([{"kind": "media", "target_ref": slug, "label": "l"}])))
         .await;
     assert_eq!(r.status_code(), StatusCode::CREATED, "seeded media slug accepted");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }

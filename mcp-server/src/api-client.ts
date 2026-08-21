@@ -106,6 +106,8 @@ export interface ApiHealth {
   authConfigured?: boolean
   allowUnauthenticated?: boolean
   tokenSource?: string
+  /** src-server 降级详情（healthSrc：/health 含 degraded 字段时透传，见 healthSrc）。 */
+  degraded?: unknown
   [key: string]: unknown
 }
 
@@ -242,9 +244,19 @@ export class LlmWikiApiClient {
 
   // ── src-server 形态端点（路径/方法/响应形状按 src-server 路由实现适配）──
 
-  /** GET /health → {status:"ok"}；无 mcpEnabled 断言（src-server 无此开关）。 */
+  /** GET /health → {status:"ok"}；无 mcpEnabled 断言（src-server 无此开关）。
+   *  响应含 degraded 字段（即使 status 仍报 "ok"）时返回结构化降级结果
+   *  {ok:false, status:"degraded", degraded:<原样透传>}——不把降级态一律当健康。 */
   async healthSrc(): Promise<ApiHealth> {
-    return (await this.requestObject("/health", { auth: false, rawPath: true })) as ApiHealth
+    const raw = await this.requestObject("/health", { auth: false, rawPath: true })
+    if (raw.degraded !== undefined) {
+      return {
+        ok: false,
+        status: "degraded",
+        degraded: raw.degraded,
+      }
+    }
+    return raw as ApiHealth
   }
 
   /** GET /api/v1/search?project_id=&query=&limit=（响应 camelCase：mode/results/tokenHits/vectorHits）。 */
@@ -424,10 +436,16 @@ function parseAuthResponse(value: unknown): ApiAuthResponse {
   if (!access_token || !refresh_token) {
     throw new Error("auth response is missing access_token/refresh_token")
   }
+  // expires_in 硬校验：缺失/非正有限数按失败抛错（调用方走 refresh 失败 → bind 重建链），
+  // 不再 `?? 0` 静默吸收——0 会把 access 缓存立即置过期，畸形响应被当成功。
+  const expires_in = numberOrUndefined(obj.expires_in)
+  if (expires_in === undefined || expires_in <= 0) {
+    throw new Error(`auth response has missing or invalid expires_in: ${JSON.stringify(obj.expires_in)}`)
+  }
   return {
     access_token,
     refresh_token,
-    expires_in: numberOrUndefined(obj.expires_in) ?? 0,
+    expires_in,
     user: {
       id: numberOrUndefined(user.id) ?? 0,
       username: String(user.username ?? ""),

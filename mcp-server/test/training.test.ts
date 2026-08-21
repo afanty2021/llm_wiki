@@ -277,6 +277,52 @@ test("healthSrc: GET /health（无 /api/v1 前缀、无鉴权头），接受 {st
   assert.equal(health.status, "ok")
 })
 
+test("healthSrc: 响应含 degraded 字段 → 结构化降级结果（ok:false + degraded 透传），不再一律健康", async () => {
+  const degradedPayload = { vector: "down", reason: "embedding backend unreachable" }
+  const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url === `${BASE}/health`,
+      then: () => ({ body: { status: "ok", degraded: degradedPayload, timestamp: "2026-08-18T00:00:00Z" } }),
+    },
+  ], [])
+
+  const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
+  const health = await client.healthSrc()
+
+  assert.equal(health.ok, false, "degraded payload must not be reported as healthy")
+  assert.equal(health.status, "degraded")
+  assert.deepEqual(health.degraded, degradedPayload)
+})
+
+test("authRefresh: expires_in 缺失/无效（非正有限数）→ 按失败抛错（上层走 bind 重建），不再静默 0", async () => {
+  const badValues: Array<Record<string, unknown>> = [
+    { expires_in: undefined },   // 缺失（JSON.stringify 丢弃该键）
+    { expires_in: "3600" },      // 字符串形态
+    { expires_in: null },
+    { expires_in: -1 },          // 非正数
+  ]
+  for (const overrides of badValues) {
+    const fetchImpl = mockFetch([
+      { when: (c) => c.url === `${BASE}/api/v1/auth/refresh`, then: () => ({ body: authBody(overrides) }) },
+    ], [])
+    const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
+    await assert.rejects(
+      () => client.authRefresh("ref-old"),
+      /expires_in/,
+      `expires_in=${String(overrides.expires_in)} must fail the auth parse`,
+    )
+  }
+})
+
+test("authRefresh: expires_in 有效 → 正常返回（回归护栏，1800 秒不被误杀）", async () => {
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/auth/refresh`, then: () => ({ body: authBody({ expires_in: 1800 }) }) },
+  ], [])
+  const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
+  const auth = await client.authRefresh("ref-old")
+  assert.equal(auth.expires_in, 1800)
+})
+
 test("llm_wiki_search（src-server 形态）: GET /api/v1/search?project_id&query&limit + Bearer", async () => {
   const calls: RecordedCall[] = []
   const searchBody = {

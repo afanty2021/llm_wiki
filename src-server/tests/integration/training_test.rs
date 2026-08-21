@@ -159,6 +159,8 @@ async fn media_assets_matrix() {
         .await
         .unwrap();
     assert_eq!(n, 1, "upsert must not duplicate rows");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// Task 16a 回归：playback_path 的 COALESCE upsert 语义。
@@ -213,6 +215,8 @@ async fn media_assets_upsert_preserves_playback_path() {
         .await
         .unwrap();
     assert_eq!(mr, "/tmp/a2.mov");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 #[tokio::test]
@@ -269,6 +273,8 @@ async fn media_assets_validation_and_atomicity() {
         .json(&json!({"items":[{"slug":edge_slug,"media_ref":"/tmp/e.mp4","duration_s":10,"kind":"video","chapters":[]}]}))
         .await;
     assert_eq!(r.status_code(), StatusCode::OK);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 // ============ Task 8：POST /api/v1/training/bind ============
@@ -367,6 +373,8 @@ async fn bind_lifecycle() {
         .json(&json!({"refresh_token": refresh2}))
         .await;
     assert_eq!(fresh.status_code(), StatusCode::OK);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// 超 44 chars（触发 username 截断分支）但 ≤ 64（Step 2 新上限内）的 wecom_userid
@@ -400,6 +408,8 @@ async fn bind_truncates_long_wecom_userid_by_chars() {
         .await;
     assert_eq!(r2.status_code(), StatusCode::OK);
     assert_eq!(r2.json::<serde_json::Value>()["user"]["id"], v["user"]["id"]);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
 }
 
 /// fail closed：TRAINING__ADMIN_TOKEN 未配置 → 500（即使无 token 头也绝不放行）；
@@ -436,11 +446,13 @@ async fn bind_fail_closed_on_missing_config() {
     assert_eq!(r.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-/// Step 1（bind 并发竞态）：两个 bind 同时 in-flight（tokio::join!）打同一**新**
-/// wecom_userid。修复前：existing 查询不在事务内且 FOR UPDATE 锁不住 absent 行 →
+/// Step 1（bind 并发竞态）：8 路 bind 同时 in-flight 打同一**新** wecom_userid。
+/// 修复前：existing 查询不在事务内且 FOR UPDATE 锁不住 absent 行 →
 /// 双双 INSERT → 23505 → 一方 500。修复后（事务级 advisory lock）：均 200、同一
 /// user_id、单条 teacher_profiles/单合成账号；且未创建 personal team（M1 行为回归）。
-#[tokio::test]
+/// multi_thread(4)：默认 current_thread 风味下 8 个 future 只是交替 poll，不真正
+/// 并行——advisory lock 的竞态窗口（两个事务同时过 existing 检查）压不出来。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bind_concurrent_same_wecom_userid_converges_on_one_account() {
     let (server, state, _admin, _member) = training_fixture_with_config_project("bindrace").await;
     let wid = unique("race");
@@ -452,12 +464,20 @@ async fn bind_concurrent_same_wecom_userid_converges_on_one_account() {
             .json(b)
             .await
     }
-    let (r1, r2) = tokio::join!(call(&server, &body), call(&server, &body));
-    assert_eq!(r1.status_code(), StatusCode::OK, "both concurrent binds must succeed");
-    assert_eq!(r2.status_code(), StatusCode::OK);
-    let v1 = r1.json::<serde_json::Value>();
-    let v2 = r2.json::<serde_json::Value>();
-    assert_eq!(v1["user"]["id"], v2["user"]["id"], "must converge on the same account");
+    // 8 路真并发（4 worker 线程）：join_all 全部同时 in-flight
+    let responses = futures::future::join_all((0..8).map(|_| call(&server, &body))).await;
+    for (i, r) in responses.iter().enumerate() {
+        assert_eq!(r.status_code(), StatusCode::OK, "concurrent bind #{i} must succeed");
+    }
+    let first = responses[0].json::<serde_json::Value>();
+    for r in &responses[1..] {
+        assert_eq!(
+            r.json::<serde_json::Value>()["user"]["id"],
+            first["user"]["id"],
+            "all 8 must converge on the same account",
+        );
+    }
+    let v1 = &first;
 
     // 只落一条 teacher_profiles 与一个合成账号（无半账号/无双号）
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM teacher_profiles WHERE wecom_userid = $1")
@@ -484,6 +504,8 @@ async fn bind_concurrent_same_wecom_userid_converges_on_one_account() {
         .map(|a| a.len())
         .unwrap();
     assert_eq!(n, 1, "bound user must belong to exactly the LT team, no personal team");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// Step 2（长度校验矩阵）：wecom_userid >64 chars / display_name >100 chars → 400；
@@ -528,6 +550,8 @@ async fn bind_length_validation_matrix() {
     assert_eq!(r.status_code(), StatusCode::OK);
     let uname = r.json::<serde_json::Value>()["user"]["username"].as_str().unwrap().to_string();
     assert!(uname.chars().count() <= 50, "synthesized username must fit VARCHAR(50)");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 // ============ M3 Task 3：GET /training/overview + weekly period_key 自算 ============
@@ -604,6 +628,8 @@ async fn overview_requires_training_admin_token() {
     let v = r.json::<serde_json::Value>();
     assert!(v["teachers"].as_array().is_some(), "teachers must be an array");
     assert!(v["generated_at"].as_str().is_some(), "generated_at must be a string");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
 }
 
 /// 聚合矩阵：两教师（A 有 plan+events、B 空）——
@@ -737,6 +763,8 @@ async fn overview_aggregates_plans_items_events_per_teacher() {
     assert_eq!(tb["items_7d"], json!({"total": 0, "viewed": 0, "completed": 0}));
     assert_eq!(tb["last_active_at"], serde_json::Value::Null);
     assert_eq!(tb["last_ask_at"], serde_json::Value::Null);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// period_key 三分支（origin=weekly）：
@@ -850,6 +878,8 @@ async fn weekly_plan_period_key_server_computed_and_validated() {
             .await
             .unwrap();
     assert_eq!(stored_chat.as_deref(), Some("1999-W01"), "chat passthrough unchanged");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }
 
 /// Task 6 集成冒烟：bind 产出的 access token（内部带 typ="access"）调认证端点 → 200；
@@ -889,4 +919,6 @@ async fn bind_access_token_typ_isolation_smoke() {
         .add_header("authorization", bearer(&plan_link))
         .await;
     assert_eq!(denied.status_code(), StatusCode::UNAUTHORIZED, "plan_link token must not work as an API credential");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }

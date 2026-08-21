@@ -284,6 +284,54 @@ describe("waitJob 总超时 + 有界重试（M2 前置）", () => {
     });
     expect((await c.waitJob("j1")).status).toBe("failed");
   });
+
+  it("重试收窄：4xx（非 429）不重试——404 首发/重试配额充足也立即抛 ApiError（零退避）", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => { calls++; return json(404, { error: { code: "JOB_NOT_FOUND", message: "no such job" } }); }));
+    const sleeps: number[] = [];
+    const c = new ApiClient("http://x", {
+      accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null",
+      pollIntervalMs: 0, sleepFn: recordingSleep(sleeps),
+    });
+    await expect(c.waitJob("j404")).rejects.toThrow(/HTTP 404/);
+    expect(calls).toBe(1);            // 4xx 语义性失败：退避重试同态无意义
+    expect(sleeps).toEqual([]);       // 未进入任何退避
+  });
+
+  it("重试收窄矩阵：400/401/403/409/422 均 1 发即败（401 的 refresh 探测另计）；429 仍按瞬时态退避重试", async () => {
+    for (const s of [400, 401, 403, 409, 422]) {
+      let jobCalls = 0;
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+        // 401 会先走 authedFetch 凭证链（refresh 探测一发，失败后原样返回）——合法行为另计
+        if (String(url).includes("/api/v1/auth/refresh")) return json(401, { error: "nope" });
+        jobCalls++;
+        return json(s, { error: "x" });
+      }));
+      const sleeps: number[] = [];
+      const c = new ApiClient("http://x", {
+        accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null",
+        pollIntervalMs: 0, sleepFn: recordingSleep(sleeps),
+      });
+      await expect(c.waitJob(`j${s}`)).rejects.toThrow(new RegExp(`HTTP ${s}`));
+      expect(jobCalls).toBe(1);      // job 端点恰一发：4xx 不进入退避重试
+      expect(sleeps).toEqual([]);    // 未进入任何退避
+    }
+    // 429 是限流瞬时态：仍吃退避重试
+    const statuses = [429, 200];
+    let calls429 = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      const s = statuses[Math.min(calls429++, statuses.length - 1)];
+      return s === 200 ? json(200, { id: "j1", status: "succeeded" }) : json(s, { error: "slow down" });
+    }));
+    const sleeps: number[] = [];
+    const c = new ApiClient("http://x", {
+      accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null",
+      pollIntervalMs: 0, sleepFn: recordingSleep(sleeps),
+    });
+    expect((await c.waitJob("j1")).status).toBe("succeeded");
+    expect(calls429).toBe(2);
+    expect(sleeps).toEqual([5_000]);
+  });
 });
 
 describe("tryRefresh 守卫（M2 前置：网络/JSON 异常吞掉返回 false，对齐 tryRelogin）", () => {

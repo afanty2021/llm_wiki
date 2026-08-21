@@ -351,8 +351,10 @@ export class ApiClient {
   /** ⑤ 轮询 GET /api/v1/ingest/jobs/:id 至终态（首次立即查，之后按 pollIntervalMs）。
    *  M2 前置健壮化：
    *  - 总超时（默认 {@link WAIT_JOB_DEFAULT_TIMEOUT_MS} 4h）——超时抛错带 job_id，防静默无限轮询；
-   *  - 单次非 2xx 有界重试（默认 3 次，退避 5s/15s/60s）——配额为整轮累计而非连续计数
-   *    （长任务中多次瞬时 5xx 也受同一上限约束）；配额尽后非 2xx 照常抛 ApiError。 */
+   *  - 单次非 2xx 有界重试（默认 3 次，退避 5s/15s/60s）——仅限瞬时态 5xx/429（4xx 是语义性
+   *    失败：404 任务不存在/401 凭证失效，退避重放同态无意义，首发即抛 ApiError）；
+   *    配额为整轮累计而非连续计数（长任务中多次瞬时 5xx 也受同一上限约束）；
+   *    配额尽后非 2xx 照常抛 ApiError。 */
   async waitJob(jobId: string, opts: WaitJobOptions = {}): Promise<JobStatus> {
     const timeoutMs = opts.timeoutMs ?? WAIT_JOB_DEFAULT_TIMEOUT_MS;
     const maxRetries = opts.retryOn5xx ?? WAIT_JOB_RETRY_BACKOFF_MS.length;
@@ -364,7 +366,8 @@ export class ApiClient {
         throw new Error(`waitJob timed out after ${timeoutMs}ms: job ${jobId} 未到终态`);
       }
       const res = await this.authedFetch(url);
-      if (!res.ok && retries < maxRetries) {
+      const retryable = res.status >= 500 || res.status === 429; // 4xx（非 429）立即失败，不退避
+      if (!res.ok && retryable && retries < maxRetries) {
         await this.doSleep(WAIT_JOB_RETRY_BACKOFF_MS[Math.min(retries, WAIT_JOB_RETRY_BACKOFF_MS.length - 1)]);
         retries++;
         continue;

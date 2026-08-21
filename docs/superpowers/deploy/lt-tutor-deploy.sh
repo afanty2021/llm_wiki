@@ -18,7 +18,9 @@
 #      启动 MCP discovery 只读主 config——llm-wiki-training 必须声明于主 config（apply 步骤 3
 #      写入第二个托管块）；profile 内声明保留仅为未来版本兼容。】
 #   3. 内联 custom_providers[].api_key 自足（候选序先于 key_env；multiplex 下无 os.environ 回退）。
-#   4. secondary profile 不得启用 platforms.wecom / wecom_callback → 本 profile platforms: {}。
+#   4. secondary profile 禁 wecom 凭证/回调 → platforms 仅 bot_id-only 块（enabled+extra.bot_id，
+#      无 secret/无 callback）：multiplex 下 cron deliver 预检/投递读 profile config 的 platforms，
+#      bot_id-only 不建第二条 ws、不入凭证指纹，ingress 恒走 default profile 的 live 适配器。
 #   5. {platform: wecom} 路由吃掉所有 wecom 消息；owner 会话靠 chat_id 高特异性路由（4 > 0）抢回
 #      default profile；指向不存在 profile 的路由 = 消息 fail-closed 丢弃。
 #   6. gateway.multiplex_profiles / gateway.profile_routes 嵌套形式受支持。
@@ -66,6 +68,19 @@ c_fail()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 
 die() { c_fail "$*"; exit 1; }
+
+# 原子恢复：备份 → 同目录隐藏临时文件 → rename(2) 替换目标。
+# 直接 cp 是 truncate+写回：中途失败/磁盘满会留下半截 config（gateway 恰在此刻重读即坏）；
+# 同目录 mktemp + mv 保证目标路径上任意时刻都是完整文件（与 merge 写盘同款原子语义）。
+# $1 = 源（备份），$2 = 目标
+atomic_restore() {
+  local src="$1" dst="$2"
+  local tmp
+  tmp=$(mktemp "$(dirname "${dst}")/.$(basename "${dst}").restore.XXXXXX") || die "mktemp 失败: ${dst}"
+  cp -p "${src}" "${tmp}"
+  chmod 600 "${tmp}"
+  mv -f "${tmp}" "${dst}"
+}
 
 # ── 秘密读取（不回显、不落仓库） ──────────────────────────────────────────────
 read_bootstrap_token() {
@@ -129,7 +144,15 @@ cfg = {
         # 只给 skills → 不注册 terminal/file/web（工具白名单）。MCP servers 自动并入。
         "wecom": ["skills"]
     },
-    "platforms": {},                            # secondary profile 禁启用 platforms.wecom / wecom_callback
+    "platforms": {
+        # Hermes multiplex 模式下 cron deliver 预检/投递读 profile config 的 platforms；
+        # bot_id-only 块不建第二条 ws、不入凭证指纹，投递走主 config 的 live 适配器
+        # （与 live 手工修补逐字一致——不吸收则每次 apply 静默抹掉、周五周报投递失效）。
+        "wecom": {
+            "enabled": True,
+            "extra": {"bot_id": "aibeAhIonpN3UeosUsOfbQxJ0faTXquVEar"},   # bot_id 非机密
+        },
+    },
     "mcp_servers": {
         "llm-wiki-training": {
             "command": "node",
@@ -312,6 +335,8 @@ PYEOF
 #   - 已存在等价的**无 marker** 声明（live 手工块：command/args/env 五键形状一致）→ 纳管
 #     （包上 marker；PUBLIC_T_BASE 沿用现值——隧道域名是运行时手工调参，re-apply 不重置；
 #     TRAINING__ADMIN_TOKEN 每次 apply 从 bootstrap.env 现读，轮换即同步）；
+#   - 首次 apply 无现值可沿用 → PUBLIC_T_BASE 必须来自 env（缺失 FATAL：127.0.0.1 默认
+#     会向教师发本机死链）；
 #   - `mcp_servers: {}` 空声明 → 原位替换为托管块；无键 → 插到 gateway 托管块前（否则尾追加）；
 #   - 其他非空声明（别的 server / 形状不符）→ 中止不写盘（与 gateway 块同款保守策略）。
 # $1 = main config 路径;  $2 = dry|write
@@ -340,7 +365,6 @@ FIXED_ENV = {   # 五键中三键恒定；TRAINING__ADMIN_TOKEN 每次现读、P
     "TRAINING__PROJECT_ID": "614",
 }
 ENV_KEYS = set(FIXED_ENV) | {"TRAINING__ADMIN_TOKEN", "PUBLIC_T_BASE"}
-DEFAULT_PUBLIC_T_BASE = "http://127.0.0.1:8080"
 
 raw = open(target).read()
 cfg = yaml.safe_load(raw)
@@ -362,11 +386,24 @@ def server_shape_ok(s):
 existing = cfg.get("mcp_servers")
 existing_srv = existing.get("llm-wiki-training") if isinstance(existing, dict) else None
 
-public_base = DEFAULT_PUBLIC_T_BASE
+# PUBLIC_T_BASE 来源（优先级）：既有托管/live 块现值（re-apply 不重置隧道调参）→ env PUBLIC_T_BASE。
+# 无默认值：127.0.0.1 对教师侧是死链（/t/ 链接发出去打不开）——缺失即 FATAL，由操作者显式提供。
+public_base = ""
 if server_shape_ok(existing_srv):
     b = str((existing_srv.get("env") or {}).get("PUBLIC_T_BASE") or "")
     if b:
         public_base = b
+if not public_base:
+    public_base = (os.environ.get("PUBLIC_T_BASE") or "").strip()
+if not public_base:
+    msg = ("FATAL: PUBLIC_T_BASE 未提供。mcp env 的 PUBLIC_T_BASE 决定教师侧 /t/ 落地链接的"
+           "对外基地址，默认 127.0.0.1 会发出本机死链。请在 apply 时导出真实隧道域名："
+           "PUBLIC_T_BASE=https://<tunnel-domain> ./lt-tutor-deploy.sh apply"
+           "（已部署块存在时沿用现值，不受此限）。")
+    if mode == "dry":
+        print(f"[merge-strategy] {msg}")
+        sys.exit(0)
+    sys.exit(msg)
 
 fresh_server = {
     "command": EXPECTED_CMD,
@@ -504,7 +541,15 @@ stage_profile_dir() {
   "${PY}" - "${PROFILE_DIR}/config.yaml" <<'PYEOF'
 import sys, yaml
 cfg = yaml.safe_load(open(sys.argv[1]))
-assert cfg["platforms"] == {}, "platforms 必须为空（secondary profile 禁 wecom/wecom_callback）"
+pl = cfg["platforms"]
+assert isinstance(pl, dict) and set(pl) == {"wecom"}, \
+    "platforms 必须恰含 wecom 块（multiplex 下 cron deliver 预检/投递读取）"
+wc = pl["wecom"]
+assert isinstance(wc, dict) and wc.get("enabled") is True, "platforms.wecom.enabled 必须 true"
+extra = wc.get("extra")
+assert isinstance(extra, dict) and set(extra) == {"bot_id"} \
+    and extra["bot_id"] == "aibeAhIonpN3UeosUsOfbQxJ0faTXquVEar", \
+    "platforms.wecom.extra 必须恰为 bot_id-only（无 secret/无回调——不建第二条 ws、不入凭证指纹）"
 assert cfg["platform_toolsets"]["wecom"] == ["skills"], "platform_toolsets.wecom 必须恰为 [skills]"
 env = cfg["mcp_servers"]["llm-wiki-training"]["env"]
 for k in ("LLM_WIKI_API_FORM", "LLM_WIKI_API_BASE_URL", "TRAINING__ADMIN_TOKEN",
@@ -512,7 +557,7 @@ for k in ("LLM_WIKI_API_FORM", "LLM_WIKI_API_BASE_URL", "TRAINING__ADMIN_TOKEN",
     assert env.get(k), f"mcp env 缺 {k}"
 assert env["LLM_WIKI_API_FORM"] == "src-server"
 assert cfg["custom_providers"][0]["api_key"], "内联 api_key 缺失"
-print("profile config 自检通过（platforms 空 / toolset=[skills] / mcp env 5 键 / 内联 key）")
+print("profile config 自检通过（platforms=wecom bot_id-only / toolset=[skills] / mcp env 5 键 / 内联 key）")
 PYEOF
   c_ok "profile config: ${PROFILE_DIR}/config.yaml (600)"
   c_ok "skill: ${PROFILE_DIR}/skills/teacher-tutor/SKILL.md"
@@ -554,7 +599,7 @@ PLAN
   section "白名单（工具面）设计核对"
   c_ok "platform_toolsets.wecom = [skills] → 不注册 terminal/file/web（'执行 ls' 无工具可调）"
   c_ok "mcp_servers.llm-wiki-training 由主 config 托管块声明（0.19 启动 discovery 只读主 config；profile 内声明保留仅为未来兼容）"
-  c_ok "platforms = {} → 不启用 platforms.wecom / wecom_callback（ingress 恒为 default profile 适配器）"
+  c_ok "platforms = wecom bot_id-only → 无 secret/无回调：不建第二条 ws、不入凭证指纹（multiplex 下 cron deliver 预检/投递读 profile config）"
   if [[ -f "${PROFILE_DIR}/config.yaml" ]]; then
     c_ok "lt-tutor profile 已就位（${PROFILE_DIR}/config.yaml）→ 路由 fail-closed 前置满足"
   else
@@ -613,14 +658,14 @@ do_apply() {
   section "2/5 合并主 config（multiplex_profiles + 两条保序路由）"
   if ! merge_main_config "${MAIN_CONFIG}" write; then
     c_fail "合并失败，自动恢复备份"
-    cp -p "${backup}" "${MAIN_CONFIG}"
+    atomic_restore "${backup}" "${MAIN_CONFIG}"
     die "已恢复，未产生变更"
   fi
 
   section "3/5 合并主 config（mcp_servers 托管块——0.19 启动 discovery 只读主 config）"
   if ! merge_main_config_mcp "${MAIN_CONFIG}" write; then
     c_fail "mcp_servers 托管块合并失败，自动恢复备份"
-    cp -p "${backup}" "${MAIN_CONFIG}"
+    atomic_restore "${backup}" "${MAIN_CONFIG}"
     die "已恢复，未产生变更"
   fi
 
@@ -669,9 +714,9 @@ import sys, yaml
 yaml.safe_load(open(sys.argv[1]))
 print("备份 YAML 合法")
 PYEOF
-  cp -p "${backup}" "${MAIN_CONFIG}"
-  chmod 600 "${MAIN_CONFIG}"
-  c_ok "已恢复: ${backup} → ${MAIN_CONFIG}"
+  # 原子恢复（mktemp 临时文件 + rename）：cp 截断窗口不会暴露半截 config
+  atomic_restore "${backup}" "${MAIN_CONFIG}"
+  c_ok "已恢复(原子): ${backup} → ${MAIN_CONFIG}"
   # 恢复后确认 lt-tutor 路由已消失
   if "${PY}" - "${MAIN_CONFIG}" <<'PYEOF'
 import sys, yaml
