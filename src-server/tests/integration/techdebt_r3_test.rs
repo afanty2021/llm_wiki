@@ -161,6 +161,9 @@ async fn plan_items_over_50_rejected() {
 
     // 边界：恰 50 项 → 201
     let (_link, _item) = make_plan(&server, &teacher, &slug, 50).await;
+
+    // 测试卫生（评审 R1）：本仓惯例每测试自清
+    crate::teardown_test_data(&state).await;
 }
 
 /// /s/ 限流：同 code 第 31 次（含第 61 次）→ 429 TooManyRequests；他 code 不受影响。
@@ -182,6 +185,11 @@ async fn s_redirect_rate_limited_30_per_minute() {
     assert_eq!(r.status_code(), StatusCode::TOO_MANY_REQUESTS, "31st /s/ hit must 429");
     let body = r.json::<serde_json::Value>();
     assert_eq!(body["error"]["code"], "TOO_MANY_REQUESTS", "429 body carries the new error code");
+    assert_eq!(
+        r.headers().get("retry-after").and_then(|v| v.to_str().ok()),
+        Some("60"),
+        "429 carries Retry-After matching the fixed 60s window (评审 R2)"
+    );
     // 第 61 次 → 仍 429（brief Step 1：61 次 /s/ → 429）
     for _ in 32..=60 {
         let r = server.get(&format!("/s/{code1}")).await;
@@ -195,6 +203,9 @@ async fn s_redirect_rate_limited_30_per_minute() {
     let code2 = link2.strip_prefix("/s/").unwrap().to_string();
     let r = server.get(&format!("/s/{code2}")).await;
     assert_eq!(r.status_code(), StatusCode::SEE_OTHER, "other code unaffected by exhausted key");
+
+    // 测试卫生（评审 R1）
+    crate::teardown_test_data(&state).await;
 }
 
 /// beacon 限流：同 token seen 第 61 次 → 429；seen/complete 共桶（耗尽后 complete 也 429）；
@@ -242,6 +253,9 @@ async fn beacon_seen_rate_limited_60_per_minute() {
     let (_code2, token2) = resolve_short_link(&server, &link2).await;
     let r = server.post(&format!("/t/{token2}/seen")).await;
     assert_eq!(r.status_code(), StatusCode::OK, "other token unaffected by exhausted key");
+
+    // 测试卫生（评审 R1）
+    crate::teardown_test_data(&state).await;
 }
 
 /// 归档事件闸（r3 Minor #4）：archived plan 上 training complete_item 与 /t/ seen/
@@ -296,4 +310,7 @@ async fn archived_plan_complete_and_viewed_404() {
         .await
         .unwrap();
     assert_eq!(st, "pending", "archived plan items untouched");
+
+    // 测试卫生（评审 R1）
+    crate::teardown_test_data(&state).await;
 }

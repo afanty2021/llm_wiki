@@ -34,9 +34,10 @@
 #   在本 CLI 进程内跑，standalone 投递读 profile config——secondary profile 禁配
 #   platforms.wecom（lt-tutor-deploy.sh 事实约束 #4），WeCom 凭证不可得，投递必败。
 #   因此 `fire` 子命令的触发方式 = 注册一个 ~2 分钟后到期的一次性 job（repeat=1
-#   自动单次、跑完自动移除），交由在跑 gateway 的 ticker 执行——与周五 09:0x 的
-#   正式触发走完全相同的执行与投递路径。这也是 runbook 里"周报补救走手动 fire"
-#   的操作入口。
+#   自动单次；跑完转 completed 保留 7 天后被 retention 清理，默认 cron list
+#   过滤 disabled/completed 不可见——评审 F2），交由在跑 gateway 的 ticker 执行——
+#   与周五 09:0x 的正式触发走完全相同的执行与投递路径。这也是 runbook 里
+#   "周报补救走手动 fire"的操作入口。
 #
 # MCP 单实例约束（部署纪律，T10 runbook 观察项）:
 #   llm-wiki-training MCP（node mcp-server/dist/src/index.js）由 multiplex gateway
@@ -140,6 +141,19 @@ check_uid() {
   [[ "${uid}" =~ ^[A-Za-z0-9._-]+$ ]] || die "wecom_userid 含非常规字符（仅允许 [A-Za-z0-9._-]）: ${uid}"
 }
 
+# 软校验（评审 F3）：uid 未出现在 MCP 凭证库时大概率是 typo——注册成功也只是
+# 每周产出"尚未建档"死 job（prompt 有 404 兜底，不破坏数据），故纯告警不阻断。
+warn_if_uid_unknown() {
+  local uid="$1" store="${LT_TEACHERS_STORE:-${HOME}/.llm-wiki-mcp/teachers.json}"
+  if [[ ! -f "${store}" ]]; then
+    c_warn "未找到凭证库 ${store}（跳过 uid 存在性软校验）"
+    return 0
+  fi
+  if ! grep -Fq -- "\"${uid}\"" "${store}"; then
+    c_warn "uid '${uid}' 未出现在 ${store}——请确认拼写；确为新教师则忽略（首次工具调用时会自动 bind 建档）"
+  fi
+}
+
 # 分钟散列：M = cksum(uid) % 15（确定性：同 uid 恒同分钟；15 人分散 09:00-09:14）
 minute_hash() {
   printf '%s' "$1" | cksum | awk '{print $1 % 15}'
@@ -159,10 +173,13 @@ build_prompt() {
 PROMPT
 }
 
-# 按 name 精确查 job id（hermes cron list 输出解析；命中多个全部输出）
+# 按 name 精确查 job id（hermes cron list 输出解析；命中多个全部输出）。
+# uid 允许含 "."（check_uid），动态正则里 "." 是通配符——不转义则 a.b 可命中 aXb
+# 的 job，remove 会误删他人教师（评审 F1）；故先 gsub 转义再拼正则。
 find_job_ids() {
   local name="$1"
   hermes_cli cron list | awk -v target="${name}" '
+    BEGIN { gsub(/\./, "\\.", target) }
     /^  [0-9a-f]+ \[/ { id = $1 }
     $0 ~ "^    Name: +" target "$" { print id }
   '
@@ -171,6 +188,7 @@ find_job_ids() {
 # ── 子命令 ───────────────────────────────────────────────────────────────────
 cmd_add() {
   local uid="$1" m schedule name existing
+  warn_if_uid_unknown "${uid}"
   m=$(minute_hash "${uid}")
   schedule="${m} 9 * * 5"
   name="${JOB_TAG}:${uid}"
@@ -220,8 +238,9 @@ cmd_remove() {
   [[ ${rc} -eq 0 ]] || exit 1
 }
 
-# 手动触发：注册 ~2 分钟后到期的一次性 job（repeat=1 自动单次），交由在跑
-# multiplex gateway 的 ticker 执行（live 适配器投递到教师企微单聊；跑完自动移除）。
+# 手动触发：注册 ~2 分钟后到期的一次性 job（repeat=1 自动单次；跑完转 completed
+# 保留 7 天，默认 list 不可见），交由在跑 multiplex gateway 的 ticker 执行
+# （live 适配器投递到教师企微单聊）。
 cmd_fire() {
   local uid="$1" name existing prompt
   name="${FIRE_TAG}:${uid}"

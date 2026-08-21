@@ -192,7 +192,7 @@ session_meta = {
 
 - [ ] **Step 1: 演练前快照**：服务/隧道/omlx/教师链路可用性基线。
 - [ ] **Step 2: USER 执行重启**（`sudo reboot`）。
-- [ ] **Step 3: 自愈验收清单**：Docker Desktop 自启→双容器 healthy→src-server launchd 起（health 200）→gateway 起（wecom 连）→MCP 子进程→cloudflared 起（`https://api.xiaoluedu.top/health` 200）→omlx-8001 起→iogpu daemon 生效（sysctl 43008）→教师发一句消息全链通。逐项留痕（含耗时）。**另验 cron catch-up（评审 sub-80）**：若重启窗口跨过某 job 触发时刻，gateway 起后观察该 job 是否自动补跑（spec §5.3 语义——补跑与 T5 手动 fire 是并集关系而非等价；实测锚定 Hermes cron 行为，不补跑则记偏差、周报补救走手动 fire）。
+- [ ] **Step 3: 自愈验收清单**：Docker Desktop 自启→双容器 healthy→src-server launchd 起（health 200）→gateway 起（wecom 连）→MCP 子进程→cloudflared 起（`https://api.xiaoluedu.top/health` 200）→omlx-8001 起→iogpu daemon 生效（sysctl 43008）→教师发一句消息全链通。逐项留痕（含耗时）。**另验 cron catch-up（评审 sub-80）**：若重启窗口跨过某 job 触发时刻，gateway 起后观察该 job 是否自动补跑（spec §5.3 语义——补跑与 T5 手动 fire 是并集关系而非等价；实测锚定 Hermes cron 行为，不补跑则记偏差、周报补救走手动 fire）。**另核部署 TZ（实现评审 R6）**：src-server 进程与 Postgres 容器时区须为 Asia/Shanghai（`date` 与容器内 `date` 各留痕）——period_key 服务端自算用 chrono Local，TZ 跑成 UTC 时东八区周一 00:00-07:59 创建的周报会算成上一周（幂等键错位、一周双单）。
 - [ ] **Step 4: 提交** `docs(deploy): M3 重启演练记录（自愈链验收）`
 
 ### Task 10: 灰度 runbook + 验收 + docs 同步

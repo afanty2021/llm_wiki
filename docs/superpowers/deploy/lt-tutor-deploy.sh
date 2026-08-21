@@ -142,7 +142,13 @@ cfg = {
     "platform_toolsets": {
         # 平台会话工具集只认 platform_toolsets.<platform>；顶层 toolsets 无人读取。
         # 只给 skills → 不注册 terminal/file/web（工具白名单）。MCP servers 自动并入。
-        "wecom": ["skills"]
+        "wecom": ["skills"],
+        # cron 同样钉死（评审 S1）：cron 回合未配置时加载全量默认 toolset（含
+        # terminal/process，scheduler _resolve_cron_enabled_toolsets 第 3 级回退）。
+        # 周报 prompt 消费教师可控内容（interests/ask 主题），注入可借 terminal
+        # spawn mcp-server 伪造 _meta 或触达同机 teachers.json——与 wecom 同款收敛。
+        # 注意 per-job enabled_toolsets 优先级更高，创建 job 时勿另行指定。
+        "cron": ["skills"],
     },
     "platforms": {
         # Hermes multiplex 模式下 cron deliver 预检/投递读 profile config 的 platforms；
@@ -551,6 +557,8 @@ assert isinstance(extra, dict) and set(extra) == {"bot_id"} \
     and extra["bot_id"] == "aibeAhIonpN3UeosUsOfbQxJ0faTXquVEar", \
     "platforms.wecom.extra 必须恰为 bot_id-only（无 secret/无回调——不建第二条 ws、不入凭证指纹）"
 assert cfg["platform_toolsets"]["wecom"] == ["skills"], "platform_toolsets.wecom 必须恰为 [skills]"
+assert cfg["platform_toolsets"]["cron"] == ["skills"], \
+    "platform_toolsets.cron 必须恰为 [skills]（评审 S1：不钉死则 cron 回合加载默认集含 terminal）"
 env = cfg["mcp_servers"]["llm-wiki-training"]["env"]
 for k in ("LLM_WIKI_API_FORM", "LLM_WIKI_API_BASE_URL", "TRAINING__ADMIN_TOKEN",
           "TRAINING__PROJECT_ID", "PUBLIC_T_BASE"):
@@ -598,6 +606,7 @@ PLAN
   merge_main_config_mcp "${MAIN_CONFIG}" dry
   section "白名单（工具面）设计核对"
   c_ok "platform_toolsets.wecom = [skills] → 不注册 terminal/file/web（'执行 ls' 无工具可调）"
+  c_ok "platform_toolsets.cron = [skills] → 周报 cron 回合同样无 terminal（评审 S1：默认集含 terminal，注入可伪造 _meta/触达凭证文件）"
   c_ok "mcp_servers.llm-wiki-training 由主 config 托管块声明（0.19 启动 discovery 只读主 config；profile 内声明保留仅为未来兼容）"
   c_ok "platforms = wecom bot_id-only → 无 secret/无回调：不建第二条 ws、不入凭证指纹（multiplex 下 cron deliver 预检/投递读 profile config）"
   if [[ -f "${PROFILE_DIR}/config.yaml" ]]; then

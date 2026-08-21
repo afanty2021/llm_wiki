@@ -541,7 +541,9 @@ async fn bind_length_validation_matrix() {
 
     // 边界值合法：wecom_userid 恰 64、display_name 恰 100 → 200
     // （重复运行走幂等路径同样 200，断言稳定）
-    let edge_id = "b".repeat(64);
+    // 前缀 t6_e（评审 F5）：合成 email=全量 wid@wecom.local——无前缀时 SWEEPS
+    // 的 t6_ 模式扫不到该边界用户，成确定性残留
+    let edge_id = format!("t6_e{}", "b".repeat(60));
     let r = server
         .post("/api/v1/training/bind")
         .add_header("x-training-admin-token", "tok123")

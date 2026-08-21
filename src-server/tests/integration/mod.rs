@@ -48,6 +48,11 @@ use llm_wiki_server::AppState;
 /// cutoff 取「本测试二进制首次 teardown 时刻 - 60s」（DB/客户端钟差余量）——只清
 /// 历史残留；本次运行新建的行留给下一轮收尾（稳态：每轮清上一轮，不再无限累积）。
 /// 在飞测试的行 created_at > cutoff，永不被触碰。
+///
+/// 范围边界（评审 F6）：SWEEPS 只覆盖 LT 域四前缀族（t3_/t6_/t7_/t9_）；同二进制
+/// 内 M1/M2 域测试（permissions/reviews/research/chat_sessions 等，tag 形如
+/// `rev-insert`/`perm-mgmt`）不经本函数清理，每轮净积累——已知取舍，勿误以为
+/// 本函数是全二进制卫生机制；如需收口可为那些文件统一前缀并入 SWEEPS。
 pub async fn teardown_test_data(state: &AppState) {
     use std::sync::OnceLock;
     static CUTOFF: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
