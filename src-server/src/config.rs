@@ -192,8 +192,10 @@ pub struct PageRateLimitConfig {
     pub beacon_per_min: usize,
 }
 
-fn default_page_rate_s_per_min() -> usize { 30 }
-fn default_page_rate_beacon_per_min() -> usize { 60 }
+// 单一真源：字面量只在 rate_limit 常量处存在一次，serde 缺省与 Default 均引用之，
+// 改默认值只动 rate_limit.rs 两常量（否则 serde 兜底与 new() 会静默漂移——评审 minor）。
+fn default_page_rate_s_per_min() -> usize { crate::services::rate_limit::S_REDIRECT_CAP_PER_MIN }
+fn default_page_rate_beacon_per_min() -> usize { crate::services::rate_limit::BEACON_CAP_PER_MIN }
 
 impl Default for PageRateLimitConfig {
     fn default() -> Self {

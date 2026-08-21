@@ -68,11 +68,13 @@ impl FixedWindowLimiter {
 
 /// GET /s/:code 限流默认规格：30 次/分钟（短码跳转，key=code）。
 /// 评审 R4 入 config（AppConfig.page_rate_limits.s_per_min，env
-/// PAGE_RATE_LIMITS__S_PER_MIN 可覆盖）——本常量是 serde 缺省与 PageRateLimits::new 的默认值。
+/// PAGE_RATE_LIMITS__S_PER_MIN 可覆盖）。**默认值单一真源在此**：config.rs 的
+/// serde 缺省函数与 PageRateLimits::new 均引用本常量，改默认只改这里。
 pub const S_REDIRECT_CAP_PER_MIN: usize = 30;
 /// /t/ beacon（seen+complete）限流默认规格：60 次/分钟（key=sha256(token) 前 16 hex）。
 /// 评审 R4 入 config（AppConfig.page_rate_limits.beacon_per_min，env
-/// PAGE_RATE_LIMITS__BEACON_PER_MIN 可覆盖）——本常量是 serde 缺省与 PageRateLimits::new 的默认值。
+/// PAGE_RATE_LIMITS__BEACON_PER_MIN 可覆盖）。**默认值单一真源在此**：config.rs 的
+/// serde 缺省函数与 PageRateLimits::new 均引用本常量，改默认只改这里。
 pub const BEACON_CAP_PER_MIN: usize = 60;
 
 /// t_page 三端点限流规格组合（AppState.limiter 持有，见模块注释）。
