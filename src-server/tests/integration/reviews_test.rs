@@ -139,7 +139,7 @@ async fn dedicated_stage_parses_provider_output() {
         reply: "---REVIEW: missing-page | From Dedicated---\nA gap.\nOPTIONS: Create Page | Skip\nSEARCH: gap query\n---END REVIEW---".into(),
     };
     let step1 = serde_json::json!({"entities":[],"connections":[],"contradictions":[]});
-    let out = run_dedicated_review_stage(&state, pid, "sources/doc.md", "source text", &step1, &step2, &provider).await.unwrap();
+    let out = run_dedicated_review_stage(&state, pid, "sources/doc.md", "source text", &step1, &step2, &provider, None).await.unwrap();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].review_type, "missing-page");
     assert_eq!(out[0].title, "From Dedicated");
@@ -151,7 +151,7 @@ async fn dedicated_stage_skips_below_threshold() {
     let step2 = "short output, no review"; // below all thresholds
     let provider = FakeReviewProvider { reply: "---REVIEW: suggestion | Should Not Happen---\nx\n---END REVIEW---".into() };
     let step1 = serde_json::json!({});
-    let out = run_dedicated_review_stage(&state, pid, "src.md", "t", &step1, step2, &provider).await.unwrap();
+    let out = run_dedicated_review_stage(&state, pid, "src.md", "t", &step1, step2, &provider, None).await.unwrap();
     assert!(out.is_empty());
 }
 

@@ -3,6 +3,7 @@
 // ── Task 2 主流程 imports ──
 use crate::{AppError, AppState};
 use crate::services::ingest_queue::{self, IngestJob, IngestJobResult};
+use crate::services::llm_stream::{self, ChatMessage, ChatOpts};
 use sqlx::Row;
 
 // ── 共用模型 ──
@@ -41,6 +42,59 @@ struct ProcessedSource {
 /// 估算 token 数（粗糙：字符数 / 4，对齐桌面端 simple token estimator）。
 fn estimate_tokens(text: &str) -> usize { text.chars().count() / 4 }
 
+// ── W3（m3-impl-review）：ingest 语言规则提为 project 级配置 ──
+// zh-batch（32b7395a）把「输出简体中文」硬编码进共享 prompt 与 reserved 三模板，
+// 本 server 所有项目的摄取都被迫中文。现改为：projects.ingest_language（迁移 017，
+// NULL = 不注入语言指令 = 原英文中性行为）驱动 prompt 注入 + reserved 模板分流。
+
+/// LANGUAGE RULE 注入文本。Some(language) → 指令段（语言值原样内插，路径/frontmatter
+/// 键/type 枚举保持英文）；None → 空串（{{LANGUAGE_RULE}} 占位符抹除）。
+pub(crate) fn language_rule_text(language: Option<&str>) -> String {
+    match language {
+        None => String::new(),
+        Some(language) => format!(
+            "LANGUAGE RULE (mandatory): All human-readable output text \
+             (titles, descriptions, body, review text) MUST be in {language}. \
+             Keep paths/frontmatter keys/type enums in English. Proper nouns, brand \
+             names, and well-known acronyms (e.g. TKT, TBLT, IELTS) may stay in \
+             their original form."
+        ),
+    }
+}
+
+/// 把 prompt 模板里的 {{LANGUAGE_RULE}} 占位符替换为注入文本（None → 空串）。
+/// 占位符必须被替换而非残留（测试断言无 `{{` 残留）。
+pub(crate) fn render_prompt(template: &str, language: Option<&str>) -> String {
+    template.replace("{{LANGUAGE_RULE}}", &language_rule_text(language))
+}
+
+/// step1 prompt（含占位符渲染）。抽为独立函数供 prompt 注入单测。
+pub(crate) fn step1_prompt(language: Option<&str>) -> String {
+    render_prompt(include_str!("prompts/step1_analyze.txt"), language)
+}
+
+/// step2 prompt（含占位符渲染 + 始终注入的 W2 path slug 约束段——后者写在 .txt 模板
+/// 本体，非语言规则，普适生效）。
+pub(crate) fn step2_prompt(language: Option<&str>) -> String {
+    render_prompt(include_str!("prompts/step2_generate.txt"), language)
+}
+
+/// reserved 三模板的语言分流：language 含「中文/Chinese/zh」（大小写不敏感）→ 中文
+/// 文案（现行为）；None 或其他语言 → 英文文案（zh-batch 前的原文恢复为代码内常量）。
+fn is_chinese_language(language: Option<&str>) -> bool {
+    match language {
+        None => false,
+        Some(language) => {
+            let lower = language.to_lowercase();
+            lower.contains("中文") || lower.contains("chinese") || lower.contains("zh")
+        }
+    }
+}
+
+/// 双语文案分流：中文语言 → zh，否则（None/英文/其他）→ en。
+fn localized<'a>(language: Option<&str>, zh: &'a str, en: &'a str) -> &'a str {
+    if is_chinese_language(language) { zh } else { en }
+}
 /// 长文档分块：按段落边界（\n\n）拆，每 chunk ≤ context_budget。
 /// context_budget = LlmConfig.context_size - 8000（预留 prompt 开销）。
 /// 若某段落 > context_budget，按句子边界（。.!?）硬拆。
@@ -347,15 +401,17 @@ async fn step1_chat(
 }
 
 /// Step 1：分析单个 chunk → 结构化 JSON（entities / concepts / connections / contradictions）。
+/// W3：`language` 来自 projects.ingest_language（None → prompt 不注入语言指令）。
 async fn step1_analyze(
     state: &AppState,
     project_id: i32,
     text: &str,
+    language: Option<&str>,
 ) -> Result<serde_json::Value, AppError> {
     let provider = crate::services::llm_stream::provider_for_project(state, project_id).await?;
-    let prompt = include_str!("prompts/step1_analyze.txt");
+    let prompt = step1_prompt(language);
     let system = "You analyze documents into structured knowledge for a personal wiki.";
-    step1_analyze_via(&*provider, project_id, system, prompt, text).await
+    step1_analyze_via(&*provider, project_id, system, &prompt, text).await
 }
 
 /// step1 的 LLM 调用 + 宽容解析（provider 注入，便于对重试语义做单元测试——同 step1_chat 模式）。
@@ -459,16 +515,30 @@ fn extract_json_object(s: &str) -> Option<serde_json::Value> {
 }
 
 /// Step 2：基于 step1 分析 JSON + 原文，生成 FILE blocks 形式的 wiki 页面。
+/// W3：`language` 来自 projects.ingest_language（None → prompt 不注入语言指令，
+/// path slug 约束等普适段始终在模板本体）。
 async fn step2_generate(
     state: &AppState,
     project_id: i32,
     original_text: &str,
     step1_json: &serde_json::Value,
+    language: Option<&str>,
 ) -> Result<String, AppError> {
-    use crate::services::llm_stream::{self, ChatMessage, ChatOpts};
     let provider = llm_stream::provider_for_project(state, project_id).await?;
-    let prompt = include_str!("prompts/step2_generate.txt");
+    let prompt = step2_prompt(language);
     let system = "You generate wiki pages. Output each page as a FILE block.";
+    step2_generate_via(&*provider, system, &prompt, original_text, step1_json).await
+}
+
+/// step2 的 LLM 调用（provider 注入，与 step1_analyze_via 同模式——prompt 注入单测
+/// 用 ScriptedProvider 捕获实际收到的 prompt 文本）。
+async fn step2_generate_via(
+    provider: &dyn llm_stream::StreamChatProvider,
+    system: &str,
+    prompt: &str,
+    original_text: &str,
+    step1_json: &serde_json::Value,
+) -> Result<String, AppError> {
     // 【编译陷阱】AppError 无 From<serde_json::Error>，必须 map_err。
     let analysis = serde_json::to_string_pretty(step1_json)
         .map_err(|e| AppError::InternalError(format!("serialize step1: {}", e)))?;
@@ -578,16 +648,28 @@ fn fold_page_write_outcomes(outcomes: &[PageWriteOutcome]) -> (usize, bool) {
     (pages_written, all_upserted)
 }
 
+/// W3：加载 project 行的 ingest 上下文（team_id + ingest_language，单查询）。
+/// ingest_language 语义（迁移 017）：NULL → 不注入语言指令（原英文中性行为）；
+/// 有值 → prompt 注入 LANGUAGE RULE + reserved 三模板语言分流。
+/// pub 供集成测试验证装配链（SQL 设值 → Some；默认 NULL → None）。
+pub async fn load_project_ingest_context(
+    state: &AppState,
+    project_id: i32,
+) -> Result<(i32, Option<String>), AppError> {
+    sqlx::query_as("SELECT team_id, ingest_language FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::ResourceNotFound("project not found".into()))
+}
+
 /// ingest job 核心入口。A/B 未就绪前处理 .md 文件为纯文本（无 LLM）。
 pub async fn run_ingest_job(
     state: &AppState,
     job: &IngestJob,
 ) -> Result<IngestJobResult, AppError> {
-    let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id = $1")
-        .bind(job.project_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| AppError::ResourceNotFound("project not found".into()))?;
+    let (team_id, ingest_language) = load_project_ingest_context(state, job.project_id).await?;
+    let language = ingest_language.as_deref();
 
     let mut result = IngestJobResult {
         new_pages: vec![],
@@ -629,7 +711,7 @@ pub async fn run_ingest_job(
         let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
             .await;
 
-        match process_source_path(state, job.project_id, team_id, sp).await {
+        match process_source_path(state, job.project_id, team_id, sp, language).await {
             Ok(None) => {
                 // 内容未变，视为 done
                 let _ =
@@ -732,7 +814,7 @@ pub async fn run_ingest_job(
         return Err(e);
     }
     let _ = ingest_queue::update_job_stage(state, job.id, "building_index", 100).await;
-    match rebuild_reserved_pages(state, job.project_id).await {
+    match rebuild_reserved_pages(state, job.project_id, language).await {
         Ok(reserved) => {
             result.updated_reserved = reserved.iter().map(|(p, _)| p.clone()).collect();
             collected.extend(reserved);  // reserved 页也纳入嵌入
@@ -775,11 +857,13 @@ pub async fn run_ingest_job(
 
 /// 单 source_path 处理：A（llm-wiki-parser 全格式解析）+ B（两步 LLM 生成 wiki pages）。
 /// 返回 Some(ProcessedSource) 表示需落库；返回 None 表示内容未变已跳过（不再重复 mark）。
+/// W3：`language` 来自 projects.ingest_language，穿透到 step1/step2/dedicated review 三处 prompt。
 async fn process_source_path(
     state: &AppState,
     project_id: i32,
     team_id: i32,
     source_path: &str,
+    language: Option<&str>,
 ) -> Result<Option<ProcessedSource>, AppError> {
     // 经 StorageBackend trait 读字节（Phase 1 抽象收敛：与 files.rs docx/xlsx 分支一致，S3 就绪）
     let bytes = state.storage.read_bytes(team_id, project_id, source_path).await?;
@@ -820,11 +904,11 @@ async fn process_source_path(
         let context_budget = ((context_size - 8000).max(8000)) as usize;
         let chunks = chunk_document(&text, context_budget);
         let analyses: Vec<serde_json::Value> = if chunks.len() == 1 {
-            vec![step1_analyze(state, project_id, &chunks[0]).await?]
+            vec![step1_analyze(state, project_id, &chunks[0], language).await?]
         } else {
             let mut v = vec![];
             for chunk in &chunks {
-                v.push(step1_analyze(state, project_id, chunk).await?);
+                v.push(step1_analyze(state, project_id, chunk, language).await?);
             }
             v
         };
@@ -837,7 +921,7 @@ async fn process_source_path(
         merged
     };
 
-    let llm_output = step2_generate(state, project_id, &text, &step1_result).await?;
+    let llm_output = step2_generate(state, project_id, &text, &step1_result, language).await?;
     let blocks = parse_file_blocks(&llm_output);
     let pages: Vec<WikiPageInsert> = blocks
         .into_iter()
@@ -864,6 +948,7 @@ async fn process_source_path(
                 &step1_result,
                 &llm_output,
                 &*provider,
+                language,
             )
             .await
             {
@@ -916,12 +1001,50 @@ pub(crate) async fn upsert_wiki_page(
     Ok(page.path.clone())
 }
 
+/// reserved 三模板的纯渲染（W3：按 language 分流中英文案）。
+/// zh 文案 = zh-batch（32b7395a）现行中文；en 文案 = zh-batch 前英文原文恢复为代码内
+/// 常量（`# Project Index` / `# Ingestion Log` / `# Overview / **Total pages:**`）。
+/// 抽为纯函数供语言分流单测（无 DB 依赖）。
+fn render_reserved_pages(
+    language: Option<&str>,
+    pages: &[(String, Option<String>)],
+    log_rows: &[(String, chrono::DateTime<chrono::Utc>)],
+    page_count: i64,
+    type_counts: &[(String, i64)],
+) -> Vec<(String, String)> {
+    let mut index = format!("# {}\n\n", localized(language, "页面索引", "Project Index"));
+    for (path, title) in pages {
+        let name = title.as_deref().unwrap_or(path);
+        index.push_str(&format!("- [{}]({})\n", name, path));
+    }
+
+    let mut log = format!("# {}\n\n", localized(language, "摄入日志", "Ingestion Log"));
+    for (path, ts) in log_rows {
+        log.push_str(&format!("- {}: {}\n", ts.format("%Y-%m-%d %H:%M"), path));
+    }
+
+    let overview_header = localized(language, "总览", "Overview");
+    let pages_label = localized(language, "**页面总数：**", "**Total pages:**");
+    let mut overview = format!("# {}\n\n{} {}\n\n", overview_header, pages_label, page_count);
+    for (t, c) in type_counts {
+        overview.push_str(&format!("- {}: {}\n", t, c));
+    }
+
+    vec![
+        ("wiki/index.md".to_string(), index),
+        ("wiki/log.md".to_string(), log),
+        ("wiki/overview.md".to_string(), overview),
+    ]
+}
+
 /// 事务内全量重建 wiki/index.md / wiki/log.md / wiki/overview.md（路径必须带 wiki/ 前缀）。
 /// MVP: log.md 取最近 100 条。
 /// 返回 (path, content) 元组，供调用方批量嵌入（内容本就在函数体内构造，零额外查询）。
+/// W3：`language` 驱动三模板中英文案分流（NULL/非中文 → 英文）。
 async fn rebuild_reserved_pages(
     state: &AppState,
     project_id: i32,
+    language: Option<&str>,
 ) -> Result<Vec<(String, String)>, AppError> {
     let mut tx = state.db.begin().await?;
 
@@ -933,11 +1056,6 @@ async fn rebuild_reserved_pages(
     .bind(project_id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut index = "# 页面索引\n\n".to_string();
-    for (path, title) in &pages {
-        let name = title.as_deref().unwrap_or(path);
-        index.push_str(&format!("- [{}]({})\n", name, path));
-    }
 
     // log.md——最近 100 条摄入记录
     let log_rows: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
@@ -947,10 +1065,6 @@ async fn rebuild_reserved_pages(
     .bind(project_id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut log = "# 摄入日志\n\n".to_string();
-    for (path, ts) in &log_rows {
-        log.push_str(&format!("- {}: {}\n", ts.format("%Y-%m-%d %H:%M"), path));
-    }
 
     // overview.md——统计页数与类型分布
     let page_count: i64 = sqlx::query_scalar(
@@ -967,17 +1081,9 @@ async fn rebuild_reserved_pages(
     .bind(project_id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut overview = format!("# 总览\n\n**页面总数：** {}\n\n", page_count);
-    for (t, c) in &type_counts {
-        overview.push_str(&format!("- {}: {}\n", t, c));
-    }
 
-    // 组装 reserved（path, content）——内容本就在函数体内构造，零额外查询
-    let reserved: Vec<(String, String)> = vec![
-        ("wiki/index.md".to_string(), index),
-        ("wiki/log.md".to_string(), log),
-        ("wiki/overview.md".to_string(), overview),
-    ];
+    // 组装 reserved（path, content）——纯渲染（语言分流）+ 零额外查询
+    let reserved = render_reserved_pages(language, &pages, &log_rows, page_count, &type_counts);
     // Upsert 三条 reserved（按引用，保留 reserved 供返回）
     for (path, content) in &reserved {
         sqlx::query(
@@ -1157,10 +1263,12 @@ mod tests {
     use futures::stream::{BoxStream, StreamExt};
 
     /// 脚本化 mock provider：按 script 依次返回（Err = stream_chat 立即失败；
-    /// Ok = 按序 yield TokenDelta 流），并记录每次收到的 ChatOpts 供断言。
+    /// Ok = 按序 yield TokenDelta 流），并记录每次收到的 ChatOpts **与 messages**
+    /// （W3/W2 测试捕获实际发给 LLM 的 prompt 文本）供断言。
     /// script 耗尽后再被调用会 panic（用于断言"无多余重试"）。
     struct ScriptedProvider {
         calls: std::sync::Mutex<Vec<ChatOpts>>,
+        messages: std::sync::Mutex<Vec<Vec<crate::services::llm_stream::ChatMessage>>>,
         script: std::sync::Mutex<
             std::collections::VecDeque<Result<Vec<TokenDelta>, LlmError>>,
         >,
@@ -1170,8 +1278,18 @@ mod tests {
         fn new(script: Vec<Result<Vec<TokenDelta>, LlmError>>) -> Self {
             Self {
                 calls: std::sync::Mutex::new(vec![]),
+                messages: std::sync::Mutex::new(vec![]),
                 script: std::sync::Mutex::new(script.into()),
             }
+        }
+
+        /// 第 `call` 次 LLM 调用的 user message 全文（prompt 注入断言入口）。
+        fn user_message_content(&self, call: usize) -> String {
+            self.messages.lock().unwrap()[call]
+                .iter()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.clone())
+                .expect("scripted call must have a user message")
         }
     }
 
@@ -1179,10 +1297,11 @@ mod tests {
     impl crate::services::llm_stream::StreamChatProvider for ScriptedProvider {
         async fn stream_chat(
             &self,
-            _messages: Vec<crate::services::llm_stream::ChatMessage>,
+            messages: Vec<crate::services::llm_stream::ChatMessage>,
             opts: ChatOpts,
         ) -> Result<BoxStream<'static, Result<TokenDelta, LlmError>>, LlmError> {
             self.calls.lock().unwrap().push(opts);
+            self.messages.lock().unwrap().push(messages);
             let next = self
                 .script
                 .lock()
@@ -1482,5 +1601,167 @@ mod tests {
             fold_page_write_outcomes(&[PageWriteOutcome::GuardSkipped, PageWriteOutcome::UpsertFailed]);
         assert_eq!(wm, 1);
         assert!(!upm);
+    }
+
+    // ── W3（批 C）：语言规则提为 project 级配置——prompt 注入 + reserved 模板分流 ──
+
+    /// W2 跟进（批 C）：step2 prompt 的 path slug 约束锚文本。
+    const SLUG_CONSTRAINT_ANCHOR: &str = "lowercase ASCII slugs";
+
+    #[test]
+    fn language_rule_text_none_empty_some_injects() {
+        // None → 空串（不注入任何语言指令）
+        assert_eq!(language_rule_text(None), "");
+        // Some → 指令段：语言值原样内插 + 路径/frontmatter 键/type 枚举保持英文
+        let rule = language_rule_text(Some("简体中文"));
+        assert!(rule.contains("LANGUAGE RULE"), "有值必须携带标记: {rule}");
+        assert!(rule.contains("MUST be in 简体中文"), "语言值原样内插: {rule}");
+        assert!(
+            rule.contains("Keep paths/frontmatter keys/type enums in English"),
+            "{rule}"
+        );
+    }
+
+    #[test]
+    fn render_prompt_replaces_placeholder() {
+        // None → 占位符抹除（不残留 {{）；Some → 指令注入
+        let none = render_prompt("head\n{{LANGUAGE_RULE}}\ntail", None);
+        assert_eq!(none, "head\n\ntail");
+        let some = render_prompt("head\n{{LANGUAGE_RULE}}\ntail", Some("简体中文"));
+        assert!(some.contains("MUST be in 简体中文"));
+        assert!(!some.contains("{{"));
+    }
+
+    #[tokio::test]
+    async fn step1_prompt_without_language_omits_language_rule() {
+        // project 无 language（ingest_language=NULL）→ LLM 实际收到的 prompt 不含
+        // 语言指令（原英文中性行为），模板主体完好、占位符无残留。
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("{\"entities\":[]}".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 5 },
+            TokenDelta::Done,
+        ])]);
+        step1_analyze_via(&provider, 614, "sys", &step1_prompt(None), "doc")
+            .await
+            .unwrap();
+        let content = provider.user_message_content(0);
+        assert!(
+            !content.contains("LANGUAGE RULE"),
+            "无 language 不得注入语言指令: {content}"
+        );
+        assert!(!content.contains("简体中文"), "{content}");
+        assert!(!content.contains("{{"), "占位符必须被替换: {content}");
+        assert!(content.contains("entities"), "模板主体必须在: {content}");
+        assert!(content.contains("<document>"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn step1_prompt_with_language_injects_rule() {
+        // language='简体中文' → prompt 含指令（语言值原样内插）
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("{\"entities\":[]}".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 5 },
+            TokenDelta::Done,
+        ])]);
+        step1_analyze_via(&provider, 614, "sys", &step1_prompt(Some("简体中文")), "doc")
+            .await
+            .unwrap();
+        let content = provider.user_message_content(0);
+        assert!(content.contains("LANGUAGE RULE"), "{content}");
+        assert!(content.contains("MUST be in 简体中文"), "{content}");
+        assert!(!content.contains("{{"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn step2_prompt_with_language_injects_rule_and_slug_constraint() {
+        // Some → 语言指令 + W2 path slug 约束段都在（slug 约束普适始终注入）
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("---FILE: concepts/a.md ---\nx\n---END FILE---".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 5 },
+            TokenDelta::Done,
+        ])]);
+        step2_generate_via(
+            &provider,
+            "sys",
+            &step2_prompt(Some("简体中文")),
+            "src text",
+            &serde_json::json!({"entities":[]}),
+        )
+        .await
+        .unwrap();
+        let content = provider.user_message_content(0);
+        assert!(content.contains("MUST be in 简体中文"), "{content}");
+        assert!(content.contains(SLUG_CONSTRAINT_ANCHOR), "W2 slug 约束必须在: {content}");
+        assert!(
+            content.contains("Never use spaces, uppercase, parentheses"),
+            "{content}"
+        );
+        // step2 组装结构回归：analysis + source 段照常拼入
+        assert!(content.contains("<analysis>"), "{content}");
+        assert!(content.contains("<source>"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn step2_prompt_without_language_keeps_slug_constraint() {
+        // None → 无语言指令；W2 slug 约束仍在（确定性约束与语言无关）
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("---FILE: concepts/a.md ---\nx\n---END FILE---".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 5 },
+            TokenDelta::Done,
+        ])]);
+        step2_generate_via(
+            &provider,
+            "sys",
+            &step2_prompt(None),
+            "src text",
+            &serde_json::json!({"entities":[]}),
+        )
+        .await
+        .unwrap();
+        let content = provider.user_message_content(0);
+        assert!(!content.contains("LANGUAGE RULE"), "{content}");
+        assert!(content.contains(SLUG_CONSTRAINT_ANCHOR), "{content}");
+        assert!(!content.contains("{{"), "{content}");
+    }
+
+    #[test]
+    fn localized_picks_by_language() {
+        assert_eq!(localized(Some("简体中文"), "中文文案", "en text"), "中文文案");
+        assert_eq!(localized(Some("Chinese"), "zh", "en"), "zh");
+        assert_eq!(localized(Some("ZH-CN"), "zh", "en"), "zh", "大小写不敏感");
+        assert_eq!(localized(Some("English"), "zh", "en"), "en", "非中文语言 → 英文");
+        assert_eq!(localized(None, "zh", "en"), "en", "NULL → 英文（原中性行为）");
+    }
+
+    #[test]
+    fn render_reserved_pages_language_split() {
+        let pages = vec![("concepts/a.md".to_string(), Some("A".to_string()))];
+        let log_rows = vec![(
+            "raw/a.md".to_string(),
+            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
+        )];
+        let counts = vec![("concept".to_string(), 1i64)];
+
+        // 无 language → 英文文案（zh-batch 前的原文恢复）
+        let en = render_reserved_pages(None, &pages, &log_rows, 1, &counts);
+        assert!(en[0].1.starts_with("# Project Index\n"), "{:?}", en[0].1);
+        assert!(en[1].1.starts_with("# Ingestion Log\n"), "{:?}", en[1].1);
+        assert!(en[2].1.starts_with("# Overview\n"), "{:?}", en[2].1);
+        assert!(en[2].1.contains("**Total pages:** 1"), "{:?}", en[2].1);
+
+        // 简体中文 → 现中文文案（zh-batch 行为保持）
+        let zh = render_reserved_pages(Some("简体中文"), &pages, &log_rows, 1, &counts);
+        assert!(zh[0].1.starts_with("# 页面索引\n"), "{:?}", zh[0].1);
+        assert!(zh[1].1.starts_with("# 摄入日志\n"), "{:?}", zh[1].1);
+        assert!(zh[2].1.starts_with("# 总览\n"), "{:?}", zh[2].1);
+        assert!(zh[2].1.contains("**页面总数：** 1"), "{:?}", zh[2].1);
+
+        // 条目行语言无关（页名/路径原样）
+        assert!(zh[0].1.contains("- [A](concepts/a.md)"));
+        assert!(zh[1].1.contains("- 1970-01-01 00:00: raw/a.md"), "{:?}", zh[1].1);
+        // 路径固定带 wiki/ 前缀
+        assert_eq!(zh[0].0, "wiki/index.md");
+        assert_eq!(zh[1].0, "wiki/log.md");
+        assert_eq!(zh[2].0, "wiki/overview.md");
     }
 }

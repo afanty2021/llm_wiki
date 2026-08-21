@@ -322,3 +322,50 @@ async fn mark_job_running_emits_job_running_event() {
         .unwrap();
     assert_eq!(status, "running");
 }
+
+/// W3（批 C）：迁移 017 幂等 + ingest_language 装配链。
+/// - 迁移文件连跑两遍均成功（IF NOT EXISTS 幂等），新项目默认 NULL；
+/// - load_project_ingest_context（run_ingest_job 的单查询加载口）：默认 NULL → None；
+///   SQL 设值（LT 部署将执行同款 UPDATE ... WHERE id=614）→ Some。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn migration_017_idempotent_and_language_context_roundtrip() {
+    let (_server, state, pid, _token) = setup().await;
+
+    // 迁移文件连跑两遍（幂等：IF NOT EXISTS）
+    let sql = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/017_project_ingest_language.sql"
+    ))
+    .unwrap();
+    for _ in 0..2 {
+        sqlx::query(&sql).execute(&state.db).await.unwrap();
+    }
+
+    // 默认 NULL → None（不注入语言指令 = 原英文中性行为）
+    let (team_id, language) =
+        llm_wiki_server::services::ingest_pipeline::load_project_ingest_context(&state, pid)
+            .await
+            .unwrap();
+    assert!(team_id > 0);
+    assert!(language.is_none(), "新项目默认 NULL，got {:?}", language);
+
+    // SQL 设值 → Some（语言值原样透传给 prompt 注入）
+    sqlx::query("UPDATE projects SET ingest_language='简体中文' WHERE id=$1")
+        .bind(pid)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (_, language) =
+        llm_wiki_server::services::ingest_pipeline::load_project_ingest_context(&state, pid)
+            .await
+            .unwrap();
+    assert_eq!(language.as_deref(), Some("简体中文"));
+
+    // 清理：回 NULL（测试项目行随 teardown 前缀清理删除，此处仅保持语义干净）
+    sqlx::query("UPDATE projects SET ingest_language=NULL WHERE id=$1")
+        .bind(pid)
+        .execute(&state.db)
+        .await
+        .unwrap();
+}
