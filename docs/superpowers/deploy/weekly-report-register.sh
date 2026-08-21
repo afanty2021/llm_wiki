@@ -99,12 +99,17 @@ preflight() {
   [[ -d "${LT_PROFILE_HOME}" ]] || die "lt-tutor profile home 不存在: ${LT_PROFILE_HOME}（先跑 lt-tutor-deploy.sh stage/apply）"
   [[ -f "${LT_PROFILE_HOME}/skills/${SKILL_NAME}/SKILL.md" ]] \
     || die "profile 内缺技能 ${LT_PROFILE_HOME}/skills/${SKILL_NAME}/SKILL.md"
-  check_delivery_config
+  # 纯告警不退出：list/remove 不依赖投递配置；add/fire 的 job 注册本身也不依赖
+  # （仅投递会被 blocked_config 拒绝）——不能在 set -e 下经 preflight 误杀（fix r1）。
+  check_delivery_config || true
 }
 
 # 投递前置条件：profile config 需有 platforms.wecom（enabled + extra.bot_id）。
 # 缺失时 deliver=wecom:* 的 job 会被 cron 预检 blocked_config 拒绝（见文件头
 # "投递前置条件"——multiplex ticker 在 profile home override 下读 profile config）。
+# 纯告警不退出（fix round 1，评审 I-1）：本检查只提示"add/fire 前需人工确认投递
+# 配置"，不阻断任何子命令——list/remove 无关投递，add/fire 的 job 注册本身也不
+# 依赖该配置（注册仍有效，仅投递会失败），set -e 下 return 1 会误杀整个脚本。
 check_delivery_config() {
   local ok
   ok=$(LT_CHECK_CONFIG="${LT_PROFILE_HOME}/config.yaml" /usr/bin/env python3 <<'PYEOF' 2>/dev/null
@@ -118,11 +123,12 @@ except Exception:
     ok = False
 print("yes" if ok else "no")
 PYEOF
-)
+) || ok="no"  # python3 本体缺失等执行失败（非零赋值在 set -e 下会直接退出）→ 降级为"未确认"
   if [[ "${ok}" != "yes" ]]; then
-    c_warn "profile config 缺 platforms.wecom（enabled + extra.bot_id）投递配置块——"
-    c_warn "job 将被 cron 预检 blocked_config 拒绝（详见脚本头部'投递前置条件'）。"
-    return 1
+    c_warn "profile config 缺 platforms.wecom（enabled + extra.bot_id）投递配置块"
+    c_warn "（或 python3/PyYAML 不可用，无法确认）——纯告警，不阻断本次操作。"
+    c_warn "add/fire 注册的 job 仍有效，但 deliver=wecom:* 会被 cron 预检 blocked_config"
+    c_warn "拒绝投递——add/fire 前请人工确认配置（详见脚本头部'投递前置条件'）。"
   fi
   return 0
 }
