@@ -18,6 +18,12 @@ Guidelines:
 - Include YAML frontmatter with title, type, sources
 - Cross-reference related concepts with [[wikilinks]]
 
+LANGUAGE RULE (mandatory):
+- Write page titles (frontmatter `title` and the body H1) and ALL body content in Simplified Chinese (简体中文). Proper nouns, brand names, and well-known acronyms (e.g. TKT, TBLT, IELTS) may stay in their original form.
+- Keep `path` as a descriptive English slug (e.g. concepts/zone-of-proximal-development.md). The path is a stable content-addressing anchor and MUST stay ASCII/English — never translate paths.
+- Keep frontmatter keys (title/type/sources) and type enum values (concept/entity/note) in English.
+- In [[wikilinks]]: if the linked concept already has an existing page, use its exact current title so the link stays resolvable; for brand-new concepts, use their Simplified Chinese title.
+
 ## Review blocks (optional, after all FILE blocks)
 
 After all FILE blocks, optionally emit REVIEW blocks for anything needing human judgment.
@@ -29,9 +35,11 @@ Review types:
 - suggestion: ideas for further research or connections worth exploring
 
 Only emit reviews that genuinely need human input. Don't create trivial reviews.
+REVIEW titles and descriptions must also be in Simplified Chinese.
 
 OPTIONS: only use "Create Page" and "Skip" (the system adds a Deep Research action automatically).
 For suggestion/missing-page, include a SEARCH line with 2-3 keyword-rich web search queries.
+SEARCH queries may be in Chinese or English, whichever retrieves better results.
 
 REVIEW block template:
 ---REVIEW: suggestion | Precise title---

@@ -889,7 +889,7 @@ async fn rebuild_reserved_pages(
     .bind(project_id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut index = "# Project Index\n\n".to_string();
+    let mut index = "# 页面索引\n\n".to_string();
     for (path, title) in &pages {
         let name = title.as_deref().unwrap_or(path);
         index.push_str(&format!("- [{}]({})\n", name, path));
@@ -903,7 +903,7 @@ async fn rebuild_reserved_pages(
     .bind(project_id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut log = "# Ingestion Log\n\n".to_string();
+    let mut log = "# 摄入日志\n\n".to_string();
     for (path, ts) in &log_rows {
         log.push_str(&format!("- {}: {}\n", ts.format("%Y-%m-%d %H:%M"), path));
     }
@@ -923,7 +923,7 @@ async fn rebuild_reserved_pages(
     .bind(project_id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut overview = format!("# Overview\n\n**Total pages:** {}\n\n", page_count);
+    let mut overview = format!("# 总览\n\n**页面总数：** {}\n\n", page_count);
     for (t, c) in &type_counts {
         overview.push_str(&format!("- {}: {}\n", t, c));
     }
