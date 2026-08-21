@@ -37,7 +37,7 @@ pub struct AppState {
     pub job_events: broadcast::Sender<JobEvent>,
     /// t_page 三端点限流（Task 6 r3）：/s/ 30/min（key=code）+ beacon 60/min
     /// （key=token 指纹，seen/complete 共桶）。两档规格组合为一个字段，内含
-    /// 两个 TokenBucketLimiter（services/rate_limit.rs）。
+    /// 两个 FixedWindowLimiter（services/rate_limit.rs，评审 R3 正名：实现是固定窗口计数非令牌桶）。
     pub limiter: Arc<services::rate_limit::PageRateLimits>,
 }
 

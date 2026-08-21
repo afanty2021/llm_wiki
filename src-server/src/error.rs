@@ -175,6 +175,17 @@ impl IntoResponse for AppError {
             }
         }));
 
+        // Retry-After（评审 R2，RFC 6585）：限流窗口固定 60s（rate_limit.rs
+        // minute 窗口），429 带固定值即可——beacon 客户端据此退避，无需猜。
+        if matches!(self, AppError::TooManyRequests) {
+            let mut resp = (status, body).into_response();
+            resp.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("60"),
+            );
+            return resp;
+        }
+
         (status, body).into_response()
     }
 }

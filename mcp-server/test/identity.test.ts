@@ -109,6 +109,42 @@ test("边界：args 空白串视为省略；meta user_id 去空白；platform �
   assert.deepEqual(resolveIdentity(undefined, "  T1  "), { mode: "system", wecomUserid: "T1" })
 })
 
+test("对抗补遗（评审 S4）：纯空格 user_id 是 truthy 假象——归一后按不可用硬拒，不落系统模式", () => {
+  // T1 的 truthiness 过滤不会省略 "  "（truthy），它会原样进入 _meta——
+  // 归一侧必须把它当"身份缺失"走 ②，而不是意外落 ③ 系统模式
+  assert.throws(
+    () => resolveIdentity({ hermes_platform: "wecom", hermes_user_id: "  " }, "T1"),
+    IdentityUnavailableError,
+  )
+})
+
+test("对抗补遗（评审 S2/S4）：platform 大小写漂移归一后仍落用户模式（fail-closed 方向）", () => {
+  assert.deepEqual(
+    resolveIdentity({ hermes_platform: "WECOM", hermes_user_id: "T1" }, undefined),
+    { mode: "user", wecomUserid: "T1" },
+  )
+  assert.deepEqual(
+    resolveIdentity({ hermes_platform: " WeCom ", hermes_user_id: "T1" }, undefined),
+    { mode: "user", wecomUserid: "T1" },
+  )
+  // 大小写漂移 + args 不符 → 仍是 IdentityMismatch 硬拒（不得因漂移静默放行到系统模式）
+  assert.throws(
+    () => resolveIdentity({ hermes_platform: "WECOM", hermes_user_id: "T1" }, "T2"),
+    IdentityMismatchError,
+  )
+})
+
+test("对抗补遗（评审 S4）：platform 非字符串（如数字）归一为空 → 系统模式须显式 wecom_userid", () => {
+  assert.deepEqual(
+    resolveIdentity({ hermes_platform: 123, hermes_user_id: "T1" }, "T1"),
+    { mode: "system", wecomUserid: "T1" },
+  )
+  assert.throws(
+    () => resolveIdentity({ hermes_platform: 123, hermes_user_id: "T1" }, undefined),
+    ToolArgumentError,
+  )
+})
+
 test("extractRequestMeta：对象直通，非对象/数组归 undefined", () => {
   assert.deepEqual(extractRequestMeta({ hermes_platform: "wecom" }), { hermes_platform: "wecom" })
   assert.equal(extractRequestMeta(undefined), undefined)

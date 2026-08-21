@@ -1,6 +1,6 @@
 //! 进程内固定窗口限流（Task 6 r3 收编：t_page 三端点防滥用）。
 //!
-//! [`TokenBucketLimiter`] 是规格件：`new(cap, window)` + `check(&self, key) -> bool`，
+//! [`FixedWindowLimiter`] 是规格件：`new(cap, window)` + `check(&self, key) -> bool`，
 //! `Mutex<HashMap<key, (window_start, count)>>` 固定窗口计数，惰性清理——
 //! - **按 key 惰性复位**：命中条目窗口已过 → 视为新窗口从 0 计数（不依赖后台任务）；
 //! - **阈值触发清扫**：map 超过 [`SWEEP_THRESHOLD`] 条时顺带 `retain` 掉全部过期窗口
@@ -24,13 +24,13 @@ use std::time::{Duration, Instant};
 const SWEEP_THRESHOLD: usize = 1024;
 
 /// 固定窗口计数限流器（规格件，见模块注释）。
-pub struct TokenBucketLimiter {
+pub struct FixedWindowLimiter {
     cap: usize,
     window: Duration,
     buckets: Mutex<HashMap<String, (Instant, u32)>>,
 }
 
-impl TokenBucketLimiter {
+impl FixedWindowLimiter {
     pub fn new(cap: usize, window: Duration) -> Self {
         Self {
             cap,
@@ -72,17 +72,17 @@ pub const BEACON_CAP_PER_MIN: usize = 60;
 /// t_page 三端点限流规格组合（AppState.limiter 持有，见模块注释）。
 pub struct PageRateLimits {
     /// GET /s/:code（30/min，key=code）
-    pub short_link: TokenBucketLimiter,
+    pub short_link: FixedWindowLimiter,
     /// POST /t/:token/seen 与 /t/:token/complete（60/min，key=token 指纹，共桶）
-    pub beacon: TokenBucketLimiter,
+    pub beacon: FixedWindowLimiter,
 }
 
 impl PageRateLimits {
     pub fn new() -> Self {
         let minute = Duration::from_secs(60);
         Self {
-            short_link: TokenBucketLimiter::new(S_REDIRECT_CAP_PER_MIN, minute),
-            beacon: TokenBucketLimiter::new(BEACON_CAP_PER_MIN, minute),
+            short_link: FixedWindowLimiter::new(S_REDIRECT_CAP_PER_MIN, minute),
+            beacon: FixedWindowLimiter::new(BEACON_CAP_PER_MIN, minute),
         }
     }
 }
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn allows_up_to_cap_then_denies() {
-        let limiter = TokenBucketLimiter::new(3, Duration::from_secs(60));
+        let limiter = FixedWindowLimiter::new(3, Duration::from_secs(60));
         assert!(limiter.check("k"));
         assert!(limiter.check("k"));
         assert!(limiter.check("k"), "cap 内最后一次放行");
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn keys_are_independent() {
-        let limiter = TokenBucketLimiter::new(1, Duration::from_secs(60));
+        let limiter = FixedWindowLimiter::new(1, Duration::from_secs(60));
         assert!(limiter.check("a"));
         assert!(!limiter.check("a"));
         assert!(limiter.check("b"), "其他 key 不受影响");
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn window_expiry_resets_count() {
-        let limiter = TokenBucketLimiter::new(1, Duration::from_millis(30));
+        let limiter = FixedWindowLimiter::new(1, Duration::from_millis(30));
         assert!(limiter.check("k"));
         assert!(!limiter.check("k"));
         std::thread::sleep(Duration::from_millis(50));

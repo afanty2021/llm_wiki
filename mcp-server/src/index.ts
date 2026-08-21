@@ -440,6 +440,22 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport()
   await server.connect(transport)
   console.error(`LLM Wiki MCP server v${VERSION} (${apiForm} form) connected to ${process.env.LLM_WIKI_API_BASE_URL ?? "http://127.0.0.1:19828"}`)
+  // 启动健康探针（评审 F4）：healthSrc 的生产消费方。非致命——src-server 未起
+  // 或依赖降级只告警（Hermes 拉起顺序不保证 src-server 先就绪），不阻断 MCP 服务。
+  if (apiForm === "src-server") {
+    client
+      .healthSrc()
+      .then((health) => {
+        if (health.ok === false || health.status === "degraded") {
+          console.error("[health] src-server DEGRADED:", JSON.stringify(health.degraded ?? health))
+        } else {
+          console.error("[health] src-server ok")
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[health] src-server unreachable:", err instanceof Error ? err.message : err)
+      })
+  }
 }
 
 // 仅作为可执行入口时启动 stdio transport（被测试 import 时不副作用）

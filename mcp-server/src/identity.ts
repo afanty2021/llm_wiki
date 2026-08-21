@@ -55,7 +55,10 @@ export function resolveIdentity(
   meta: MetaLike | undefined,
   argsWecomUserid: string | undefined,
 ): ResolvedIdentity {
-  const platform = typeof meta?.hermes_platform === "string" ? meta.hermes_platform.trim() : ""
+  // platform 归一大小写（评审 S2）：当前枚举源唯一（Platform.WECOM="wecom"），
+  // 但上游漂移（新枚举/二次封装）写出 "WECOM" 时大小写敏感匹配会静默落系统
+  // 模式 fail-open——归一后漂移仍落用户模式（fail-closed 方向）。
+  const platform = typeof meta?.hermes_platform === "string" ? meta.hermes_platform.trim().toLowerCase() : ""
   const sessionUserid = typeof meta?.hermes_user_id === "string" ? meta.hermes_user_id.trim() : ""
   const argsUserid = typeof argsWecomUserid === "string" ? argsWecomUserid.trim() : ""
 
