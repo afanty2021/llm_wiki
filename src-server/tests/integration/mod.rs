@@ -24,13 +24,20 @@ mod t_page_test;
 use axum::Router;
 use llm_wiki_server::AppState;
 
-/// 测试数据 teardown（测试卫生）：按三套 unique() 的实际前缀清理积累的测试行——
-/// `t6_`（training_test）、`t7_`（learning_api_test + media_test）、`t9_`（t_page_test）。
+/// 测试数据 teardown（测试卫生）：按四套 unique() 的实际前缀清理积累的测试行——
+/// `t6_`（training_test）、`t3_`（training_test M3 Task 3，bind 教师 unique_t3）、
+/// `t7_`（learning_api_test + media_test）、`t9_`（t_page_test）。
 ///
-/// 前缀落点（grep 三套 unique() 的实际用途）：
+/// 前缀落点（grep 四套 unique() 的实际用途）：
 /// - users.username：注册用户 = `t*_*_*`；bind 合成用户 = `wecom_t*_*`
-///   （超长 wecom_userid 按 chars 截断后 username 失去前缀，但 email 仍含——见下）；
-/// - users.email：`t*_*@t*.com`（注册）/ `t*_*@wecom.local`（bind），双列都匹配；
+///   （超长 wecom_userid 按 chars 截断后，username 只剩 `wecom_` + wid 前 30 chars +
+///   digest，username 与 email 的起始 `t*_` 锚点都可能丢——见下）；
+/// - users.email：`t*_*@t*.com`（注册）/ `t*_*@wecom.local`（bind）。username 用起始
+///   锚定 `t*\_%` / `wecom_t*\_%`，但 email 必须非锚定 `%t*\_%`：bind 截断分支合成
+///   email = `{全量 wid}@wecom.local`，wid 前段是任意业务串（如 CJK 混排测试输入）时
+///   email 起始无 `t*_`，起始锚定永远匹配不上、每轮净漏删；非锚定 % 通配理论上有
+///   误删面，但测试 email 域仅 @t*.com / @wecom.local，真实用户 email 不可能含
+///   `t3_`/`t6_`/`t7_`/`t9_` 测试前缀串，安全；
 /// - projects.name：fixtures 统一 `LT项目_<owner_name>`（projects.created_by 无级联，
 ///   残留项目会挡住 users 删除，故最先删；wiki_pages/embeddings 等随项目级联）；
 /// - media_assets.slug：无 user FK，独立按 slug 清。
@@ -49,15 +56,22 @@ pub async fn teardown_test_data(state: &AppState) {
     const SWEEPS: [&str; 3] = [
         // 1) projects 先删：created_by 无级联，残留会让 users 删除撞 FK
         "DELETE FROM projects WHERE created_at < $1 AND (\
-             name LIKE 'LT项目_t6\\_%' OR name LIKE 'LT项目_t7\\_%' OR name LIKE 'LT项目_t9\\_%')",
-        // 2) users：注册（username/email）+ bind 合成（wecom_ 前缀 username / wecom.local email）
+             name LIKE 'LT项目_t3\\_%' OR name LIKE 'LT项目_t6\\_%' \
+             OR name LIKE 'LT项目_t7\\_%' OR name LIKE 'LT项目_t9\\_%')",
+        // 2) users：注册（username/email）+ bind 合成（wecom_ 前缀 username / wecom.local email）。
+        //    email 非锚定 '%t*\_%'：bind 截断分支 email = {全量 wid}@wecom.local，起始可能是
+        //    任意业务串（无 t*_ 锚点），起始锚定漏删；测试 email 域仅 @t*.com/@wecom.local，
+        //    真实用户不含 t3_/t6_ 等测试前缀串，非锚定无误删面（详见函数头注释）。
         "DELETE FROM users WHERE created_at < $1 AND (\
-             username LIKE 't6\\_%' OR username LIKE 't7\\_%' OR username LIKE 't9\\_%' \
-             OR username LIKE 'wecom_t6\\_%' OR username LIKE 'wecom_t7\\_%' OR username LIKE 'wecom_t9\\_%' \
-             OR email LIKE 't6\\_%' OR email LIKE 't7\\_%' OR email LIKE 't9\\_%')",
+             username LIKE 't3\\_%' OR username LIKE 't6\\_%' \
+             OR username LIKE 't7\\_%' OR username LIKE 't9\\_%' \
+             OR username LIKE 'wecom_t3\\_%' OR username LIKE 'wecom_t6\\_%' \
+             OR username LIKE 'wecom_t7\\_%' OR username LIKE 'wecom_t9\\_%' \
+             OR email LIKE '%t3\\_%' OR email LIKE '%t6\\_%' \
+             OR email LIKE '%t7\\_%' OR email LIKE '%t9\\_%')",
         // 3) media_assets：无 user FK，按 slug 清
         "DELETE FROM media_assets WHERE created_at < $1 AND (\
-             slug LIKE 't6\\_%' OR slug LIKE 't7\\_%' OR slug LIKE 't9\\_%')",
+             slug LIKE 't3\\_%' OR slug LIKE 't6\\_%' OR slug LIKE 't7\\_%' OR slug LIKE 't9\\_%')",
     ];
     for sql in SWEEPS {
         sqlx::query(sql)
