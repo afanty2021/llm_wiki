@@ -7,7 +7,7 @@
 // 用法：
 //   node translate-wiki-pages.mjs [--limit N] [--project 614]
 //        [--api http://127.0.0.1:8080] [--omlx http://127.0.0.1:8001]
-//        [--bootstrap <path/to/bootstrap.env>]
+//        [--bootstrap <path/to/bootstrap.env>] [--model NAME]
 //
 // 设计要点（详见 task-zh-batch-report.md）：
 // - 翻译引擎：本地 omlx /v1/chat/completions，模型名从 GET /v1/models 动态取（Qwen 优先）。
@@ -15,20 +15,31 @@
 //   绝不直连 DB——PUT 会触发 re-embed（pages.rs update_page → embed_page），保检索干净。
 // - 鉴权：svc-transcriber 服务账号，凭据从 tools/transcriber/out/bootstrap.env 读
 //   （或 env SVC_USERNAME/SVC_PASSWORD 覆盖），密码不落日志不落 commit。
-// - wikilink 两遍法：Pass1 批量翻译全部标题 → oldTitle→newTitle 全局映射；
-//   Pass2 逐页翻译正文时 [[...]]/代码块替换为 ⟦WLn⟧/⟦Cn⟧ 占位符，译文回来后按映射
-//   还原链接目标（映射里有的才替换，悬空链接保持原样）。
+// - wikilink 别名形式（Fix round 2 C1）：链接一律重写为 [[english-slug|中文标签]]——
+//   slug = 目标页 path 末段（与图谱解析的 stem 表对齐），标签 = 目标页最终标题
+//   （titleMap 有则中文，无/碰撞则原英文）。悬空链接（目标不在页表）保持原样；
+//   链接里已有的 alias 与 #锚点 保留。启动时对已完成页跑链接修复 pass（历史
+//   [[中文标题]] 裸链接改写为别名形式）。
+// - 并发安全（I1）：If-Match 用主循环 GET 时刻的 updated_at；PUT 409 → 重新 GET +
+//   重新翻译该页（不复用旧译文），上限 PUT_ROUNDS 轮。
+// - 备份（I2）：每次启动无条件全量快照全部页面（path/title/updated_at/content/
+//   frontmatter 全字段）到当日新文件（同名已存在则 -2/-3 递增），tmp+rename 原子写。
+// - 进度（I3）：~/.llm-wiki-mcp/translate-progress.json 每页落盘，tmp+rename 原子写。
+// - 碰撞（I4）：Pass1 后检测不同 path 的标题译后同中文/同归一化——碰撞组全部保持
+//   英文标题不翻，告警清单记日志与进度文件（.collisions）。
+// - title 为 null 的页跳过翻译（M2）；PUT frontmatter 以读取到的为准回填
+//   type/sources/images，仅译 title 值与正文（M3）。
 // - path 是内容寻址锚：绝不翻译（concepts/xxx.md 保持英文 slug）。
-// - 可恢复：进度 ~/.llm-wiki-mcp/translate-progress.json（completed + titleMap），重跑跳过；
-//   可回滚：启动前全量快照 ~/.llm-wiki-mcp/translate-backup-<date>.jsonl（仓外）。
-// - 串行逐页（omlx 内存压力前科，不并发）；LLM 失败重试 2 次；PUT 409 走 GET→If-Match 重试环。
+// - 可恢复：重跑跳过 completed；可回滚：备份 jsonl 仓外。
+// - 串行逐页（omlx 内存压力前科，不并发）；LLM 失败重试 2 次；507/Cannot load
+//   快速终止（不落恒等映射、不空烧重试）。
 //
 // 禁改范围（本脚本天然遵守）：transcripts/%（转写页，中文）、wiki/index|log|overview.md
 // （reserved，ingest 重建）、learning_plans/learning_items（本脚本只碰 wiki_pages，经 API）。
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, appendFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ── CLI ──
@@ -57,7 +68,6 @@ const BOOTSTRAP_PATH = ARGS.bootstrap ?? join(REPO_ROOT, "tools/transcriber/out/
 const MCP_HOME = join(homedir(), ".llm-wiki-mcp");
 const PROGRESS_PATH = join(MCP_HOME, "translate-progress.json");
 const AUTH_PATH = join(MCP_HOME, "translate-auth.json");
-const BACKUP_PATH = join(MCP_HOME, `translate-backup-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.jsonl`);
 
 /** reserved 页：ingest 每轮重建，翻译会被覆盖 → 跳过 */
 const RESERVED_PAGES = new Set(["wiki/index.md", "wiki/log.md", "wiki/overview.md"]);
@@ -67,7 +77,7 @@ const ZH_RATIO_SKIP = 0.6;
 const TITLE_CHUNK = 40;
 /** LLM 单次调用失败重试次数（不含首发） */
 const LLM_RETRIES = 2;
-/** PUT If-Match 冲突重试环上限 */
+/** PUT If-Match 冲突重试环上限（409 → 重新 GET + 重新翻译/重写） */
 const PUT_ROUNDS = 3;
 
 // ── bootstrap.env（凭据只进内存，绝不打印） ──
@@ -88,17 +98,32 @@ const PASSWORD = process.env.SVC_PASSWORD ?? BOOT.SVC_PASSWORD;
 if (!Number.isInteger(PROJECT_ID)) die(`PROJECT_ID 无效: ${PROJECT_ID}`);
 if (!PASSWORD) die(`SVC_PASSWORD 缺失（${BOOTSTRAP_PATH} 无 SVC_PASSWORD 且 env 未设）`);
 
-// ── 进度文件 ──
+// ── 原子写（I2/I3：tmp + rename，读者永远看到完整文件） ──
+function atomicWrite(file, data) {
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, file);
+}
+/** 当日新备份文件名；同名已存在则 -2/-3 递增（I2：每次启动无条件新文件） */
+function newBackupPath() {
+  const base = `translate-backup-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`;
+  let p = join(MCP_HOME, `${base}.jsonl`);
+  let n = 2;
+  while (existsSync(p)) p = join(MCP_HOME, `${base}-${n++}.jsonl`);
+  return p;
+}
+
+// ── 进度文件（I3：原子写） ──
 function loadProgress() {
   try {
     const j = JSON.parse(readFileSync(PROGRESS_PATH, "utf-8"));
-    return { completed: new Set(j.completed ?? []), failed: j.failed ?? {}, titleMap: j.titleMap ?? {}, model: j.model ?? null };
-  } catch { return { completed: new Set(), failed: {}, titleMap: {}, model: null }; }
+    return { completed: new Set(j.completed ?? []), failed: j.failed ?? {}, titleMap: j.titleMap ?? {}, collisions: j.collisions ?? [], model: j.model ?? null };
+  } catch { return { completed: new Set(), failed: {}, titleMap: {}, collisions: [], model: null }; }
 }
 function saveProgress(p) {
   mkdirSync(MCP_HOME, { recursive: true });
-  const j = { completed: [...p.completed], failed: p.failed, titleMap: p.titleMap, model: p.model, saved_at: new Date().toISOString() };
-  writeFileSync(PROGRESS_PATH, JSON.stringify(j, null, 2));
+  const j = { completed: [...p.completed], failed: p.failed, titleMap: p.titleMap, collisions: p.collisions, model: p.model, saved_at: new Date().toISOString() };
+  atomicWrite(PROGRESS_PATH, JSON.stringify(j, null, 2));
 }
 const PROGRESS = loadProgress();
 
@@ -113,6 +138,10 @@ function zhRatio(s) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
 function stripThink(s) { return s.replace(/<think>[\s\S]*?<\/think>/gi, "").trim(); }
+/** 归一化链接键：小写 + 空白→连字符（与服务端 graph.rs normalize_stem 对齐） */
+const normKey = (s) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, "-");
+/** path 末段去 .md（= 图谱 stem 表的键） */
+const pathStem = (p) => String(p ?? "").split("/").pop().replace(/\.md$/, "");
 
 // ── src-server API 客户端（login / 401 重登 / GET+PUT If-Match） ──
 let accessToken = null;
@@ -127,7 +156,7 @@ async function apiLogin() {
   accessToken = j.access_token;
   try {
     mkdirSync(MCP_HOME, { recursive: true });
-    writeFileSync(AUTH_PATH, JSON.stringify({ access_token: accessToken, saved_at: new Date().toISOString() }), { mode: 0o600 });
+    atomicWrite(AUTH_PATH, JSON.stringify({ access_token: accessToken, saved_at: new Date().toISOString() }));
     chmodSync(AUTH_PATH, 0o600);
   } catch { /* 持久化失败不致命 */ }
   return accessToken;
@@ -155,19 +184,18 @@ async function apiJson(res, what) {
 }
 function pageUrl(path) { return `/api/v1/projects/${PROJECT_ID}/page?path=${encodeURIComponent(path)}`; }
 
-/** PUT 页面（If-Match 乐观锁；409 → 重新 GET 再试，上限 PUT_ROUNDS 轮）。返回更新后页面。 */
-async function putPage(path, body) {
-  for (let round = 0; round < PUT_ROUNDS; round++) {
-    const cur = await apiJson(await apiFetch(pageUrl(path)), `GET ${path}`);
-    const put = await apiFetch(pageUrl(path), {
-      method: "PUT",
-      headers: { "if-match": cur.updated_at },
-      body: JSON.stringify({ ...body, path }),
-    });
-    if (put.status === 409) { log(`  409 冲突，重新预检 (${round + 1}/${PUT_ROUNDS}): ${path}`); continue; }
-    return apiJson(put, `PUT ${path}`);
-  }
-  throw new Error(`PUT ${path}: If-Match 冲突持续 ${PUT_ROUNDS} 轮`);
+/** PUT 409（If-Match 过期 / 页不存在）——调用方应重新 GET 并重做（I1：不复用旧译文）。 */
+class ConflictError extends Error {}
+
+/** PUT 页面。If-Match 必须用「读取内容那一刻」的 updated_at（I1）；409 抛 ConflictError。 */
+async function putPageIfMatch(path, body, ifMatch) {
+  const put = await apiFetch(pageUrl(path), {
+    method: "PUT",
+    headers: { "if-match": ifMatch },
+    body: JSON.stringify({ ...body, path }),
+  });
+  if (put.status === 409) throw new ConflictError(`PUT ${path}: If-Match 冲突（内容已被并发修改）`);
+  return apiJson(put, `PUT ${path}`);
 }
 
 // ── omlx LLM 客户端 ──
@@ -278,6 +306,112 @@ async function translateTitles(titles) {
   }
 }
 
+// ── 链接解析上下文（C1：title 表 + stem 表 + effTitle，全部页表建，不只目标集） ──
+
+/** 历史遗留恢复映射：前任运行（已 kill）把已完成页链接目标改写为【译后中文标题】，
+ *  其中指向 I4 碰撞组的中文值随恒等化从 titleMap 丢失（collisions 记录亦被后续运行
+ *  覆盖）。以下 pairs 由首发备份 translate-backup-20260821.jsonl 与当前内容按序
+ *  配对回溯得到（2026-08-21 核实，共 6 对），仅用于反查链兜底。 */
+const LEGACY_LINK_RECOVERY = {
+  "IELTS阅读": "IELTS Reading",
+  "KWL图表": "KWL Chart",
+  "合作学习": "Cooperative Learning",
+  "听力微技能": "Listening Sub-skills",
+  "学生档案袋": "Student Portfolio",
+  "教师语言支架": "Scaffolding Through Teacher Language",
+};
+
+function buildLinkCtx(pages) {
+  const exact = new Map();    // 精确 title → path；同 title 多页 → null（歧义）
+  const normTitle = new Map(); // 归一化 title → path；归一化碰撞 → null（歧义）
+  for (const p of pages) {
+    if (!p.title) continue;
+    const prev = exact.get(p.title);
+    exact.set(p.title, prev === undefined ? p.path : null);
+    const k = normKey(p.title);
+    const prevN = normTitle.get(k);
+    normTitle.set(k, prevN === undefined ? p.path : null);
+  }
+  const normStem = new Map(); // 归一化 stem → path；重复 stem 取首个（对齐服务端 build_stem_to_path）
+  for (const p of pages) {
+    const k = normKey(pathStem(p.path));
+    if (!normStem.has(k)) normStem.set(k, p.path);
+  }
+  const effTitle = new Map(); // path → 最终标题（titleMap 有则中文，无/碰撞则原英文）
+  for (const p of pages) {
+    if (!p.title) continue;
+    effTitle.set(p.path, PROGRESS.titleMap[p.title] ?? p.title);
+  }
+  // 反查表：titleMap 值(中文) → 键(原英文标题)。I4 碰撞组已恒等化，值理应唯一；
+  // 万一仍有重复值 → null（歧义不解析）。
+  const revTitle = new Map();
+  for (const [k, v] of Object.entries(PROGRESS.titleMap)) {
+    const prev = revTitle.get(v);
+    revTitle.set(v, prev === undefined ? k : null);
+  }
+  // 碰撞组的译后中文值已被 I4 恒等化覆盖，从 progress.collisions 记录的
+  // translated（覆盖前终值）补建反查——历史 [[中文标题]] 链接仍可回溯到英文标题。
+  for (const c of PROGRESS.collisions ?? []) {
+    for (const m of c.pages ?? []) {
+      if (typeof m?.translated === "string" && typeof m?.title === "string" && m.translated !== m.title) {
+        const prev = revTitle.get(m.translated);
+        if (prev === undefined) revTitle.set(m.translated, m.title);
+        else if (prev !== m.title) revTitle.set(m.translated, null); // 同中文值对应多个英文标题 → 歧义
+      }
+    }
+  }
+  for (const [zh, en] of Object.entries(LEGACY_LINK_RECOVERY)) {
+    if (!revTitle.has(zh)) revTitle.set(zh, en);
+  }
+  return { exact, normTitle, normStem, effTitle, revTitle };
+}
+
+/** 链接目标文本 → 目标页 path（对齐图谱双表解析：stem 优先、title 兜底）。悬空 → null。 */
+function resolveTargetPath(ctx, rawTitle) {
+  const t = String(rawTitle ?? "").trim();
+  if (!t) return null;
+  const ex = ctx.exact.get(t);
+  if (ex) return ex;
+  const nk = normKey(t);
+  const nt = ctx.normTitle.get(nk);
+  if (nt) return nt;
+  const st = ctx.normStem.get(nk);
+  if (st) return st;
+  // 目标页已被翻译（DB 标题已是中文）：经 titleMap 旧标题→新标题 反查
+  const mapped = PROGRESS.titleMap[t];
+  if (mapped && mapped !== t) {
+    const m = ctx.exact.get(mapped);
+    if (m) return m;
+    const mn = ctx.normTitle.get(normKey(mapped));
+    if (mn) return mn;
+  }
+  // 历史遗留：前任脚本把链接改写成了目标页的【译后中文标题】，而目标页本体尚未翻译
+  // （DB 标题仍英文）——经反查表 中文→原英文 再解析
+  const rev = ctx.revTitle.get(t);
+  if (rev && rev !== t) {
+    const r = ctx.exact.get(rev);
+    if (r) return r;
+    const rn = ctx.normTitle.get(normKey(rev));
+    if (rn) return rn;
+    const rs = ctx.normStem.get(normKey(rev));
+    if (rs) return rs;
+  }
+  return null;
+}
+
+/** 渲染别名形式链接：[[slug#锚点|alias或中文标签]]。悬空/异常内容 → 原样返回。 */
+function renderWikilink(slot, ctx) {
+  const path = resolveTargetPath(ctx, slot.target);
+  if (!path) return slot.raw; // 悬空链接保持原样
+  const slug = pathStem(path);
+  if (/[|\[\]\n]/.test(slug)) return slot.raw; // 异常 slug 不硬写
+  const label = ctx.effTitle.get(path) ?? slot.target;
+  const alias = (slot.alias !== undefined && slot.alias !== "")
+    ? slot.alias // 已有 alias 是作者选择的显示文本，保留
+    : (/[|\[\]\n]/.test(label) ? slot.target : label);
+  return `[[${slug}${slot.anchor ?? ""}|${alias}]]`;
+}
+
 // ── wikilink / 代码块占位符 ──
 const LINK_RE = /\[\[([^\[\]]+?)\]\]/g;
 const FENCE_RE = /```[\s\S]*?(?:```|$)/g;
@@ -302,23 +436,57 @@ function maskWikilinks(body) {
   });
   return { masked, slots };
 }
-/** 译文里还原占位符：wl 按映射换目标（悬空保持原样），code 原样还原。 */
-function unmaskWikilinks(translated, slots) {
+const slotToken = (s, i) => `${s.kind === "wl" ? "\u27e6WL" : "\u27e6C"}${i}\u27e7`;
+
+/** 译文里还原占位符：wl 按解析结果改写为别名形式（悬空原样），code 原样还原。 */
+function unmaskWikilinks(translated, slots, ctx) {
   let out = translated;
   for (let i = 0; i < slots.length; i++) {
     const s = slots[i];
-    const token = `${s.kind === "wl" ? "\u27e6WL" : "\u27e6C"}${i}\u27e7`;
-    const replacement = s.kind === "code" ? s.raw
-      : `[[${PROGRESS.titleMap[s.target] ?? s.target}${s.anchor ?? ""}${s.alias !== undefined ? `|${s.alias}` : ""}]]`;
-    if (!out.includes(token)) throw new Error(`译文丢失占位符 ${token}（LLM 改动了受保护内容）`);
-    out = out.split(token).join(replacement);
+    const replacement = s.kind === "code" ? s.raw : renderWikilink(s, ctx);
+    if (!out.includes(slotToken(s, i))) throw new Error(`译文丢失占位符 ${slotToken(s, i)}（LLM 改动了受保护内容）`);
+    out = out.split(slotToken(s, i)).join(replacement);
   }
   // 容错：LLM 偶尔会把 ⟦WLn⟧ 写成 [[WLn]] 等
   out = out.replace(/\[\[WL(\d+)\]\]/g, (_, n) => slots[Number(n)]?.raw ?? _);
   return out;
 }
 
-// ── Pass 2：单页翻译 ──
+/** 确定性链接改写（修复 pass 用，不经 LLM）：全部 [[...]] 按别名形式重写，fence 不动。 */
+function rewriteLinksInBody(body, ctx) {
+  const { masked, slots } = maskWikilinks(body);
+  let out = masked;
+  for (let i = 0; i < slots.length; i++) {
+    out = out.split(slotToken(slots[i], i)).join(slots[i].kind === "code" ? slots[i].raw : renderWikilink(slots[i], ctx));
+  }
+  return out;
+}
+
+// ── I4：标题碰撞检测——碰撞组全部保持英文标题不翻 ──
+function detectAndApplyTitleCollisions(pages) {
+  const groups = new Map(); // normKey(最终标题) → [{path, title}]
+  for (const p of pages) {
+    if (!p.title) continue;
+    const eff = PROGRESS.titleMap[p.title] ?? p.title;
+    const k = normKey(eff);
+    const list = groups.get(k) ?? [];
+    list.push({ path: p.path, title: p.title, eff });
+    groups.set(k, list);
+  }
+  const collisions = [];
+  for (const [k, members] of groups) {
+    if (members.length <= 1) continue;
+    for (const m of members) PROGRESS.titleMap[m.title] = m.title; // 保持英文标题
+    collisions.push({ normalizedTitle: k, pages: members.map((m) => ({ path: m.path, title: m.title, translated: m.eff })) });
+    log(`I4 碰撞: 标题 "${members[0].eff}" 归一化后为 "${k}"，被 ${members.length} 页共享——整组保持英文标题:`);
+    for (const m of members) log(`    ${m.path} (原 title: ${m.title})`);
+  }
+  PROGRESS.collisions = collisions;
+  if (collisions.length > 0) log(`I4: 共 ${collisions.length} 组标题碰撞，清单已记入进度文件 .collisions`);
+  return collisions;
+}
+
+// ── Pass 2：单页翻译（只组装 PUT body，不发送——I1 由主循环持有 GET 时刻的 If-Match） ──
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 function rewriteFrontmatterTitle(fmText, newTitle) {
@@ -331,12 +499,22 @@ function rewriteFrontmatterTitle(fmText, newTitle) {
   return lines.join("\n");
 }
 
-async function translatePage(page) {
-  const { path } = page;
-  const content = page.content ?? "";
-  if (!content.trim()) return { status: "skipped", reason: "空内容" };
-  if (zhRatio(content) > ZH_RATIO_SKIP) return { status: "skipped", reason: `中文占比 ${Math.round(zhRatio(content) * 100)}%` };
+/** M3：PUT frontmatter 以读取到的为准——保留原键，回填缺失的 type/sources/images（DB 列值），
+ *  仅 title 值被替换。防止 denormalize 默认值悄悄改写 page_type/sources。 */
+function normalizedFrontmatter(page, newTitle) {
+  const fm = (page.frontmatter && typeof page.frontmatter === "object" && !Array.isArray(page.frontmatter))
+    ? { ...page.frontmatter }
+    : {};
+  if (newTitle != null) fm.title = newTitle;
+  if (fm.type === undefined) fm.type = page.page_type ?? "concept";
+  if (fm.sources === undefined) fm.sources = page.sources ?? [];
+  if (fm.images === undefined) fm.images = page.images ?? [];
+  return fm;
+}
 
+async function composePageUpdate(page, ctx) {
+  if (!page.title) throw new Error("title 为 null（M2 应在主循环跳过）");
+  const content = page.content ?? "";
   const newTitle = PROGRESS.titleMap[page.title] ?? page.title;
   const m = FM_RE.exec(content);
   const fmText = m ? m[1] : null;
@@ -360,18 +538,58 @@ async function translatePage(page) {
     "4. 只输出翻译后的 Markdown 正文，不要任何前言、解释或代码围栏包裹。",
   ].join("\n");
   const translated = await llm([{ role: "system", content: sys }, { role: "user", content: masked }]);
-  let newBody = unmaskWikilinks(translated, slots);
+  const newBody = unmaskWikilinks(translated, slots, ctx);
 
   const newContent = fmText !== null
     ? `---\n${rewriteFrontmatterTitle(fmText, newTitle)}\n---\n\n${newBody.replace(/^\s+/, "")}\n`
     : `${newBody.replace(/^\s+/, "")}\n`;
 
-  const fmJson = (page.frontmatter && typeof page.frontmatter === "object" && !Array.isArray(page.frontmatter))
-    ? { ...page.frontmatter, title: newTitle }
-    : { title: newTitle };
+  return { title: newTitle, content: newContent, frontmatter: normalizedFrontmatter(page, newTitle) };
+}
 
-  const updated = await putPage(path, { title: newTitle, content: newContent, frontmatter: fmJson });
-  return { status: "ok", title: newTitle, zh: Math.round(zhRatio(newContent) * 100), updated_at: updated.updated_at };
+// ── C1 修复 pass：已完成页的 [[中文标题]] 裸链接 → [[slug|中文标签]] 别名形式 ──
+async function repairCompletedLinks(pages, ctx) {
+  const list = pages.filter((p) => PROGRESS.completed.has(p.path)).sort((a, b) => a.path.localeCompare(b.path));
+  if (list.length === 0) { log("链接修复 pass：无已完成页"); return; }
+  log(`链接修复 pass：${list.length} 页（[[中文标题]] → [[slug|中文标签]]，幂等）`);
+  let fixed = 0, untouched = 0, failed = 0;
+  for (const p of list) {
+    try {
+      for (let round = 0; round < PUT_ROUNDS; round++) {
+        const fresh = await apiJson(await apiFetch(pageUrl(p.path)), `GET ${p.path}`);
+        const content = fresh.content ?? "";
+        if (!content.trim()) { untouched++; break; }
+        const newContent = rewriteLinksInBody(content, ctx);
+        if (newContent === content) { untouched++; break; }
+        try {
+          const body = { content: newContent, frontmatter: normalizedFrontmatter(fresh, fresh.title) };
+          if (fresh.title != null) body.title = fresh.title;
+          await putPageIfMatch(p.path, body, fresh.updated_at);
+          fixed++;
+          log(`  已修复 ${p.path}`);
+          break;
+        } catch (e) {
+          if (e instanceof ConflictError && round < PUT_ROUNDS - 1) { log(`  409，重取重写 (${round + 1}/${PUT_ROUNDS}): ${p.path}`); continue; }
+          throw e;
+        }
+      }
+    } catch (e) {
+      failed++;
+      log(`  修复失败 ${p.path}: ${String(e.message ?? e).slice(0, 200)}`);
+    }
+  }
+  log(`链接修复 pass 完成：改写 ${fixed} / 无需改动 ${untouched} / 失败 ${failed}`);
+}
+
+// ── I2：无条件全量备份（每次启动新文件，全字段，tmp+rename 原子写） ──
+function backupAllPages(pages) {
+  const file = newBackupPath();
+  const lines = pages.map((p) =>
+    JSON.stringify({ path: p.path, title: p.title, updated_at: p.updated_at, content: p.content, frontmatter: p.frontmatter }),
+  ).join("\n") + "\n";
+  atomicWrite(file, lines);
+  log(`备份 ${pages.length} 页（path/title/updated_at/content/frontmatter 全字段）→ ${file}`);
+  return file;
 }
 
 // ── 主流程 ──
@@ -386,30 +604,35 @@ async function main() {
   const pages = await apiJson(await apiFetch(`/api/v1/projects/${PROJECT_ID}/pages`), "GET pages");
   log(`项目共 ${pages.length} 页`);
 
-  // 目标集：非 transcripts/、非 reserved、未完成、非空
-  const targets = pages.filter((p) =>
+  // 目标集：非 transcripts/、非 reserved、未完成、非空、title 非 null（M2）
+  const candidates = pages.filter((p) =>
     !p.path.startsWith("transcripts/") &&
     !RESERVED_PAGES.has(p.path) &&
     !PROGRESS.completed.has(p.path) &&
     (p.content ?? "").trim() !== "",
   );
-  log(`目标集 ${targets.length} 页（排除 transcripts/reserved/已完成；含已是中文待启发式跳过）`);
+  const targets = candidates.filter((p) => p.title != null);
+  const nullTitle = candidates.filter((p) => p.title == null);
+  log(`目标集 ${targets.length} 页（排除 transcripts/reserved/已完成/空内容${nullTitle.length ? `；M2: ${nullTitle.length} 页 title 为 null 跳过翻译` : ""}）`);
+  if (nullTitle.length > 0) for (const p of nullTitle) log(`  M2 SKIP ${p.path}: title 为 null`);
 
-  // 回滚备份：当日文件已存在则跳过（保留首发快照；--limit 干跑与全量共用同一份全量快照）
-  if (!existsSync(BACKUP_PATH)) {
-    mkdirSync(MCP_HOME, { recursive: true });
-    for (const p of targets) {
-      appendFileSync(BACKUP_PATH, JSON.stringify({ path: p.path, title: p.title, updated_at: p.updated_at, content: p.content }) + "\n");
-    }
-    log(`备份 ${targets.length} 页 → ${BACKUP_PATH}`);
-  } else {
-    log(`备份已存在，跳过: ${BACKUP_PATH}`);
-  }
+  // I2：无条件全量快照备份（每次启动新文件）
+  backupAllPages(pages);
 
-  // Pass 1：全量标题映射（--limit 也全量建映射，保证干跑页的 wikilink 也能替换）
-  await translateTitles(targets.map((p) => p.title ?? p.path));
+  // Pass 1：全量标题映射（--limit 也全量建映射，保证干跑页的链接也能替换）
+  await translateTitles(targets.map((p) => p.title));
 
-  // Pass 2：逐页串行
+  // I4：标题碰撞检测——碰撞组保持英文标题
+  detectAndApplyTitleCollisions(pages);
+  saveProgress(PROGRESS);
+
+  // C1：链接解析上下文（备份/映射定型后构建）
+  const ctx = buildLinkCtx(pages);
+
+  // C1：已完成页链接修复 pass（幂等，重跑无改动即跳过）
+  await repairCompletedLinks(pages, ctx);
+
+  // Pass 2：逐页串行（I1：If-Match 用 GET 时刻 updated_at；409 → 重新 GET + 重新翻译）
   const order = targets.slice().sort((a, b) => a.path.localeCompare(b.path));
   const queue = order.slice(0, ARGS.limit);
   let ok = 0, skipped = 0, failed = 0;
@@ -417,11 +640,39 @@ async function main() {
     const p = queue[i];
     const progress = `[${i + 1}/${queue.length}]`;
     try {
-      // 每页重新 GET：拿最新 updated_at（If-Match）与 frontmatter
-      const fresh = await apiJson(await apiFetch(pageUrl(p.path)), `GET ${p.path}`);
-      const r = await translatePage(fresh);
-      if (r.status === "skipped") { skipped++; PROGRESS.completed.add(p.path); log(`${progress} SKIP ${p.path}: ${r.reason}`); }
-      else { ok++; PROGRESS.completed.add(p.path); delete PROGRESS.failed[p.path]; log(`${progress} OK   ${p.path} -> ${r.title} (中文 ${r.zh}%)`); }
+      let done = false;
+      for (let round = 0; round < PUT_ROUNDS && !done; round++) {
+        // 每轮重新 GET：拿翻译基线内容 + If-Match（同一时刻）
+        const fresh = await apiJson(await apiFetch(pageUrl(p.path)), `GET ${p.path}`);
+        if (fresh.title == null) {
+          skipped++; PROGRESS.completed.add(p.path);
+          log(`${progress} SKIP ${p.path}: title 为 null`);
+          break;
+        }
+        if (!(fresh.content ?? "").trim()) {
+          skipped++; PROGRESS.completed.add(p.path);
+          log(`${progress} SKIP ${p.path}: 空内容`);
+          break;
+        }
+        if (zhRatio(fresh.content) > ZH_RATIO_SKIP) {
+          skipped++; PROGRESS.completed.add(p.path);
+          log(`${progress} SKIP ${p.path}: 中文占比 ${Math.round(zhRatio(fresh.content) * 100)}%`);
+          break;
+        }
+        const body = await composePageUpdate(fresh, ctx);
+        try {
+          await putPageIfMatch(p.path, body, fresh.updated_at);
+          ok++; PROGRESS.completed.add(p.path); delete PROGRESS.failed[p.path];
+          log(`${progress} OK   ${p.path} -> ${body.title} (中文 ${Math.round(zhRatio(body.content) * 100)}%)`);
+          done = true;
+        } catch (e) {
+          if (e instanceof ConflictError && round < PUT_ROUNDS - 1) {
+            log(`${progress} 409 冲突，重新 GET + 重新翻译 (${round + 1}/${PUT_ROUNDS}): ${p.path}`);
+            continue;
+          }
+          throw e;
+        }
+      }
     } catch (e) {
       failed++; PROGRESS.failed[p.path] = String(e.message ?? e).slice(0, 300);
       log(`${progress} FAIL ${p.path}: ${PROGRESS.failed[p.path]}`);
@@ -430,7 +681,7 @@ async function main() {
   }
 
   const mins = Math.round((Date.now() - started) / 60000);
-  log(`完成: ok=${ok} skip=${skipped} fail=${failed} 用时 ${mins}min；进度 ${PROGRESS.completed.size}/${pages.length - 44 - RESERVED_PAGES.size}（估）`);
+  log(`完成: ok=${ok} skip=${skipped} fail=${failed} 用时 ${mins}min；进度 ${PROGRESS.completed.size} 完成 / 碰撞组 ${PROGRESS.collisions.length}`);
   if (failed > 0) { log(`失败清单见 ${PROGRESS_PATH} .failed`); process.exitCode = 1; }
 }
 

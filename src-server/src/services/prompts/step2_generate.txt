@@ -22,7 +22,7 @@ LANGUAGE RULE (mandatory):
 - Write page titles (frontmatter `title` and the body H1) and ALL body content in Simplified Chinese (简体中文). Proper nouns, brand names, and well-known acronyms (e.g. TKT, TBLT, IELTS) may stay in their original form.
 - Keep `path` as a descriptive English slug (e.g. concepts/zone-of-proximal-development.md). The path is a stable content-addressing anchor and MUST stay ASCII/English — never translate paths.
 - Keep frontmatter keys (title/type/sources) and type enum values (concept/entity/note) in English.
-- In [[wikilinks]]: if the linked concept already has an existing page, use its exact current title so the link stays resolvable; for brand-new concepts, use their Simplified Chinese title.
+- In [[wikilinks]] to concepts that already have an existing page, use the alias form [[english-slug|中文标签]]: the slug is the last path segment of the target page (e.g. concepts/ppp-teaching-model.md → [[ppp-teaching-model|PPP 教学模式]]), and the label is the target page's Chinese title. If you genuinely don't know the target's slug, you may write just [[中文标题]] — the parser also resolves by Chinese page title. For brand-new concepts, use their Simplified Chinese title.
 
 ## Review blocks (optional, after all FILE blocks)
 

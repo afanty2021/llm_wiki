@@ -121,9 +121,10 @@ function extractWikilinks(content: string): string[] {
   return links
 }
 
-function resolveTarget(
+export function resolveTarget(
   raw: string,
   nodeIds: ReadonlySet<string>,
+  titleIndex: ReadonlyMap<string, string>,
 ): string | null {
   if (nodeIds.has(raw)) return raw
 
@@ -134,7 +135,38 @@ function resolveTarget(
     if (idLower === raw.toLowerCase()) return id
     if (idLower.replace(/\s+/g, "-") === normalized) return id
   }
+
+  // Title-index fallback: [[中文标题]] bare links (translated titles don't match
+  // file-name stems). Mirrors wiki-graph.ts / server-side graph.rs.
+  const byTitle = titleIndex.get(normalized)
+  if (byTitle !== undefined) return byTitle
+
   return null
+}
+
+/**
+ * Build the normalized-title → id index used as the second wikilink resolution
+ * table. A title shared by two pages (exact or normalized) is ambiguous — the
+ * whole group is excluded instead of resolving to an arbitrary page.
+ */
+export function buildTitleIndex(
+  nodes: ReadonlyArray<{ id: string; title: string }>,
+): Map<string, string> {
+  const groups = new Map<string, string[]>()
+  for (const node of nodes) {
+    const title = node.title.trim()
+    if (!title) continue
+    const key = title.toLowerCase().replace(/\s+/g, "-")
+    const list = groups.get(key) ?? []
+    list.push(node.id)
+    groups.set(key, list)
+  }
+  const index = new Map<string, string>()
+  for (const [key, ids] of groups) {
+    if (ids.length > 1) continue // collision → exclude the whole group
+    index.set(key, ids[0])
+  }
+  return index
 }
 
 function getNeighbors(node: RetrievalNode): ReadonlySet<string> {
@@ -206,6 +238,8 @@ export async function buildRetrievalGraph(
   }
 
   const nodeIds = new Set(rawNodes.map((n) => n.id))
+  // Second resolution table for [[中文标题]] bare links (translated titles).
+  const titleIndex = buildTitleIndex(rawNodes.map((n) => ({ id: n.id, title: n.title })))
 
   // Second pass: resolve links and build graph nodes
   const outLinksMap = new Map<string, Set<string>>()
@@ -218,7 +252,7 @@ export async function buildRetrievalGraph(
 
   for (const raw of rawNodes) {
     for (const linkTarget of raw.rawLinks) {
-      const resolvedId = resolveTarget(linkTarget, nodeIds)
+      const resolvedId = resolveTarget(linkTarget, nodeIds, titleIndex)
       if (resolvedId === null || resolvedId === raw.id) continue
       outLinksMap.get(raw.id)!.add(resolvedId)
       inLinksMap.get(resolvedId)!.add(raw.id)
