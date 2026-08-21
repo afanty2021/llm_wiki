@@ -180,6 +180,30 @@ pub struct MediaConfig {
     pub signing_key: String,
 }
 
+/// t_page 三端点限流规格（评审 R4 入 config；此前 rate_limit.rs 硬编码 30/60）。
+/// - `s_per_min`：GET /s/:code 每分钟上限（默认 30）
+/// - `beacon_per_min`：POST /t/:token/seen 与 /complete 每分钟上限（默认 60，共桶）
+/// 环境变量覆盖（"__" 分隔嵌套）：PAGE_RATE_LIMITS__S_PER_MIN / PAGE_RATE_LIMITS__BEACON_PER_MIN
+#[derive(Debug, Clone, Deserialize)]
+pub struct PageRateLimitConfig {
+    #[serde(default = "default_page_rate_s_per_min")]
+    pub s_per_min: usize,
+    #[serde(default = "default_page_rate_beacon_per_min")]
+    pub beacon_per_min: usize,
+}
+
+fn default_page_rate_s_per_min() -> usize { 30 }
+fn default_page_rate_beacon_per_min() -> usize { 60 }
+
+impl Default for PageRateLimitConfig {
+    fn default() -> Self {
+        Self {
+            s_per_min: default_page_rate_s_per_min(),
+            beacon_per_min: default_page_rate_beacon_per_min(),
+        }
+    }
+}
+
 /// 已泄露/占位 secret 黑名单：命中即拒绝启动
 /// - "your-super-secret-key-change-this": 模板占位符
 /// - "test_secret_for_development_32bytes!": 2026-08 已提交进 git，视为泄露
@@ -218,6 +242,8 @@ pub struct AppConfig {
     pub training: TrainingConfig,
     #[serde(default)]
     pub media: MediaConfig,
+    #[serde(default)]
+    pub page_rate_limits: PageRateLimitConfig,
     #[serde(default)]
     pub search: SearchConfig,
     #[serde(default = "default_frontend")]
@@ -407,6 +433,46 @@ mod tests {
         assert_eq!(c.training.admin_token, "");
         assert!(c.training.project_id.is_none());
         assert_eq!(c.media.signing_key, "");
+    }
+
+    #[test]
+    fn page_rate_limits_default_30_60_and_env_shape() {
+        // R4：限流规格入 config——段缺失时 serde 默认 30/60（与旧硬编码零行为变化）；
+        // default.json 显式携带同值；Environment 覆盖键形如 PAGE_RATE_LIMITS__S_PER_MIN
+        // （"__" 分隔嵌套 + try_parsing 数字解析，与 DATABASE__MAX_CONNECTIONS 同法）。
+        let json = r#"{
+            "server": {"host": "0.0.0.0", "port": 8080},
+            "database": {"url": "postgres://x", "max_connections": 1},
+            "redis_url": "redis://x",
+            "jwt": {"secret": "x"},
+            "storage": {"path": "/tmp/x"},
+            "cors": {"allowed_origins": ["http://localhost"]}
+        }"#;
+        let c: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.page_rate_limits.s_per_min, 30, "absent section falls back to 30");
+        assert_eq!(c.page_rate_limits.beacon_per_min, 60, "absent section falls back to 60");
+
+        // default.json 显式值 = 30/60（from_env 读 cargo test cwd 的 config/default.json）
+        std::env::set_var("JWT__SECRET", "unit-test-secret-override-not-leaked");
+        let cfg = AppConfig::from_env().expect("from_env");
+        assert_eq!(cfg.page_rate_limits.s_per_min, 30);
+        assert_eq!(cfg.page_rate_limits.beacon_per_min, 60);
+
+        // env 覆盖形状（独立前缀隔离，避免与并行测试 env 竞争）
+        std::env::set_var("T4RATE__S_PER_MIN", "7");
+        std::env::set_var("T4RATE__BEACON_PER_MIN", "9");
+        #[derive(Deserialize)]
+        struct RateProbe {
+            s_per_min: usize,
+            beacon_per_min: usize,
+        }
+        let probe: RateProbe = ConfigBuilder::builder()
+            .add_source(Environment::with_prefix("T4RATE").separator("__").try_parsing(true))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!((probe.s_per_min, probe.beacon_per_min), (7, 9));
     }
 
     #[test]

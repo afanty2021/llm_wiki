@@ -10,11 +10,13 @@
 //! （爆表 → 429）不需要跨副本精确；重启清零可接受。
 //!
 //! [`PageRateLimits`] 把 t_page 的两档规格组合进一个 AppState 字段（`limiter`）：
-//! - `short_link`：GET /s/:code，30 次/分钟，key = code（短码即身份）；
-//! - `beacon`：POST /t/:token/seen 与 /complete，60 次/分钟，key = sha256(token)
+//! - `short_link`：GET /s/:code，默认 30 次/分钟，key = code（短码即身份）；
+//! - `beacon`：POST /t/:token/seen 与 /complete，默认 60 次/分钟，key = sha256(token)
 //!   前 16 hex（与 /media fp 同法——JWT 前缀全同构，裸 token 前缀会让所有
 //!   token 共享一个桶；哈希前 16 hex 是本仓既定的 token 指纹形态）。seen 与
 //!   complete 同 key **共桶**：一个 /t/ 会话的全部 beacon 共用 60/min 预算。
+//! 两档规格经 config 注入（评审 R4：AppConfig.page_rate_limits，默认 30/60 与
+//! 旧硬编码一致，env `PAGE_RATE_LIMITS__S_PER_MIN`/`PAGE_RATE_LIMITS__BEACON_PER_MIN` 可覆盖）。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -64,26 +66,36 @@ impl FixedWindowLimiter {
     }
 }
 
-/// GET /s/:code 限流：30 次/分钟（短码跳转，key=code）。
+/// GET /s/:code 限流默认规格：30 次/分钟（短码跳转，key=code）。
+/// 评审 R4 入 config（AppConfig.page_rate_limits.s_per_min，env
+/// PAGE_RATE_LIMITS__S_PER_MIN 可覆盖）——本常量是 serde 缺省与 PageRateLimits::new 的默认值。
 pub const S_REDIRECT_CAP_PER_MIN: usize = 30;
-/// /t/ beacon（seen+complete）限流：60 次/分钟（key=sha256(token) 前 16 hex）。
+/// /t/ beacon（seen+complete）限流默认规格：60 次/分钟（key=sha256(token) 前 16 hex）。
+/// 评审 R4 入 config（AppConfig.page_rate_limits.beacon_per_min，env
+/// PAGE_RATE_LIMITS__BEACON_PER_MIN 可覆盖）——本常量是 serde 缺省与 PageRateLimits::new 的默认值。
 pub const BEACON_CAP_PER_MIN: usize = 60;
 
 /// t_page 三端点限流规格组合（AppState.limiter 持有，见模块注释）。
 pub struct PageRateLimits {
-    /// GET /s/:code（30/min，key=code）
+    /// GET /s/:code（默认 30/min，key=code）
     pub short_link: FixedWindowLimiter,
-    /// POST /t/:token/seen 与 /t/:token/complete（60/min，key=token 指纹，共桶）
+    /// POST /t/:token/seen 与 /t/:token/complete（默认 60/min，key=token 指纹，共桶）
     pub beacon: FixedWindowLimiter,
 }
 
 impl PageRateLimits {
-    pub fn new() -> Self {
+    /// 按规格构造（lib.rs create_app 从 config 接线处调用）。
+    pub fn with_caps(s_per_min: usize, beacon_per_min: usize) -> Self {
         let minute = Duration::from_secs(60);
         Self {
-            short_link: FixedWindowLimiter::new(S_REDIRECT_CAP_PER_MIN, minute),
-            beacon: FixedWindowLimiter::new(BEACON_CAP_PER_MIN, minute),
+            short_link: FixedWindowLimiter::new(s_per_min, minute),
+            beacon: FixedWindowLimiter::new(beacon_per_min, minute),
         }
+    }
+
+    /// 默认规格（30/60 每分钟，与 config 缺省一致——规格件单测用）。
+    pub fn new() -> Self {
+        Self::with_caps(S_REDIRECT_CAP_PER_MIN, BEACON_CAP_PER_MIN)
     }
 }
 
@@ -144,6 +156,18 @@ mod tests {
         }
         assert!(!limits.beacon.check("fp1"), "beacon 超过 60/min 拒绝");
         assert!(limits.beacon.check("fp2"), "他 token 不受影响");
+    }
+
+    #[test]
+    fn page_rate_limits_with_caps_override() {
+        // R4：规格经 config 注入——with_caps 生效即 config 覆盖生效（默认值路径
+        // 由 with_caps(S_REDIRECT_CAP_PER_MIN, BEACON_CAP_PER_MIN) 复用同一实现）
+        let limits = PageRateLimits::with_caps(1, 2);
+        assert!(limits.short_link.check("c"));
+        assert!(!limits.short_link.check("c"), "cap=1 → 第 2 次拒绝");
+        assert!(limits.beacon.check("f1"));
+        assert!(limits.beacon.check("f1"), "beacon cap=2 内放行");
+        assert!(!limits.beacon.check("f1"), "beacon 第 3 次拒绝");
     }
 
     #[test]

@@ -740,15 +740,19 @@ async fn plan_period_key_concurrent_converges_without_500() {
     let page_path = format!("concepts/conc-{}.md", unique("pg"));
     seed_wiki_page(&state, &page_path).await;
     // M3：weekly period_key 必须等于服务端自算当周（格式非法/错周均 400）——
-    // 动态取当周（unique() 任意串过不了新校验）；4 个并发请求共用同一 key
-    let pk = current_iso_week();
+    // 动态取当周（unique() 任意串过不了新校验）；4 个并发请求共用同一 key。
+    // R9 周界兜底（m3-impl-review 次级收编）：pk 采样到请求落地之间恰跨 ISO 周界
+    // 时，服务端当周翻页 → 携旧周串的请求合法地 400（错周）——before-after 双值法
+    // （同 training_test.rs t3 先例）：请求前后各采样一次，翻转则放宽断言到
+    // 「无 500 + 成功者恰一创建且收敛同 id」，未翻转维持严格断言。
+    let pk_before = current_iso_week();
 
     // TestServer 非 Clone，但请求方法取 &self——4 个借用同一 server 的 future 并发打点
     let bodies: Vec<serde_json::Value> = (0..4)
         .map(|i| {
             let mut b = plan_body(
                 "weekly",
-                Some(&pk),
+                Some(&pk_before),
                 json!([{"kind": "wiki_page", "target_ref": page_path, "label": "c"}]),
             );
             b["title"] = json!(format!("并发-{i}"));
@@ -766,21 +770,45 @@ async fn plan_period_key_concurrent_converges_without_500() {
         }
     });
     let results = futures::future::join_all(jobs).await;
+    let pk_after = current_iso_week();
+    let flipped = pk_before != pk_after;
     let mut ids = Vec::new();
     let mut created = 0;
     for (i, r) in results.into_iter().enumerate() {
         let code = r.status_code();
-        assert!(
-            code == StatusCode::CREATED || code == StatusCode::OK,
-            "concurrent create #{i} must be 200/201, got {code}"
-        );
+        if flipped {
+            assert!(
+                code == StatusCode::CREATED || code == StatusCode::OK || code == StatusCode::BAD_REQUEST,
+                "week-flipped concurrent create #{i} must be 200/201/400, got {code}"
+            );
+        } else {
+            assert!(
+                code == StatusCode::CREATED || code == StatusCode::OK,
+                "concurrent create #{i} must be 200/201, got {code}"
+            );
+        }
         if code == StatusCode::CREATED {
             created += 1;
         }
-        ids.push(r.json::<serde_json::Value>()["plan"]["id"].as_i64().unwrap());
+        if code != StatusCode::BAD_REQUEST {
+            ids.push(r.json::<serde_json::Value>()["plan"]["id"].as_i64().unwrap());
+        }
     }
-    assert_eq!(created, 1, "exactly one winner creates");
-    assert!(ids.windows(2).all(|w| w[0] == w[1]), "all converge on same id: {ids:?}");
+    if flipped {
+        assert!(created <= 1, "at most one winner among pre-flip requests: {created}");
+    } else {
+        assert_eq!(created, 1, "exactly one winner creates");
+    }
+    assert!(
+        ids.windows(2).all(|w| w[0] == w[1]),
+        "successful creates converge on same id: {ids:?}"
+    );
+    if ids.is_empty() {
+        // 全 400（4 请求全部落在周界之后）：唯一合法情形是已翻转
+        assert!(flipped, "no 200/201 without a week flip");
+        crate::teardown_test_data(&state).await;
+        return;
+    }
 
     // 收敛后仅一个 plan、一条 plan_created、一个 item
     let plan_id = ids[0] as i32;
@@ -788,7 +816,7 @@ async fn plan_period_key_concurrent_converges_without_500() {
         "SELECT COUNT(*) FROM learning_plans WHERE user_id = $1 AND period_key = $2",
     )
     .bind(teacher_id as i32)
-    .bind(&pk)
+    .bind(&pk_before)
     .fetch_one(&state.db)
     .await
     .unwrap();

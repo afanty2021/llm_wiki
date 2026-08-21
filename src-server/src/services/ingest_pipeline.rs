@@ -72,6 +72,32 @@ fn chunk_document(text: &str, context_budget: usize) -> Vec<String> {
     chunks
 }
 
+/// W2（m3-impl-review 次级收编）：step2 生成的 FILE block path 确定性校验。
+/// 合法形态 = ASCII slug：仅 `[a-z0-9]` 与 `-` `_` `/` `.`（拒绝中文/空格/大写等）。
+/// 违规 path → 该页按解析失败处理（不入 blocks，warn 留痕）。transcripts/ 前缀路径
+/// 本就是 ASCII slug 形态，照常通过——run_ingest_job 的 transcripts/ 对账守卫
+/// （is_llm_generated_path）与计账逻辑不受影响。允许集全 ASCII，按字节判定即可
+/// （UTF-8 多字节序列的每个字节都非允许集，必被拒绝）。
+fn is_valid_wiki_path(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'/' | b'.'))
+}
+
+/// parse_file_blocks 的落块口：path 过 W2 确定性校验才入 blocks，否则该页按
+/// 解析失败处理（丢弃 + warn）。
+fn push_validated_block(blocks: &mut Vec<ParsedBlock>, path: &str, content: &str) {
+    if is_valid_wiki_path(path) {
+        blocks.push(parse_single_block(path, content));
+    } else {
+        tracing::warn!(
+            path = %path,
+            "step2 FILE block path is not an ASCII slug (W2), treating page as parse failure"
+        );
+    }
+}
+
 /// FILE block 解析。移植桌面 parseFileBlocks，含 CommonMark code fence 感知。
 fn parse_file_blocks(text: &str) -> Vec<ParsedBlock> {
     let text = text.replace("\r\n", "\n");
@@ -101,7 +127,7 @@ fn parse_file_blocks(text: &str) -> Vec<ParsedBlock> {
                 .and_then(|s| s.strip_suffix(" ---"))
             {
                 if in_block && !cur_content.is_empty() {
-                    blocks.push(parse_single_block(&cur_path, &cur_content));
+                    push_validated_block(&mut blocks, &cur_path, &cur_content);
                 }
                 cur_path = path.trim().to_string();
                 cur_content.clear();
@@ -109,7 +135,7 @@ fn parse_file_blocks(text: &str) -> Vec<ParsedBlock> {
                 continue;
             }
             if trimmed == "---END FILE---" && in_block {
-                blocks.push(parse_single_block(&cur_path, &cur_content));
+                push_validated_block(&mut blocks, &cur_path, &cur_content);
                 in_block = false;
                 cur_content.clear();
                 continue;
@@ -122,7 +148,7 @@ fn parse_file_blocks(text: &str) -> Vec<ParsedBlock> {
         }
     }
     if in_block && !cur_content.is_empty() {
-        blocks.push(parse_single_block(&cur_path, &cur_content));
+        push_validated_block(&mut blocks, &cur_path, &cur_content);
     }
     blocks
 }
@@ -173,6 +199,29 @@ fn merge_analyses(analyses: &[serde_json::Value]) -> serde_json::Value {
         }
     }
     merged
+}
+
+/// R10（m3-impl-review 次级收编）：step1 merged 结果形状守卫——非对象直接报错
+/// （走解析失败路径），不再放行进 step2。Task 6 r3 时仅跳过缓存写但仍流向 step2：
+/// 非对象分析（"[]"/"null"/标量）进 step2 会基于空分析产出无效 wiki 页；宁可本次
+/// source 失败（item_state=failed，由 resume/重试自愈），也不产出坏页。
+fn merged_step1_result(
+    project_id: i32,
+    merged: serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
+    if merged.is_object() {
+        Ok(merged)
+    } else {
+        tracing::warn!(
+            project_id,
+            shape = type_of_value(&merged),
+            "step1 merged result is not an object, failing this source (no step2)"
+        );
+        Err(AppError::LlmApiError(format!(
+            "step1 merged result is not a JSON object (got {}), refusing to feed step2",
+            type_of_value(&merged)
+        )))
+    }
 }
 
 /// 替换 text 里的原始图片相对路径为 media/{project_id}/ 前缀。
@@ -780,16 +829,11 @@ async fn process_source_path(
             v
         };
         let merged = merge_analyses(&analyses);
-        // is_object 才入缓存（Task 6 r3 belt-and-braces）：step1_analyze_via 已在解析
-        // 层拒绝非对象，此处守卫防未来新增调用方绕过形状校验把非对象写进 7 天缓存。
-        if merged.is_object() {
-            cache_step1_result(state, &content_hash, &merged).await?;
-        } else {
-            tracing::warn!(
-                project_id,
-                "step1 merged result is not an object, skipping cache write"
-            );
-        }
+        // 形状守卫（评审 R10）：非对象 merged → 直接报错走解析失败路径（本次 source
+        // failed，resume 可重试），不再「仅跳过缓存仍流向 step2」。is_object 才入
+        // 缓存（Task 6 r3 belt-and-braces）——守卫通过后此处 merged 必为对象。
+        let merged = merged_step1_result(project_id, merged)?;
+        cache_step1_result(state, &content_hash, &merged).await?;
         merged
     };
 
@@ -1017,6 +1061,64 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].content.contains("---END FILE---"), "fence content preserved");
         assert!(blocks[0].content.contains("Real end here."));
+    }
+
+    // ── W2：step2 FILE block path 确定性校验（m3-impl-review 次级收编）──
+
+    #[test]
+    fn parse_file_blocks_drops_non_slug_paths() {
+        // 中文 / 空格 / 大写 → 该页按解析失败处理（不入 blocks）
+        let text = "---FILE: 概念/机器学习.md ---\n# A\nBody\n---END FILE---\n\
+                    ---FILE: concepts/My Page.md ---\n# B\nBody\n---END FILE---";
+        let blocks = parse_file_blocks(text);
+        assert!(
+            blocks.is_empty(),
+            "non-slug paths must be dropped, got {:?}",
+            blocks.iter().map(|b| b.path.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn parse_file_blocks_keeps_slug_paths_incl_transcripts() {
+        // 合法 ASCII slug 形态照常解析；transcripts/ 前缀路径本就是 slug 形态，
+        // 照常通过——run_ingest_job 的 transcripts/ 对账守卫（is_llm_generated_path）不受影响
+        let text = "---FILE: concepts/my-page_v2.0.md ---\n# A\nBody\n---END FILE---\n\
+                    ---FILE: transcripts/t9-sess-1.md ---\n# T\nBody\n---END FILE---";
+        let blocks = parse_file_blocks(text);
+        let paths: Vec<&str> = blocks.iter().map(|b| b.path.as_str()).collect();
+        assert_eq!(paths, vec!["concepts/my-page_v2.0.md", "transcripts/t9-sess-1.md"]);
+    }
+
+    #[test]
+    fn parse_file_blocks_invalid_path_between_valid_blocks() {
+        // 中间页 path 违规被丢弃，不吞前后合法页
+        let text = "---FILE: a.md ---\n# A\nBody\n---END FILE---\n\
+                    ---FILE: 概念/B页.md ---\n# B\nBody\n---END FILE---\n\
+                    ---FILE: c.md ---\n# C\nBody\n---END FILE---";
+        let blocks = parse_file_blocks(text);
+        let paths: Vec<&str> = blocks.iter().map(|b| b.path.as_str()).collect();
+        assert_eq!(paths, vec!["a.md", "c.md"]);
+    }
+
+    #[test]
+    fn merged_step1_result_nonobject_fails_not_flows_to_step2() {
+        // R10：非对象 merged → Err（解析失败路径，process_source_path 即失败，不再流入
+        // step2）。Task 6 r3 时仅跳过缓存写但仍放行——非对象分析进 step2 会产出无效
+        // wiki 页，宁可本次失败由队列重试。
+        for bad in [
+            serde_json::json!([]),
+            serde_json::json!(null),
+            serde_json::json!("not-an-object"),
+            serde_json::json!(42),
+            serde_json::Value::Bool(true),
+        ] {
+            let err = merged_step1_result(614, bad).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("not a JSON object"), "err must name shape: {msg}");
+        }
+        // 对象照常放行（缓存写 + step2 均不受影响）
+        let ok = merged_step1_result(614, serde_json::json!({"entities": []})).unwrap();
+        assert!(ok.is_object());
     }
 
     #[test]

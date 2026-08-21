@@ -412,6 +412,75 @@ async fn bind_truncates_long_wecom_userid_by_chars() {
     crate::teardown_test_data(&_state).await;
 }
 
+/// R7（m3-impl-review 次级收编）：bind 23505 → 409 **中性文案**回归锚定。
+/// 「已被占用或已绑定」不向调用方泄漏具体命中哪张表/哪个唯一约束（users.username /
+/// users.email / teacher_profiles.wecom_userid 三者共用同一串）。冲突场景断言：
+/// - 状态 409、code=CONFLICT；
+/// - message 恰为中性串，不含表名/列名/约束号/db error detail 等内部语义；
+/// - 提前 return → 事务回滚，不留半账号（无 teacher_profiles 残行）。
+/// 回归意义：任何人把 23505 映射改成透传数据库错误详情即红。
+#[tokio::test]
+async fn bind_conflict_409_message_stays_neutral() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("bind409").await;
+
+    // 冲突源 1：username 占用——users 已有行恰占 bind 合成 username（wecom_{wid}）
+    // （直接 SQL 落历史占位用户；app2 未开注册，无法经 /auth/register 制造）
+    let wid1 = unique("c1");
+    sqlx::query(
+        "INSERT INTO users (username, email, password_hash, full_name) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(format!("wecom_{wid1}"))
+    .bind(format!("{}@t6.com", unique("c1u")))
+    .bind("placeholder-not-a-login-hash")
+    .bind("占位用户")
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    // 冲突源 2：email 占用——users 已有行恰占 bind 合成 email（{wid}@wecom.local）
+    let wid2 = unique("c2");
+    sqlx::query(
+        "INSERT INTO users (username, email, password_hash, full_name) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(unique("c2n"))
+    .bind(format!("{wid2}@wecom.local"))
+    .bind("placeholder-not-a-login-hash")
+    .bind("占位用户")
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    for (i, wid) in [&wid1, &wid2].into_iter().enumerate() {
+        let r = server
+            .post("/api/v1/training/bind")
+            .add_header("x-training-admin-token", "tok123")
+            .json(&json!({"wecom_userid": wid, "display_name": "冲突老师"}))
+            .await;
+        assert_eq!(r.status_code(), StatusCode::CONFLICT, "conflict source #{i} must 409");
+        let v = r.json::<serde_json::Value>();
+        assert_eq!(v["error"]["code"], "CONFLICT");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "已被占用或已绑定", "409 message 必须恰为中性串: {msg}");
+        // 中性：不泄漏表名/列名/约束号等内部语义（"占用/绑定"两词本身是允许面）
+        for leak in [
+            "users", "teacher_profiles", "wecom_userid", "constraint",
+            "23505", "unique", "username", "email", "detail",
+        ] {
+            assert!(!msg.contains(leak), "409 message leaks '{leak}': {msg}");
+        }
+        // 无半账号：提前 return → tx 回滚，wid 不落 teacher_profiles
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM teacher_profiles WHERE wecom_userid = $1")
+                .bind(wid)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(n, 0, "conflict bind must roll back (no profile for {wid})");
+    }
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
 /// fail closed：TRAINING__ADMIN_TOKEN 未配置 → 500（即使无 token 头也绝不放行）；
 /// ADMIN_TOKEN 配了但 TRAINING__PROJECT_ID 缺失 → 500。
 #[tokio::test]

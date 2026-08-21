@@ -22,6 +22,10 @@
   "auth": {
     "registration_enabled": false
   },
+  "page_rate_limits": {
+    "s_per_min": 30,
+    "beacon_per_min": 60
+  },
   "embedding": {
     "base_url": "http://localhost:8001/v1",
     "model": "bge-m3-mlx-fp16",

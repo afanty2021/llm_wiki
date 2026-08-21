@@ -38,6 +38,8 @@ pub struct AppState {
     /// t_page 三端点限流（Task 6 r3）：/s/ 30/min（key=code）+ beacon 60/min
     /// （key=token 指纹，seen/complete 共桶）。两档规格组合为一个字段，内含
     /// 两个 FixedWindowLimiter（services/rate_limit.rs，评审 R3 正名：实现是固定窗口计数非令牌桶）。
+    /// 评审 R4：cap 经 config 注入（page_rate_limits.s_per_min / beacon_per_min，
+    /// 默认 30/60 与旧硬编码一致，env PAGE_RATE_LIMITS__* 可覆盖）。
     pub limiter: Arc<services::rate_limit::PageRateLimits>,
 }
 
@@ -73,7 +75,10 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
 
     let (job_events, _job_events_rx) = broadcast::channel::<JobEvent>(64);
 
-    let limiter = Arc::new(services::rate_limit::PageRateLimits::new());
+    let limiter = Arc::new(services::rate_limit::PageRateLimits::with_caps(
+        config.page_rate_limits.s_per_min,
+        config.page_rate_limits.beacon_per_min,
+    ));
 
     let state = AppState {
         db,

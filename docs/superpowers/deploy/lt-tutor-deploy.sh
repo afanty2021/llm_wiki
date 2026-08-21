@@ -47,6 +47,10 @@ STATE_FILE="${HERMES_HOME}/.lt-tutor-deploy.state"
 # 全部 user=HuangZhengBo chat=HuangZhengBo，无其他 wecom chat、无群聊 wr* id）。
 # wecom DM 的 chat_id = 发送者 userid（adapter.py: chat_id = body.chatid or sender.userid）。
 OWNER_WECOM_CHAT_ID="HuangZhengBo"
+# wecom bot_id（profile platforms.wecom 的 bot_id-only 块；bot_id 非机密）。
+# F7：此前在 render_profile_config 与 stage_profile_dir 自检两处硬编码——提为脚本
+# 变量，默认现值，换机器人时 env LT_TUTOR_WECOM_BOT_ID 覆盖即可，不必改脚本。
+LT_TUTOR_WECOM_BOT_ID="${LT_TUTOR_WECOM_BOT_ID:-aibeAhIonpN3UeosUsOfbQxJ0faTXquVEar}"
 # 默认 profile 名：内置根 profile（~/.hermes）在 multiplex 下的服务名恒为 "default"
 # （hermes_cli/profiles.py: get_active_profile_name() 在 HERMES_HOME=~/.hermes 时返回 "default"）。
 DEFAULT_PROFILE="default"
@@ -116,12 +120,14 @@ render_profile_config() {
   local out="$1"
   ZAI_API_KEY_VAL="$(read_zai_key)" \
   TRAINING_ADMIN_TOKEN_VAL="$(read_bootstrap_token)" \
+  LT_TUTOR_BOT_ID_VAL="${LT_TUTOR_WECOM_BOT_ID}" \
   MCPPROFILE_OUT="${out}" \
   "${PY}" <<'PYEOF'
 import os, sys, yaml
 
 zai = os.environ["ZAI_API_KEY_VAL"]
 tok = os.environ["TRAINING_ADMIN_TOKEN_VAL"]
+bot_id = os.environ["LT_TUTOR_BOT_ID_VAL"]
 out = os.environ["MCPPROFILE_OUT"]
 
 cfg = {
@@ -156,7 +162,7 @@ cfg = {
         # （与 live 手工修补逐字一致——不吸收则每次 apply 静默抹掉、周五周报投递失效）。
         "wecom": {
             "enabled": True,
-            "extra": {"bot_id": "aibeAhIonpN3UeosUsOfbQxJ0faTXquVEar"},   # bot_id 非机密
+            "extra": {"bot_id": bot_id},   # bot_id 非机密；脚本变量（env LT_TUTOR_WECOM_BOT_ID 可覆盖，F7）
         },
     },
     "mcp_servers": {
@@ -273,7 +279,7 @@ else:
            "或移除既有 gateway 键后重跑 apply。")
     if mode == "dry":
         print(f"[merge-strategy] {msg}")
-        sys.exit(0)
+        sys.exit(1)  # F7：dry 遇 FATAL 必须非零退出（此前 exit(0) 把致命状态伪装成成功）
     sys.exit(msg)
 
 # 校验 1: 结果是合法 YAML 且无重复顶层键
@@ -408,7 +414,7 @@ if not public_base:
            "（已部署块存在时沿用现值，不受此限）。")
     if mode == "dry":
         print(f"[merge-strategy] {msg}")
-        sys.exit(0)
+        sys.exit(1)  # F7：dry 遇 FATAL 必须非零退出（此前 exit(0) 把致命状态伪装成成功）
     sys.exit(msg)
 
 fresh_server = {
@@ -491,7 +497,7 @@ elif hdr_idx is not None:
                "或移除既有声明后重跑 apply。")
         if mode == "dry":
             print(f"[merge-strategy] {msg}")
-            sys.exit(0)
+            sys.exit(1)  # F7：dry 遇 FATAL 必须非零退出（此前 exit(0) 把致命状态伪装成成功）
         sys.exit(msg)
 else:
     # 无 mcp_servers 键：插到 gateway 托管块 marker 之前（维持 [mcp 块][gateway 块] 布局），否则尾追加
@@ -543,9 +549,10 @@ stage_profile_dir() {
   chmod 700 "${PROFILE_DIR}" "${PROFILE_DIR}/skills" "${PROFILE_DIR}/skills/teacher-tutor"
   render_profile_config "${PROFILE_DIR}/config.yaml"
   cp "${SKILL_SRC}" "${PROFILE_DIR}/skills/teacher-tutor/SKILL.md"
-  # 部署物自检：YAML 合法、白名单形状正确
+  # 部署物自检：YAML 合法、白名单形状正确（bot_id 对照脚本变量，F7：不再重复硬编码）
+  LT_TUTOR_BOT_ID_VAL="${LT_TUTOR_WECOM_BOT_ID}" \
   "${PY}" - "${PROFILE_DIR}/config.yaml" <<'PYEOF'
-import sys, yaml
+import os, sys, yaml
 cfg = yaml.safe_load(open(sys.argv[1]))
 pl = cfg["platforms"]
 assert isinstance(pl, dict) and set(pl) == {"wecom"}, \
@@ -554,7 +561,7 @@ wc = pl["wecom"]
 assert isinstance(wc, dict) and wc.get("enabled") is True, "platforms.wecom.enabled 必须 true"
 extra = wc.get("extra")
 assert isinstance(extra, dict) and set(extra) == {"bot_id"} \
-    and extra["bot_id"] == "aibeAhIonpN3UeosUsOfbQxJ0faTXquVEar", \
+    and extra["bot_id"] == os.environ["LT_TUTOR_BOT_ID_VAL"], \
     "platforms.wecom.extra 必须恰为 bot_id-only（无 secret/无回调——不建第二条 ws、不入凭证指纹）"
 assert cfg["platform_toolsets"]["wecom"] == ["skills"], "platform_toolsets.wecom 必须恰为 [skills]"
 assert cfg["platform_toolsets"]["cron"] == ["skills"], \
@@ -582,6 +589,54 @@ preflight() {
   # 秘密可读但不回显
   read_zai_key >/dev/null       && c_ok "zai api_key 可从主 config 读取（不回显）"
   read_bootstrap_token >/dev/null && c_ok "TRAINING__ADMIN_TOKEN 可从 bootstrap.env 读取（不回显）"
+}
+
+# ── PUBLIC_T_BASE 前置检查（F7：提前到任何写盘之前）─────────────────────────
+# 此前该 FATAL 藏在 apply 步骤 3/5 的 merge_main_config_mcp 里：备份/gateway 合并/
+# profile 目录已落盘，只能靠备份兜底恢复。现在 apply 一进来（preflight 后、任何
+# mkdir/cp/合并之前）即拦截。判定与 merge_main_config_mcp 的来源优先级逐字一致：
+# 主 config 已有形状等价的 llm-wiki-training 块（env 五键、三恒定键一致）且带非空
+# PUBLIC_T_BASE → re-apply 沿用现值，放行；否则必须来自 env PUBLIC_T_BASE。
+check_public_t_base() {
+  set +e
+  "${PY}" - "${MAIN_CONFIG}" <<'PYEOF'
+import sys, yaml
+try:
+    cfg = yaml.safe_load(open(sys.argv[1]))
+except Exception:
+    sys.exit(2)  # config 不可解析：非本检查职责，交给 merge 阶段既有 FATAL 路径
+srv = (cfg.get("mcp_servers") or {}).get("llm-wiki-training") if isinstance(cfg, dict) else None
+def shape_ok(s):
+    if not isinstance(s, dict):
+        return False
+    if s.get("command") != "node" \
+       or s.get("args") != ["/Users/berton/Github/kb-obsidian/llm_wiki/mcp-server/dist/src/index.js"]:
+        return False
+    env = s.get("env")
+    if not isinstance(env, dict) or set(env) != {"LLM_WIKI_API_FORM", "LLM_WIKI_API_BASE_URL",
+                                                 "TRAINING__ADMIN_TOKEN", "TRAINING__PROJECT_ID",
+                                                 "PUBLIC_T_BASE"}:
+        return False
+    return (str(env.get("LLM_WIKI_API_FORM")) == "src-server"
+            and str(env.get("LLM_WIKI_API_BASE_URL")) == "http://127.0.0.1:8080"
+            and str(env.get("TRAINING__PROJECT_ID")) == "614")
+base = str(((srv or {}).get("env") or {}).get("PUBLIC_T_BASE") or "") if shape_ok(srv) else ""
+sys.exit(0 if base else 1)
+PYEOF
+  local rc=$?
+  set -e
+  if [[ ${rc} -eq 0 ]]; then
+    c_ok "PUBLIC_T_BASE：主 config 既有 llm-wiki-training 块可沿用现值（re-apply 不重置）"
+    return 0
+  elif [[ ${rc} -eq 2 ]]; then
+    c_warn "主 config 暂不可解析，PUBLIC_T_BASE 前置检查跳过（merge 阶段会 FATAL）"
+    return 0
+  fi
+  if [[ -n "${PUBLIC_T_BASE:-}" ]]; then
+    c_ok "PUBLIC_T_BASE：来自 env（首次 apply / 主 config 无既有块）"
+    return 0
+  fi
+  die "PUBLIC_T_BASE 未提供（F7 前置拦截，未写任何盘）。mcp env 的 PUBLIC_T_BASE 决定教师侧 /t/ 落地链接的对外基地址，默认 127.0.0.1 会发出本机死链。请在 apply 时导出真实隧道域名：PUBLIC_T_BASE=https://<tunnel-domain> ./lt-tutor-deploy.sh apply（已部署块存在时沿用现值，不受此限）。"
 }
 
 # ── dry-run ──────────────────────────────────────────────────────────────────
@@ -630,6 +685,9 @@ do_stage() {
 do_apply() {
   c_bold "APPLY：备份 → 合并主 config（gateway 路由 + mcp_servers 托管块）→ 校验 → 部署 profile（不重启 gateway）"
   preflight
+  # F7：PUBLIC_T_BASE 前置拦截——先于 profile stage / 备份 / 任何写盘（此前藏在
+  # 步骤 3/5，靠备份兜底恢复）。既有块可沿用现值则放行，否则必须 env 提供。
+  check_public_t_base
 
   # 前置：profile 必须先就位（路由指向不存在 profile = 消息 fail-closed 丢弃）
   if [[ ! -f "${PROFILE_DIR}/config.yaml" ]]; then
