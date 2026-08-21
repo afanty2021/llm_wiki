@@ -113,20 +113,59 @@ export function buildSlugInfo(page, llmPhrase = null) {
   };
 }
 
+// ── curated slug 钉死（fix round 1 F2） ──
+
+/**
+ * curated slug 钉死表：path → 同目录 slug 目标 path（值须为合法 slug path）。
+ * 中文页 rename 目标随 omlx 短语漂移（"New Concept English Adult Version" /
+ * "...Adult Edition" → 不同 slug）——命中页以表值为准且不调 LLM（目标确定性）。
+ * 命名与现存 entities/new-concept-english.md（青少版）家族对齐；2026-08-21 快照
+ * 核实库内无 *adult* slug 页，不与现存页撞名（撞名会翻转为 merge）。
+ */
+export const SLUG_OVERRIDES = {
+  "entities/新概念英语 (成人版).md": "entities/new-concept-english-adult.md",
+};
+
+/** 页面的 curated slug 覆盖目标：值须为合法 slug path 且与源页同目录（rename 目标
+ *  dir 取源页目录），否则 null（视为无效 curation，回落常规流程）。 */
+export function slugOverrideFor(page) {
+  const ov = SLUG_OVERRIDES[page?.path];
+  return ov != null && isSlugPath(ov) && dirOf(ov) === dirOf(page.path) ? ov : null;
+}
+
+/**
+ * slug 计算统一入口：SLUG_OVERRIDES 优先于 LLM 短语——命中页以表值 path 的 stem
+ * 为 slug（ASCII，无需 LLM）、source 标 "override"；未命中直通 buildSlugInfo。
+ * 调用方（normalize-wiki-paths.mjs）据 slugOverrideFor 预判，跳过命中页的 LLM 调用。
+ */
+export function resolveSlugInfo(page, llmPhrase = null) {
+  const ov = slugOverrideFor(page);
+  if (ov != null) {
+    const info = buildSlugInfo({ ...page, path: ov }, null);
+    info.source = "override";
+    return info;
+  }
+  return buildSlugInfo(page, llmPhrase);
+}
+
 // ── 孪生探测（六级 + curated 覆盖，逐级收紧歧义保护） ──
 
 /**
  * curated 孪生钉死表（2026-08-21 dry-run 核实，见 task-normalize-wiki-paths-report.md）：
  * 标题级孪生（title/token-set/fuzzy 基）在翻译 v2 完成后可能漂移——twin 的英文标题会被
  * 译成中文，短语/标题比对失效导致误判 rename 造重复页。path 基（exact/stem-equiv/
- * paren-stripped）不受影响。两处标题基决策钉死如下（同 translate-core
+ * paren-stripped）不受影响。三处决策钉死如下（同 translate-core
  * LEGACY_LINK_RECOVERY 的 curated 先例）：
  *   青少版新概念英语 ↔ entities/new-concept-english.md（"Youth Version" vs "(Youth Edition)"）
  *   entities/Flipped Classroom.md ↔ concepts/flip-classroom.md（title 基）
+ *   entities/人教版八年级上册-unit-1.md ↔ entities/pep-grade-8-unit-1.md（fix round 1 F1：
+ *     原走 exact-dir 但该级依赖 LLM 短语恰为 "PEP Grade 8 Unit 1"——apply 时短语重起
+ *     非确定，偏离则失配翻转为 rename，会新建与现存 pep 页内容重复的页；钉死后恒 merge）
  */
 export const TWIN_OVERRIDES = {
   "entities/青少版新概念英语.md": "entities/new-concept-english.md",
   "entities/Flipped Classroom.md": "concepts/flip-classroom.md",
+  "entities/人教版八年级上册-unit-1.md": "entities/pep-grade-8-unit-1.md",
 };
 
 const STEM_KEY_CACHE = new WeakMap();
@@ -224,8 +263,10 @@ export function mergeSources(...arrays) {
  * @param slugInfoByPath Map<path, buildSlugInfo 结果>（中文页已含 LLM 短语）
  * @returns {decisions, groups, warnings}
  *   decisions: [{path, title, contentLen, decision, target, basis, slugSource, phrase, reason}]
- *   groups:    Map<targetPath, {target, members[], winnerPath, dropped[{path,len}], sources, title}>
- *              members 含目标页自身（dropped 记录落败者含目标页旧正文）
+ *   groups:    Map<targetPath, {target, members[], winnerPath, dropped[{path,len,links}], sources, title}>
+ *              members 含目标页自身（dropped 记录落败者含目标页旧正文；links 为落败正文
+ *              的 [[...]] 出链清单——extractGraphWikilinks/graph.rs 语义，供边数变化归因
+ *              与事后回补，见 fix round 1 F5）
  */
 export function computeDecisions(pages, slugInfoByPath, { log = () => {} } = {}) {
   const byPath = new Map(pages.map((p) => [p.path, p]));
@@ -304,7 +345,7 @@ export function computeDecisions(pages, slugInfoByPath, { log = () => {} } = {})
     g.members.sort((a, b) => (b.content ?? "").length - (a.content ?? "").length || a.path.localeCompare(b.path));
     g.winnerPath = g.members[0]?.path ?? g.target;
     g.dropped = g.members.filter((m) => m.path !== g.winnerPath)
-      .map((m) => ({ path: m.path, len: (m.content ?? "").length }));
+      .map((m) => ({ path: m.path, len: (m.content ?? "").length, links: extractGraphWikilinks(m.content) }));
     if (g.members.length > 2) {
       log(`  多胞胎合并: ${g.target} ← ${g.members.length - 1} 个非 slug 页（winner ${g.winnerPath}）`);
     }

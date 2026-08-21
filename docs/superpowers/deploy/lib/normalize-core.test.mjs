@@ -23,9 +23,10 @@ const { test, describe } = process.env.VITEST
   : await import("node:test");
 
 import {
-  isSlugPath, hasCJK, mechanicalSlugStem, stripParens, tokenKey, needsLlmSlug, buildSlugInfo,
+  isSlugPath, hasCJK, dirOf, mechanicalSlugStem, stripParens, tokenKey, needsLlmSlug, buildSlugInfo,
   selectNonSlugPages, selectTwinCandidates, findTwin, computeDecisions, mergeSources,
   rewriteLinksToPlan, extractGraphWikilinks, graphNorm, simulateGraphStats, composePostPlanPages,
+  SLUG_OVERRIDES, slugOverrideFor, resolveSlugInfo,
 } from "./normalize-core.mjs";
 import { buildLinkCtx } from "./translate-core.mjs";
 
@@ -96,6 +97,42 @@ describe("① isSlugPath / hasCJK / 目标集过滤", () => {
   });
 });
 
+// ══ ①b curated slug 钉死（fix round 1 F2） ══
+describe("①b SLUG_OVERRIDES / resolveSlugInfo：override 优先于 LLM 短语", () => {
+  const adult = { path: "entities/新概念英语 (成人版).md", title: "新概念英语 (成人版)", content: "x" };
+
+  test("命中键：LLM 短语被忽略，slug/source 取表值；未命中键直通 buildSlugInfo", () => {
+    assert.ok(needsLlmSlug(adult), "中文 stem 常规应走 LLM");
+    assert.equal(slugOverrideFor(adult), "entities/new-concept-english-adult.md");
+    const i = resolveSlugInfo(adult, "New Concept English Adult Version"); // 短语漂移形态
+    assert.equal(i.source, "override");
+    assert.equal(i.slug, "new-concept-english-adult");
+    assert.equal(i.phrase, null, "override 页不携带短语（未调 LLM）");
+    // 未命中键：llm 短语照常生效
+    const j = resolveSlugInfo({ path: "entities/青少新概念.md", title: "青少版新概念英语" }, "Youth Edition New Concept English");
+    assert.equal(j.source, "llm");
+    assert.equal(j.slug, "youth-edition-new-concept-english");
+    assert.equal(slugOverrideFor({ path: "concepts/别的页.md" }), null);
+    // 表值与源页同目录（rename 目标 dir 取源页）且为合法 slug path——库内无同名页，不撞名翻 merge
+    assert.ok(Object.entries(SLUG_OVERRIDES).every(([k, v]) => dirOf(k) === dirOf(v) && isSlugPath(v)));
+  });
+
+  test("override 页决策：无孪生 → rename 到钉死目标（slugSource=override，不随短语漂移）", () => {
+    const pages = [
+      adult,
+      { path: "entities/new-concept-english.md", title: "新概念英语（青少版）", content: "y".repeat(1634), sources: [] },
+    ];
+    const { decisions, groups } = computeDecisions(pages, new Map([
+      ["entities/新概念英语 (成人版).md", resolveSlugInfo(adult, "whatever drifted phrase")],
+    ]));
+    const d = decisions.find((x) => x.path === adult.path);
+    assert.equal(d.decision, "rename");
+    assert.equal(d.target, "entities/new-concept-english-adult.md");
+    assert.equal(d.slugSource, "override");
+    assert.equal(groups.size, 0, "钉死目标非现存页 → 不成 merge 组");
+  });
+});
+
 // ══ ② 孪生探测：curated 覆盖 + 六级链 ══
 describe("② findTwin 覆盖+六级链（生产 23 页真实形态）", () => {
   const T = (path, title) => ({ path, title, content: "", sources: [] });
@@ -106,6 +143,7 @@ describe("② findTwin 覆盖+六级链（生产 23 页真实形态）", () => {
     T("concepts/teachers_pay_teachers.md", "Teachers Pay Teachers"),           // D paren-stripped
     T("concepts/tblt.md", "TBLT (Task Based Language Teaching)"),              // D paren-stripped（多胞胎目标）
     T("entities/new-concept-english.md", "New Concept English (Youth Edition)"), // E token-set（中文短语）
+    T("entities/pep-grade-8-unit-1.md", "PEP 八年级上册第一单元"),               // override（fix F1；v2 译后中文标题）
     T("entities/mary.md", "Mary"),
     T("concepts/mary.md", "Mary"),
   ];
@@ -176,6 +214,18 @@ describe("② findTwin 覆盖+六级链（生产 23 页真实形态）", () => {
     assert.equal(r2, null);
     assert.ok(logged.some((l) => l.includes("覆盖目标不在候选池")));
   });
+  test("TWIN_OVERRIDES 人教版（fix F1）：LLM 短语偏离 'PEP Grade 8 Unit 1' 仍钉死 merge 目标", () => {
+    const p = T("entities/人教版八年级上册-unit-1.md", "人教版八年级上册 Unit 1");
+    assert.ok(needsLlmSlug(p), "混合中文 stem 走 LLM");
+    // apply 时短语重起非确定——偏离形态 slug 化后不再是 pep-grade-8-unit-1，
+    // exact-dir/stem 级必失配（对照：无钉死则误判 rename，新建与现存 pep 页重复的页）
+    const i = info(p, "PEP Grade Eight Textbook Unit One");
+    assert.notEqual(i.slug, "pep-grade-8-unit-1");
+    // curated 钉死：短语无关，恒 merge 到现存 pep 页（basis=override）
+    const r = findTwin(p, i, twins);
+    assert.equal(r.path, "entities/pep-grade-8-unit-1.md");
+    assert.equal(r.basis, "override");
+  });
   test("无孪生：concepts/Twinkle.md → null（rename 语义）", () => {
     const p = T("concepts/Twinkle.md", "Twinkle（闪烁）");
     assert.equal(findTwin(p, info(p), twins), null);
@@ -216,6 +266,8 @@ describe("③④ computeDecisions：rename/merge/多胞胎/撞车", () => {
     assert.equal(g.members.length, 3, "target + 2 非 slug 成员");
     assert.equal(g.winnerPath, "entities/TBLT (Task Based Language Teaching).md");
     assert.deepEqual(g.dropped.map((d) => d.path).sort(), ["concepts/TBLT.md", "concepts/tblt.md"]);
+    // fix F5：dropped 增记出链清单（[[...]] 提取，graph.rs 语义——本组正文无 wikilink → 空数组）
+    assert.ok(g.dropped.every((d) => Array.isArray(d.links)));
     assert.deepEqual(g.sources.sort(), ["s1", "s2", "s3"]);
     assert.equal(g.title, "TBLT (Task Based Language Teaching)");
     // 两个非 slug 页 decision 均 merge 且 target 一致

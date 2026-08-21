@@ -14,7 +14,8 @@
 // 流程：
 //  1. 枚举：REST 拉全部页，筛非 slug（^[a-z0-9/_\.\-]+$，排除 transcripts/ 与 reserved 三页）。
 //  2. slug 计算：英文形态机械化（lib/normalize-core.mjs mechanicalSlugStem）；
-//     中文/混合 stem → omlx LLM 起英文短语再 slug 化（507 fail-fast）。
+//     中文/混合 stem → omlx LLM 起英文短语再 slug 化（507 fail-fast）；
+//     SLUG_OVERRIDES 命中页（fix round 1 F2）直接以 curated 表值为目标、不调 LLM。
 //  3. 逐页决策（lib computeDecisions）：五级孪生探测——命中 → merge（目标=孪生 slug 页，
 //     正文长者胜、sources 并集、title 保留孪生现值；多胞胎迭代合并到同一目标）；
 //     未命中 → rename（POST 新 slug 页沿用 frontmatter/title/content/sources + DELETE 旧页）。
@@ -41,6 +42,7 @@ import { fileURLToPath } from "node:url";
 import {
   isSlugPath, needsLlmSlug, buildSlugInfo, computeDecisions, mergeSources,
   rewriteLinksToPlan, simulateGraphStats, composePostPlanPages, mechanicalSlugStem, hasCJK,
+  slugOverrideFor, resolveSlugInfo,
 } from "./lib/normalize-core.mjs";
 import { RESERVED_PAGES, buildLinkCtx } from "./lib/translate-core.mjs";
 
@@ -309,17 +311,23 @@ async function main() {
   // 5a. 执行前全字段备份（dry-run 也产——apply 重跑时会再备新快照）
   const backupFile = backupAllPages(pages);
 
-  // 2. slug 计算（中文 stem → omlx 短语）
+  // 2. slug 计算（curated SLUG_OVERRIDES 优先钉死、不调 LLM；中文 stem → omlx 短语）
   const nonSlug = pages.filter((p) =>
     !p.path.startsWith("transcripts/") && !RESERVED_PAGES.has(p.path) && !isSlugPath(p.path));
   log(`非 slug 收编目标 ${nonSlug.length} 页（排除 transcripts/ 与 reserved 三页）`);
   const slugInfoByPath = new Map();
-  const llmPages = nonSlug.filter((p) => needsLlmSlug(p));
+  const llmPages = nonSlug.filter((p) => needsLlmSlug(p) && slugOverrideFor(p) == null);
   if (llmPages.length > 0) {
     await pickModel();
     log(`omlx 模型: ${OMLX_MODEL}；中文/混合标题 ${llmPages.length} 页走 LLM 短语`);
   }
   for (const p of nonSlug) {
+    const ov = slugOverrideFor(p);
+    if (ov != null) {
+      slugInfoByPath.set(p.path, resolveSlugInfo(p));
+      log(`  SLUG override: ${p.path} → ${ov}（curated 钉死，不调 LLM）`);
+      continue;
+    }
     let phrase = null;
     if (needsLlmSlug(p)) {
       phrase = await llmSlugPhrase(p.title, p.path.split("/").pop().replace(/\.md$/, ""));
