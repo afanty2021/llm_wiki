@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { LlmWikiApiClient, normalizeBaseUrl } from "../src/api-client.js"
+import { ApiNotFoundError, LlmWikiApiClient, normalizeBaseUrl } from "../src/api-client.js"
 
 test("normalizeBaseUrl trims trailing slashes and falls back to localhost", () => {
   assert.equal(normalizeBaseUrl("http://127.0.0.1:19828///"), "http://127.0.0.1:19828")
@@ -160,4 +160,32 @@ test("API errors include status and server message", async () => {
 
   const client = new LlmWikiApiClient({ fetchImpl })
   await assert.rejects(() => client.projects(), /LLM Wiki API 401: Unauthorized/)
+})
+
+test("404 responses throw typed ApiNotFoundError (message unchanged); 5xx stay plain Errors", async () => {
+  const notFound = new LlmWikiApiClient({
+    fetchImpl: async (): Promise<Response> => (
+      new Response(JSON.stringify({ error: { code: "FILE_NOT_FOUND", message: "File not found" } }), { status: 404 })
+    ),
+  })
+  await assert.rejects(
+    () => notFound.fileContent("current", "wiki/missing.md"),
+    (err: unknown) =>
+      err instanceof ApiNotFoundError
+      && err.name === "ApiNotFoundError"
+      && /LLM Wiki API 404: File not found/.test(err.message),
+  )
+
+  const serverError = new LlmWikiApiClient({
+    fetchImpl: async (): Promise<Response> => (
+      new Response(JSON.stringify({ error: { code: "INTERNAL", message: "boom" } }), { status: 500 })
+    ),
+  })
+  await assert.rejects(
+    () => serverError.fileContent("current", "wiki/a.md"),
+    (err: unknown) =>
+      err instanceof Error
+      && !(err instanceof ApiNotFoundError)
+      && /LLM Wiki API 500: boom/.test(err.message),
+  )
 })

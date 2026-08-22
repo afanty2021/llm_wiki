@@ -368,6 +368,46 @@ test("llm_wiki_read_file（src-server 形态）: GET /api/v1/files/:id/read?path
   assert.equal(toolText(result), "# wiki/a.md\n\n# Hello")
 })
 
+// ── T8 周报 fire#1 根因：read_file 404 防熔断误伤 ──
+
+test("llm_wiki_read_file 404 → 正常返回（isError=false）+ 未找到文案，不抛 MCP 错误", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url.startsWith(`${BASE}/api/v1/files/42/read`),
+      then: () => ({ status: 404, body: { error: { code: "FILE_NOT_FOUND", message: "File not found" } } }),
+    },
+  ], calls)
+
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("llm_wiki_read_file")!({ wecom_userid: "t1", path: "wiki/missing.md" })
+
+  // 正常返回：isError 不为 true（缺省即 false）→ MCP 客户端熔断器不计数
+  assert.notEqual((result as { isError?: boolean }).isError, true)
+  const text = toolText(result)
+  assert.ok(text.includes("未找到文件：wiki/missing.md"), text)
+  assert.ok(text.includes("search 返回的确切 path"), text)
+  // identity_source 尾块保留（system 模式：无 meta + 显式 wecom_userid）
+  assert.deepEqual(result.content.slice(1).map((block) => block.text), ['identity_source: "system"'])
+  // 404 不吃 401 重试逻辑：只发一次读请求
+  assert.equal(calls.filter((c) => c.url.startsWith(`${BASE}/api/v1/files/42/read`)).length, 1)
+})
+
+test("llm_wiki_read_file 500 → 仍抛错（isError=true 路径保持，服务故障照常计熔断）", async () => {
+  const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url.startsWith(`${BASE}/api/v1/files/42/read`),
+      then: () => ({ status: 500, body: { error: { code: "INTERNAL", message: "boom" } } }),
+    },
+  ], [])
+
+  const handlers = makeHandlers(fetchImpl)
+  await assert.rejects(
+    handlers.get("llm_wiki_read_file")!({ wecom_userid: "t1", path: "wiki/a.md" }),
+    /LLM Wiki API 500: boom/,
+  )
+})
+
 test("工具 401 后失效重试一次（invalidate + 新 token）", async (t) => {
   const dir = tempDir("retry-401")
   t.after(() => rmSync(dir, { recursive: true, force: true }))

@@ -17,6 +17,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 
 import {
+  ApiNotFoundError,
   LlmWikiApiClient,
   type ApiAuthResponse,
   type ApiSearchResult,
@@ -361,6 +362,15 @@ function textResult(text: string): ToolOutput {
   return { content: [{ type: "text", text }] }
 }
 
+/**
+ * read_file 404 的正常返回文案（isError=false）：应用级"未找到"（模型拼错/引用了
+ * 不存在的 path）不是服务故障，抛 MCP 错误会被 Hermes 客户端计入熔断器，3 次即把
+ * 整个服务器熔断 ~60s（T8 周报 fire#1 根因）——改为正常返回引导模型优雅纠正。
+ */
+export function fileNotFoundText(relPath: string): string {
+  return `未找到文件：${relPath}（本工具只接受 search 返回的确切 path；请核对后重试或换一个来源）`
+}
+
 function jsonResult(value: unknown): ToolOutput {
   return textResult(JSON.stringify(value, null, 2))
 }
@@ -444,12 +454,21 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
   handlers.set("llm_wiki_read_file", async (args, meta) => {
     const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const relPath = stringArg(args.path, "path")
-    const { path: filePath, content } = await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.readFileSrc(deps.getProjectId(), relPath, { token }))
-    return withIdentitySource(
-      textResult(`# ${filePath}\n\n${truncateText(content, MAX_TEXT_BYTES)}`),
-      ident.mode,
-    )
+    try {
+      const { path: filePath, content } = await callWithAccess(deps, ident.wecomUserid, (token) =>
+        deps.client.readFileSrc(deps.getProjectId(), relPath, { token }))
+      return withIdentitySource(
+        textResult(`# ${filePath}\n\n${truncateText(content, MAX_TEXT_BYTES)}`),
+        ident.mode,
+      )
+    } catch (err) {
+      // 404 = 应用级"未找到" → 正常返回（isError=false），熔断器不被触发；
+      // 其他错误形态（5xx/网络）保持抛错上抛。
+      if (err instanceof ApiNotFoundError) {
+        return withIdentitySource(textResult(fileNotFoundText(relPath)), ident.mode)
+      }
+      throw err
+    }
   })
 
   handlers.set("teacher_tutor_profile_get", async (args, meta) => {

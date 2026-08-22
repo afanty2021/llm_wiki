@@ -127,6 +127,19 @@ export interface ApiAuthResponse {
   user: ApiAuthUser
 }
 
+/**
+ * API 404（应用级"未找到"，如文件不存在）——单独分流的类型化错误。
+ * read_file 捕获后转为正常返回（isError=false）引导模型纠正 path，避免 MCP 客户端
+ * （如 Hermes）把工具级失败计入熔断器、3 次后整服务器熔断；未捕获场景与普通 Error
+ * 等价上抛（message 形状不变），其他错误形态（5xx/网络）不受影响。
+ */
+export class ApiNotFoundError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "ApiNotFoundError"
+  }
+}
+
 export function normalizeBaseUrl(value?: string): string {
   const raw = (value ?? DEFAULT_API_BASE_URL).trim() || DEFAULT_API_BASE_URL
   return raw.replace(/\/+$/, "")
@@ -397,7 +410,11 @@ export class LlmWikiApiClient {
       ? (json as Record<string, unknown>).ok
       : undefined
     if (!response.ok || okFlag === false) {
-      throw new Error(`LLM Wiki API ${response.status}: ${apiErrorMessage(json, response.statusText)}`)
+      const message = `LLM Wiki API ${response.status}: ${apiErrorMessage(json, response.statusText)}`
+      // 404 = 应用级"未找到"（如文件不存在，多半是调用方拼错 path），不是服务故障：
+      // 抛类型化 ApiNotFoundError 供 read_file 等工具分流为正常返回。
+      if (response.status === 404) throw new ApiNotFoundError(message)
+      throw new Error(message)
     }
     return json
   }

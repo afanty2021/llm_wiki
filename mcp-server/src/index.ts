@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { pathToFileURL } from "node:url"
 import {
+  ApiNotFoundError,
   LlmWikiApiClient,
   resolveApiForm,
   type ApiFileNode,
@@ -28,6 +29,7 @@ import {
   TeacherCredentialStore,
   ToolArgumentError,
   createSrcServerHandlers,
+  fileNotFoundText,
   formatSearchResults,
   srcServerToolDefinitions,
   trainingToolDefinitions,
@@ -253,8 +255,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "llm_wiki_read_file": {
         await assertMcpEnabled()
         const relPath = stringArg(args.path, "path")
-        const { path, content } = await client.fileContent(projectId(args), relPath)
-        return textResult(`# ${path}\n\n${truncateText(content, MAX_TEXT_BYTES)}`)
+        try {
+          const { path, content } = await client.fileContent(projectId(args), relPath)
+          return textResult(`# ${path}\n\n${truncateText(content, MAX_TEXT_BYTES)}`)
+        } catch (err) {
+          // 404 = 应用级"未找到" → 正常返回（isError=false），不当服务故障计入客户端熔断器
+          if (err instanceof ApiNotFoundError) {
+            return textResult(fileNotFoundText(relPath))
+          }
+          throw err
+        }
       }
       case "llm_wiki_reviews": {
         await assertMcpEnabled()

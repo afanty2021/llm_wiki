@@ -39,7 +39,7 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 | `teacher_tutor_plan_link` | 老师反馈清单链接打不开时取新链接（`/s/` 短链长期有效；打不开多半是隧道/网络问题） | `plan_id` | 新的完整 `/s/` 短链 |
 | `teacher_tutor_progress` | 老师问"我的进度/学得怎么样" | 无 | 全部计划（含条目计数）+ 最近学习事件 |
 | `llm_wiki_search` | 答疑、生成清单前检索知识库 | `query`、可选 `limit`（建议 5） | 结果列表：`path` / `title` / `snippet` / `score` |
-| `llm_wiki_read_file` | 取页面全文：定位片段时间戳、深度阅读 | `path`（search 结果中的 `path`） | 页面全文 |
+| `llm_wiki_read_file` | 取页面全文：定位片段时间戳、深度阅读 | `path`——只传 `llm_wiki_search` 返回结果里的原样 path，不要自行拼接/改写 | 页面全文；path 不存在时返回"未找到文件：…"（正常结果非报错，核对 path 重试或换一个来源即可） |
 
 调用纪律：
 
