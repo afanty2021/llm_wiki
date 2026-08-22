@@ -67,11 +67,18 @@ async fn list_ingest_jobs(
     Ok(Json(ListJobsResponse { items, count }))
 }
 
-/// GET /api/v1/ingest/jobs/:id（不绑 project，按 job_id UUID 查）
+/// GET /api/v1/ingest/jobs/:id（按 job_id UUID 查；Phase D 鉴权收敛）
+/// 鉴权（读权限）：未知 job → 404 保持（不泄漏存在性），再校验 project Member。
+/// CLI waitJob 已带 svc-transcriber Bearer（项目成员），不受影响。
 async fn get_job_status(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(job_id): Path<Uuid>,
 ) -> Result<Json<ingest_queue::JobResponse>, AppError> {
+    let project_id: i32 = sqlx::query_scalar("SELECT project_id FROM ingest_jobs WHERE id=$1")
+        .bind(job_id).fetch_optional(&state.db).await?
+        .ok_or_else(|| AppError::ResourceNotFound("job not found".into()))?;
+    let _ = check_project_access(&state, &headers, project_id).await?;
     let job = ingest_queue::job_status(&state, job_id).await?;
     Ok(Json(job))
 }

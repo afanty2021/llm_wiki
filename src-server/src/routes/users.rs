@@ -21,7 +21,10 @@ pub fn user_routes() -> axum::Router<AppState> {
         .route("/me", axum::routing::get(get_current_user))
         .route("/me", axum::routing::put(update_current_user))
         .route("/me/teams", axum::routing::get(get_user_teams))
-        .route("/{id}", axum::routing::get(get_user_by_id))
+        // SEC-1：`/{id}` 在 axum 0.7 是**字面量**（路径参数语法是 `:id`，0.8 才改
+        // `{id}`）——GET /users/1 从未进过 handler，一直落到 SPA fallback 200。
+        // 改为真参数路由 + require_auth，端点从"死的 public"变为"活的 authenticated"。
+        .route("/:id", axum::routing::get(get_user_by_id))
 }
 
 /// GET /users/me - Get current user profile (authenticated)
@@ -103,11 +106,18 @@ async fn get_user_teams(
     Ok(Json(teams))
 }
 
-/// GET /users/:id - Get user by ID (public)
+/// GET /users/:id - Get user by ID (authenticated)
+///
+/// SEC-1（终审必修）：曾为 public——公网遍历 id 即拉全部教师 PII
+/// （username/email/full_name）。加 require_auth（同文件 /me 同款 JWT 模式）。
+/// 调用方核查（2026-08-22）：桌面端走自有 API（src/lib/api-client.ts 仅
+/// /users/me*），transcriber/mcp 只用 /training/*——无 public 形态依赖，直接落鉴权。
 async fn get_user_by_id(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
+    let _claims = require_auth(&state, &headers).await?;
     let row = sqlx::query(
         "SELECT id, username, email, full_name, created_at FROM users WHERE id = $1"
     )

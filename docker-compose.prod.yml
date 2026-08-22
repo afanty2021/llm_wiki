@@ -29,19 +29,34 @@ services:
 
   server:
     build:
-      context: ./src-server
-      dockerfile: Dockerfile
+      # 上下文须为仓库根：src-server path-depends on crates/llm-wiki-parser
+      # （根级 .dockerignore 负责把 node_modules/tools/target 等挡在上下文外）
+      context: .
+      dockerfile: src-server/Dockerfile
     environment:
-      DATABASE_URL: postgres://llmwiki:${DB_PASSWORD:-changeme}@db:5432/llmwiki
+      # 键名批改（M2 Step 4）：config.rs Environment separator="__"——旧键
+      # DATABASE_URL/HOST/PORT/STORAGE_PATH/ALLOWED_ORIGINS 从不映射到
+      # server/database/storage/cors 节，属死键（本文件此前起不来）。
+      # 镜像内无 config/default.json 且无挂载，Environment 是唯一配置源；
+      # config.rs 已开 try_parsing + list_separator（见 from_env）。
+      SERVER__HOST: 0.0.0.0 # 容器内监听 0.0.0.0（宿主端口映射维持 127.0.0.1: 前缀）
+      SERVER__PORT: 8080 # u16：try_parsing 下 "8080"→数字
+      DATABASE__URL: postgres://llmwiki:${DB_PASSWORD:-changeme}@db:5432/llmwiki
+      DATABASE__MAX_CONNECTIONS: "10"
       REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET}
-      STORAGE_PATH: /data/storage
-      HOST: 0.0.0.0
-      PORT: 8080
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
-      RUST_LOG: info
+      JWT__SECRET: ${JWT__SECRET}
+      STORAGE__PATH: /data/storage
+      CORS__ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      AUTH__REGISTRATION_ENABLED: "false"
+      TRAINING__ADMIN_TOKEN: ${TRAINING__ADMIN_TOKEN:-}
+      # Option<i32> 不能收空串（try_parsing 下 "" 非数字 → 反序列化失败）；
+      # 故不给默认值：宿主未 export PROJECT_ID 时 compose up 渲染空串 →
+      # 容器启动即失败（fail-closed 且比运行期 500 更早暴露）
+      TRAINING__PROJECT_ID: ${PROJECT_ID}
+      MEDIA__SIGNING_KEY: ${MEDIA__SIGNING_KEY:-}
+      # RUST_LOG 已删：日志级别走 LOGGING__LEVEL（config），RUST_LOG 从不被读取（死键）
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - storage_data:/data/storage
     depends_on:

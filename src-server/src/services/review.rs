@@ -305,8 +305,19 @@ fn trim_to(s: &str, max: usize) -> String {
     }
 }
 
+/// W3（m3-impl-review）：step3 prompt 构造（{{LANGUAGE_RULE}} 占位符渲染）。
+/// Some(language) → 注入 LANGUAGE RULE；None → 占位符抹除（原英文中性行为）。
+/// 复用 ingest_pipeline::render_prompt，占位符替换语义单点维护。
+pub(crate) fn step3_prompt(language: Option<&str>) -> String {
+    crate::services::ingest_pipeline::render_prompt(
+        include_str!("prompts/step3_review.txt"),
+        language,
+    )
+}
+
 /// 3rd-call dedicated review stage. `provider` is injected so tests can use a fake.
 /// Returns empty vec if the trigger condition is not met.
+/// W3：`language` 来自 projects.ingest_language（None → step3 prompt 不注入语言指令）。
 pub async fn run_dedicated_review_stage(
     state: &AppState,
     project_id: i32,
@@ -315,13 +326,14 @@ pub async fn run_dedicated_review_stage(
     step1_json: &serde_json::Value,
     step2_output: &str,
     provider: &dyn StreamChatProvider,
+    language: Option<&str>,
 ) -> Result<Vec<ParsedReview>, AppError> {
     if !should_run_dedicated_review_stage(step2_output) {
         return Ok(vec![]);
     }
     let purpose = fetch_overview(state, project_id).await.unwrap_or_default();
     let index = fetch_index_snippet(state, project_id).await;
-    let prompt = include_str!("prompts/step3_review.txt");
+    let prompt = step3_prompt(language);
     let analysis = serde_json::to_string_pretty(step1_json).unwrap_or_default();
     let user = format!(
         "{prompt}\n\n## Wiki Purpose\n{purpose}\n\n## Current Wiki Index\n{index}\n\n## Source\n{src}\n\n## Stage 1 Analysis\n{a}\n\n## Source Context\n{ctx}\n\n## Generated Wiki Output\n{gen}",
@@ -685,5 +697,24 @@ mod tests {
         assert!(should_run_dedicated_review_stage(&many_blocks));
         // explicit REVIEW marker
         assert!(should_run_dedicated_review_stage("---REVIEW: suggestion | T---\nx\n---END REVIEW---"));
+    }
+
+    // ── W3（批 C）：step3 prompt 语言注入 ──
+
+    #[test]
+    fn step3_prompt_language_injection() {
+        // None → 不注入语言指令（原英文中性行为），占位符无残留，模板主体完好
+        let en = step3_prompt(None);
+        assert!(!en.contains("LANGUAGE RULE"), "{en}");
+        assert!(!en.contains("简体中文"), "{en}");
+        assert!(!en.contains("{{"), "占位符必须被替换: {en}");
+        assert!(en.contains("REVIEW blocks"), "{en}");
+        assert!(en.contains("SEARCH: query 1 | query 2 | query 3"), "{en}");
+
+        // Some('简体中文') → 注入指令（语言值原样内插）
+        let zh = step3_prompt(Some("简体中文"));
+        assert!(zh.contains("LANGUAGE RULE"), "{zh}");
+        assert!(zh.contains("MUST be in 简体中文"), "{zh}");
+        assert!(!zh.contains("{{"), "{zh}");
     }
 }

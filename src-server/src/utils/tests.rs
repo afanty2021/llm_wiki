@@ -152,4 +152,116 @@ mod tests {
 
         assert_ne!(hash1, hash2); // Different inputs should produce different hashes
     }
+
+    // ============ Task 6：JWT typ 隔离（access / plan_link 互斥） ============
+
+    use crate::AppError;
+
+    #[test]
+    fn test_access_token_carries_typ_access() {
+        let token = crate::utils::generate_access_token(1, "u", TEST_SECRET, Duration::hours(1)).unwrap();
+        let claims = crate::utils::verify_token(&token, TEST_SECRET).unwrap();
+        assert_eq!(claims.typ.as_deref(), Some("access"), "new access tokens must carry typ=access");
+    }
+
+    /// 存量兼容：M1 签发的旧 token 无 typ 字段（None）→ verify_token 照常通过。
+    #[test]
+    fn test_legacy_token_without_typ_still_verifies() {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+        use crate::models::Claims;
+
+        let now = chrono::Utc::now();
+        let claims = Claims {
+            sub: "11".to_string(),
+            username: "legacy".to_string(),
+            exp: (now + Duration::hours(1)).timestamp(),
+            iat: now.timestamp(),
+            jti: String::new(),
+            typ: None,
+        };
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(TEST_SECRET.as_ref()),
+        )
+        .unwrap();
+
+        let decoded = crate::utils::verify_token(&token, TEST_SECRET).unwrap();
+        assert_eq!(decoded.sub, "11");
+        assert!(decoded.typ.is_none());
+    }
+
+    /// plan_link 往返：generate → verify 得回 (user_id, plan_id)。
+    #[test]
+    fn test_plan_link_token_round_trip() {
+        let token =
+            crate::utils::generate_plan_link_token(7, 42, TEST_SECRET, Duration::hours(1)).unwrap();
+        let (user_id, plan_id) = crate::utils::verify_plan_link_token(&token, TEST_SECRET).unwrap();
+        assert_eq!(user_id, 7);
+        assert_eq!(plan_id, 42);
+    }
+
+    /// /api 侧隔离：plan_link token 不能当 access 用 —— verify_token（require_auth 底层）
+    /// 对其返回 AuthInvalid（claims 结构不符 + typ 隔离，殊途同归 401）。
+    #[test]
+    fn test_plan_link_token_rejected_by_verify_token() {
+        let token =
+            crate::utils::generate_plan_link_token(7, 42, TEST_SECRET, Duration::hours(1)).unwrap();
+        let err = crate::utils::verify_token(&token, TEST_SECRET).unwrap_err();
+        assert!(matches!(err, AppError::AuthInvalid(_)), "got: {:?}", err);
+    }
+
+    /// /t/ 侧隔离：access token 交给 verify_plan_link_token → PermissionDenied（403 域内拒绝）。
+    #[test]
+    fn test_verify_plan_link_token_on_access_token_permission_denied() {
+        let token = crate::utils::generate_access_token(1, "u", TEST_SECRET, Duration::hours(1)).unwrap();
+        let err = crate::utils::verify_plan_link_token(&token, TEST_SECRET).unwrap_err();
+        assert!(matches!(err, AppError::PermissionDenied), "got: {:?}", err);
+    }
+
+    /// 过期 plan_link → PermissionDenied（403，brief 错误语义）。
+    /// 负 TTL 取 -120s：越过 default Validation 的 60s leeway，确保命中过期分支。
+    #[test]
+    fn test_verify_plan_link_token_expired_permission_denied() {
+        let token =
+            crate::utils::generate_plan_link_token(7, 42, TEST_SECRET, Duration::seconds(-120))
+                .unwrap();
+        let err = crate::utils::verify_plan_link_token(&token, TEST_SECRET).unwrap_err();
+        assert!(matches!(err, AppError::PermissionDenied), "got: {:?}", err);
+    }
+
+    /// 签名无效 → AuthInvalid（401，沿用 jwt.rs 惯例）。
+    #[test]
+    fn test_verify_plan_link_token_wrong_secret_auth_invalid() {
+        let token =
+            crate::utils::generate_plan_link_token(7, 42, TEST_SECRET, Duration::hours(1)).unwrap();
+        let err = crate::utils::verify_plan_link_token(&token, "wrong_secret").unwrap_err();
+        assert!(matches!(err, AppError::AuthInvalid(_)), "got: {:?}", err);
+    }
+
+    /// typ 显式不符（伪造 plid 齐备但 typ=access 的 token）→ decode 成功后仍须 PermissionDenied。
+    #[test]
+    fn test_verify_plan_link_token_wrong_typ_after_decode_permission_denied() {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+        use crate::models::PlanLinkClaims;
+
+        let now = chrono::Utc::now();
+        // 手工构造 typ="access" 且带 plid 的 token：能通过 PlanLinkClaims 反序列化，
+        // 只能靠 decode 后的显式 typ 检查拦截。
+        let claims = PlanLinkClaims {
+            sub: "7".to_string(),
+            plid: 42,
+            exp: (now + Duration::hours(1)).timestamp(),
+            typ: "access".to_string(),
+        };
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(TEST_SECRET.as_ref()),
+        )
+        .unwrap();
+
+        let err = crate::utils::verify_plan_link_token(&token, TEST_SECRET).unwrap_err();
+        assert!(matches!(err, AppError::PermissionDenied), "got: {:?}", err);
+    }
 }

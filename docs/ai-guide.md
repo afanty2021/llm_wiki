@@ -44,10 +44,10 @@
 
 #### 4. 多阶段检索管道
 
-- **Phase 1**: 分词搜索（英文单词分割 + 中文 CJK bigram，标题匹配 +10 分）
+- **Phase 1**: 分词搜索（英文单词分割 + 中文 CJK bigram，标题 token 权重 ×5、正文 ×1，标题短语命中 +50 分）
 - **Phase 1.5**: 向量语义搜索（可选，LanceDB，余弦相似度）
 - **Phase 2**: 图扩展（2-hop 遍历，衰减）
-- **Phase 3**: 预算控制（可配置 4K-1M tokens，60/20/5/15 分配）
+- **Phase 3**: 预算控制（可配置 4K-1M tokens，50/30/5/15 分配）
 - **Phase 4**: 上下文组装（编号页面，引用格式 [1], [2]）
 
 ### AI 辅助开发建议
@@ -130,7 +130,7 @@
 
 技术栈：
 - 前端: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui
-- 后端: Rust, Tauri v2, LanceDB (可选), pdf-extract, docx-rs
-- LLM: OpenAI, Anthropic, Google, Ollama, MiniMax, Custom
+- 后端: Rust, Tauri v2, LanceDB (可选), pdfium-render, docx-rs
+- LLM: OpenAI, Anthropic, Google, Azure, Ollama, MiniMax, Claude Code, Codex CLI, Custom
 ```
 

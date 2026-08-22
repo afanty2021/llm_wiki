@@ -1,0 +1,26 @@
+# 根级 .dockerignore——prod 镜像构建上下文为仓库根（docker-compose.prod.yml: context: .，
+# src-server path-depends on crates/llm-wiki-parser，子目录作上下文会缺 crate）。
+# 只放行构建所需：根/ src-server/ crates 的 Cargo 清单与锁、src-server/src、migrations、
+# src-server/Dockerfile。其余（含一切 .env*）一律排除，防大头进上下文、防密钥进镜像。
+.git
+.github
+.claude
+.serena
+.superpowers
+.playwright-mcp
+**/.env*
+**/node_modules
+tools
+src-tauri
+dist
+assets
+docs
+MEMORY
+Plans
+**/target
+**/logs
+**/tests_tmp
+**/storage
+*.md
+*.png
+*.log

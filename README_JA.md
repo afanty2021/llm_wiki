@@ -205,7 +205,7 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 フェーズ 1: トークン化検索
   - 英語: 単語分割 + ストップワード除去
   - 中国語: CJK バイグラム分割（每个 → [每个, 个…]）
-  - タイトル一致ボーナス（+10 点）
+  - タイトル一致は本文より高く重み付け（タイトルトークン ×5、本文 ×1、タイトル内フレーズ +50 点）
   - wiki/ と raw/sources/ の両方を検索
 
 フェーズ 1.5: ベクトル意味検索（オプション）
@@ -221,7 +221,7 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 
 フェーズ 3: 予算制御
   - 設定可能なコンテキストウィンドウ: 4K → 1M トークン
-  - 比例配分: Wiki ページ 60%、チャット履歴 20%、index 5%、システムプロンプト 15%
+  - 比例配分: Wiki ページ 50%、チャット履歴 + システムプロンプト約 30%、index 5%、回答予約 15%
   - 検索 + グラフ関連度の総合スコアでページを優先順位付け
 
 フェーズ 4: コンテキスト組み立て
@@ -312,7 +312,7 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 
 | フォーマット | 抽出方法 |
 |--------------|----------|
-| PDF | 内蔵 pdf-extract（Rust）+ ファイルキャッシュ。表、数式、複雑なレイアウト向けに MinerU クラウド解析を任意で利用可能 |
+| PDF | 内蔵 pdfium-render（Rust）+ ファイルキャッシュ。表、数式、複雑なレイアウト向けに MinerU クラウド解析を任意で利用可能 |
 | DOCX | docx-rs — 見出し、太字／斜体、リスト、テーブルを構造化 Markdown へ |
 | PPTX | ZIP + XML — スライド単位で抽出し、見出し／リスト構造を保持 |
 | XLSX/XLS/ODS | calamine — 正しいセル型、複数シート対応、Markdown テーブルに変換 |
@@ -338,7 +338,7 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 
 - **4K から 1M トークンまでのスライダー** — LLM ごとの能力に合わせて調整可能
 - **比例配分された予算** — ウィンドウが大きいほど Wiki コンテンツの取り分も増える
-- **60/20/5/15 の配分** — Wiki ページ／チャット履歴／index／システムプロンプト
+- **50/30/5/15 の配分** — Wiki ページ／チャット履歴 + システムプロンプト／index／回答予約
 
 ### 17. クロスプラットフォーム互換
 
@@ -349,7 +349,7 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 - **macOS のクローズ＝隠す** — 閉じるボタンでウィンドウを隠す（アプリはバックグラウンドで継続）。Dock アイコンクリックで復元、Cmd+Q で終了
 - **Windows / Linux の終了確認** — 終了時に確認ダイアログを表示し、誤操作によるデータ消失を防止
 - **Tauri v2** — macOS、Windows、Linux のネイティブデスクトップ
-- **GitHub Actions による CI/CD** — macOS（ARM + Intel）、Windows（.msi）、Linux（.deb / .AppImage）の自動ビルド
+- **GitHub Actions による CI/CD** — macOS（ARM）、Windows（.msi）、Linux（.deb / .AppImage）の自動ビルド
 
 ### 18. その他の追加機能
 
@@ -357,8 +357,8 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 - **設定の永続化** — LLM プロバイダー、API キー、モデル、コンテキストサイズ、言語を Tauri Store で保存
 - **Obsidian 設定** — 推奨設定入りの `.obsidian/` ディレクトリを自動生成
 - **Markdown レンダリング** — 枠線付きの GFM テーブル、整形されたコードブロック、チャットとプレビュー内での wikilink 処理
-- **マルチプロバイダー LLM 対応** — OpenAI、Anthropic、Google、Ollama、カスタム。プロバイダーごとにストリーミングとヘッダーを調整
-- **15 分タイムアウト** — 長時間のインジェスト処理が早すぎる段階で失敗しないようにする
+- **マルチプロバイダー LLM 対応** — OpenAI、Anthropic、Google、Azure、Ollama、MiniMax、Claude Code、Codex CLI、カスタム。プロバイダーごとにストリーミングとヘッダーを調整
+- **30 分タイムアウト** — 長時間のインジェスト処理が早すぎる段階で失敗しないようにする
 - **dataVersion シグナル** — Wiki コンテンツの変更に合わせてグラフと UI を自動リフレッシュ
 
 ## 技術スタック
@@ -372,11 +372,11 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 | グラフ | sigma.js + graphology + ForceAtlas2 |
 | 検索 | トークン化検索 + グラフ関連度 + 任意のベクトル検索（LanceDB） |
 | ベクトル DB | LanceDB（Rust、組み込み、オプション） |
-| PDF | pdf-extract + 任意の MinerU クラウド解析 |
+| PDF | pdfium-render + 任意の MinerU クラウド解析 |
 | Office | docx-rs + calamine |
 | 多言語対応 | react-i18next |
 | 状態管理 | Zustand |
-| LLM | ストリーミング fetch（OpenAI、Anthropic、Google、Ollama、カスタム） |
+| LLM | ストリーミング fetch（OpenAI、Anthropic、Google、Azure、Ollama、MiniMax、Claude Code、Codex CLI、カスタム） |
 | Web 検索 | Tavily、SerpApi、SearXNG JSON API |
 
 ## インストール
@@ -385,7 +385,7 @@ LLM Wiki は、手元の文書を整理された相互リンク付きの知識�
 
 [Releases](https://github.com/nashsu/llm_wiki/releases) からダウンロードできます。
 
-- **macOS**: `.dmg`（Apple Silicon + Intel）
+- **macOS**: `.dmg`（Apple Silicon）
 - **Windows**: `.msi`
 - **Linux**: `.deb` / `.AppImage`
 

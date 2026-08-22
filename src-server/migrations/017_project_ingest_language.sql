@@ -1,0 +1,12 @@
+-- 017_project_ingest_language.sql — 评审 W3（m3-impl-review）：ingest 输出语言提为 project 级配置。
+-- 背景：zh-batch（32b7395a）把「输出简体中文」硬编码进共享 prompt（step1/2/3 .txt）与
+-- reserved 三模板（index/log/overview），导致本 server 所有项目的摄取都被迫中文。
+-- 语义：
+--   NULL（默认）= 不注入语言指令（原英文中性行为）+ reserved 模板走英文文案；
+--   有值（如 '简体中文'）= prompt 注入 LANGUAGE RULE（语言值原样内插）+
+--   reserved 模板按语言分流（含 中文/Chinese/zh → 中文文案，否则英文）。
+-- 注意：不在此处给 LT 项目（id=614）写死 UPDATE——迁移保持通用，由部署侧显式设值：
+--   UPDATE projects SET ingest_language='简体中文' WHERE id=614;
+-- 幂等：up 可重复执行（IF NOT EXISTS）；down 为
+--   ALTER TABLE projects DROP COLUMN IF EXISTS ingest_language;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS ingest_language TEXT NULL;

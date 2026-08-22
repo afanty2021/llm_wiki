@@ -17,6 +17,7 @@ pub const ERR_LLM_API_ERROR: &str = "LLM_API_ERROR";
 pub const ERR_INTERNAL_ERROR: &str = "INTERNAL_ERROR";
 pub const ERR_CONFLICT: &str = "CONFLICT";
 pub const ERR_NOT_IMPLEMENTED: &str = "NOT_IMPLEMENTED";
+pub const ERR_TOO_MANY_REQUESTS: &str = "TOO_MANY_REQUESTS";
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -70,6 +71,10 @@ pub enum AppError {
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    /// 限流超限（Task 6 r3：t_page /s/ 与 beacon 端点）→ 429。
+    #[error("Too many requests")]
+    TooManyRequests,
 }
 
 impl IntoResponse for AppError {
@@ -156,6 +161,11 @@ impl IntoResponse for AppError {
                 ERR_NOT_IMPLEMENTED,
                 msg.clone(),
             ),
+            AppError::TooManyRequests => (
+                StatusCode::TOO_MANY_REQUESTS,
+                ERR_TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ),
         };
 
         let body = Json(json!({
@@ -164,6 +174,17 @@ impl IntoResponse for AppError {
                 "message": message,
             }
         }));
+
+        // Retry-After（评审 R2，RFC 6585）：限流窗口固定 60s（rate_limit.rs
+        // minute 窗口），429 带固定值即可——beacon 客户端据此退避，无需猜。
+        if matches!(self, AppError::TooManyRequests) {
+            let mut resp = (status, body).into_response();
+            resp.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("60"),
+            );
+            return resp;
+        }
 
         (status, body).into_response()
     }

@@ -1,7 +1,7 @@
 # LT 教师培训系统改造设计（llm_wiki × Hermes × 企业微信）
 
 **日期**: 2026-08-17
-**版本**: v5（v4 评审修订 4 项 + 8 项低分措辞收敛；设计冻结，进入 M0 实施，见 §12）
+**版本**: v6（v5 冻结版实施 M0-M2 后的落地事实回写：/s/ 短链凭证模型、MCP 主 config 声明位置、step1 双重防线、隧道单 hostname、omlx 内存依赖——2026-08-20 评审 #3 收编）
 **状态**: 已冻结
 **路径分类**: Architectural（多子系统，M0-M4 五个里程碑，约 4.5 周）
 
@@ -11,7 +11,7 @@
 
 把 llm_wiki（文档知识库）改造为面向 15 名老师的师训学习系统：
 
-- 内容源：`~/Github/L T师训 2024-2025` + `~/Github/L T师训 2024-2025（HEVC）`（两目录合计约 1500 个媒体文件，含约 440 个仅存在于 HEVC 目录；权威清单由 M0 对账产出）
+- 内容源：`~/Github/L T师训 2024-2025` + `~/Github/L T师训 2024-2025（HEVC）`（时点值：两目录合计 1528 个媒体文件（含自 ignored 救援的 29 个伪扩展名媒体）；**主库正向 HEVC 目录整体迁移中（音视频皆迁、~110 个/天，最终仅存 HEVC 目录）**——所有计数/时长以批产前重审计为准；权威清单为 `tools/transcriber/out/manifest-summary.json`，见 §3.1）
 - 通道：Hermes agent（已接通企业微信：上游自带 callback 适配器，强制 SHA1 验签 + AES-CBC 解密 + corp_id 匹配；gateway 本机常驻）
 - 老师体验：手机企微里问答 → 收到个性化学习清单 → 点链接看视频/文档 → 系统记录进度 → 定期收到推荐
 - 部署：本机 Mac。**公网暴露经 cloudflared 隧道**（见 §6），不开放入站端口
@@ -78,19 +78,21 @@
 **新增独立 Node CLI**（放 `tools/transcriber/`，TypeScript，复用仓库 vitest 基建）。
 
 ### 3.1 M0 内容对账（先于一切转写）
-- 扫描两目录（含 HEVC 独有约 440 个；排除 `__MACOSX`），ffprobe 逐个：容器/视频编码/音频编码/时长
+- 扫描两目录（排除 `__MACOSX`），ffprobe 逐个：容器/视频编码/音频编码/时长；**未登记扩展名文件也跑 ffprobe 救援**（"数字.标题"伪扩展名下实为媒体的按 ext:"" 兜底登记、桶 B——实测救援 29 个/5.54h，真 ignored 仅 17 个）
 - **分桶（两桶，含音频维度）**：
   - 桶 A「浏览器可播」：视频 = MP4 + H.264 + AAC；音频 = mp3/m4a → 直用
   - 桶 B「一律转码」：其余全部——hevc、VOB/MPEG-2（60 个）、mkv/avi/flv/wmv 内非 H.264、**wma（16 个，浏览器不可播音频）** → 视频 H.264+AAC mp4 副本，音频转 AAC/MP3 副本
-- 权威 manifest：清单/桶归属/播放副本需求/总时长（**约 343-363h** = 主库 ~253h + HEVC 独有 ~90-110h；夜间窗口 4-6 晚，推算：343-363h ÷ 14-18× 实时 ≈ 19-26h 纯转写，9h/晚 + 转码/重试余量）/归一化重叠
+- 权威 manifest：清单/桶归属/播放副本需求/总时长（**实测 404.51h**（M0 manifest-summary.json，救援后口径）= 主库 169.44h + HEVC 目录 235.07h；夜间窗口 5-7 晚，推算：404.51h ÷ 14-18× 实时 ≈ 22-29h 纯转写，9h/晚 + 转码/重试余量）/重叠（**配对键含一级父目录 + 时长交叉验证 |Δ|≤max(2s,1%)；实测有效配对 0 对**——名称级 3 对中 1 对空名假阳性已消除，2 对为主库完好↔HEVC 损坏，明细见 `out/overlap.json`；mainOnly 901 / hevcOnly 494 键）/privacyFiles 252/elapsedS；配对明细与 M4 排产用的 `--diff`/manifest 信封格式延后至 M4
 - 少儿影像隐私标注（链接生命周期见 §4.2）
-- v1 事实修正存档：mp3↔mp4 归一化同名 0 对；HEVC 目录纳入；首批专栏 = 教学新知班级管理专栏（36 个）
+- v1 事实修正存档：mp3↔mp4 归一化同名 0 对；HEVC 目录纳入；首批专栏 = 教学新知班级管理专栏（**合计 48 个 / 23.88h：HEVC 侧 44 个 mp4 + 主库同目录 4 个伪扩展名视频（137/141/144/145，2.05h，经救援登记）**——历轮"36/44 个"均为不完整口径）
+- **manifest 为时点快照**：库迁移期间每次批产前重跑 audit（≈14s，兼作迁移健康检查——probeFailures 涌增 = 转换器产坏件；迁移收尾时全量 audit 即迁移验收）。audit preflight 对"配置根目录不存在"降级为警告并视为空集（迁移终态主库目录将被删除）；**双根皆缺或审计结果为 0 媒体时报错退出（防静默空跑）**。M4 全量批产前抽一个已迁移 mp3 对比抽取 wav 的 SHA（验证"音频流直拷、SHA 稳定"假设——若被重编码则 slug 会漂移，需重估内容寻址策略）
+- M0 实测发现 2 个损坏文件（ffprobe demuxer 错误，均 HEVC 源、均不在首批专栏内；~~主库有同名完好副本可替代转写~~ **主库副本已在目录迁移中被删除——需从备份恢复或手工重导出**；overlap.json 的 error_involved 标记保留供迁移前后比对）：`【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/高中词汇课练习设计案例分析.mp4`；`【2024-2025】LT年度师训会员（高年级版）/独立教师教学力专栏/420. 独立教师-双减后行业现状.mp4`
 
 ### 3.2 管线五段式
 1. **扫描分类**（以 manifest 为准）：直收音频；视频抽音频；文档不走转写
 2. **去重**：16kHz mono wav SHA-256 内容去重
-3. **规范化与转码**：ffmpeg 抽音频；桶 B 产出播放副本
-4. **转写**：whisper.cpp（Metal）+ ggml large-v3-turbo 主引擎（PyTorch 20250625 含 turbo 作 fallback）；language 强制 zh；`--prompt` 注入 LT 域词表；JSONL 断点续跑，单文件重试 2 次
+3. **规范化与按需转码**：ffmpeg 抽音频（slug = 净化 basename + wavSha8，**内容寻址**——迁移中 relPath 漂移不影响 slug/transcript/asset 幂等）；播放副本 = **按需转码缓存**（videotoolbox 硬编，老师点开才转、只缓存实际消费、可淘汰——**批量预转废弃**：全库 HEVC 化后全量 H.264 副本体积 2-3 倍会吃掉迁移省下的磁盘；M1 仅转验收演示件）
+4. **转写**：whisper.cpp（Metal）+ ggml large-v3-turbo 主引擎（step1 分析调 LLM 侧：max_tokens 32000 + context 超限降档 16000 重试 + **解析失败自动重试一次**——本地 omlx 内存压力下提前 EOS 半截 JSON 的瞬态兜底，2026-08-19 夜 5/48 实证；配套服务端三防线见 §6）（PyTorch 20250625 含 turbo 作 fallback）；language 强制 zh；`--prompt` 注入 LT 域词表；JSONL 断点续跑，单文件重试 2 次
 5. **产物写入（五步，全经 REST，凭证见 §3.3）**：
    - ① transcript 源文件落项目 storage（现有 ingest 输入边界）
    - ② **transcript 页**：`POST /pages`，path 确定性派生 **`transcripts/<slug>.md`**，type: transcript，含 `[mm:ss]`；创建即嵌入（实测确认）。**409 策略**（POST 对已存在 path 返回 Conflict，实测确认）：续跑先 GET——hash 一致跳过，不一致走 If-Match PUT 更新
@@ -99,9 +101,10 @@
    - ⑤ **transcripts/ 对账**：CLI 轮询 ingest job 状态（jobs API），job 完成后校验 `transcripts/` 前缀页 hash 未被 LLM 生成页覆写（ingest upsert 是 ON CONFLICT DO UPDATE，path 由 LLM 输出决定，实测确认撞名即覆盖）；被改则重写并告警；实测撞名频发则 M2 升级为 ingest 运行时拒绝该前缀（列入风险跟踪）
 
 ### 3.3 CLI 凭证与批产控制
-- **svc-transcriber 服务账号**（LT team Admin，注册关闭前手工创建）：CLI 加密存储其 refresh token 自行刷新（一次性旋转，每次持久化新 token）；media-assets 端点鉴权即 LT team Admin 角色 token，**CLI 不持 TRAINING__ADMIN_TOKEN**
+- **svc-transcriber 服务账号**（LT team Admin，注册关闭前手工创建）：CLI 本机文件存储 refresh token（`out/auth.json`，gitignored + chmod 600，不加密——本机单用户威胁模型下已声明）自行刷新（一次性旋转，每次持久化新 token）；media-assets 端点鉴权即 LT team Admin 角色 token，**CLI 不持 TRAINING__ADMIN_TOKEN**
 - `TRAINING__PROJECT_ID`：CLI/MCP/落地页共用的单项目 ID
 - `--window 23:00-08:00`；首批教学新知班级管理专栏；M4 全量
+- **机器错峰约束**：格式迁移/转换（ffmpeg CPU/GPU）与 whisper 批处理都会吃满本机——转换任务白天跑、whisper 夜窗跑，或批处理期间暂停转换（迁移期约 7-8 天与 M1 开发周重叠，需协调）
 
 ## 4. 子项目 P1：src-server training 域
 
@@ -160,9 +163,9 @@ learning_events
 | `GET /overview` | 管理员服务 token | 15 人进度总览 JSON |
 | `GET/PUT /profile` | 老师 access token | 问卷与 interests 回写 |
 | `POST /events` | 老师 access token | 仅 event_type='ask' |
-| `POST /plans` | 老师 access token | 创建清单（事务内写 plan_created 事件）；响应返回整单 `/t/:token` 链接 |
+| `POST /plans` | 老师 access token | 创建清单（事务内写 plan_created 事件）；响应返回整单 `/s/:code` 短链（v6：替代直发 /t/ 长链——LLM 转发 164 字符 JWT 两次截断致死链，实测 structural 修复） |
 | `GET /plans` `GET /plans/:id` | 老师 access token | **资源归属校验：plan.user_id == token 用户，否则 404** |
-| `POST /plans/:id/link` | 老师 access token | 补签整单链接（同归属校验） |
+| `POST /plans/:id/link` | 老师 access token | 重发整单短链（同归属校验） |
 | `POST /items/:id/complete` | 老师 access token | **归属链校验：item→plan.user_id == token 用户**（mark_complete 由 LLM 产出裸 id，防跨用户完成）；单调守卫 |
 | `GET /progress` | 老师 access token | 个人汇总 |
 
@@ -170,7 +173,8 @@ learning_events
 
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
-| `GET /t/:token` | plan_link token（绑 plan_id，TTL 7 天） | 落地页 HTML；渲染事务记 view 事件 |
+| `GET /s/:code` | 短链码（10 字符 ~60bit 随机，capability URL） | 303 → 现签 7 天 /t/ token（每次点击新签）；**仅 status=active 的 plan**（归档即吊销，v6） |
+| `GET /t/:token` | plan_link token（绑 plan_id，TTL 7 天） | 落地页 HTML；渲染事务记 view 事件；**仅 status=active 的 plan**（v6） |
 | `POST /t/:token/seen` | 同上 | beacon：body 可选 item_id（双粒度规则见 §4.1） |
 | `POST /t/:token/complete` | 同上 | body {item_id}，校验 ∈ 该 plan |
 | `GET /media/:media_id` | 签名 URL（HMAC 消息 = media_id + exp + **当次 plan_link 指纹**，exp ≤12h） | Range 流式；media_id 即 media_assets.slug（字符串，消歧）；受众绑定：URL 随清单链接失效而失效 |
@@ -180,7 +184,8 @@ learning_events
 **凭证模型（三层，JWT 带 `typ`，`require_auth` 增加 typ 校验）**：
 - access/refresh（300s/7d，refresh 一次性旋转）：老师与服务账号持有，MCP/CLI 持久化每次新 refresh；MCP 并发刷新 **single-flight**（合并为单次，防旋转竞态丢 token）
 - plan_link：一链一清单，TTL 7 天；到期 /plans/:id/link 重发
-- /media 签名：渲染时现签，HMAC 消息含当次 plan_link 指纹——纯时限 bearer 升级为受众绑定凭证（未成年人影像的"转发即失效"），`<video>` 与 Range 天然可用
+- /s/ 短链（v6 新增层）：plan 存活期内**永活**的 capability URL，点击时现签 7 天 plan_link；泄露止血 = `UPDATE learning_plans SET status='archived'`（/s/、/t/、beacon 三面同判 active）
+- /media 签名：渲染时现签，HMAC 消息含当次 plan_link 指纹（受众绑定；12h 时限为主要失效边界；plan 归档后新渲染停止——存量 URL 至多再流 12h，v6 口径）
 - 管理员服务 token：`TRAINING__ADMIN_TOKEN`（32B hex，常数时间比较），**仅护 /bind 与 /overview**
 
 ### 4.3 落地页 `/t/:token`（M2 交付）
@@ -206,11 +211,13 @@ get_progress / record_ask
 ```
 凭证持有：wecom_userid → (access, refresh) 加密映射，按会话注入；**刷新 single-flight**；/bind 与管理员服务 token 只在 MCP 配置；凭证零进 LLM 上下文。
 
+**MCP 声明位置（v6 实测修正）**：Hermes 0.19 启动 discovery 只读主 config（profile 作用域 contextvar 不传播到 discovery 路径）——`mcp_servers.llm-wiki-training` 声明于 `~/.hermes/config.yaml` 主 config（deploy.sh 托管块）；**代价：default profile 会话也可见 10 个 training 工具**，身份伪造残余风险面扩大，M3 会话级身份绑定优先级上调。教师侧工具白名单仍由 lt-tutor profile 的 `platform_toolsets.wecom: [skills]` 门控（实测"执行 ls"零工具可调）。
+
 ### 5.2 SKILL.md 对话编排（prompt，非状态机）
 新用户（pending）→ 问卷 3-4 问 → upsert_profile(surveyed) → 首个清单；答疑 = kb_search 多查询 + record_ask + read_page 时间戳定位 → 带引用回答；清单生成 = profile + 问题 + 图谱邻居 → create_plan → 整单链接；完成确认 = 对齐 list_plans → mark_complete。
 
 ### 5.3 推荐信号与周报
-冷启动问卷画像；行为累积 = ask 主题 + item 级 complete 内容（seen 弱信号）→ 回写 interests；图谱邻居；已完成/历史清单降权。周报周五 09:00 cron：逐人无头编排 → period_key 幂等 → 推送；逐人失败隔离；补跑语义已核实。
+冷启动问卷画像；行为累积 = ask 主题 + item 级 complete 内容（seen 弱信号）→ 回写 interests；图谱邻居；已完成/历史清单降权。周报周五 09:00 cron：逐人无头编排 → period_key 幂等 → 推送；逐人失败隔离；补跑双通道（M3 T9 实测锚定）= 停机错过的触发 gateway 起动后自动补跑单次（due 检查天然拾起过期 job，非累计队列；实测停机窗口盖过触发时刻，起后 5s 补跑）∪ 手动 fire 兜底（`weekly-report-register.sh fire`，与正式触发同走 gateway ticker + live 投递路径）。
 
 ### 5.4 安全收敛（配置项，M2 定型）
 企微频道经 `profile_routing` 路由到独立 profile（独立 HERMES_HOME），该 profile 只启用 MCP 工具 + 消息收发；验签依赖 gateway 现有三重校验，仅需 wecom 凭证保密。
@@ -219,13 +226,14 @@ get_progress / record_ask
 
 | 项 | 措施 | 里程碑 |
 |---|---|---|
-| 公网入口 | cloudflared tunnel：api → src-server、cb → hermes 回调（8645，GET 验证握手同隧道）；自动 TLS，不开入站端口 | M2 |
+| 公网入口 | cloudflared tunnel：api.xiaoluedu.top → src-server（**单 hostname**——wecom 为 websocket 出站模式无回调路由，cb 入口裁撤，v6）；自动 TLS，不开入站端口 | M2 |
 | 监听收敛 | src-server host 改 127.0.0.1；hermes callback 显式绑 127.0.0.1 | M1 |
 | 密钥轮换 | 新 JWT secret 经 `JWT__SECRET` 注入；dev secret 失效化，视为已泄露 | M1 |
 | 密钥供给 | 全部经环境变量、不入 git：`JWT__SECRET`、`TRAINING__ADMIN_TOKEN`、`TRAINING__PROJECT_ID`、`MEDIA__SIGNING_KEY`（/media HMAC） | M1 |
 | 数据库 | compose 端口绑 127.0.0.1；容器 `restart: unless-stopped` | M1 |
 | 注册关闭 | `auth.registration_enabled` 默认 false；svc-transcriber 关闭前创建；此后 /bind 唯一建号 | M1 |
-| 常驻保活 | launchd KeepAlive：cloudflared、hermes gateway、src-server；Docker Desktop 自启 | M2 |
+| 常驻保活 | launchd KeepAlive：cloudflared、hermes gateway、src-server、omlx-8001、iogpu-wired-limit(42GB)；Docker Desktop 登录项自启 | M2 |
+| omlx 内存依赖（v6 新增） | 本地 LLM（Qwen3.6-35B + bge-m3）在默认 37.4GB Metal 上限下批量 ingest 会触碰水位 → 提前 EOS 半截 JSON；三防线：iogpu wired_limit 42GB 开机 daemon + Qwen pinned/KV 4bit + 客户端 step1 解析重试 | M2 |
 | 日志脱敏 | /t/、/media 路径与 query 脱敏（现状写全量 URI） | M2 |
 | 遗留鉴权缺口 | /ingest/jobs/:id 加项目绑定鉴权（经 check_project_access；不用 admin token——其范围已收窄至 /bind 与 /overview） | M2 |
 
@@ -259,11 +267,11 @@ get_progress / record_ask
 
 | 里程碑 | 内容 | 验收标准 |
 |---|---|---|
-| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（约 343-363h 定值）/重叠；首批排产 |
-| **M1（1 周）** | whisper.cpp 管线 + 首批专栏五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
-| **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
+| **M0（0.5 天）** | 对账脚本 + manifest | 两桶分类/时长（实测 404.51h）/重叠（时长验证后 0 对，hevcOnly 494 键）/救援 29 个；首批 48 个/23.88h 排产 ✅ |
+| **M1（1 周）** | whisper.cpp 管线 + 首批专栏（48 个，**首批源全为 hevc/伪扩展名——即含桶 B 全量转码副本**）五步写入 + **migration 013（media_assets + teacher_profiles）+ /media/:id 签名 URL + /bind 完整版 + svc-transcriber + 安全基线（§6 M1 行）** | search 命中 transcript 页（snippet 出自命中段落）+ **向量命中抽查**；**临时调试页/手工签 URL 演示 Range 播放**（落地页 M2 才有，章节跳转验收挪 M2）；注册关闭后 /bind 可建测试账号；无对外明文端口 |
+| **M2（1.5 周）** | migration 014 + plans/events/complete API + /t/ 落地页（view/seen 双粒度/complete）+ MCP 扩展（含 read_page）+ SKILL.md 最小版 + 隧道 + **launchd 保活（§6 归属 M2）** + 白名单 profile（§5.4）+ 日志脱敏 + /ingest 收敛 + **真机测试件预转副本（复用 --demo-slug 模式；安卓 X5 的 HEVC 支持不保证，开工前先用测试机确认 HEVC 能力——服务端按需转码仍留 M4）** | **M2 版 E2E** 全流程；鉴权矩阵全绿（含跨用户归属）；落地页真机双内核含章节跳转；AGENTS.md/docs 同步 |
 | **M3（1.5 周）** | 问卷编排、/overview、周报 cron | 3-5 人灰度一周；**M3 版 E2E 全量**；全链路重启演练（launchd 已于 M2 就位，此处为演练验收）；AGENTS.md/docs 同步 |
-| **M4（持续）** | 全量夜间批处理（桶 B 转码副本）+ 推荐迭代 + 15 人上线 | manifest 100% 转写；周报完成率可观测；可选 snippet 增强 |
+| **M4（持续）** | 全量夜间批处理 + **按需转码缓存**（老师点开才转、只缓存实际消费、可淘汰——批量预转废弃）+ 推荐迭代 + 15 人上线 | manifest 100% 转写（批产前重审计口径）；周报完成率可观测；可选 snippet 增强 |
 
 ## 10. 明确不做（YAGNI）
 
@@ -284,7 +292,15 @@ get_progress / record_ask
 
 ## 12. 修订记录
 
-### v4 → v5（本轮 4 项 ≥80 + 8 项低分，设计冻结）
+### M0 复审修复（feat/Training-System，commit 51a5532c；三路评审用真实 manifest 交叉复算）
+1. 🔴 ignored 救援：46 个未登记扩展名文件经 ffprobe 救援出 **29 个真媒体（5.54h）**（"数字.标题"伪扩展名，extname 取到伪后缀），ext:"" 兜底登记、桶 B；首批由 44 个/21.82h 修正为 **48 个/23.88h**（主库 4 个救援视频入首批）
+2. 🔴 配对键重做：键含一级父目录 + 仅剥节目前缀数字 + 分隔符类补 `_` + **时长交叉验证 |Δ|≤max(2s,1%)**；matchedPairs 由 3（1 空名假阳性 + 2 坏文件对）修正为 **0 有效对**；mainOnly 901 / hevcOnly 494 键；明细落 `out/overlap.json`（error_involved 标记出"主库完好↔HEVC 损坏"可替代转写对）
+3. 🔴 error 行 bucket 改 null（提前于原 M1 计划；error 的 .mp3 原会判 A_playable）
+4. 🟡 一并落：bySource 加时长（可复核提交产物）、privacyFiles 252 入 summary、probeMedia real-llm 冒烟（仓库 test:llm 惯例）、`--concurrency` 配置 + config/根目录/ffprobe 预检、elapsedS 留档
+5. 延后至 M4：`audit --diff` 模式、manifest 信封格式（去 absPath 省 45%）
+6. 流程项备查：分支名 feat/Training-System 承接 M0（用户指定）；M1 计划 Task 1 的 error→null 项已由本波完成，T1 剩余收敛项不变
+
+### v4 → v5（4 项 ≥80 + 8 项低分，设计冻结）
 1. 决策表术语：进度判定改"beacon 确认 seen"（view/seen 对立信号不再混用一个词）
 2. §6 /ingest 收敛措施改项目绑定鉴权，与 admin token 收窄范围（仅 /bind 与 /overview）对齐
 3. /media 签名加受众绑定：HMAC 消息含当次 plan_link 指纹，URL 随清单链接失效（未成年人影像威胁模型自洽）；media_id 消歧为 slug

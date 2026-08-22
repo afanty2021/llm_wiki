@@ -113,9 +113,38 @@ pub(crate) fn build_stem_to_path(paths: &[String]) -> HashMap<String, String> {
     map
 }
 
-/// [[X]] → path：归一化 raw 后查 stem_to_path。
-pub(crate) fn resolve_wikilink(raw: &str, stem_to_path: &HashMap<String, String>) -> Option<String> {
-    stem_to_path.get(&normalize_stem(raw.trim())).cloned()
+/// 构造 title_to_path：normalize_stem(title) → path（第二索引，兜底解析 [[中文标题]] 裸链接）。
+///
+/// 【中文化适配】页面标题译成中文后，新摄入页会产出 [[中文标题]] 裸链接——stem 表按 path
+/// 末段英文 slug 建键，无法命中。此表按 title 建键补位。碰撞语义与 stem 表不同：
+/// stem 碰撞取首个（path 是人写的，重名常见），title 碰撞若任选一页会把链接指向错误页面，
+/// 宁缺毋错——碰撞组（两页同 title 或同归一化 title）整组不进索引，debug 日志每组一次。
+pub(crate) fn build_title_to_path(titles_and_paths: &[(String, String)]) -> HashMap<String, String> {
+    let mut groups: HashMap<String, Vec<&str>> = HashMap::new();
+    for (title, path) in titles_and_paths {
+        let t = title.trim();
+        if t.is_empty() { continue; } // COALESCE(title,'') 的空标题不可解析
+        groups.entry(normalize_stem(t)).or_default().push(path.as_str());
+    }
+    let mut map = HashMap::new();
+    for (key, paths) in groups {
+        if paths.len() > 1 {
+            tracing::debug!("title collision {:?} across {} pages — excluded from title index", key, paths.len());
+            continue;
+        }
+        map.insert(key, paths[0].to_string());
+    }
+    map
+}
+
+/// [[X]] → path：归一化 raw 后先查 stem_to_path（path 表优先），再查 title_to_path。
+pub(crate) fn resolve_wikilink(
+    raw: &str,
+    stem_to_path: &HashMap<String, String>,
+    title_to_path: &HashMap<String, String>,
+) -> Option<String> {
+    let key = normalize_stem(raw.trim());
+    stem_to_path.get(&key).or_else(|| title_to_path.get(&key)).cloned()
 }
 
 // ── build_graph 输出类型 ──
@@ -201,6 +230,7 @@ fn sources_from_json(v: &Option<serde_json::Value>) -> HashSet<String> {
 fn build_adjacency(
     pages: &[WikiPageRow],
     stem_to_path: &HashMap<String, String>,
+    title_to_path: &HashMap<String, String>,
     path_index: &HashMap<String, usize>,
 ) -> (Vec<HashSet<String>>, HashMap<String, HashSet<String>>, Vec<(String, String)>) {
     let mut adj_out: Vec<HashSet<String>> = pages.iter().map(|_| HashSet::new()).collect();
@@ -211,7 +241,7 @@ fn build_adjacency(
         let content = p.content.as_deref().unwrap_or("");
         let si = path_index[&p.path];
         for raw in extract_wikilinks(content) {
-            let Some(tgt) = resolve_wikilink(&raw, stem_to_path) else { continue };
+            let Some(tgt) = resolve_wikilink(&raw, stem_to_path, title_to_path) else { continue };
             if tgt == p.path { continue; }
             // 不变式护栏：tgt 必属 pages（resolve_wikilink 只返回 stem_to_path 的 value）
             debug_assert!(path_index.contains_key(&tgt), "wikilink target {tgt} 不在 pages 内");
@@ -255,10 +285,13 @@ pub async fn build_graph(pool: &PgPool, project_id: i32) -> Result<WikiGraph, Ap
 
     let paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
     let stem_to_path = build_stem_to_path(&paths);
+    let title_to_path = build_title_to_path(
+        &pages.iter().map(|p| (p.title.clone(), p.path.clone())).collect::<Vec<_>>(),
+    );
     let path_index: HashMap<String, usize> = paths.iter().enumerate().map(|(i,p)| (p.clone(), i)).collect();
 
     // 3a. 有向邻接 + 无向边集（build_adjacency 纯函数，对齐桌面 buildRetrievalGraph 有向记录）
-    let (adj_out, mut in_links_map, placeholder_edges) = build_adjacency(&pages, &stem_to_path, &path_index);
+    let (adj_out, mut in_links_map, placeholder_edges) = build_adjacency(&pages, &stem_to_path, &title_to_path, &path_index);
     // in_degree = in_links 的 source 集大小（入度，按 source 去重；Vec 下标=pages 序，查询处用 i 省hash）
     let in_degree: Vec<i32> = pages.iter().map(|p|
         in_links_map.get(&p.path).map(|s| s.len() as i32).unwrap_or(0)
@@ -656,12 +689,13 @@ mod tests {
         let mut s2p = std::collections::HashMap::new();
         s2p.insert("alice".into(), "entities/alice.md".into());
         s2p.insert("project-phoenix".into(), "entities/project-phoenix.md".into());
+        let empty_title = std::collections::HashMap::new();
         // 大小写
-        assert_eq!(resolve_wikilink("Alice", &s2p), Some("entities/alice.md".into()));
+        assert_eq!(resolve_wikilink("Alice", &s2p, &empty_title), Some("entities/alice.md".into()));
         // 空格↔连字符
-        assert_eq!(resolve_wikilink("Project Phoenix", &s2p), Some("entities/project-phoenix.md".into()));
+        assert_eq!(resolve_wikilink("Project Phoenix", &s2p, &empty_title), Some("entities/project-phoenix.md".into()));
         // 未命中
-        assert_eq!(resolve_wikilink("nonexistent", &s2p), None);
+        assert_eq!(resolve_wikilink("nonexistent", &s2p, &empty_title), None);
     }
 
     #[test]
@@ -670,6 +704,76 @@ mod tests {
         let paths = vec!["entities/alice.md".to_string(), "concepts/alice.md".to_string()];
         let s2p = build_stem_to_path(&paths);
         assert_eq!(s2p.get("alice"), Some(&"entities/alice.md".to_string()));
+    }
+
+    #[test]
+    fn title_index_three_states() {
+        // 三态：① 同 slug（不同目录同名 stem，title 唯一）→ title 表正常兜底
+        //       ② 同 title（两页 title 完全相同）→ 碰撞组不进索引
+        //       ③ 同归一化 title（大小写/空格差异归一后相同）→ 碰撞组不进索引
+        let tp = vec![
+            // ① concepts/overview.md 与 notes/overview.md 同 slug；title 唯一可兜底
+            ("总览页面".to_string(), "concepts/overview.md".to_string()),
+            ("备注页".to_string(), "notes/overview.md".to_string()),
+            // ② 同 title 两页
+            ("学术英语".to_string(), "concepts/academic-english.md".to_string()),
+            ("学术英语".to_string(), "notes/academic-english-dup.md".to_string()),
+            // ③ 归一化碰撞："PPP Teaching Model" vs "ppp teaching model"
+            ("PPP Teaching Model".to_string(), "concepts/ppp-teaching-model.md".to_string()),
+            ("ppp teaching model".to_string(), "notes/ppp-model-dup.md".to_string()),
+            // 空标题不进索引
+            ("".to_string(), "concepts/empty-title.md".to_string()),
+        ];
+        let t2p = build_title_to_path(&tp);
+        // ① 唯一 title 命中（stem 表查不到中文 title 时兜底）
+        assert_eq!(t2p.get("总览页面"), Some(&"concepts/overview.md".to_string()));
+        assert_eq!(t2p.get("备注页"), Some(&"notes/overview.md".to_string()));
+        // ② 同 title 碰撞 → 整组排除
+        assert!(t2p.get("学术英语").is_none(), "同 title 两页应排除");
+        // ③ 归一化碰撞 → 整组排除
+        assert!(t2p.get("ppp-teaching-model").is_none(), "归一化同 title 应排除");
+        // 空标题不进索引
+        assert!(t2p.get("").is_none());
+    }
+
+    #[test]
+    fn resolve_wikilink_stem_table_takes_priority_over_title_table() {
+        // path 表优先：stem 键与 title 归一化键同键时，stem 表先命中
+        let s2p = build_stem_to_path(&["concepts/zone-of-proximal-development.md".to_string()]);
+        let t2p = build_title_to_path(&[
+            ("最近发展区".to_string(), "notes/zpd-note.md".to_string()),
+        ]);
+        // [[zone-of-proximal-development]]（slug 形）→ stem 表
+        assert_eq!(
+            resolve_wikilink("zone-of-proximal-development", &s2p, &t2p),
+            Some("concepts/zone-of-proximal-development.md".into()),
+        );
+        // [[最近发展区]]（中文裸链接）→ title 表兜底
+        assert_eq!(
+            resolve_wikilink("最近发展区", &s2p, &t2p),
+            Some("notes/zpd-note.md".into()),
+        );
+    }
+
+    #[test]
+    fn build_adjacency_resolves_chinese_title_links_via_title_index() {
+        // 端到端：[[中文标题]] 裸链接经 title_to_path 兜底建边（修复前 77.7% 边解析失败）
+        let pages = vec![
+            WikiPageRow { path: "concepts/ppp-teaching-model.md".into(), title: "PPP 教学模式".into(),
+                          page_type: Some("concept".into()), content: Some("[[学术写作]] 指向未译页".into()), sources: None },
+            WikiPageRow { path: "concepts/academic-writing-fundamentals.md".into(), title: "学术写作".into(),
+                          page_type: Some("concept".into()), content: Some("[[PPP 教学模式]] 中文裸链接".into()), sources: None },
+        ];
+        let paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
+        let stem_to_path = build_stem_to_path(&paths);
+        let title_to_path = build_title_to_path(&pages.iter().map(|p| (p.title.clone(), p.path.clone())).collect::<Vec<_>>());
+        let path_index: HashMap<String, usize> = paths.iter().enumerate().map(|(i, p)| (p.clone(), i)).collect();
+        let (adj_out, in_links_map, placeholder_edges) = build_adjacency(&pages, &stem_to_path, &title_to_path, &path_index);
+        // 双向 [[中文标题]] 裸链接均解析建边
+        assert!(adj_out[1].contains("concepts/ppp-teaching-model.md"), "中文裸链接应经 title 表解析");
+        assert!(adj_out[0].contains("concepts/academic-writing-fundamentals.md"));
+        assert!(in_links_map.get("concepts/ppp-teaching-model.md").map(|s| s.contains("concepts/academic-writing-fundamentals.md")).unwrap_or(false));
+        assert_eq!(placeholder_edges.len(), 1);
     }
 
     #[test]
@@ -685,8 +789,9 @@ mod tests {
         ];
         let paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
         let stem_to_path = build_stem_to_path(&paths);
+        let title_to_path = build_title_to_path(&pages.iter().map(|p| (p.title.clone(), p.path.clone())).collect::<Vec<_>>());
         let path_index: HashMap<String, usize> = paths.iter().enumerate().map(|(i, p)| (p.clone(), i)).collect();
-        let (adj_out, in_links_map, placeholder_edges) = build_adjacency(&pages, &stem_to_path, &path_index);
+        let (adj_out, in_links_map, placeholder_edges) = build_adjacency(&pages, &stem_to_path, &title_to_path, &path_index);
         // 有向 out 双向（修复前 b→a 被 seen_edges 去重跳过）
         assert!(adj_out[0].contains("b.md"), "a→b 应记录");
         assert!(adj_out[1].contains("a.md"), "b→a 应记录");

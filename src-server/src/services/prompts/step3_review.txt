@@ -1,6 +1,8 @@
 You are identifying high-value follow-up research items for a personal wiki.
 Do not output chain-of-thought, hidden reasoning, or explanatory preamble.
 
+{{LANGUAGE_RULE}}
+
 Your job is NOT to generate wiki pages. Generation already happened.
 Output only REVIEW blocks for unresolved knowledge gaps that deserve human attention.
 

@@ -22,7 +22,7 @@ describe("invokeTraced", () => {
     expect(args[0]).toBe("read_file");
     const passedArgs = args[1] as Record<string, unknown>;
     // trace_id 是合法 UUID v4 格式：8-4-4-4-12 hex
-    expect(passedArgs.trace_id).toMatch(
+    expect(passedArgs.traceId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
   });
@@ -35,7 +35,7 @@ describe("invokeTraced", () => {
     await invokeTraced("read_file", { path: "/x", trace_id: callerTraceId });
 
     const passedArgs = mockedInvoke.mock.calls[0][1] as Record<string, unknown>;
-    expect(passedArgs.trace_id).toBe(callerTraceId);
+    expect(passedArgs.traceId).toBe(callerTraceId);
   });
 
   it("treats empty string trace_id as absent and generates a new one", async () => {
@@ -46,8 +46,8 @@ describe("invokeTraced", () => {
 
     const passedArgs = mockedInvoke.mock.calls[0][1] as Record<string, unknown>;
     // 空串不应透传，应生成新 UUID
-    expect(passedArgs.trace_id).not.toBe("");
-    expect(passedArgs.trace_id).toMatch(
+    expect(passedArgs.traceId).not.toBe("");
+    expect(passedArgs.traceId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
   });
@@ -61,7 +61,7 @@ describe("invokeTraced", () => {
     const passedArgs = mockedInvoke.mock.calls[0][1] as Record<string, unknown>;
     expect(passedArgs.path).toBe("/x");
     expect(passedArgs.deep).toBe(true);
-    expect(passedArgs.trace_id).toBeDefined();
+    expect(passedArgs.traceId).toBeDefined();
     expect(result).toBe(42);
   });
 
@@ -72,7 +72,7 @@ describe("invokeTraced", () => {
     await invokeTraced("ping");
 
     const passedArgs = mockedInvoke.mock.calls[0][1] as Record<string, unknown>;
-    expect(passedArgs.trace_id).toMatch(
+    expect(passedArgs.traceId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
   });

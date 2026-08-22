@@ -197,7 +197,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 阶段 1：分词搜索
   - 英文：分词 + 停用词过滤
   - 中文：CJK 二元组分词（每个 → [每个, 个…]）
-  - 标题匹配加分（+10 分）
+  - 标题匹配加权高于正文（标题 token ×5、正文 ×1，标题短语命中 +50 分）
   - 同时搜索 wiki/ 和 raw/sources/
 
 阶段 1.5：向量语义搜索（可选）
@@ -213,7 +213,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 
 阶段 3：预算控制
   - 可配置上下文窗口：4K → 1M tokens
-  - 比例分配：60% Wiki 页面，20% 聊天历史，5% 索引，15% 系统提示
+  - 比例分配：50% Wiki 页面，约 30% 聊天历史 + 系统提示，5% 索引，15% 响应预留
   - 页面按搜索 + 图谱关联度综合分数排序
 
 阶段 4：上下文组装
@@ -304,7 +304,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 
 | 格式 | 方法 |
 |------|------|
-| PDF | 内置 pdf-extract（Rust）+ 文件缓存；可选 MinerU 云端解析表格、公式和复杂排版 |
+| PDF | 内置 pdfium-render（Rust）+ 文件缓存；可选 MinerU 云端解析表格、公式和复杂排版 |
 | DOCX | docx-rs —— 标题、加粗/斜体、列表、表格 → 结构化 Markdown |
 | PPTX | ZIP + XML —— 逐页提取，保留标题/列表结构 |
 | XLSX/XLS/ODS | calamine —— 正确的单元格类型、多工作表支持、Markdown 表格 |
@@ -330,7 +330,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 
 - **4K 到 1M tokens 滑块** —— 适配不同 LLM 的能力
 - **比例预算分配** —— 更大的窗口按比例获得更多 Wiki 内容
-- **60/20/5/15 分配** —— Wiki 页面 / 聊天历史 / 索引 / 系统提示
+- **50/30/5/15 分配** —— Wiki 页面 / 聊天历史 + 系统提示 / 索引 / 响应预留
 
 ### 17. 跨平台兼容
 
@@ -341,7 +341,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 - **macOS 关闭隐藏** —— 关闭按钮隐藏窗口（程序后台运行），点击 Dock 图标恢复，Cmd+Q 退出
 - **Windows/Linux 关闭确认** —— 关闭时弹出确认对话框，防止误操作导致数据丢失
 - **Tauri v2** —— macOS、Windows、Linux 原生桌面
-- **GitHub Actions CI/CD** —— 自动构建 macOS（ARM + Intel）、Windows（.msi）、Linux（.deb / .AppImage）
+- **GitHub Actions CI/CD** —— 自动构建 macOS（ARM）、Windows（.msi）、Linux（.deb / .AppImage）
 
 ### 18. 其他新增
 
@@ -349,8 +349,8 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 - **设置持久化** —— LLM 提供商、API 密钥、模型、上下文大小、语言通过 Tauri Store 保存
 - **Obsidian 配置** —— 自动生成 `.obsidian/` 目录及推荐设置
 - **Markdown 渲染** —— 带边框的 GFM 表格、代码块、聊天和预览中的 wikilink 处理
-- **多 LLM 提供商** —— OpenAI、Anthropic、Google、Ollama、自定义 —— 各有特定的流式传输和请求头
-- **15 分钟超时** —— 长时间摄入操作不会过早失败
+- **多 LLM 提供商** —— OpenAI、Anthropic、Google、Azure、Ollama、MiniMax、Claude Code、Codex CLI、自定义 —— 各有特定的流式传输和请求头
+- **30 分钟超时** —— 长时间摄入操作不会过早失败
 - **dataVersion 信号** —— 图谱和 UI 在 Wiki 内容变更时自动刷新
 
 ## 技术栈
@@ -364,11 +364,11 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 | 图谱 | sigma.js + graphology + ForceAtlas2 |
 | 搜索 | 分词搜索 + 图谱关联度 + 可选向量（LanceDB） |
 | 向量数据库 | LanceDB（Rust，嵌入式，可选） |
-| PDF | pdf-extract + 可选 MinerU 云端解析 |
+| PDF | pdfium-render + 可选 MinerU 云端解析 |
 | Office | docx-rs + calamine |
 | 国际化 | react-i18next |
 | 状态管理 | Zustand |
-| LLM | 流式 fetch（OpenAI、Anthropic、Google、Ollama、自定义） |
+| LLM | 流式 fetch（OpenAI、Anthropic、Google、Azure、Ollama、MiniMax、Claude Code、Codex CLI、自定义） |
 | 网络搜索 | Tavily、SerpApi、SearXNG JSON API |
 
 ## 安装
@@ -376,7 +376,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 ### 预编译二进制文件
 
 从 [Releases](https://github.com/nashsu/llm_wiki/releases) 下载：
-- **macOS**：`.dmg`（Apple Silicon + Intel）
+- **macOS**：`.dmg`（Apple Silicon）
 - **Windows**：`.msi`
 - **Linux**：`.deb` / `.AppImage`
 

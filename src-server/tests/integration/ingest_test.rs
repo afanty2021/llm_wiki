@@ -3,9 +3,11 @@
 /// 复用 ingest_queue_test.rs 的成熟 setup 模式（AtomicU64 + pid 唯一化 username），
 /// 不用 plan 原文 `format!("etest_{}", std::process::id())`——并行测试同秒碰撞。
 ///
-/// 4 用例覆盖：
+/// 6 用例覆盖：
 ///   - POST   /api/v1/projects/:id/ingest           → 201 + job_id + status=pending
-///   - GET    /api/v1/ingest/jobs/:id               → 200 + status=pending + progress=0
+///   - GET    /api/v1/ingest/jobs/:id（成员 token）  → 200 + status=pending + progress=0
+///   - GET    /api/v1/ingest/jobs/:id（无 token）    → 401（Phase D 鉴权收敛）
+///   - GET    /api/v1/ingest/jobs/:id（未知 id）     → 404（不泄漏存在性）
 ///   - GET    /api/v1/projects/:id/ingest/jobs      → 200 + items.len>=2
 ///   - POST   /api/v1/projects/:id/ingest (no auth) → 401
 use axum::http::StatusCode;
@@ -81,13 +83,48 @@ async fn get_job_status_returns_200() {
         .unwrap()
         .to_string();
 
+    // 项目创建者 = 团队成员（owner 满足 Member），带 token 查询 → 200。
+    // 注意：本用例只锁鉴权契约（成员可读），status 值受环境 worker 竞争影响
+    // （pending/running/failed 均可能——test/bar.md 不存在），故只断言 JobResponse 形状。
     let resp = server
         .get(&format!("/api/v1/ingest/jobs/{}", job_id))
+        .add_header("authorization", format!("Bearer {}", token))
         .await;
     assert_eq!(resp.status_code(), StatusCode::OK);
     let job: serde_json::Value = resp.json();
-    assert_eq!(job["status"], "pending");
-    assert_eq!(job["progress"], 0);
+    assert_eq!(job["id"].as_str().unwrap(), job_id);
+    assert!(job["status"].is_string());
+    assert!(job["progress"].is_i64());
+}
+
+/// Phase D 鉴权收敛：GET /ingest/jobs/:id 无 token → 401（不再匿名可读）。
+#[tokio::test]
+async fn get_job_status_without_token_returns_401() {
+    let (server, _state, pid, token) = setup().await;
+    let resp = server
+        .post(&format!("/api/v1/projects/{}/ingest", pid))
+        .add_header("authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({"source_paths": ["test/noauth.md"]}))
+        .await;
+    let job_id = resp.json::<serde_json::Value>()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = server.get(&format!("/api/v1/ingest/jobs/{}", job_id)).await;
+    assert_eq!(resp.status_code(), StatusCode::UNAUTHORIZED);
+}
+
+/// 未知 job id → 404 保持（不因加鉴权变成 401/403 泄漏存在性）。
+#[tokio::test]
+async fn get_job_status_unknown_id_returns_404() {
+    let (server, _state, _pid, token) = setup().await;
+    let unknown = uuid::Uuid::new_v4();
+    let resp = server
+        .get(&format!("/api/v1/ingest/jobs/{}", unknown))
+        .add_header("authorization", format!("Bearer {}", token))
+        .await;
+    assert_eq!(resp.status_code(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

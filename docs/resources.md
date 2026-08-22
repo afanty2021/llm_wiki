@@ -26,6 +26,8 @@
 - **Google AI**: https://ai.google.dev/
 - **Ollama**: https://ollama.ai/
 - **Tavily API**: https://tavily.com/
+- **SerpApi**: https://serpapi.com/
+- **SearXNG**: https://docs.searxng.org/
 
 ---
 

@@ -208,6 +208,10 @@ export async function buildWikiGraph(
     }
   }
 
+  // Second resolution table for [[中文标题]] bare links (built after query-node
+  // filtering so excluded titles don't resolve). Ids win first inside resolveTarget.
+  const titleIndex = buildTitleIndex(nodeMap)
+
   // Count link references
   const linkCounts = new Map<string, number>()
   for (const [id] of nodeMap) {
@@ -218,8 +222,9 @@ export async function buildWikiGraph(
 
   for (const [sourceId, nodeData] of nodeMap) {
     for (const targetRaw of nodeData.links) {
-      // Normalize target: try matching by id (case-insensitive, hyphen/space)
-      const targetId = resolveTarget(targetRaw, nodeMap)
+      // Normalize target: try matching by id (case-insensitive, hyphen/space),
+      // then by page title via titleIndex (translated titles)
+      const targetId = resolveTarget(targetRaw, nodeMap, titleIndex)
       if (targetId === null) continue
       if (targetId === sourceId) continue
 
@@ -285,9 +290,10 @@ export async function buildWikiGraph(
   return { nodes, edges, communities }
 }
 
-function resolveTarget(
+export function resolveTarget(
   raw: string,
   nodeMap: Map<string, { id: string }>,
+  titleIndex: Map<string, string>,
 ): string | null {
   // Direct match
   if (nodeMap.has(raw)) return raw
@@ -300,5 +306,39 @@ function resolveTarget(
     if (id.toLowerCase().replace(/\s+/g, "-") === normalized) return id
   }
 
+  // Title-index fallback: [[中文标题]] bare links. Translated titles don't match
+  // file-name stems, so slug-based matching above fails — resolve by page title
+  // (same second table as the server-side graph.rs resolve_wikilink).
+  const byTitle = titleIndex.get(normalized)
+  if (byTitle !== undefined) return byTitle
+
   return null
+}
+
+/**
+ * Build the normalized-title → id index used as the second wikilink resolution table.
+ *
+ * Collision semantics: a title shared by two pages (exact or after normalization)
+ * points nowhere unambiguously — the whole group is excluded rather than resolved
+ * to an arbitrary page (which would create wrong edges). Mirrors the server-side
+ * graph.rs build_title_to_path.
+ */
+export function buildTitleIndex(
+  nodes: Map<string, { id: string; label: string }>,
+): Map<string, string> {
+  const groups = new Map<string, string[]>()
+  for (const node of nodes.values()) {
+    const label = node.label.trim()
+    if (!label) continue
+    const key = label.toLowerCase().replace(/\s+/g, "-")
+    const list = groups.get(key) ?? []
+    list.push(node.id)
+    groups.set(key, list)
+  }
+  const index = new Map<string, string>()
+  for (const [key, ids] of groups) {
+    if (ids.length > 1) continue // collision → exclude the whole group
+    index.set(key, ids[0])
+  }
+  return index
 }

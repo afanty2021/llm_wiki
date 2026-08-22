@@ -22,7 +22,7 @@ pub use db::{create_pool, create_redis_pool, DbPool, RedisPoolType as RedisPool}
 pub use error::{
     AppError, IntoAppError, ERR_AUTH_INVALID, ERR_AUTH_EXPIRED, ERR_PERMISSION_DENIED,
     ERR_RESOURCE_NOT_FOUND, ERR_VALIDATION_FAILED, ERR_DATABASE_ERROR, ERR_FILE_UPLOAD_FAILED,
-    ERR_LLM_API_ERROR, ERR_INTERNAL_ERROR, ERR_CONFLICT,
+    ERR_LLM_API_ERROR, ERR_INTERNAL_ERROR, ERR_CONFLICT, ERR_TOO_MANY_REQUESTS,
 };
 pub use routes::WikiPage;
 
@@ -35,6 +35,15 @@ pub struct AppState {
     pub storage: Arc<dyn services::storage::StorageBackend>,
     pub vector_store: Arc<dyn services::vector_store::VectorStore>,
     pub job_events: broadcast::Sender<JobEvent>,
+    /// t_page 三端点限流（Task 6 r3）：/s/ 30/min（key=code）+ beacon 60/min
+    /// （key=token 指纹，seen/complete 共桶）。两档规格组合为一个字段，内含
+    /// 两个 FixedWindowLimiter（services/rate_limit.rs，评审 R3 正名：实现是固定窗口计数非令牌桶）。
+    /// 评审 R4：cap 经 config 注入（page_rate_limits.s_per_min / beacon_per_min，
+    /// 默认 30/60 与旧硬编码一致，env PAGE_RATE_LIMITS__* 可覆盖）。
+    pub limiter: Arc<services::rate_limit::PageRateLimits>,
+    /// SEC-3（终审必修）：bind/login IP 级限流（各 10/min/IP，FixedWindowLimiter
+    /// 独立两桶；key 见 rate_limit::ClientIp——Cf-Connecting-Ip 头优先回落 socket addr）。
+    pub ip_limiter: Arc<services::rate_limit::IpRateLimits>,
 }
 
 pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
@@ -69,6 +78,13 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
 
     let (job_events, _job_events_rx) = broadcast::channel::<JobEvent>(64);
 
+    let limiter = Arc::new(services::rate_limit::PageRateLimits::with_caps(
+        config.page_rate_limits.s_per_min,
+        config.page_rate_limits.beacon_per_min,
+    ));
+
+    let ip_limiter = Arc::new(services::rate_limit::IpRateLimits::new());
+
     let state = AppState {
         db,
         redis,
@@ -77,6 +93,8 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
         storage,
         vector_store,
         job_events,
+        limiter,
+        ip_limiter,
     };
 
     // 构建 CORS 中间件层

@@ -58,3 +58,25 @@ src-server/tests_tmp/
 .serena/
 .playwright-mcp/
 e2e-ui-*.png
+
+# Transcriber local config and generated manifest
+tools/transcriber/config.json
+tools/transcriber/out/manifest.json
+# whisper.cpp GGML 模型文件（≈1.6GB/个），本地下载，勿入库
+tools/transcriber/models/
+# bootstrap.sh 生成的本地凭据（密码），勿入库
+tools/transcriber/out/bootstrap.env
+# ApiClient 持久化的 token 对（含长期 refresh token，600 权限），勿入库
+tools/transcriber/out/auth.json
+tools/transcriber/out/state.jsonl
+# 转写管线本地产物：内容寻址 wav 去重池与可播副本（大文件，可再生成）
+tools/transcriber/out/audio/
+tools/transcriber/out/playback/
+tools/transcriber/out/transcripts/
+tools/transcriber/out/*.txt
+tools/transcriber/out/bind-resp.json
+tools/transcriber/out/register-resp.json
+tools/transcriber/out/search-*.json
+# 验收演示页（内含限时限验签 URL，本地播放验证用）
+tools/transcriber/out/media-demo.html
+tools/transcriber/out/h264-cache/

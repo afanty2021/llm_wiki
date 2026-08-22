@@ -1,0 +1,44 @@
+{
+  "generatedAt": "2026-08-19T16:01:38.104Z",
+  "elapsedS": 7.2,
+  "totalFiles": 1861,
+  "totalDurationH": 404.51,
+  "byBucket": {
+    "A_playable": {
+      "files": 703,
+      "durationH": 88.1
+    },
+    "B_transcode": {
+      "files": 807,
+      "durationH": 316.42
+    }
+  },
+  "bySource": {
+    "main": {
+      "files": 0,
+      "durationH": 0
+    },
+    "hevc": {
+      "files": 1861,
+      "durationH": 404.51
+    }
+  },
+  "docFiles": 351,
+  "privacyFiles": 252,
+  "ignoredFiles": 33,
+  "probeFailures": 0,
+  "overlap": {
+    "matchedPairs": 0,
+    "mainOnly": 0,
+    "hevcOnly": 1387
+  },
+  "firstBatch": {
+    "dir": "教学新知班级管理专栏",
+    "files": 48,
+    "durationH": 23.88,
+    "bySource": {
+      "main": 0,
+      "hevc": 48
+    }
+  }
+}

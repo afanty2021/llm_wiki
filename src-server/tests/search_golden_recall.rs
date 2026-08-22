@@ -12,6 +12,10 @@ async fn serial_lock() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 async fn setup() -> (sqlx::PgPool, AppConfig, reqwest::Client) {
+    // default.json 的 jwt.secret 已出库置空（M1 评审 #1），env 注入非黑名单值
+    if std::env::var("JWT__SECRET").unwrap_or_default().is_empty() {
+        std::env::set_var("JWT__SECRET", "integration_test_secret_not_for_prod_32b");
+    }
     let cfg = AppConfig::from_env().expect("from_env");
     let pool = sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(cfg.database_url()).await.unwrap();
     (pool, cfg, reqwest::Client::new())

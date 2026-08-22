@@ -15,6 +15,9 @@ mod search_providers;
 pub mod chat_sessions;
 pub mod reviews;
 pub mod research;
+pub mod training;
+pub mod media;
+pub mod t_page;
 
 pub use pages::WikiPage;
 
@@ -41,10 +44,15 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/chat", chat::chat_routes())
         .nest("/api/v1/graph", graph::graph_routes())
         .nest("/api/v1/logs", logs::logs_routes())
+        .nest("/api/v1/training", training::training_routes())
         .merge(ingest::global_ingest_routes())
         .merge(research::global_research_routes())
         .merge(llm_providers::llm_provider_routes())
         .merge(search_providers::search_provider_routes())
+        .merge(media::media_routes())
+        // /t/ 落地页（Task 9）：必须在 SPA fallback（fallback_service）前 merge——
+        // 否则 /t/:token 会被 ServeDir fallback 吃掉返回 index.html
+        .merge(t_page::t_routes())
         .fallback_service(spa)
         .with_state(state)
 }

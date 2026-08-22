@@ -1,0 +1,620 @@
+{
+  "startedAt": "2026-08-19T16:01:30.928Z",
+  "finishedAt": "2026-08-19T16:45:00.651Z",
+  "files": 48,
+  "transcribed": 30,
+  "skipped": 18,
+  "failed": 0,
+  "jobStatus": "failed",
+  "jobId": "a4a05d48-3cc8-4a86-af8a-c19112ffd7dd",
+  "failedSources": [
+    {
+      "path": "sources/transcripts/116-3f89a942.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/117-3566b154.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/118-3b445b9c.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/119-58676fdb.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/120-9d3e7811.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/121-59426afe.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/122-b6a58193.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/123-3838e579.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/124-word-puzzle-6d8bc9b7.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/125-commonlit-8aaee530.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/126-Word-wall-b7acd2e1.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/127-9f1efb27.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/128-23b35f09.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/130-Ted-ed753bb1.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/131-authentic-material-12300efc.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/132-63347618.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/134-65f347ed.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/136-PBL-2879f93a.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/137-IBL-Inquiry-based-learning-89049dcc.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/138-8547a21d.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/139-ea19f3df.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/140-5aeebd08.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/141-KWL-Teaching-Strategy-a58b3e91.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/142-edaf215c.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/143-3efdeb52.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/144-Scaffolding-through-teaching-strategies-5bea9330.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/145-Scaffolding-through-teacher-language-b1029706.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/146-Jerome-Bruner-f80de654.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/147-e64a28d8.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/148-34f6b034.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/149-Differentiated-Instructions-7fd69f62.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/150-42d910a3.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/151-2a5b638c.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/152-Multiple-Intelligence-55c628ae.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/153-Multiple-Intelligence-8a087038.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/154-TBLT-8a3a86d7.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/155-5-46402e4c.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/156-Praise-students-4-f53cb910.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/157-39a5f806.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/158-9e7bac82.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/159-5ea22044.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/160-classroom-rules-798336c6.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/558c39d9.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/468bcec8.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/Chat-GPT-5a49fb8f.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/ChatGPT-19f36109.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/360e6378.md",
+      "error": "Encryption error: Decryption failed"
+    },
+    {
+      "path": "sources/transcripts/567a5b05.md",
+      "error": "Encryption error: Decryption failed"
+    }
+  ],
+  "exhaustedRetries": [],
+  "durationMinutes": 43.5,
+  "transcribeMinutes": 43.3,
+  "mediaHours": 14.35,
+  "realtimeFactor": 19.9,
+  "reAudit": {
+    "generatedAt": "2026-08-19T16:01:38.104Z",
+    "probeFailures": 0,
+    "firstBatch": {
+      "dir": "教学新知班级管理专栏",
+      "files": 48,
+      "durationH": 23.88,
+      "bySource": {
+        "main": 0,
+        "hevc": 48
+      }
+    },
+    "probeFailureEntries": []
+  },
+  "perFile": [
+    {
+      "slug": "116-3f89a942",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/116. 如何准备公开课.mp4",
+      "status": "skipped",
+      "durationS": 672,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "117-3566b154",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/117. 如何提升线上课堂趣味性？.mp4",
+      "status": "skipped",
+      "durationS": 1710,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "118-3b445b9c",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/118. 语音教学概述.mp4",
+      "status": "skipped",
+      "durationS": 2329,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "119-58676fdb",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/119. 英文歌曲教学方法.mp4",
+      "status": "skipped",
+      "durationS": 2252,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "120-9d3e7811",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/120. 好用教学资源网站分享.mp4",
+      "status": "skipped",
+      "durationS": 1017,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "121-59426afe",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/121. 如何设计口语测试.mp4",
+      "status": "skipped",
+      "durationS": 3026,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "122-b6a58193",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/122. 如何用数据管理班级.mp4",
+      "status": "skipped",
+      "durationS": 2311,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "123-3838e579",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/123. 如何发布高效课堂指令.mp4",
+      "status": "skipped",
+      "durationS": 2702,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "124-word-puzzle-6d8bc9b7",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/124. 单词活动word puzzle制作网站推荐.mp4",
+      "status": "skipped",
+      "durationS": 1211,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "125-commonlit-8aaee530",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/125. commonlit网站推荐.mp4",
+      "status": "skipped",
+      "durationS": 396,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "126-Word-wall-b7acd2e1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/126. Word wall单词墙制作.mp4",
+      "status": "skipped",
+      "durationS": 1747,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "127-9f1efb27",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/127. 青少版新概念怎么教.mp4",
+      "status": "skipped",
+      "durationS": 2372,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "128-23b35f09",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/128. 如何评估教材.mp4",
+      "status": "skipped",
+      "durationS": 2121,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "130-Ted-ed753bb1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/130. 如何用Ted演讲设计教学课堂.mp4",
+      "status": "skipped",
+      "durationS": 2447,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "131-authentic-material-12300efc",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/131. 如何筛选authentic material～.mp4",
+      "status": "skipped",
+      "durationS": 1882,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "132-63347618",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/132. 语言学习者学习脑图.mp4",
+      "status": "skipped",
+      "durationS": 1417,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "134-65f347ed",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/134. 如何设计英语测试.mp4",
+      "status": "skipped",
+      "durationS": 2506,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "136-PBL-2879f93a",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/136. PBL课堂如何设计.mp4",
+      "status": "skipped",
+      "durationS": 2189,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "137-IBL-Inquiry-based-learning-89049dcc",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/137. IBL-Inquiry based learning.mp4",
+      "status": "done",
+      "durationS": 1508,
+      "transcribeMs": 63596,
+      "upsert": "updated"
+    },
+    {
+      "slug": "138-8547a21d",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/138. 如何做有效反馈.mp4",
+      "status": "done",
+      "durationS": 1765,
+      "transcribeMs": 78539,
+      "upsert": "updated"
+    },
+    {
+      "slug": "139-ea19f3df",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/139. 雅思备考攻略（下）.mp4",
+      "status": "done",
+      "durationS": 1220,
+      "transcribeMs": 66225,
+      "upsert": "updated"
+    },
+    {
+      "slug": "140-5aeebd08",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/140. 雅思备考攻略（上）.mp4",
+      "status": "done",
+      "durationS": 2099,
+      "transcribeMs": 108945,
+      "upsert": "updated"
+    },
+    {
+      "slug": "141-KWL-Teaching-Strategy-a58b3e91",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/141. KWL Teaching Strategy.mp4",
+      "status": "done",
+      "durationS": 1596,
+      "transcribeMs": 73644,
+      "upsert": "updated"
+    },
+    {
+      "slug": "142-edaf215c",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/142. 如何开展合作式学习课堂.mp4",
+      "status": "done",
+      "durationS": 1436,
+      "transcribeMs": 72627,
+      "upsert": "updated"
+    },
+    {
+      "slug": "143-3efdeb52",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/143. 语言学习的动机研究.mp4",
+      "status": "done",
+      "durationS": 2895,
+      "transcribeMs": 139060,
+      "upsert": "updated"
+    },
+    {
+      "slug": "144-Scaffolding-through-teaching-strategies-5bea9330",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/144. Scaffolding through teaching strategies.mp4",
+      "status": "done",
+      "durationS": 2230,
+      "transcribeMs": 124765,
+      "upsert": "updated"
+    },
+    {
+      "slug": "145-Scaffolding-through-teacher-language-b1029706",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/145. Scaffolding through teacher language.mp4",
+      "status": "done",
+      "durationS": 2054,
+      "transcribeMs": 108544,
+      "upsert": "updated"
+    },
+    {
+      "slug": "146-Jerome-Bruner-f80de654",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/146. Jerome Bruner和他的脚手架.mp4",
+      "status": "done",
+      "durationS": 1529,
+      "transcribeMs": 77068,
+      "upsert": "updated"
+    },
+    {
+      "slug": "147-e64a28d8",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/147. 皮亚杰的儿童认知发展四阶段.mp4",
+      "status": "done",
+      "durationS": 2212,
+      "transcribeMs": 120591,
+      "upsert": "updated"
+    },
+    {
+      "slug": "148-34f6b034",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/148. 维果茨基的脚手架～.mp4",
+      "status": "done",
+      "durationS": 1280,
+      "transcribeMs": 65908,
+      "upsert": "updated"
+    },
+    {
+      "slug": "149-Differentiated-Instructions-7fd69f62",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/149. 如何开展差异化教学-Differentiated Instructions.mp4",
+      "status": "done",
+      "durationS": 1681,
+      "transcribeMs": 107118,
+      "upsert": "updated"
+    },
+    {
+      "slug": "150-42d910a3",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/150. 如何开展分层教学设计？.mp4",
+      "status": "done",
+      "durationS": 1960,
+      "transcribeMs": 96907,
+      "upsert": "updated"
+    },
+    {
+      "slug": "151-2a5b638c",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/151. 开班课特辑-教师自我介绍背后的原理.mp4",
+      "status": "done",
+      "durationS": 1181,
+      "transcribeMs": 54848,
+      "upsert": "updated"
+    },
+    {
+      "slug": "152-Multiple-Intelligence-55c628ae",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/152. Multiple Intelligence在语言课堂的运用.mp4",
+      "status": "done",
+      "durationS": 839,
+      "transcribeMs": 41739,
+      "upsert": "updated"
+    },
+    {
+      "slug": "153-Multiple-Intelligence-8a087038",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/153. 多元智能Multiple Intelligence.mp4",
+      "status": "done",
+      "durationS": 1568,
+      "transcribeMs": 82111,
+      "upsert": "updated"
+    },
+    {
+      "slug": "154-TBLT-8a3a86d7",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/154. TBLT-理想化的教学.mp4",
+      "status": "done",
+      "durationS": 1882,
+      "transcribeMs": 93153,
+      "upsert": "updated"
+    },
+    {
+      "slug": "155-5-46402e4c",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/155. 帮助学生养成成长型思维的5个好方法.mp4",
+      "status": "done",
+      "durationS": 747,
+      "transcribeMs": 35602,
+      "upsert": "updated"
+    },
+    {
+      "slug": "156-Praise-students-4-f53cb910",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/156. Praise students的4个超好用方法.mp4",
+      "status": "done",
+      "durationS": 683,
+      "transcribeMs": 31694,
+      "upsert": "updated"
+    },
+    {
+      "slug": "157-39a5f806",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/157.【班级管理】如何“对付”课堂问题学生.mp4",
+      "status": "done",
+      "durationS": 2509,
+      "transcribeMs": 126532,
+      "upsert": "updated"
+    },
+    {
+      "slug": "158-9e7bac82",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/158.【班级管理】我是如何把问题学生变成“铁杆粉丝” 的.mp4",
+      "status": "done",
+      "durationS": 1684,
+      "transcribeMs": 86455,
+      "upsert": "updated"
+    },
+    {
+      "slug": "159-5ea22044",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/159. 【班级管理】学学米国小学老师是如何制定班规的.mp4",
+      "status": "done",
+      "durationS": 1091,
+      "transcribeMs": 53067,
+      "upsert": "updated"
+    },
+    {
+      "slug": "160-classroom-rules-798336c6",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/160.【班级管理】如何设定真正有效的classroom rules.mp4",
+      "status": "done",
+      "durationS": 928,
+      "transcribeMs": 47617,
+      "upsert": "updated"
+    },
+    {
+      "slug": "558c39d9",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/什么是阅读理解能力.mp4",
+      "status": "done",
+      "durationS": 2761,
+      "transcribeMs": 129641,
+      "upsert": "updated"
+    },
+    {
+      "slug": "468bcec8",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何开展小组合作式阅读教学.mp4",
+      "status": "done",
+      "durationS": 1717,
+      "transcribeMs": 88977,
+      "upsert": "updated"
+    },
+    {
+      "slug": "Chat-GPT-5a49fb8f",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何用Chat GPT备阅读课.mp4",
+      "status": "done",
+      "durationS": 1079,
+      "transcribeMs": 52619,
+      "upsert": "updated"
+    },
+    {
+      "slug": "ChatGPT-19f36109",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何用ChatGPT备一堂课.mp4",
+      "status": "done",
+      "durationS": 1884,
+      "transcribeMs": 89566,
+      "upsert": "updated"
+    },
+    {
+      "slug": "360e6378",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何设计听力测试.mp4",
+      "status": "done",
+      "durationS": 2871,
+      "transcribeMs": 142695,
+      "upsert": "updated"
+    },
+    {
+      "slug": "567a5b05",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何设计阅读测试.mp4",
+      "status": "done",
+      "durationS": 2759,
+      "transcribeMs": 137151,
+      "upsert": "updated"
+    }
+  ],
+  "warnings": [],
+  "m2Retranscribe20260819": {
+    "windowStart": "2026-08-19T23:30+08:00",
+    "transcription": {
+      "firstRun": "18/48（23:30-23:59，withinWindow 结束时刻排他 off-by-one：00:00-23:59 实际到 23:58:59）",
+      "resumeRun": "30 新 + 18 复用 = 48/48，realtimeFactor 19.9，0 失败",
+      "promptVersion": "LT英语师训 课堂教学 班级管理 自然拼读 独立教师 双减 师训（09cb1b15）"
+    },
+    "ingest": {
+      "firstAttempt": "CLI 自动触发全 48 源失败——provider key 解密失败（DB 密文为历史 secret 加密，launchd 服为 bootstrap secret；经 svc-transcriber 重录行 37 key 修复，omlx 本地无鉴权）",
+      "manualJob": "e9a90b8c，00:51-02:26，43 done / 5 failed，stage=building_index",
+      "usageEvidence": "48 条 ingest step1 usage 日志（真实 LLM 调用），max completion 2536 / max prompt 9485",
+      "finalTally": "48/48 done（43 夜间 + 5 晨间重试）"
+    },
+    "residualFailures": {
+      "count": 5,
+      "items": [
+        "116-3f89a942",
+        "130-Ted-ed753bb1",
+        "136-PBL-2879f93a",
+        "468bcec8",
+        "ChatGPT-19f36109"
+      ],
+      "signature": "step1 JSON parse failed（无有效 JSON 对象）| head 形似合法 entities JSON",
+      "newEvidence": "completion ≤2536 << 32000 上限 → 排除 cap 截断（含 M1 的 12000 截断诊断存疑）；疑本地 Qwen3.6 提前停止/JSON 中途断；待白天捕获完整失败响应体分析",
+      "resolution": "08:00-08:10 原样重跑 5 项全部 done（job b2b87f86）——失败确证为瞬态（同请求晨间成功；疑昨夜 whisper 同机/omlx 长跑并发疲劳）；首批最终 48/48 全量 ingest 达成。改进项：step1 解析失败自动重试一次（防瞬态模型抖动浪费整夜），随 T16 批次实施"
+    },
+    "operator": "automation-e9999cbd 两阶段 + 控制器人工介入（窗口续跑、密钥重录、ingest 重触发）"
+  }
+}

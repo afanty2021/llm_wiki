@@ -22,7 +22,7 @@ LLM Wiki 是一个**跨平台桌面应用**，将您的文档自动转化为结�
 
 | 层级 | 技术选型 | 版本 |
 |------|---------|------|
-| **桌面框架** | Tauri v2 (Rust 后端) | 2.10.1 |
+| **桌面框架** | Tauri v2 (Rust 后端) | 2.11.1 |
 | **前端** | React 19 + TypeScript + Vite | 19.0.0 / 5.7.3 / 8.0.0 |
 | **UI 库** | shadcn/ui + Tailwind CSS v4 | 4.1.2 / 4.2.2 |
 | **编辑器** | Milkdown (基于 ProseMirror 的 WYSIWYG) | 7.20.0 |
@@ -30,10 +30,10 @@ LLM Wiki 是一个**跨平台桌面应用**，将您的文档自动转化为结�
 | **状态管理** | Zustand | 5.0.12 |
 | **搜索** | 分词搜索 + 图相关性 + 可选向量搜索 | - |
 | **向量数据库** | LanceDB (Rust, 嵌入式, 可选) | 0.27.2 |
-| **文档解析** | pdf-extract, docx-rs, calamine | 0.10.0 / 0.4.20 / 0.34.0 |
-| **国际化** | react-i18next | 26.0.3 |
-| **LLM 集成** | OpenAI, Anthropic, Google, Ollama, MiniMax, Custom | - |
-| **Web 搜索** | Tavily API | - |
+| **文档解析** | pdfium-render, docx-rs, calamine | 0.9.2 / 0.4.20 / 0.34.0 |
+| **国际化** | react-i18next | 17.0.2 |
+| **LLM 集成** | OpenAI, Anthropic, Google, Azure, Ollama, MiniMax, Claude Code, Codex CLI, Custom | - |
+| **Web 搜索** | Tavily, SerpApi, SearXNG | - |
 | **浏览器扩展** | Chrome Extension (Manifest V3) | - |
 
 ### 应用架构图
@@ -53,11 +53,12 @@ LLM Wiki 是一个**跨平台桌面应用**，将您的文档自动转化为结�
 │  ├── Document Extraction (PDF, DOCX, XLSX, PPTX)            │
 │  ├── Vector Store (LanceDB integration)                     │
 │  ├── Clip Server (HTTP for browser extension)              │
-│  └── Tauri Commands (FS, Project, VectorStore)             │
+│  ├── Local HTTP API (external tools / MCP server)          │
+│  └── Tauri Commands (FS, Project, Search, VectorStore)     │
 ├─────────────────────────────────────────────────────────────┤
 │  External Integrations                                      │
 │  ├── LLM Providers (OpenAI, Anthropic, Google, Ollama...)  │
-│  ├── Web Search (Tavily API)                               │
+│  ├── Web Search (Tavily/SerpApi/SearXNG)                   │
 │  ├── Vector Embeddings (OpenAI-compatible endpoints)       │
 │  └── Browser Extension (Chrome Web Clipper)                │
 └─────────────────────────────────────────────────────────────┘
@@ -126,7 +127,7 @@ graph TD
 | **src/lib/wiki-graph.ts** | 知识图谱构建 | graphology, Louvain | wiki-graph.ts | ✅ 已深度扫描 |
 | **src/lib/search.ts** | 多阶段搜索 | 分词, 向量, 图扩展 | search.ts | ✅ 已深度扫描 |
 | **src/lib/embedding.ts** | 向量嵌入管理 | OpenAI API, LanceDB | embedding.ts | ✅ 已深度扫描 |
-| **src/lib/deep-research.ts** | 深度研究功能 | Tavily API | deep-research.ts | ✅ 已深度扫描 |
+| **src/lib/deep-research.ts** | 深度研究功能 | Tavily / SerpApi / SearXNG | deep-research.ts | ✅ 已深度扫描 |
 | **src/lib/graph-relevance.ts** | 四信号相关性模型 | graphology | graph-relevance.ts | ✅ 已深度扫描 |
 | **src/lib/graph-insights.ts** | 图洞察分析 | graphology | graph-insights.ts | ✅ 已深度扫描 |
 | **src/lib/ingest-queue.ts** | 持久化摄取队列 | TypeScript | ingest-queue.ts | ✅ 已深度扫描 |
@@ -139,12 +140,29 @@ graph TD
 
 ---
 
+## 🎓 LT 师训 learning 域（src-server，M2 起）
+
+教师经企业微信使用知识库的培训子系统，运行在 `src-server`（Web 服务端）而非桌面端：
+
+- **三表 + 投影**：`learning_plans` / `learning_items` / `learning_events` 三表是事实源（事件即事实），`services/projection.rs` 把 seen/complete 事件单调投影到 `learning_items.status`（pending < viewed < completed，completed 永不回退，可事件重放重建）；
+- **/t/ 与 /s/**：`/t/:token` 移动端落地页（plan_link JWT 凭证，视频章节跳转/Transcript 阅读/完成按钮 beacon）；`/s/:code` 10 字符短链现签跳转（303 → 现签 7d token，短码不过期，对 LLM 转发截断免疫）。归档 plan（status='archived'）即吊销：/s/、/t/ 与事件写入一律 404；M3 起两端口均接限流（内存固定窗口，超限 429）；
+- **/media 签名**：落地页媒体经 `slug + exp + sig + fp` 签名 URL 播放（fp = sha256(token) 前 16 hex，票据 TTL 12h）；
+- **MCP（M3 身份硬闸）**：`mcp-server` teacher-tutor 工具组（档案/建单/进度等，per-teacher 凭证持有 + single-flight 自愈）；Hermes 每次 `tools/call` 注入会话身份 `_meta`（agent 线程捕获、strict 读取），`resolveIdentity` 三态判定——wecom 会话用户模式（参数身份省略，给出且不等即 IdentityMismatch 硬拒）/ wecom 空身份 IdentityUnavailable fail-closed / cron·cli 系统模式（显式 wecom_userid，`identity_source:"system"`），prompt 注入冒用身份被结构性封死；
+- **Hermes**：lt-tutor profile 企微接入（SKILL 五流程编排 + 工具白名单 + 身份硬规则）；
+- **overview 与周报（M3）**：`GET /api/v1/training/overview` 管理总览（require_training_admin，三预聚合子查询）；周五 09:00-09:14 逐教师周报 cron（分钟 cksum(uid)%15 散列错峰，`period_key` ISO 周服务端自算 + ON CONFLICT 幂等，deliver wecom 单聊直推；停机错过的触发 gateway 起后自动补跑单次，手动 fire 兜底）；
+- **部署拓扑实证（M3 T9 重启演练）**：multiplex gateway 单实例持有 MCP 子进程（多实例并发 = 凭证 bind 乒乓，部署纪律）；launchd 自愈链 reboot 后全绿（容器 47s healthy → src-server/gateway/MCP/cloudflared/omlx/iogpu 逐起）。
+
+详见 `docs/superpowers/specs/2026-08-17-teacher-training-design.md` 与 [features.md §10](features.md)。
+
+---
+
 ## 📂 项目目录结构
 
 ```
 llm_wiki/
 ├── src/                          # 前端源代码 (React + TypeScript)
 │   ├── components/               # UI 组件
+│   │   ├── auth/                # 登录/注册页面（Web 端）
 │   │   ├── chat/                # 聊天界面组件
 │   │   ├── graph/               # 知识图谱可视化
 │   │   ├── layout/              # 布局组件
@@ -155,6 +173,7 @@ llm_wiki/
 │   │   ├── search/              # 搜索视图
 │   │   ├── settings/            # 设置视图
 │   │   ├── sources/             # 文件源视图
+│   │   ├── web/                 # Web 端组件（项目选择/摄取面板）
 │   │   └── ui/                  # shadcn/ui 基础组件
 │   ├── stores/                  # Zustand 状态管理
 │   ├── lib/                     # 核心逻辑库
@@ -182,9 +201,20 @@ llm_wiki/
 │   │   ├── commands/            # Tauri 命令实现
 │   │   │   ├── fs.rs            # 文件系统操作
 │   │   │   ├── project.rs       # 项目管理
+│   │   │   ├── search.rs        # 共享搜索后端（本地 API 与 WebView 同一实现）
 │   │   │   ├── vectorstore.rs   # 向量数据库 (LanceDB)
+│   │   │   ├── file_sync.rs     # 源文件夹同步 (Source Watch rescan)
+│   │   │   ├── extract_images.rs # 文档内嵌图片抽取（多模态）
+│   │   │   ├── claude_cli.rs    # Claude Code CLI 子进程传输
+│   │   │   ├── codex_cli.rs     # Codex CLI 子进程传输
+│   │   │   ├── cli_resolver.rs  # CLI 可执行路径解析
 │   │   │   └── mod.rs           # 命令模块导出
-│   │   ├── clip_server.rs       # Web Clipper HTTP 服务
+│   │   ├── api_server.rs        # 本地 HTTP API (127.0.0.1:19828)
+│   │   ├── clip_server.rs       # Web Clipper HTTP 服务 (19827)
+│   │   ├── logging/             # 日志（tracing + 文件轮转）
+│   │   ├── proxy.rs             # 全局出站 HTTP 代理
+│   │   ├── tray.rs              # 系统托盘
+│   │   ├── panic_guard.rs       # 命令 panic 转 error 边界
 │   │   ├── types/               # Rust 类型定义
 │   │   ├── lib.rs               # Tauri 主入口
 │   │   └── main.rs              # Rust 主函数
