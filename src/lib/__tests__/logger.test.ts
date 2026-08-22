@@ -3,6 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { createLogger, setLogLevel } from "../logger";
 
 // Mock Tauri invoke (hoisted; factory is self-contained, no external refs)
+// vitest node 环境无 window → caps.detect() 判为 web，logger/search 的 web 分支会让
+// 发送变 no-op / 走 HTTP——这些测试测的是桌面(tauri)行为，须 mock 为 tauri。
+vi.mock("@/lib/capabilities", () => ({
+  caps: {
+    platform: "tauri",
+    canPickFiles: true, canAccessFs: true, canWatchClipboard: true,
+    canAutoStart: true, canRunCli: true, canWatchFiles: true, canShowNotif: true,
+  },
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
