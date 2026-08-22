@@ -847,10 +847,13 @@ async fn post_complete(
 fn parse_chapters(v: &serde_json::Value) -> Vec<TChapter> {
     #[derive(serde::Deserialize)]
     struct Raw {
+        // 转写时间戳带小数秒（如 end_s=300.16）——必须按 f64 收再取整；
+        // 按 i64 直收会在浮点值上反序列化失败，unwrap_or_default 吞掉整组
+        //（T8 实弹：夜窗重转写后章节全灭的根因）。
         #[serde(default)]
-        start_s: i64,
+        start_s: f64,
         #[serde(default)]
-        end_s: i64,
+        end_s: f64,
         #[serde(default)]
         label: String,
     }
@@ -858,8 +861,8 @@ fn parse_chapters(v: &serde_json::Value) -> Vec<TChapter> {
         .unwrap_or_default()
         .into_iter()
         .map(|r| TChapter {
-            start_s: r.start_s.max(0),
-            end_s: r.end_s.max(0),
+            start_s: r.start_s.max(0.0).round() as i64,
+            end_s: r.end_s.max(0.0).round() as i64,
             label: r.label,
         })
         .collect()
@@ -1078,6 +1081,13 @@ mod tests {
         assert_eq!(cs[0].start_s, 10);
         assert_eq!(cs[1].start_s, 0, "negative clamped");
         assert_eq!(cs[1].label, "");
+        // 转写实测形态：小数秒（夜窗重转写后全部如此）——按 f64 收再取整
+        let frac = serde_json::json!([{"start_s": 0, "end_s": 300.16, "label": "嗨"},
+                                      {"start_s": 300.16, "end_s": 600.62}]);
+        let fcs = parse_chapters(&frac);
+        assert_eq!(fcs.len(), 2, "小数秒不得使整组解析失败（T8 章节全灭回归）");
+        assert_eq!(fcs[0].end_s, 300);
+        assert_eq!(fcs[1].start_s, 300);
         assert!(parse_chapters(&serde_json::json!("not-array")).is_empty());
         assert!(parse_chapters(&serde_json::json!({"a": 1})).is_empty());
     }
