@@ -1,620 +1,675 @@
 {
-  "startedAt": "2026-08-19T16:01:30.928Z",
-  "finishedAt": "2026-08-19T16:45:00.651Z",
-  "files": 48,
-  "transcribed": 30,
-  "skipped": 18,
+  "startedAt": "2026-08-22T17:00:34.437Z",
+  "finishedAt": "2026-08-22T21:11:13.772Z",
+  "files": 79,
+  "transcribed": 79,
+  "skipped": 0,
   "failed": 0,
-  "jobStatus": "failed",
-  "jobId": "a4a05d48-3cc8-4a86-af8a-c19112ffd7dd",
+  "jobStatus": "succeeded_with_warnings",
+  "jobId": "24d66853-c8b7-4a8d-924b-af172bd3d93d",
+  "jobError": null,
   "failedSources": [
     {
-      "path": "sources/transcripts/116-3f89a942.md",
-      "error": "Encryption error: Decryption failed"
+      "path": "sources/transcripts/Learners-characteristic-87163dd1.md",
+      "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象，retried once）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Mary\\\",\\n      \\\"type\\\": \\\"Person\\\",\\n      \\\"des\""
     },
     {
-      "path": "sources/transcripts/117-3566b154.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/118-3b445b9c.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/119-58676fdb.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/120-9d3e7811.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/121-59426afe.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/122-b6a58193.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/123-3838e579.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/124-word-puzzle-6d8bc9b7.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/125-commonlit-8aaee530.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/126-Word-wall-b7acd2e1.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/127-9f1efb27.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/128-23b35f09.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/130-Ted-ed753bb1.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/131-authentic-material-12300efc.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/132-63347618.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/134-65f347ed.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/136-PBL-2879f93a.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/137-IBL-Inquiry-based-learning-89049dcc.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/138-8547a21d.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/139-ea19f3df.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/140-5aeebd08.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/141-KWL-Teaching-Strategy-a58b3e91.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/142-edaf215c.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/143-3efdeb52.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/144-Scaffolding-through-teaching-strategies-5bea9330.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/145-Scaffolding-through-teacher-language-b1029706.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/146-Jerome-Bruner-f80de654.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/147-e64a28d8.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/148-34f6b034.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/149-Differentiated-Instructions-7fd69f62.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/150-42d910a3.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/151-2a5b638c.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/152-Multiple-Intelligence-55c628ae.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/153-Multiple-Intelligence-8a087038.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/154-TBLT-8a3a86d7.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/155-5-46402e4c.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/156-Praise-students-4-f53cb910.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/157-39a5f806.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/158-9e7bac82.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/159-5ea22044.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/160-classroom-rules-798336c6.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/558c39d9.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/468bcec8.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/Chat-GPT-5a49fb8f.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/ChatGPT-19f36109.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/360e6378.md",
-      "error": "Encryption error: Decryption failed"
-    },
-    {
-      "path": "sources/transcripts/567a5b05.md",
-      "error": "Encryption error: Decryption failed"
+      "path": "sources/transcripts/9-function-6bd6d810.md",
+      "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象，retried once）| head: \"{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Part of Speech (词性)\\\",\\n      \\\"type\\\": \\\"ling\""
     }
   ],
   "exhaustedRetries": [],
-  "durationMinutes": 43.5,
-  "transcribeMinutes": 43.3,
-  "mediaHours": 14.35,
-  "realtimeFactor": 19.9,
+  "durationMinutes": 250.7,
+  "transcribeMinutes": 94.9,
+  "mediaHours": 29.89,
+  "realtimeFactor": 18.9,
   "reAudit": {
-    "generatedAt": "2026-08-19T16:01:38.104Z",
+    "generatedAt": "2026-08-22T17:00:42.076Z",
     "probeFailures": 0,
     "firstBatch": {
-      "dir": "教学新知班级管理专栏",
-      "files": 48,
-      "durationH": 23.88,
+      "dir": "LT教学法系统知识库（基础阶）",
+      "files": 79,
+      "durationH": 29.89,
       "bySource": {
         "main": 0,
-        "hevc": 48
+        "hevc": 79
       }
     },
     "probeFailureEntries": []
   },
   "perFile": [
     {
-      "slug": "116-3f89a942",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/116. 如何准备公开课.mp4",
-      "status": "skipped",
-      "durationS": 672,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "117-3566b154",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/117. 如何提升线上课堂趣味性？.mp4",
-      "status": "skipped",
-      "durationS": 1710,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "118-3b445b9c",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/118. 语音教学概述.mp4",
-      "status": "skipped",
-      "durationS": 2329,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "119-58676fdb",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/119. 英文歌曲教学方法.mp4",
-      "status": "skipped",
-      "durationS": 2252,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "120-9d3e7811",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/120. 好用教学资源网站分享.mp4",
-      "status": "skipped",
-      "durationS": 1017,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "121-59426afe",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/121. 如何设计口语测试.mp4",
-      "status": "skipped",
-      "durationS": 3026,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "122-b6a58193",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/122. 如何用数据管理班级.mp4",
-      "status": "skipped",
-      "durationS": 2311,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "123-3838e579",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/123. 如何发布高效课堂指令.mp4",
-      "status": "skipped",
-      "durationS": 2702,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "124-word-puzzle-6d8bc9b7",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/124. 单词活动word puzzle制作网站推荐.mp4",
-      "status": "skipped",
-      "durationS": 1211,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "125-commonlit-8aaee530",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/125. commonlit网站推荐.mp4",
-      "status": "skipped",
-      "durationS": 396,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "126-Word-wall-b7acd2e1",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/126. Word wall单词墙制作.mp4",
-      "status": "skipped",
-      "durationS": 1747,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "127-9f1efb27",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/127. 青少版新概念怎么教.mp4",
-      "status": "skipped",
-      "durationS": 2372,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "128-23b35f09",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/128. 如何评估教材.mp4",
-      "status": "skipped",
-      "durationS": 2121,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "130-Ted-ed753bb1",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/130. 如何用Ted演讲设计教学课堂.mp4",
-      "status": "skipped",
-      "durationS": 2447,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "131-authentic-material-12300efc",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/131. 如何筛选authentic material～.mp4",
-      "status": "skipped",
-      "durationS": 1882,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "132-63347618",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/132. 语言学习者学习脑图.mp4",
-      "status": "skipped",
-      "durationS": 1417,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "134-65f347ed",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/134. 如何设计英语测试.mp4",
-      "status": "skipped",
-      "durationS": 2506,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "136-PBL-2879f93a",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/136. PBL课堂如何设计.mp4",
-      "status": "skipped",
-      "durationS": 2189,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "137-IBL-Inquiry-based-learning-89049dcc",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/137. IBL-Inquiry based learning.mp4",
+      "slug": "15-assessment-activity-5beddbc8",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/15个assessment activity（三阶段）.mp4",
       "status": "done",
-      "durationS": 1508,
-      "transcribeMs": 63596,
-      "upsert": "updated"
+      "durationS": 1856,
+      "transcribeMs": 97991,
+      "upsert": "created"
     },
     {
-      "slug": "138-8547a21d",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/138. 如何做有效反馈.mp4",
+      "slug": "6-coursebook-material-61f2fcac",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/6招灵活使用coursebook material（三阶段）.mp4",
       "status": "done",
-      "durationS": 1765,
-      "transcribeMs": 78539,
-      "upsert": "updated"
+      "durationS": 1586,
+      "transcribeMs": 75103,
+      "upsert": "created"
     },
     {
-      "slug": "139-ea19f3df",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/139. 雅思备考攻略（下）.mp4",
+      "slug": "Alternatives-to-lesson-planning-d409472c",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Alternatives to lesson planning（三阶段）.mp4",
       "status": "done",
-      "durationS": 1220,
-      "transcribeMs": 66225,
-      "upsert": "updated"
+      "durationS": 2193,
+      "transcribeMs": 108981,
+      "upsert": "created"
     },
     {
-      "slug": "140-5aeebd08",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/140. 雅思备考攻略（上）.mp4",
+      "slug": "Classroom-activity-route-map-770de11e",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Classroom activity route map（一阶）.mp4",
       "status": "done",
-      "durationS": 2099,
-      "transcribeMs": 108945,
-      "upsert": "updated"
+      "durationS": 1298,
+      "transcribeMs": 69144,
+      "upsert": "created"
     },
     {
-      "slug": "141-KWL-Teaching-Strategy-a58b3e91",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/141. KWL Teaching Strategy.mp4",
+      "slug": "Classroom-activity-1984a595",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Classroom activity（一阶）.mp4",
       "status": "done",
-      "durationS": 1596,
-      "transcribeMs": 73644,
-      "upsert": "updated"
+      "durationS": 815,
+      "transcribeMs": 41966,
+      "upsert": "created"
     },
     {
-      "slug": "142-edaf215c",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/142. 如何开展合作式学习课堂.mp4",
+      "slug": "Classroom-management-cea289f3",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Classroom management（一阶）.mp4",
       "status": "done",
-      "durationS": 1436,
-      "transcribeMs": 72627,
-      "upsert": "updated"
+      "durationS": 2446,
+      "transcribeMs": 133669,
+      "upsert": "created"
     },
     {
-      "slug": "143-3efdeb52",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/143. 语言学习的动机研究.mp4",
+      "slug": "Correcting-students-4d9f60b4",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Correcting students小妙招（三阶段）.mp4",
       "status": "done",
-      "durationS": 2895,
-      "transcribeMs": 139060,
-      "upsert": "updated"
+      "durationS": 1641,
+      "transcribeMs": 87672,
+      "upsert": "created"
     },
     {
-      "slug": "144-Scaffolding-through-teaching-strategies-5bea9330",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/144. Scaffolding through teaching strategies.mp4",
+      "slug": "Creating-Positive-Learning-Atmosphere-da016f14",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Creating Positive Learning Atmosphere（三阶段.mp4",
       "status": "done",
-      "durationS": 2230,
-      "transcribeMs": 124765,
-      "upsert": "updated"
+      "durationS": 1493,
+      "transcribeMs": 81271,
+      "upsert": "created"
     },
     {
-      "slug": "145-Scaffolding-through-teacher-language-b1029706",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/145. Scaffolding through teacher language.mp4",
+      "slug": "Getting-Students-Feedback-79d0e3aa",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Getting Students’ Feedback（三阶段）.mp4",
       "status": "done",
-      "durationS": 2054,
-      "transcribeMs": 108544,
-      "upsert": "updated"
+      "durationS": 1572,
+      "transcribeMs": 84756,
+      "upsert": "created"
     },
     {
-      "slug": "146-Jerome-Bruner-f80de654",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/146. Jerome Bruner和他的脚手架.mp4",
+      "slug": "Giving-feedback-577d1697",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Giving feedback（三阶段）.mp4",
       "status": "done",
-      "durationS": 1529,
-      "transcribeMs": 77068,
-      "upsert": "updated"
+      "durationS": 1199,
+      "transcribeMs": 65760,
+      "upsert": "created"
     },
     {
-      "slug": "147-e64a28d8",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/147. 皮亚杰的儿童认知发展四阶段.mp4",
+      "slug": "How-to-teach-grammar-3c2674e4",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach grammar（一阶）.mp4",
       "status": "done",
-      "durationS": 2212,
-      "transcribeMs": 120591,
-      "upsert": "updated"
+      "durationS": 1353,
+      "transcribeMs": 70213,
+      "upsert": "created"
     },
     {
-      "slug": "148-34f6b034",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/148. 维果茨基的脚手架～.mp4",
+      "slug": "How-to-teach-lexis-9d60cef4",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach lexis（一阶）.mp4",
+      "status": "done",
+      "durationS": 1873,
+      "transcribeMs": 99844,
+      "upsert": "created"
+    },
+    {
+      "slug": "How-to-teach-listening-2-c39f0137",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach listening-2（一阶）.mp4",
+      "status": "done",
+      "durationS": 1196,
+      "transcribeMs": 62131,
+      "upsert": "created"
+    },
+    {
+      "slug": "How-to-teach-listening-de0e2969",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach listening（一阶）.mp4",
+      "status": "done",
+      "durationS": 1842,
+      "transcribeMs": 103256,
+      "upsert": "created"
+    },
+    {
+      "slug": "How-to-teach-reading-1-c8c63fde",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach reading-1（一阶基础）.mp4",
+      "status": "done",
+      "durationS": 1168,
+      "transcribeMs": 63982,
+      "upsert": "created"
+    },
+    {
+      "slug": "How-to-teach-reading-2-e8262930",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach reading-2（一阶基础）.mp4",
+      "status": "done",
+      "durationS": 1360,
+      "transcribeMs": 75514,
+      "upsert": "created"
+    },
+    {
+      "slug": "How-to-teach-speaking-1-c0ed5688",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach speaking-1（一阶）.mp4",
+      "status": "done",
+      "durationS": 1763,
+      "transcribeMs": 94527,
+      "upsert": "created"
+    },
+    {
+      "slug": "How-to-teach-speaking-2-b8484470",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach speaking-2（一阶）.mp4",
+      "status": "done",
+      "durationS": 1355,
+      "transcribeMs": 71044,
+      "upsert": "created"
+    },
+    {
+      "slug": "How-to-teach-writing-b801f0f3",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/How to teach writing（一阶）.mp4",
+      "status": "done",
+      "durationS": 1559,
+      "transcribeMs": 85131,
+      "upsert": "created"
+    },
+    {
+      "slug": "Improving-Student-Interactions-ff7b9834",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Improving Student Interactions（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1833,
+      "transcribeMs": 95501,
+      "upsert": "created"
+    },
+    {
+      "slug": "Language-systems-and-skills-a1755939",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Language systems and skills（一阶）.mp4",
+      "status": "done",
+      "durationS": 1501,
+      "transcribeMs": 78809,
+      "upsert": "created"
+    },
+    {
+      "slug": "Learners-characteristic-87163dd1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Learners‘ characteristic 如何了解你的学生？（一阶）.mp4",
+      "status": "done",
+      "durationS": 1372,
+      "transcribeMs": 72589,
+      "upsert": "created"
+    },
+    {
+      "slug": "Lesson-Aims-2b2cd3bc",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Lesson Aims概述（一阶）.mp4",
+      "status": "done",
+      "durationS": 1748,
+      "transcribeMs": 92822,
+      "upsert": "created"
+    },
+    {
+      "slug": "Lesson-planning-6-f0518f37",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Lesson planning的6个小贴士（三阶段）.mp4",
+      "status": "done",
+      "durationS": 647,
+      "transcribeMs": 35592,
+      "upsert": "created"
+    },
+    {
+      "slug": "PPP-a083b14f",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/PPP的课堂是如何呈现知识点的（二阶段）.mp4",
+      "status": "done",
+      "durationS": 1897,
+      "transcribeMs": 101289,
+      "upsert": "created"
+    },
+    {
+      "slug": "Scheme-of-work-8c9d8d8c",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Scheme of work到底是啥（三阶段）.mp4",
+      "status": "done",
+      "durationS": 797,
+      "transcribeMs": 44608,
+      "upsert": "created"
+    },
+    {
+      "slug": "Speaking-function-ca17e2d6",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Speaking中最容易被忽略的function（二阶段）.mp4",
+      "status": "done",
+      "durationS": 830,
+      "transcribeMs": 43604,
+      "upsert": "created"
+    },
+    {
+      "slug": "Study-your-own-teaching-773f6efb",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Study your own teaching-如何做教学反馈？（一阶）.mp4",
+      "status": "done",
+      "durationS": 969,
+      "transcribeMs": 50669,
+      "upsert": "created"
+    },
+    {
+      "slug": "teacher-language-7587b9a1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/teacher language是一堂课的排面（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1560,
+      "transcribeMs": 87574,
+      "upsert": "created"
+    },
+    {
+      "slug": "teacher-language-afdc189a",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/teacher language真题讲解（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1052,
+      "transcribeMs": 53662,
+      "upsert": "created"
+    },
+    {
+      "slug": "Teaching-and-planning-934b2a27",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Teaching and planning（三阶段）.mp4",
+      "status": "done",
+      "durationS": 2568,
+      "transcribeMs": 133890,
+      "upsert": "created"
+    },
+    {
+      "slug": "Teaching-Lexis-cbc76476",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Teaching Lexis（三阶段）.mp4",
+      "status": "done",
+      "durationS": 2619,
+      "transcribeMs": 142004,
+      "upsert": "created"
+    },
+    {
+      "slug": "Teaching-skills-3365e4f9",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/Teaching skills（三阶段）.mp4",
+      "status": "done",
+      "durationS": 2805,
+      "transcribeMs": 144703,
+      "upsert": "created"
+    },
+    {
+      "slug": "TKT-f8b689a1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/TKT真题教学案例（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1084,
+      "transcribeMs": 60008,
+      "upsert": "created"
+    },
+    {
+      "slug": "What-is-a-teacher-cc886667",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/What is a teacher（一阶）.mp4",
+      "status": "done",
+      "durationS": 1814,
+      "transcribeMs": 98455,
+      "upsert": "created"
+    },
+    {
+      "slug": "assessment-activity-e9d6a31d",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/一张图看懂assessment activity（三阶段）.mp4",
+      "status": "done",
+      "durationS": 776,
+      "transcribeMs": 43264,
+      "upsert": "created"
+    },
+    {
+      "slug": "TKT-6d5fa644",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/一道TKT真题学会一套完整的阅读备课思路（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1121,
+      "transcribeMs": 62365,
+      "upsert": "created"
+    },
+    {
+      "slug": "b2636aa8",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/不同检测形式的目的是什么（二阶段）.mp4",
+      "status": "done",
+      "durationS": 1152,
+      "transcribeMs": 60062,
+      "upsert": "created"
+    },
+    {
+      "slug": "7575116c",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/不同考试的目的分别是什么？（二阶段）.mp4",
+      "status": "done",
+      "durationS": 686,
+      "transcribeMs": 36436,
+      "upsert": "created"
+    },
+    {
+      "slug": "controlled-activity-free-activity-0059f437",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/从controlled activity到free activity（二阶段）.mp4",
+      "status": "done",
+      "durationS": 712,
+      "transcribeMs": 42077,
+      "upsert": "created"
+    },
+    {
+      "slug": "87f90eb7",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/你会诊断学生错误吗（三阶段）.mp4",
       "status": "done",
       "durationS": 1280,
-      "transcribeMs": 65908,
-      "upsert": "updated"
+      "transcribeMs": 70135,
+      "upsert": "created"
     },
     {
-      "slug": "149-Differentiated-Instructions-7fd69f62",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/149. 如何开展差异化教学-Differentiated Instructions.mp4",
+      "slug": "lesson-aims-7f2ed651",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/关于lesson aims必须要掌握的关键词（三阶段）.mp4",
       "status": "done",
-      "durationS": 1681,
-      "transcribeMs": 107118,
-      "upsert": "updated"
+      "durationS": 1129,
+      "transcribeMs": 57678,
+      "upsert": "created"
     },
     {
-      "slug": "150-42d910a3",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/150. 如何开展分层教学设计？.mp4",
+      "slug": "lesson-plan-11-headings-59a4867f",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/关于lesson plan你必须要记住的11个headings（三阶段）.mp4",
       "status": "done",
-      "durationS": 1960,
-      "transcribeMs": 96907,
-      "upsert": "updated"
+      "durationS": 1397,
+      "transcribeMs": 74574,
+      "upsert": "created"
     },
     {
-      "slug": "151-2a5b638c",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/151. 开班课特辑-教师自我介绍背后的原理.mp4",
+      "slug": "cohesion-coherence-e0cd3aad",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/写作教学中最容易被忽略的cohesion&coherence（二阶段）.mp4",
       "status": "done",
-      "durationS": 1181,
-      "transcribeMs": 54848,
-      "upsert": "updated"
+      "durationS": 1299,
+      "transcribeMs": 68716,
+      "upsert": "created"
     },
     {
-      "slug": "152-Multiple-Intelligence-55c628ae",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/152. Multiple Intelligence在语言课堂的运用.mp4",
+      "slug": "ecf32f73",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/写作教学中的核心要素（二阶段）.mp4",
       "status": "done",
-      "durationS": 839,
-      "transcribeMs": 41739,
-      "upsert": "updated"
+      "durationS": 938,
+      "transcribeMs": 51098,
+      "upsert": "created"
     },
     {
-      "slug": "153-Multiple-Intelligence-8a087038",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/153. 多元智能Multiple Intelligence.mp4",
+      "slug": "2-88220692",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/写作课堂的2种教学方法（二阶段）.mp4",
       "status": "done",
-      "durationS": 1568,
-      "transcribeMs": 82111,
-      "upsert": "updated"
+      "durationS": 997,
+      "transcribeMs": 51054,
+      "upsert": "created"
     },
     {
-      "slug": "154-TBLT-8a3a86d7",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/154. TBLT-理想化的教学.mp4",
+      "slug": "655e9cec",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/口语到底怎么教-素材案例分析（二阶段）.mp4",
       "status": "done",
-      "durationS": 1882,
-      "transcribeMs": 93153,
-      "upsert": "updated"
+      "durationS": 1877,
+      "transcribeMs": 102639,
+      "upsert": "created"
     },
     {
-      "slug": "155-5-46402e4c",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/155. 帮助学生养成成长型思维的5个好方法.mp4",
+      "slug": "3472a791",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/口语输出能力到底有多复杂？（二阶段）.mp4",
       "status": "done",
-      "durationS": 747,
-      "transcribeMs": 35602,
-      "upsert": "updated"
+      "durationS": 505,
+      "transcribeMs": 26937,
+      "upsert": "created"
     },
     {
-      "slug": "156-Praise-students-4-f53cb910",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/156. Praise students的4个超好用方法.mp4",
+      "slug": "e6ac9eca",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/听力和阅读在语言输入中有哪些不同？（二阶段）.mp4",
       "status": "done",
-      "durationS": 683,
-      "transcribeMs": 31694,
-      "upsert": "updated"
+      "durationS": 1710,
+      "transcribeMs": 92354,
+      "upsert": "created"
     },
     {
-      "slug": "157-39a5f806",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/157.【班级管理】如何“对付”课堂问题学生.mp4",
+      "slug": "9-78a99511",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/听力能力到底是什么？9个听力练习设计思路（二阶段）.mp4",
       "status": "done",
-      "durationS": 2509,
-      "transcribeMs": 126532,
-      "upsert": "updated"
+      "durationS": 1293,
+      "transcribeMs": 68966,
+      "upsert": "created"
     },
     {
-      "slug": "158-9e7bac82",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/158.【班级管理】我是如何把问题学生变成“铁杆粉丝” 的.mp4",
+      "slug": "42aab4f9",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何分析学生语言学习需求（二阶段）.mp4",
       "status": "done",
-      "durationS": 1684,
-      "transcribeMs": 86455,
-      "upsert": "updated"
+      "durationS": 1353,
+      "transcribeMs": 73571,
+      "upsert": "created"
     },
     {
-      "slug": "159-5ea22044",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/159. 【班级管理】学学米国小学老师是如何制定班规的.mp4",
+      "slug": "variety-ad23b44e",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何增加课堂variety（三阶段）.mp4",
       "status": "done",
-      "durationS": 1091,
-      "transcribeMs": 53067,
-      "upsert": "updated"
+      "durationS": 669,
+      "transcribeMs": 38006,
+      "upsert": "created"
     },
     {
-      "slug": "160-classroom-rules-798336c6",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/160.【班级管理】如何设定真正有效的classroom rules.mp4",
+      "slug": "44e9fd31",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何巧用托福口语素材教听力？（二阶段）.mp4",
       "status": "done",
-      "durationS": 928,
-      "transcribeMs": 47617,
-      "upsert": "updated"
+      "durationS": 1060,
+      "transcribeMs": 56322,
+      "upsert": "created"
     },
     {
-      "slug": "558c39d9",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/什么是阅读理解能力.mp4",
+      "slug": "ad64ae8b",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何教词汇？（二阶段）.mp4",
       "status": "done",
-      "durationS": 2761,
-      "transcribeMs": 129641,
-      "upsert": "updated"
+      "durationS": 860,
+      "transcribeMs": 44077,
+      "upsert": "created"
     },
     {
-      "slug": "468bcec8",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何开展小组合作式阅读教学.mp4",
+      "slug": "44a4fa7f",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何激发学生动力（二阶段）.mp4",
       "status": "done",
-      "durationS": 1717,
-      "transcribeMs": 88977,
-      "upsert": "updated"
+      "durationS": 1769,
+      "transcribeMs": 97668,
+      "upsert": "created"
     },
     {
-      "slug": "Chat-GPT-5a49fb8f",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何用Chat GPT备阅读课.mp4",
+      "slug": "guided-discovery-65087d41",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何用guided discovery做知识点呈现？（二阶段）.mp4",
       "status": "done",
-      "durationS": 1079,
-      "transcribeMs": 52619,
-      "upsert": "updated"
+      "durationS": 600,
+      "transcribeMs": 31035,
+      "upsert": "created"
     },
     {
-      "slug": "ChatGPT-19f36109",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何用ChatGPT备一堂课.mp4",
+      "slug": "755eeef1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何确定你设计的评估测试是否有效（二阶段）.mp4",
       "status": "done",
-      "durationS": 1884,
-      "transcribeMs": 89566,
-      "upsert": "updated"
+      "durationS": 1232,
+      "transcribeMs": 71569,
+      "upsert": "created"
     },
     {
-      "slug": "360e6378",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何设计听力测试.mp4",
+      "slug": "c9aa432f",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何给学生做分类（二阶段）.mp4",
       "status": "done",
-      "durationS": 2871,
-      "transcribeMs": 142695,
-      "upsert": "updated"
+      "durationS": 619,
+      "transcribeMs": 31111,
+      "upsert": "created"
     },
     {
-      "slug": "567a5b05",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/如何设计阅读测试.mp4",
+      "slug": "lead-in-7912b093",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何设计有效lead-in？.mp4",
       "status": "done",
-      "durationS": 2759,
-      "transcribeMs": 137151,
-      "upsert": "updated"
+      "durationS": 1340,
+      "transcribeMs": 76752,
+      "upsert": "created"
+    },
+    {
+      "slug": "controlled-practice-aba0d8b6",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/如何高效运用课堂中的controlled practice（二阶段）.mp4",
+      "status": "done",
+      "durationS": 1003,
+      "transcribeMs": 53089,
+      "upsert": "created"
+    },
+    {
+      "slug": "function-f280f48a",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/学生课堂语言function有哪些（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1141,
+      "transcribeMs": 56578,
+      "upsert": "created"
+    },
+    {
+      "slug": "06ad7ef1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/当我们教词汇的时候，我们都在教什么？（二阶段）.mp4",
+      "status": "done",
+      "durationS": 1629,
+      "transcribeMs": 85429,
+      "upsert": "created"
+    },
+    {
+      "slug": "1-4353ac26",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/教学目标核心三讲1-目标编写方法（一阶）.mp4",
+      "status": "done",
+      "durationS": 1480,
+      "transcribeMs": 80019,
+      "upsert": "created"
+    },
+    {
+      "slug": "2-Bloom-s-Taxonomy-17281bce",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/教学目标核心三讲2-Bloom's Taxonomy（一阶）.mp4",
+      "status": "done",
+      "durationS": 1223,
+      "transcribeMs": 65438,
+      "upsert": "created"
+    },
+    {
+      "slug": "3-c63002b1",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/教学目标核心三讲3-案例分析（一阶）.mp4",
+      "status": "done",
+      "durationS": 1425,
+      "transcribeMs": 74325,
+      "upsert": "created"
+    },
+    {
+      "slug": "4-c00bc33a",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/教学目标设定常见4大误区（三阶段）.mp4",
+      "status": "done",
+      "durationS": 734,
+      "transcribeMs": 40177,
+      "upsert": "created"
+    },
+    {
+      "slug": "dc1bfb42",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/教师最重要的角色有哪些？（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1399,
+      "transcribeMs": 74585,
+      "upsert": "created"
+    },
+    {
+      "slug": "Eliciting-c5ad6d65",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/教师语言- Eliciting（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1978,
+      "transcribeMs": 98744,
+      "upsert": "created"
+    },
+    {
+      "slug": "412c21d5",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/检测学生的学习效果有哪些形式（二阶段）.mp4",
+      "status": "done",
+      "durationS": 812,
+      "transcribeMs": 41829,
+      "upsert": "created"
+    },
+    {
+      "slug": "TKT-8b2c2b78",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/用TKT真题学教学（三阶段）.mp4",
+      "status": "done",
+      "durationS": 688,
+      "transcribeMs": 35924,
+      "upsert": "created"
+    },
+    {
+      "slug": "9-function-6bd6d810",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/英文中9大词性的function（二阶段）.mp4",
+      "status": "done",
+      "durationS": 1194,
+      "transcribeMs": 65632,
+      "upsert": "created"
+    },
+    {
+      "slug": "7-speaking-c2cdd23b",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/英语老师必知的7个speaking子技能（二阶段）.mp4",
+      "status": "done",
+      "durationS": 1900,
+      "transcribeMs": 99723,
+      "upsert": "created"
+    },
+    {
+      "slug": "6-16bbbc68",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/评估教学素材的6个关键因素（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1264,
+      "transcribeMs": 71821,
+      "upsert": "created"
+    },
+    {
+      "slug": "46b53d19",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/词汇教学效果不好，原因在哪里-案例分析（三阶段）.mp4",
+      "status": "done",
+      "durationS": 1904,
+      "transcribeMs": 91502,
+      "upsert": "created"
+    },
+    {
+      "slug": "37d3b965",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/语法怎么教-素材案例分析（二阶段）.mp4",
+      "status": "done",
+      "durationS": 663,
+      "transcribeMs": 31868,
+      "upsert": "created"
+    },
+    {
+      "slug": "MFUP-fe5dfb0b",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/语法教学的MFUP（二阶段）.mp4",
+      "status": "done",
+      "durationS": 630,
+      "transcribeMs": 29123,
+      "upsert": "created"
+    },
+    {
+      "slug": "6057182a",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/语法概念下的三个部分（二阶段）.mp4",
+      "status": "done",
+      "durationS": 291,
+      "transcribeMs": 13432,
+      "upsert": "created"
+    },
+    {
+      "slug": "fc5a26e8",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/阅读和听力如何设计练习活动（二阶段）.mp4",
+      "status": "done",
+      "durationS": 1360,
+      "transcribeMs": 63757,
+      "upsert": "created"
+    },
+    {
+      "slug": "5a96263a",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/阅读教学全解（二阶段）.mp4",
+      "status": "done",
+      "durationS": 3843,
+      "transcribeMs": 183543,
+      "upsert": "created"
     }
   ],
-  "warnings": [],
-  "m2Retranscribe20260819": {
-    "windowStart": "2026-08-19T23:30+08:00",
-    "transcription": {
-      "firstRun": "18/48（23:30-23:59，withinWindow 结束时刻排他 off-by-one：00:00-23:59 实际到 23:58:59）",
-      "resumeRun": "30 新 + 18 复用 = 48/48，realtimeFactor 19.9，0 失败",
-      "promptVersion": "LT英语师训 课堂教学 班级管理 自然拼读 独立教师 双减 师训（09cb1b15）"
-    },
-    "ingest": {
-      "firstAttempt": "CLI 自动触发全 48 源失败——provider key 解密失败（DB 密文为历史 secret 加密，launchd 服为 bootstrap secret；经 svc-transcriber 重录行 37 key 修复，omlx 本地无鉴权）",
-      "manualJob": "e9a90b8c，00:51-02:26，43 done / 5 failed，stage=building_index",
-      "usageEvidence": "48 条 ingest step1 usage 日志（真实 LLM 调用），max completion 2536 / max prompt 9485",
-      "finalTally": "48/48 done（43 夜间 + 5 晨间重试）"
-    },
-    "residualFailures": {
-      "count": 5,
-      "items": [
-        "116-3f89a942",
-        "130-Ted-ed753bb1",
-        "136-PBL-2879f93a",
-        "468bcec8",
-        "ChatGPT-19f36109"
-      ],
-      "signature": "step1 JSON parse failed（无有效 JSON 对象）| head 形似合法 entities JSON",
-      "newEvidence": "completion ≤2536 << 32000 上限 → 排除 cap 截断（含 M1 的 12000 截断诊断存疑）；疑本地 Qwen3.6 提前停止/JSON 中途断；待白天捕获完整失败响应体分析",
-      "resolution": "08:00-08:10 原样重跑 5 项全部 done（job b2b87f86）——失败确证为瞬态（同请求晨间成功；疑昨夜 whisper 同机/omlx 长跑并发疲劳）；首批最终 48/48 全量 ingest 达成。改进项：step1 解析失败自动重试一次（防瞬态模型抖动浪费整夜），随 T16 批次实施"
-    },
-    "operator": "automation-e9999cbd 两阶段 + 控制器人工介入（窗口续跑、密钥重录、ingest 重触发）"
-  }
+  "warnings": []
 }
