@@ -15,6 +15,8 @@ vi.mock("@/lib/capabilities", () => ({
 }))
 
 import { createDirectory, listDirectory, writeFile, writeFileAtomic } from "./fs"
+// #6：fs.ts 按 ApiRequestError.isNotFound/isConflict 分支——mock 工厂必须回传真类
+import { ApiRequestError } from "@/lib/api-client"
 
 describe("fs command path guards", () => {
   beforeEach(() => {
@@ -144,12 +146,15 @@ describe("fs.ts web 适配", () => {
 
   // ── #1(web):wiki 页面读写与 pages API 对齐 ──
 
-  function webFsMocks(overrides: Partial<Record<"statFile" | "readFile" | "getPage" | "updatePage" | "writeFile", ReturnType<typeof vi.fn>>>) {
+  const notFound = () => new ApiRequestError("not found", 404, "RESOURCE_NOT_FOUND")
+
+  function webFsMocks(overrides: Partial<Record<"statFile" | "readFile" | "getPage" | "updatePage" | "createPage" | "writeFile", ReturnType<typeof vi.fn>>>) {
     return {
       statFile: overrides.statFile ?? vi.fn().mockResolvedValue({ exists: false, is_dir: false, size: 0, modified: 0 }),
       readFile: overrides.readFile ?? vi.fn(),
-      getPage: overrides.getPage ?? vi.fn().mockRejectedValue(new Error("HTTP 404")),
+      getPage: overrides.getPage ?? vi.fn().mockRejectedValue(notFound()),
       updatePage: overrides.updatePage ?? vi.fn(),
+      createPage: overrides.createPage ?? vi.fn(),
       writeFile: overrides.writeFile ?? vi.fn().mockResolvedValue(undefined),
     }
   }
@@ -172,7 +177,7 @@ describe("fs.ts web 适配", () => {
     vi.resetModules()
     const api = webFsMocks({ getPage: vi.fn().mockResolvedValue(samplePage) })
     vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
-    vi.doMock("@/lib/api-client", () => ({ apiClient: api }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
     ;(globalThis as Record<string, unknown>).window = globalThis
     ;(globalThis as any).__currentProjectId = 7
     const fs = await import("./fs")
@@ -197,11 +202,11 @@ describe("fs.ts web 适配", () => {
     vi.resetModules()
     const api = webFsMocks({
       getPage: vi.fn()
-        .mockRejectedValueOnce(new Error("HTTP 404")) // 带前缀变体 miss
+        .mockRejectedValueOnce(notFound()) // 带前缀变体 miss
         .mockResolvedValueOnce(samplePage),            // 去前缀变体命中
     })
     vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
-    vi.doMock("@/lib/api-client", () => ({ apiClient: api }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
     ;(globalThis as Record<string, unknown>).window = globalThis
     ;(globalThis as any).__currentProjectId = 7
     const fs = await import("./fs")
@@ -219,7 +224,7 @@ describe("fs.ts web 适配", () => {
     vi.resetModules()
     const api = webFsMocks({})
     vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
-    vi.doMock("@/lib/api-client", () => ({ apiClient: api }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
     ;(globalThis as Record<string, unknown>).window = globalThis
     ;(globalThis as any).__currentProjectId = 7
     const fs = await import("./fs")
@@ -242,7 +247,7 @@ describe("fs.ts web 适配", () => {
       readFile: vi.fn().mockResolvedValue({ path: "wiki/chat.json", content: "{}" }),
     })
     vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
-    vi.doMock("@/lib/api-client", () => ({ apiClient: api }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
     ;(globalThis as Record<string, unknown>).window = globalThis
     ;(globalThis as any).__currentProjectId = 7
     const fs = await import("./fs")
@@ -258,7 +263,7 @@ describe("fs.ts web 适配", () => {
     vi.resetModules()
     const api = webFsMocks({ getPage: vi.fn().mockResolvedValue(samplePage) })
     vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
-    vi.doMock("@/lib/api-client", () => ({ apiClient: api }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
     ;(globalThis as Record<string, unknown>).window = globalThis
     ;(globalThis as any).__currentProjectId = 7
     const fs = await import("./fs")
@@ -281,7 +286,7 @@ describe("fs.ts web 适配", () => {
     vi.resetModules()
     const api = webFsMocks({})
     vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
-    vi.doMock("@/lib/api-client", () => ({ apiClient: api }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
     ;(globalThis as Record<string, unknown>).window = globalThis
     ;(globalThis as any).__currentProjectId = 7
     const fs = await import("./fs")
@@ -306,7 +311,7 @@ describe("fs.ts web 适配", () => {
         .mockResolvedValueOnce(freshPage),
     })
     vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
-    vi.doMock("@/lib/api-client", () => ({ apiClient: api }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
     ;(globalThis as Record<string, unknown>).window = globalThis
     ;(globalThis as any).__currentProjectId = 7
     const fs = await import("./fs")
@@ -459,5 +464,118 @@ describe("fs.ts web 适配", () => {
     await expect(listDirectory("/tmp/project")).resolves.toEqual([])
 
     expect(mocks.invoke).toHaveBeenCalledTimes(2)
+  })
+
+  // ── #6/FS-1：失败类型化 —— 非 404 不再当 miss ──
+
+  it("fetchWikiPage 瞬时 500 → 上抛而非静默落 files(防永久分叉)", async () => {
+    vi.resetModules()
+    const api = webFsMocks({
+      getPage: vi.fn().mockRejectedValue(new ApiRequestError("Database error", 500, "DATABASE_ERROR")),
+    })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    // 读路径:500 上抛(File not found 语义只在真 404 时)
+    await expect(fs.readFile("entities/x.md")).rejects.toThrow("Database error")
+    // 写路径:同样上抛,不得静默落回 files API 写存储目录
+    await expect(fs.writeFile("entities/x.md", "# y")).rejects.toThrow("Database error")
+    expect(api.writeFile).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("writeFile(web) PUT body 不含 title(frontmatter.title 驱动 denormalize)", async () => {
+    vi.resetModules()
+    const api = webFsMocks({ getPage: vi.fn().mockResolvedValue(samplePage) })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await fs.writeFile("entities/kwl-chart.md", "---\ntype: entity\ntitle: 新标题\n---\n\n正文")
+    expect(api.updatePage).toHaveBeenCalledTimes(1)
+    const body = api.updatePage.mock.calls[0][2]
+    expect(body).not.toHaveProperty("title")
+    expect(body.frontmatter).toMatchObject({ title: "新标题" })
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  // ── #7：web 下新 .md = 建 wiki 页 ──
+
+  it("writeFile(web) 不存在的 .md → POST /pages 建页,不写存储目录", async () => {
+    vi.resetModules()
+    const created = { ...samplePage, path: "wiki/queries/q-120000.md", updated_at: "2026-08-23T00:00:00Z" }
+    const api = webFsMocks({ createPage: vi.fn().mockResolvedValue(created) })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await fs.writeFile("wiki/queries/q-120000.md", "---\ntype: query\ntitle: Q\n---\n\n答案")
+    expect(api.createPage).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ path: "wiki/queries/q-120000.md", content: "答案" }),
+    )
+    expect(api.createPage.mock.calls[0][1]).not.toHaveProperty("title")
+    expect(api.writeFile).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("writeFile(web) 建页 409 竞态 → 转 PUT 更新", async () => {
+    vi.resetModules()
+    const api = webFsMocks({
+      createPage: vi.fn().mockRejectedValue(new ApiRequestError("path already exists", 409, "CONFLICT")),
+      getPage: vi.fn()
+        .mockRejectedValueOnce(notFound())          // 首查变体1 miss
+        .mockRejectedValueOnce(notFound())          // 首查变体2 miss → 走建页
+        .mockResolvedValueOnce(samplePage),         // 409 后转 PUT 的存在性重查命中
+    })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await fs.writeFile("entities/kwl-chart.md", "# 改")
+    expect(api.createPage).toHaveBeenCalledTimes(1)
+    expect(api.updatePage).toHaveBeenCalledTimes(1)
+    expect(api.writeFile).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("writeFile(web) 裸 HTTP 409(网关剥 body)也触发 stale 重试", async () => {
+    vi.resetModules()
+    const fresh = { ...samplePage, updated_at: "2026-08-23T03:00:00Z" }
+    const api = webFsMocks({
+      getPage: vi.fn().mockResolvedValueOnce(samplePage).mockResolvedValueOnce(fresh),
+      updatePage: vi.fn()
+        .mockRejectedValueOnce(new Error("HTTP 409"))
+        .mockResolvedValueOnce(fresh),
+    })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await fs.writeFile("entities/kwl-chart.md", "# 新")
+    expect(api.updatePage).toHaveBeenCalledTimes(2)
+    expect(api.updatePage).toHaveBeenLastCalledWith(7, "entities/kwl-chart.md", expect.anything(), "2026-08-23T03:00:00Z")
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
   })
 })

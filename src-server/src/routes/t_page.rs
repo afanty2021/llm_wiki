@@ -17,10 +17,12 @@
 //! - `POST /t/:token/complete`：body `{item_id}`，校验 ∈ plan（伪造 → 400）后
 //!   projection::complete_item（单调、幂等）。
 //!
-//! **限流（Task 6 r3 + SEC-7）**：`/s/:code` 30 次/分钟（key=code）、`/t/` 的
-//! seen/complete beacon 60 次/分钟（key=sha256(token) 前 16 hex，两端点共桶）、
-//! `GET /t/:token` 落地 30 次/分钟（SEC-7：view 事件随 GET 无界写，同指纹形态
-//! 独立桶）——AppState.limiter（services/rate_limit.rs），超限 `TooManyRequests` → 429。
+//! **限流（Task 6 r3 + SEC-7 + SEC-8）**：`/s/:code` 30 次/分钟（key=code，先于
+//! DB）、`/t/` 的 seen/complete beacon 60 次/分钟（两端点共桶）、`GET /t/:token`
+//! 落地 30 次/分钟（SEC-7：view 事件随 GET 无界写，独立桶）。SEC-8 起 `/t/` 系
+//! 桶 key = **plan 身份**（`user_id:plan_id`，验签后取）——token 指纹可经 /s/
+//! 铸链放大约 30×，plan 身份使同一 plan 无论换多少 token 共享预算。超限
+//! `TooManyRequests` → 429（带 Retry-After: 60）。
 //!
 //! **XSS 防线（存储型，本文件的安全核心）**：label 由 LLM 从老师消息生成、
 //! title/reason/content 来自 wiki——全部是不可信输入。`render_t_page` 对所有
@@ -567,22 +569,27 @@ async fn get_s_redirect(
     Ok(Redirect::to(&location))
 }
 
+/// SEC-8：/t/ 系限流桶 key = plan 身份（`user_id:plan_id`）。
+///
+/// 原 key=sha256(token) 指纹，但 plan_link token 无 jti、exp 秒级——持一个
+/// /s/ 短码者 30 token/min × 每 token 独立预算即可放大约 30×（view 无界写
+/// 从无界收敛到 900 行/min 仍可污染）。换 plan 身份后同一 plan 无论换多少
+/// token 共享预算，铸链失效。副作用可控：合法教师单 plan 的正常浏览/点击
+/// 频率远低于桶上限。
+fn plan_identity_key(user_id: i32, plan_id: i32) -> String {
+    format!("{user_id}:{plan_id}")
+}
+
 /// GET /t/:token — 验签 → 同事务 view 事件 + 数据装载 → 200 HTML。
 async fn get_t_page(
     State(state): State<AppState>,
     Path(token): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // SEC-7（终审强烈建议）：view 事件随 GET 无界写——持任一 plan_link 者循环
-    // GET 即可刷库膨胀 learning_events 并污染 view 统计。落地 30/min（key=token
-    // 指纹，独立桶）。先于验签/DB（与 beacon 限流同位——最廉价的 DoS 闸）。
-    if !state
-        .limiter
-        .t_page
-        .check(&crate::services::rate_limit::beacon_key(&token))
-    {
-        return Err(AppError::TooManyRequests);
-    }
+    // SEC-7：view 事件随 GET 无界写——落地 30/min 独立桶。
+    // SEC-8：桶 key 从 token 指纹改 plan 身份，检查移到验签后（拿 plan 身份
+    // 才能入桶）。DoS 面不劣化：验签是纯 CPU HMAC 无 DB，无效 token 一律
+    // 403 友好页，不触限流不碰 DB。
     let (user_id, plan_id) =
         match crate::utils::verify_plan_link_token(&token, state.config.jwt_secret()) {
             Ok(v) => v,
@@ -594,6 +601,9 @@ async fn get_t_page(
                 )
             }
         };
+    if !state.limiter.t_page.check(&plan_identity_key(user_id, plan_id)) {
+        return Err(AppError::TooManyRequests);
+    }
 
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
@@ -763,13 +773,14 @@ async fn post_seen(
     Path(token): Path<String>,
     body: Option<Json<SeenBody>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // 限流（Task 6 r3）：beacon 60 次/分钟，key=sha256(token) 前 16 hex
-    // （与 complete 共桶——一个 /t/ 会话的全部 beacon 共用预算）。先于验签/DB。
-    if !state.limiter.beacon.check(&crate::services::rate_limit::beacon_key(&token)) {
-        return Err(AppError::TooManyRequests);
-    }
+    // 限流：beacon 60 次/分钟（与 complete 共桶）。SEC-8：key 从 token 指纹改
+    // plan 身份（铸链放大同族——30 token/min × 独立 60 预算 ≈ 1800 写/min），
+    // 检查移到验签后（同 get_t_page；验签纯 CPU，DoS 面不劣化）。
     let (user_id, plan_id) =
         crate::utils::verify_plan_link_token(&token, state.config.jwt_secret())?;
+    if !state.limiter.beacon.check(&plan_identity_key(user_id, plan_id)) {
+        return Err(AppError::TooManyRequests);
+    }
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
     // 归属 + status 门禁（评审 #1）：归档 plan 不再接受任何 beacon（404）。
@@ -820,12 +831,12 @@ async fn post_complete(
     Path(token): Path<String>,
     Json(body): Json<CompleteBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // 限流（Task 6 r3）：与 seen 共桶（60 次/分钟，key=token 指纹）。
-    if !state.limiter.beacon.check(&crate::services::rate_limit::beacon_key(&token)) {
-        return Err(AppError::TooManyRequests);
-    }
+    // 限流：与 seen 共桶（60 次/分钟）。SEC-8：key 同改 plan 身份（验签后）。
     let (user_id, plan_id) =
         crate::utils::verify_plan_link_token(&token, state.config.jwt_secret())?;
+    if !state.limiter.beacon.check(&plan_identity_key(user_id, plan_id)) {
+        return Err(AppError::TooManyRequests);
+    }
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
     // 归属 + status 门禁（评审 #1，与 post_seen 一致）：归档 plan 拒收 complete。
@@ -1129,5 +1140,18 @@ mod tests {
         // 敌意 token（理论不可达：JWT 字符集受限）也不会破坏 JS 字符串字面量
         let hostile = beacon_js("x\";alert(1);//");
         assert!(hostile.contains(r#"var TOKEN = "x\";alert(1);//";"#), "serde_json escapes quotes");
+    }
+
+    /// SEC-8：桶 key = plan 身份。同 plan 不同 token 必须同 key（铸链失效的
+    /// 语义核心）；不同 plan 必须不同 key（预算不串门）。
+    #[test]
+    fn plan_identity_key_groups_by_plan_not_token() {
+        // 同一 (user, plan) 恒同 key——token 轮换不再产生新桶
+        assert_eq!(plan_identity_key(7, 42), plan_identity_key(7, 42));
+        // 不同 plan / 不同 user 各自独立
+        assert_ne!(plan_identity_key(7, 42), plan_identity_key(7, 43));
+        assert_ne!(plan_identity_key(7, 42), plan_identity_key(8, 42));
+        // 形态：`user:plan`，无 token 参与
+        assert_eq!(plan_identity_key(7, 42), "7:42");
     }
 }

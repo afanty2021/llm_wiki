@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from "react"
+import { useEffect, useCallback, useRef, useState } from "react"
 import { X } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile } from "@/commands/fs"
@@ -7,10 +7,12 @@ import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
 import { getFileName } from "@/lib/path-utils"
 import { createLogger } from "@/lib/logger"
+import { useTranslation } from "react-i18next"
 
 const logger = createLogger("preview")
 
 export function PreviewPanel() {
+  const { t } = useTranslation()
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const fileContent = useWikiStore((s) => s.fileContent)
   const previewContentPath = useWikiStore((s) => s.previewContentPath)
@@ -18,6 +20,9 @@ export function PreviewPanel() {
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const closePreview = useWikiStore((s) => s.closePreview)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // #6：PUT/建页失败此前只进 console，编辑器无感（web 下页面写回 DB 失败
+  // 若不提示，用户以为已保存）。持久错误条，下次成功保存清除。
+  const [saveError, setSaveError] = useState<string | null>(null)
   // Snapshot of what was most recently loaded from disk. Milkdown re-emits
   // `markdownUpdated` on initial parse (before the user types anything),
   // which used to trigger an auto-save that could write back a placeholder
@@ -63,9 +68,13 @@ export function PreviewPanel() {
     writeFile(path, markdown)
       .then(() => {
         lastLoadedRef.current = markdown
+        setSaveError(null)
         if (syncStore) setFileContent(markdown)
       })
-      .catch((err) => logger.error("Failed to save", { error: String(err) }))
+      .catch((err) => {
+        logger.error("Failed to save", { error: String(err) })
+        setSaveError(String(err instanceof Error ? err.message : err))
+      })
   }, [setFileContent])
 
   const handleSave = useCallback(
@@ -120,6 +129,18 @@ export function PreviewPanel() {
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+      {saveError && (
+        <div className="flex items-start justify-between gap-2 border-b bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <span className="min-w-0 break-all">{t("preview.saveFailed")}: {saveError}</span>
+          <button
+            onClick={() => setSaveError(null)}
+            className="shrink-0 rounded p-0.5 hover:bg-destructive/20"
+            aria-label={t("common.dismiss")}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       <div className="flex-1 min-w-0 overflow-auto">
         {externalPreview?.path === selectedFile ? (
           <ExternalReferencePreview

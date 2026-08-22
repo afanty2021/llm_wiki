@@ -12,6 +12,29 @@ export function resolveApiBase(envValue: string | undefined): string {
 }
 export const API_BASE = resolveApiBase(import.meta.env.VITE_API_BASE_URL)
 
+/** 类型化请求错误（#6/FS-1）：携带 HTTP status 与服务端 error.code
+ *  （error.rs 的 RESOURCE_NOT_FOUND/CONFLICT/…），供调用方做分支而非
+ *  解析 message 字符串。body 非 JSON（网关剥 body）时仅 status 可用。 */
+export class ApiRequestError extends Error {
+  readonly status: number
+  readonly code?: string
+
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.name = "ApiRequestError"
+    this.status = status
+    this.code = code
+  }
+
+  get isNotFound(): boolean {
+    return this.status === 404 || this.code === "RESOURCE_NOT_FOUND"
+  }
+
+  get isConflict(): boolean {
+    return this.status === 409 || this.code === "CONFLICT"
+  }
+}
+
 class ApiClient {
   private accessToken: string | null = null
   private refreshToken: string | null = null
@@ -82,8 +105,18 @@ class ApiClient {
     }
 
     if (!response.ok) {
-      const error: ApiError = await response.json()
-      throw new Error(error.error?.message || `HTTP ${response.status}`)
+      // #6/FS-1：类型化错误（status + error.code）——调用方可按 isNotFound/
+      // isConflict 分支；body 非 JSON（网关剥 body/裸 502）时退回 `HTTP <status>`。
+      let code: string | undefined
+      let message = `HTTP ${response.status}`
+      try {
+        const error = (await response.json()) as ApiError
+        code = error?.error?.code
+        message = error?.error?.message || message
+      } catch {
+        // 无 JSON body：保留裸 HTTP 状态形态
+      }
+      throw new ApiRequestError(message, response.status, code)
     }
 
     return response.json()
@@ -199,6 +232,15 @@ class ApiClient {
   async getPage(projectId: number, path: string): Promise<WikiPage> {
     const params = `?path=${encodeURIComponent(path)}`
     return this.request<WikiPage>("GET", `/api/v1/projects/${projectId}/page${params}`)
+  }
+
+  /** POST /projects/:id/pages —— 建页（#7：web 下新 .md 的页面语义写入；
+   *  冲突 409 由调用方处理）。不传 title——pages.rs denormalize 回落 frontmatter。 */
+  async createPage(
+    projectId: number,
+    body: { path: string; content?: string | null; frontmatter?: unknown },
+  ): Promise<WikiPage> {
+    return this.request<WikiPage>("POST", `/api/v1/projects/${projectId}/pages`, body)
   }
 
   /** PUT /projects/:id/page?path= —— 更新页面(If-Match 乐观锁,RFC3339 updated_at)。 */
