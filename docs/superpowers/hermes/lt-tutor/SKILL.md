@@ -68,6 +68,7 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 **输入** = 档案 `interests` / `goals` + 当次问题 + `llm_wiki_search` 候选。
 
 1. 挑 **3-5 项**，宁缺毋滥（凑不够 3 项就少几项并说明原因）。每项：`kind`=`"wiki_page"`（`target_ref` = 页相对路径）或 `"media"`（`target_ref` = 媒体 slug）；`label` 用老师能看懂的短标题；媒体片段可带 `timecode_start_s` / `timecode_end_s`（单位秒）。
+   **🔴 视频优先（硬规则）**：这是视频师训产品——清单**以 `media` 视频项为主体：视频项必须 ≥ 2 且占条目多数**；`wiki_page` 至多 1 项且仅作视频的延伸阅读。**严禁用概念页/文稿页凑数**（老师点开没视频可看=废单）。视频项的 `target_ref` 取 transcript 页 frontmatter 的 `media_slug` 字段（检索命中讲课后，读该讲 transcript 页拿 `media_slug` 作 `target_ref`、`kind="media"`）。找不到足够视频时宁少勿凑并说明。
 2. `teacher_tutor_plan_create`：`origin` 固定 `"chat"`；`title` 简短；`reason` 一句话说明推荐理由。会话场景**不传 `period_key`**（按周防重复是周报流程的事，由服务端自算当周，见流程 5；**不要自己推算周串**）。
 3. 回复**整单链接**（返回值 `link`）：老师点开即可查看清单、播放视频（含章节跳转）、阅读文稿、点"完成"。话术示例：`给你整理了一份学习清单（3 项），点链接就能开始：` 换行后**原样完整**粘贴 `{link}`（见 §1"链接原样转发"硬规则——严禁省略号/截断）。
 
@@ -86,7 +87,7 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 1. `teacher_tutor_profile_get`（带 userid）读档案，重点是 `interests` / `goals`。未建档（404）→ 不建清单，输出一句"该教师尚未完成入门问卷，本期暂无周报"即止。
 2. `teacher_tutor_progress` 取近 7 天提问主题（`recent_events` 中 ask 事件的 `question`）与各计划完成情况——**已完成或已看过的条目方向降权**，周报不重复推刚学过的内容。
 3. 以 `interests` + 近期提问主题为种子，`llm_wiki_search` 发 2-3 个不同措辞的查询取候选（做法同流程 2）。
-4. `teacher_tutor_plan_create`：`origin` 固定 `"weekly"`；**不传 `period_key`**——服务端自算当周并按 `(用户, weekly, 当周)` 幂等，**禁止自行推算 ISO 周串**（手算年界/周一起始极易错串）。若返回 400 且 message 含 `expected_period_key=<周串>`，用该周串**原样**作 `period_key` 重试一次，不要再改写。`items` 3-5 项，要求同流程 3。
+4. `teacher_tutor_plan_create`：`origin` 固定 `"weekly"`；**不传 `period_key`**——服务端自算当周并按 `(用户, weekly, 当周)` 幂等，**禁止自行推算 ISO 周串**（手算年界/周一起始极易错串）。若返回 400 且 message 含 `expected_period_key=<周串>`，用该周串**原样**作 `period_key` 重试一次，不要再改写。`items` 3-5 项，**要求同流程 3（含视频优先硬规则：`media` 视频项为主体、视频 ≥ 2 且占多数，`target_ref` 取 transcript 页 frontmatter 的 `media_slug`）**。
 5. **幂等**：同周周报清单已存在时，`plan_create` 会原样返回既有计划（其 `created_at` 早于本次可判别）——话术改口"本周清单已生成，链接如下"，附返回的 `link`（或 `plan_link` 取新链），**不要描述成新建**。
 6. 输出面向该教师的中文周报短文：几句本周学习小结（来自 progress：几份清单完成多少、最近在问什么）→ 本周新清单介绍（各项标题 + 一句话理由）→ **整单链接独占一行、原样完整转发**（§1"链接原样转发"硬规则同样适用）。
 
