@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
+import { caps } from "@/lib/capabilities"
 import { RefreshCw, Search, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useChatStore } from "@/stores/chat-store"
@@ -65,7 +66,9 @@ export function SkillsSection() {
   }, [agentMode, project?.path, retrievalMode, useAnyTxtSearch, useWebSearch])
 
   const scan = useCallback(async () => {
-    if (!project?.path) {
+    // web 门控（终审 round4 Minor）：agent_list_skills 是 Tauri-only command，
+    // web 下必然 reject 且报错文本直达 UI——技能面板在 web 本就不可用。
+    if (!project?.path || caps.platform === "web") {
       setSkills([])
       return
     }

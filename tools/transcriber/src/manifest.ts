@@ -225,7 +225,7 @@ export function parseManifest(json: unknown): ManifestEntry[] {
     assertRows(env.rows, "v2 rows");
     const baseDir = env.baseDir as Partial<ManifestBaseDir>;
     return (env.rows as ManifestEntrySlim[]).map(e => {
-      const root = baseDir[e.source];
+      const root = Object.hasOwn(baseDir, e.source) ? baseDir[e.source] : undefined; // 防原型键（constructor 等）
       return { ...e, absPath: root ? `${root}/${e.relPath}` : e.relPath };
     });
   }

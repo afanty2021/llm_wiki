@@ -518,6 +518,16 @@ async function applyAll(snapshotPages, decisions, groups, ctx, finalPath, finalT
       log(`  RENAME OK ${d.path} → ${target}`);
       await deletePage(d.path, fresh.updated_at);
       log(`  DELETE ${d.path}`);
+      // CLN-2（终审 round4）：-2 改投时同步预建映射——C pass 的 rewrite 读的是
+      // finalPath/finalTitle（main 预建），只回写 d.target 无人消费，原 target
+      // 已被并发异质页占用，不改映射则全库入链仍指向占用者。RESUME 分支目标
+      // 未变（内容一致续跑），无需处理。
+      if (finalPath.get(d.path) !== target) {
+        const plannedTarget = d.target; // 改写前留存（title 键挂在原计划目标上）
+        finalPath.set(d.path, target);
+        finalTitle.set(target, finalTitle.get(plannedTarget) ?? d.title ?? null);
+        finalTitle.delete(plannedTarget);
+      }
       d.target = target; // C pass（入链改写）按实际落地目标
     } catch (e) {
       applyFailed++;

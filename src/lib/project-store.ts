@@ -18,15 +18,24 @@ const LAST_PROJECT_KEY = "lastProject"
  * 行为零变化（caps 运行时判定，与 fs.ts 同法）。
  */
 function webStore() {
+  // 终审 round4 Minor：合法 JSON 标量（"null"/数组）会以 TypeError 逃出 JSON.parse
+  // 之后的 as 断言路径（后续 [key] 访问崩），改为显式校验非对象即空表；
   const read = (): Record<string, unknown> => {
     try {
-      return JSON.parse(localStorage.getItem(STORE_NAME) ?? "{}") as Record<string, unknown>
+      const parsed: unknown = JSON.parse(localStorage.getItem(STORE_NAME) ?? "{}")
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {}
     } catch {
       return {}
     }
   }
   const write = (map: Record<string, unknown>) => {
-    localStorage.setItem(STORE_NAME, JSON.stringify(map))
+    try {
+      localStorage.setItem(STORE_NAME, JSON.stringify(map))
+    } catch {
+      /* 配额满：静默丢弃本次持久化（读取侧回默认，与 plugin-store 容错同语义） */
+    }
   }
   return {
     async get<T>(key: string): Promise<T | undefined> {

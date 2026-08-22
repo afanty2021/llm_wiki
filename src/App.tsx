@@ -536,7 +536,9 @@ function App() {
       })
       // Bump data version so any cached graphs/views invalidate
       useWikiStore.getState().bumpDataVersion()
-      // web 无 app-state.json,跳过 last-project 持久化(桌面专属;web 每次走 team/project picker)。
+      // web 的 last-project 持久化经 project-store 的 localStorage 平替(终审 round4
+      // Minor:注释原写"无 app-state.json"已过时——1fb4c035 起有 KV 平替;但 web
+      // 入口本就走 team/project picker,不依赖 last-project,维持跳过)。
       if (caps.platform !== "web") {
         await saveLastProject(proj)
       }

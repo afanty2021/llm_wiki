@@ -6,7 +6,8 @@
 // 双 runner 兼容：根 vitest 4 会扫到 docs/**/*.test.mjs 但不收集 node:test 用例
 // （报 "No test suite found" 破坏 npm test），故在 vitest 环境（process.env.VITEST）
 // 下改 import vitest 的 test/describe；断言统一 node:assert/strict（两 runner 通用）。
-// 本文件零外部依赖、零网络/文件副作用。
+// 本文件零网络副作用；仅读 ../legacy-link-recovery.json 一个数据文件（LEGACY 挪出代码后
+// 测试自 JSON 读入，2026-08-22）。
 //
 // 四类核心用例（对应评审 W4 验收）：
 //  ① 碰撞：两组同译名 → 整组恒等 + 记录

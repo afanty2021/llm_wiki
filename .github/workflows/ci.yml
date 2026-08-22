@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 最小权限原则（终审 round4 Minor）：本 workflow 只需读代码，显式收窄默认 token
+permissions:
+  contents: read
+
 jobs:
   check:
     strategy:
