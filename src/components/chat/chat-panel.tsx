@@ -697,7 +697,9 @@ export function ChatPanel() {
 
   useEffect(() => {
     let cancelled = false
-    if (!project?.path) {
+    // web 门控：agent_list_skills 是 Tauri-only command，web 下必然 reject
+    // （无 catch 的未处理 promise 噪音）——技能面板在 web 本就不可用。
+    if (!project?.path || caps.platform === "web") {
       setAvailableSkills([])
       return
     }
@@ -780,6 +782,84 @@ export function ChatPanel() {
           caps.platform === "tauri" &&
           llmConfig.provider !== "claude-code" &&
           llmConfig.provider !== "codex-cli"
+
+        if (!useBackendAgent) {
+          // WEB-1（终审 round3 修正形态）：非 backend-agent 形态——web（全部
+          // provider）与桌面 CLI provider——走直接 streamChat 后早退。fork 时代
+          // 的统一发送链（cc361609:513）被上游 v0.6.10 agent 化重写整体吞掉
+          // （上游亦无 else 支路），本分支按 fork 语义重建：web 下 llm-client
+          // 首行分流 streamViaServer → src-server /chat/stream（服务器自建
+          // system prompt + team provider，不消费前端 llmConfig）；CLI provider
+          // 走 streamChat 内部子进程传输。无前端 retrieval（web fs 不可用——
+          // 与 fork 同口径，Sources chip 留空）。错误抛给外层 catch 统一收口。
+          const activeConvMessages = conversationMessages(convId)
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .slice(-maxHistoryMessages)
+          const priorMessages = sendOptions.suppressUserMessage
+            ? activeConvMessages
+            : activeConvMessages.slice(0, -1)
+          const userContent: string | ContentBlock[] = images.length > 0
+            ? [
+                { type: "text", text },
+                ...images.map((image) => ({
+                  type: "image" as const,
+                  mediaType: image.mediaType,
+                  dataBase64: image.dataBase64,
+                })),
+              ]
+            : text
+          const directMessages: LlmChatMessage[] = [
+            ...(sendOptions.historyOverride ?? chatMessagesToLLM(priorMessages)),
+            { role: "user", content: userContent },
+          ]
+          let accumulated = ""
+          let thinkingOpen = false
+          let streamError: Error | null = null
+          await streamChat(
+            llmConfig,
+            directMessages,
+            {
+              onToken: (token) => {
+                if (!isCurrentRun()) return
+                if (thinkingOpen) {
+                  thinkingOpen = false
+                  accumulated += "</think>"
+                  appendStreamToken("</think>")
+                }
+                accumulated += token
+                appendStreamToken(token)
+              },
+              onReasoningToken: (token) => {
+                if (!isCurrentRun()) return
+                if (!thinkingOpen) {
+                  thinkingOpen = true
+                  accumulated += "<think>"
+                  appendStreamToken("<think>")
+                }
+                accumulated += token
+                appendStreamToken(token)
+              },
+              onDone: () => {},
+              onError: (err) => {
+                streamError = err
+              },
+            },
+            controller.signal,
+          )
+          if (streamError) throw streamError
+          if (!isCurrentRun()) return
+          if (thinkingOpen) {
+            accumulated += "</think>"
+            appendStreamToken("</think>")
+          }
+          finalized = true
+          finalizeStreamForConversation(convId, accumulated, undefined)
+          setStreamingConversationId(null)
+          abortRef.current = null
+          activeRunSessionIdRef.current = null
+          activeRunIdRef.current = null
+          return
+        }
 
         if (useBackendAgent) {
           setAgentEvents([
