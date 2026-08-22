@@ -18,6 +18,12 @@ vi.mock("@/commands/fs", () => ({
   readFile: (...args: unknown[]) => mockReadFile(...args),
 }))
 
+// 本文件测桌面构建路径(listDirectory+逐页 readFile);vitest 非宿主环境下 caps 判
+// "web" 会改走服务端聚合分支,钉 tauri 保住原语义。
+vi.mock("@/lib/capabilities", () => ({
+  caps: { platform: "tauri" },
+}))
+
 async function loadBuildWikiGraph() {
   const mod = await import("../wiki-graph")
   return mod.buildWikiGraph

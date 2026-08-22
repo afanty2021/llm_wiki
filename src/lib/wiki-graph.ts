@@ -4,6 +4,8 @@ import { buildRetrievalGraph, calculateRelevance } from "./graph-relevance"
 import { normalizePath } from "@/lib/path-utils"
 import { parseFrontmatter } from "@/lib/frontmatter"
 import { detectCommunities } from "./wiki-graph-analysis"
+import { apiClient } from "@/lib/api-client"
+import { caps } from "@/lib/capabilities"
 
 export interface GraphNode {
   id: string
@@ -160,6 +162,15 @@ export async function buildWikiGraph(
   projectPath: string,
   dataVersion?: number,
 ): Promise<WikiGraphResult> {
+  // #2(web):src-server 项目的 wiki 页在 DB,桌面式 listDirectory+逐页 readFile 在
+  // web 上恒 miss(页面不在存储目录)。web 直接调服务端聚合端点 GET /api/v1/graph/{id}
+  // (服务端 Louvain + 四信号 relevance + 按 max(updated_at) 缓存)——一次请求替代
+  // 600+ 次文件读。失败/超时抛错,graph-view 落到 error 态显示重试按钮(不再无限
+  // spinner)。dataVersion 缓存语义与桌面分支一致(版本不变不重拉)。
+  if (caps.platform === "web") {
+    return buildWikiGraphFromServer(dataVersion)
+  }
+
   const normalizedProjectPath = normalizePath(projectPath)
   if (dataVersion !== undefined) {
     const cached = graphCache.get(normalizedProjectPath)
@@ -187,6 +198,65 @@ export async function buildWikiGraph(
         if (oldestProject) graphCache.delete(oldestProject)
       }
       graphCache.set(normalizedProjectPath, { dataVersion, result })
+    }
+  }
+  return result
+}
+
+const WEB_GRAPH_FETCH_TIMEOUT_MS = 30_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Graph fetch timed out")), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
+
+async function buildWikiGraphFromServer(dataVersion?: number): Promise<WikiGraphResult> {
+  const projectId =
+    typeof window !== "undefined" ? Number((window as unknown as { __currentProjectId?: number }).__currentProjectId ?? 0) : 0
+  const cacheKey = `web:${projectId}`
+  if (dataVersion !== undefined) {
+    const cached = graphCache.get(cacheKey)
+    if (cached?.dataVersion === dataVersion) return cached.result
+  }
+
+  const buildKey = `${cacheKey}\u0000${dataVersion ?? "uncached"}`
+  const pending = graphBuilds.get(buildKey)
+  if (pending) return pending
+  const build = (async () => {
+    const data = await withTimeout(apiClient.getGraph(projectId), WEB_GRAPH_FETCH_TIMEOUT_MS)
+    const result: WikiGraphResult = {
+      nodes: data.nodes,
+      edges: data.edges,
+      communities: data.communities,
+    }
+    return result
+  })()
+  graphBuilds.set(buildKey, build)
+  let result: WikiGraphResult
+  try {
+    result = await build
+  } finally {
+    graphBuilds.delete(buildKey)
+  }
+  if (dataVersion !== undefined) {
+    const cached = graphCache.get(cacheKey)
+    if (!cached || cached.dataVersion <= dataVersion) {
+      if (!cached && graphCache.size >= MAX_CACHED_PROJECT_GRAPHS) {
+        const oldestKey = graphCache.keys().next().value
+        if (oldestKey) graphCache.delete(oldestKey)
+      }
+      graphCache.set(cacheKey, { dataVersion, result })
     }
   }
   return result

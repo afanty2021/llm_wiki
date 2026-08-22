@@ -53,9 +53,11 @@ class ApiClient {
     path: string,
     body?: unknown,
     isRetry = false,
+    extraHeaders?: Record<string, string>,
   ): Promise<T> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      ...extraHeaders,
     }
 
     if (this.accessToken) {
@@ -72,7 +74,7 @@ class ApiClient {
     if (response.status === 401 && !isRetry && this.refreshToken) {
       try {
         await this.refreshAccessToken()
-        return this.request<T>(method, path, body, true)
+        return this.request<T>(method, path, body, true, extraHeaders)
       } catch {
         this.clearTokens()
         throw new Error("Session expired")
@@ -190,6 +192,30 @@ class ApiClient {
   async listPages(projectId: number, pageType?: string): Promise<WikiPage[]> {
     const params = pageType ? `?type=${encodeURIComponent(pageType)}` : ""
     return this.request<WikiPage[]>("GET", `/api/v1/projects/${projectId}/pages${params}`)
+  }
+
+  /** GET /projects/:id/page?path= —— 单页全文(含 content/frontmatter/updated_at)。
+   *  path 用 query 而非路径段,避免 %2F 二次 decode(与 pages.rs 路由设计一致)。 */
+  async getPage(projectId: number, path: string): Promise<WikiPage> {
+    const params = `?path=${encodeURIComponent(path)}`
+    return this.request<WikiPage>("GET", `/api/v1/projects/${projectId}/page${params}`)
+  }
+
+  /** PUT /projects/:id/page?path= —— 更新页面(If-Match 乐观锁,RFC3339 updated_at)。 */
+  async updatePage(
+    projectId: number,
+    path: string,
+    body: { path: string; title?: string | null; content?: string | null; frontmatter?: unknown },
+    ifMatch: string,
+  ): Promise<WikiPage> {
+    const params = `?path=${encodeURIComponent(path)}`
+    return this.request<WikiPage>(
+      "PUT",
+      `/api/v1/projects/${projectId}/page${params}`,
+      body,
+      false,
+      { "If-Match": ifMatch },
+    )
   }
 
   // === Files ===

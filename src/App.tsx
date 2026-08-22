@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useCallback, useState, useEffect, useReducer } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
 import { invoke } from "@tauri-apps/api/core"
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart"
@@ -51,6 +51,14 @@ function App() {
   const zoomLevel = useZoomStore((s) => s.level)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [loading, setLoading] = useState(true)
+  // #3(web):WelcomeScreen 的 Open/New Project 走 Tauri 目录选择器,web 上是死按钮。
+  // 清 __currentProjectId 让顶部 web 门控回到 ProjectPicker;改 window 属性不触发
+  // 渲染,此 reducer 仅作 re-render 触发器。
+  const [, bumpWebGate] = useReducer((x: number) => x + 1, 0)
+  const routeToWebPicker = useCallback(() => {
+    ;(window as any).__currentProjectId = undefined
+    bumpWebGate()
+  }, [])
 
   function isCurrentProject(proj: WikiProject): boolean {
     const current = useWikiStore.getState().project
@@ -655,6 +663,11 @@ function App() {
   }
 
   async function handleSelectRecent(proj: WikiProject) {
+    // web:recent 列表是桌面语义(本地路径),web 的项目入口是服务端 ProjectPicker
+    if (caps.platform === "web") {
+      routeToWebPicker()
+      return
+    }
     try {
       const validated = await openProject(proj.path)
       await handleProjectOpened(validated)
@@ -664,6 +677,11 @@ function App() {
   }
 
   async function handleOpenProject() {
+    // #3(web):web 无本地目录可选,项目由服务端管理——Open Project 回工作区选择器
+    if (caps.platform === "web") {
+      routeToWebPicker()
+      return
+    }
     const selected = await open({
       directory: true,
       multiple: false,
@@ -701,6 +719,11 @@ function App() {
     // so old data cannot leak in via any async render pass.
     const { resetProjectState } = await import("@/lib/reset-project-state")
     await resetProjectState()
+    // #3(web):清 __currentProjectId,渲染门控回到 ProjectPicker(web 的重进入口)。
+    // 桌面不受影响,继续走 WelcomeScreen。
+    if (caps.platform === "web") {
+      ;(window as any).__currentProjectId = undefined
+    }
     setProject(null)
     setFileTree([])
     setSelectedFile(null)
@@ -718,7 +741,15 @@ function App() {
     return (
       <>
         <WelcomeScreen
-          onCreateProject={() => setShowCreateDialog(true)}
+          // #3(web):New Project 对话框要本地路径(桌面语义),web 的建项入口在
+          // ProjectPicker(服务端建项目)——web 下两个按钮都回工作区选择器。
+          onCreateProject={() => {
+            if (caps.platform === "web") {
+              routeToWebPicker()
+              return
+            }
+            setShowCreateDialog(true)
+          }}
           onOpenProject={handleOpenProject}
           onSelectProject={handleSelectRecent}
         />

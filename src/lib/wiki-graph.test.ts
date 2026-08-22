@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { buildTitleIndex, resolveTarget } from "@/lib/wiki-graph"
 import { buildTitleIndex as buildTitleIndexRR, resolveTarget as resolveTargetRR } from "@/lib/graph-relevance"
 
@@ -96,5 +96,64 @@ describe("graph-relevance resolveTarget with title index", () => {
     expect(resolveTargetRR("Zoltan Dornyei", nodeIds, titleIndex)).toBe("zoltan-dornyei")
     expect(resolveTargetRR("重复", nodeIds, titleIndex)).toBeNull()
     expect(resolveTargetRR("dangling", nodeIds, titleIndex)).toBeNull()
+  })
+})
+
+describe("wiki-graph web 分支(服务端聚合端点,#2)", () => {
+  const serverGraph = {
+    nodes: [
+      { id: "entities/a.md", label: "A", type: "entity", path: "entities/a.md", linkCount: 2, community: 0 },
+      { id: "concepts/b.md", label: "B", type: "concept", path: "concepts/b.md", linkCount: 1, community: 0 },
+    ],
+    edges: [{ source: "entities/a.md", target: "concepts/b.md", weight: 3.5 }],
+    communities: [{ id: 0, nodeCount: 2, cohesion: 1, topNodes: ["A", "B"] }],
+  }
+
+  it("web 下走 getGraph 聚合端点,不触碰文件系统;dataVersion 缓存生效", async () => {
+    vi.resetModules()
+    const getGraph = vi.fn().mockResolvedValue(serverGraph)
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: { getGraph } }))
+    // node 测试环境无 window:垫 globalThis.window 使 fs/wiki-graph 的 web 读取生效
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as unknown as Record<string, unknown>).__currentProjectId = 7
+    try {
+      const { buildWikiGraph } = await import("@/lib/wiki-graph")
+      const result = await buildWikiGraph("/any/path", 1)
+      expect(getGraph).toHaveBeenCalledWith(7)
+      expect(result.nodes).toHaveLength(2)
+      expect(result.edges[0].weight).toBe(3.5)
+      expect(result.communities[0].topNodes).toEqual(["A", "B"])
+      // 同 dataVersion 命中缓存,不重拉
+      await buildWikiGraph("/any/path", 1)
+      expect(getGraph).toHaveBeenCalledTimes(1)
+      // 新 dataVersion 重拉
+      await buildWikiGraph("/any/path", 2)
+      expect(getGraph).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.doUnmock("@/lib/capabilities")
+      vi.doUnmock("@/lib/api-client")
+      delete (globalThis as unknown as Record<string, unknown>).__currentProjectId
+      delete (globalThis as Record<string, unknown>).window
+    }
+  })
+
+  it("web 下 getGraph 失败上抛(graph-view 落 error 态+重试,不无限 spinner)", async () => {
+    vi.resetModules()
+    const getGraph = vi.fn().mockRejectedValue(new Error("HTTP 500"))
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: { getGraph } }))
+    // node 测试环境无 window:垫 globalThis.window 使 fs/wiki-graph 的 web 读取生效
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as unknown as Record<string, unknown>).__currentProjectId = 7
+    try {
+      const { buildWikiGraph } = await import("@/lib/wiki-graph")
+      await expect(buildWikiGraph("/x", 1)).rejects.toThrow("HTTP 500")
+    } finally {
+      vi.doUnmock("@/lib/capabilities")
+      vi.doUnmock("@/lib/api-client")
+      delete (globalThis as unknown as Record<string, unknown>).__currentProjectId
+      delete (globalThis as Record<string, unknown>).window
+    }
   })
 })
