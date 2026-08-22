@@ -217,7 +217,7 @@ get_progress / record_ask
 新用户（pending）→ 问卷 3-4 问 → upsert_profile(surveyed) → 首个清单；答疑 = kb_search 多查询 + record_ask + read_page 时间戳定位 → 带引用回答；清单生成 = profile + 问题 + 图谱邻居 → create_plan → 整单链接；完成确认 = 对齐 list_plans → mark_complete。
 
 ### 5.3 推荐信号与周报
-冷启动问卷画像；行为累积 = ask 主题 + item 级 complete 内容（seen 弱信号）→ 回写 interests；图谱邻居；已完成/历史清单降权。周报周五 09:00 cron：逐人无头编排 → period_key 幂等 → 推送；逐人失败隔离；补跑语义已核实。
+冷启动问卷画像；行为累积 = ask 主题 + item 级 complete 内容（seen 弱信号）→ 回写 interests；图谱邻居；已完成/历史清单降权。周报周五 09:00 cron：逐人无头编排 → period_key 幂等 → 推送；逐人失败隔离；补跑双通道（M3 T9 实测锚定）= 停机错过的触发 gateway 起动后自动补跑单次（due 检查天然拾起过期 job，非累计队列；实测停机窗口盖过触发时刻，起后 5s 补跑）∪ 手动 fire 兜底（`weekly-report-register.sh fire`，与正式触发同走 gateway ticker + live 投递路径）。
 
 ### 5.4 安全收敛（配置项，M2 定型）
 企微频道经 `profile_routing` 路由到独立 profile（独立 HERMES_HOME），该 profile 只启用 MCP 工具 + 消息收发；验签依赖 gateway 现有三重校验，仅需 wecom 凭证保密。

@@ -2,6 +2,19 @@
 
 ## 📋变更记录 (Changelog)
 
+### 2026-08-22 - LT 师训系统 M3（身份会话级绑定 + overview + 周报 cron + 技术债收敛）
+- ✅ **身份会话级绑定（结构性根治 prompt 注入冒用）**：Hermes `_meta` 身份戳（tools/call 注入会话身份，agent 线程捕获 + strict 读取）+ mcp-server `resolveIdentity` 三态硬闸（用户模式/系统模式/两类硬拒 fail-closed，10 工具接闸，wecom_userid schema 放开可选）——三层 live 证实（meta 实弹/SKILL 4 拒/协议探针 S1-S3）
+- ✅ **GET /api/v1/training/overview**：管理总览（require_training_admin 常量时间比较、三预聚合子查询、items_7d 周报口径）+ weekly `period_key` 服务端自算（ISO 周收口，杜绝 LLM 手算；400 含 expected_period_key 改口重试）
+- ✅ **周五周报 cron**：SKILL 流程⑤（系统模式编排）+ per-teacher job（分钟 cksum(uid)%15 散列错峰 09:00-09:14，deliver wecom 单聊直推）+ `weekly-report-register.sh`（add/list/remove/fire）；幂等 live 三证；T9 实测 cron catch-up 单次补跑——补跑双通道语义回写 spec §5.3
+- ✅ **技术债两批（r3 收编）**：items cap/409 文案/归档事件闸/非对象不缓存/beacon+/s/ 限流 429/registration fail-closed/withinWindow 含端/healthSrc 降级链路/重试收窄/PUBLIC_T_BASE 必填/回滚原子化/teardown SWEEPS
+- 🔧 **T8 E2E 三热修**：SKILL 清单视频优先硬规则（39e42b69）/章节小数秒解析（0f7b542b）/read_file 404 改正常返回防 Hermes 熔断误伤（990eac2b）——安卓 OPPO PHJ110/Android 13 HEVC 原件直播成功（M4 转码退役依据）
+- ✅ **计划外：wiki 中文化批次**（止血→577 页翻译 v2/v3→2 页污染根因修复（关 thinking）→全量审计 LLM 保真 4.87/流利 4.92→标题收口（英文 title 25 全为品牌）→23 页非 slug 收编，图 650→633）+ 恢复工具/收编工具 105 测试
+- ✅ **计划外：upstream v0.6.10 试合并草稿**（merge-upstream-trial 05ac9031：40 冲突全解 + 8 处语义破损修复，三套测试绿，待正式合并）
+- ✅ **T9 重启演练**：自愈链 9/9（reboot→容器 47s→launchd 全起→隧道/omlx/iogpu→inbound 15.5s 回复）+ cron catch-up 实测（停机盖过触发→起后 5s 自动补跑）
+- 📄 **灰度 runbook**（`docs/superpowers/deploy/m3-gray-runbook.md`：3-5 教师加白/每日 5 分钟观察/一周退出判据/异常处置）
+- 🧪 src-server lib 254 + integration 107/107 · mcp 54/54 · transcriber 130 · E2E v3 live 全绿（冷启动/对抗三连/鉴权矩阵/周报三连 fire）
+- 📈 验收：`docs/superpowers/specs/m3-acceptance-2026-08-22.md`（计划外中文化与 upstream 试合并单列切割；偏差与遗留逐项披露）
+
 ### 2026-08-20 - LT 师训系统 M2（learning 域 + 企微通道 + 基础设施）
 - ✅ **服务端 learning 域**：migration 014（plans/items/events + period_key 部分唯一）、JWT typ 隔离（access/plan_link 互斥）、training API（profile/events/progress/plans/link/complete + 事件投影：单调守卫/幂等/归属 404）
 - ✅ **/t/ 教师落地页**：view 事件同事务、seen 双粒度 beacon（Option\<Json\> 空 body 兼容）、XSS 五字符转义先转义后 linkify、媒体签名 fingerprint 三段式（Rust/TS 双锁向量）、`playsinline` 三连（iOS 企微 WebView 必需）、**/s/ 短链**（303 现签跳转，根治 LLM 转发截断）
