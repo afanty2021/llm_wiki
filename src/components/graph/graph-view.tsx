@@ -1,21 +1,25 @@
-import { useEffect, useCallback, useMemo, useState, useRef, type ChangeEvent } from "react"
+import { useEffect, useCallback, useMemo, useState, useRef, type ChangeEvent, type SetStateAction } from "react"
 import Graph from "graphology"
 import { SigmaContainer, useLoadGraph, useRegisterEvents, useSetSettings, useSigma } from "@react-sigma/core"
 import "@react-sigma/core/lib/style.css"
+import type { NodeHoverDrawingFunction } from "sigma/rendering"
 import type { SigmaNodeEventPayload } from "sigma/types"
 import forceAtlas2 from "graphology-layout-forceatlas2"
 import { Network, RefreshCw, ZoomIn, ZoomOut, Maximize, Layers, Tag, Lightbulb, AlertTriangle, Link2, X, Search, Loader2, Filter, RotateCcw, EyeOff } from "lucide-react"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { useResearchStore } from "@/stores/research-store"
 import { Button } from "@/components/ui/button"
-import { useWikiStore } from "@/stores/wiki-store"
-import { readFile } from "@/commands/fs"
+import { useWikiStore, type GraphColorMode } from "@/stores/wiki-store"
+import { readFile, writeFile } from "@/commands/fs"
+import { WikiEditor } from "@/components/editor/wiki-editor"
+import { FilePreview } from "@/components/editor/file-preview"
 import { buildWikiGraph, type GraphNode, type GraphEdge, type CommunityInfo } from "@/lib/wiki-graph"
 import { findSurprisingConnections, detectKnowledgeGaps, type SurprisingConnection, type KnowledgeGap } from "@/lib/graph-insights"
 import { queueResearch } from "@/lib/deep-research"
 import { optimizeResearchTopic } from "@/lib/optimize-research-topic"
-import { normalizePath } from "@/lib/path-utils"
-import { applyGraphFilters, DEFAULT_GRAPH_FILTERS, hasActiveGraphFilters, type GraphFilterState } from "@/lib/graph-filters"
+import { getFileName, normalizePath } from "@/lib/path-utils"
+import { getFileCategory } from "@/lib/file-types"
+import { applyGraphFilters, hasActiveGraphFilters, type GraphFilterState } from "@/lib/graph-filters"
 import { applyGraphSearch } from "@/lib/graph-search"
 import { createLogger } from "@/lib/logger"
 
@@ -63,10 +67,13 @@ const COMMUNITY_COLORS = [
   "#fbbf24",  // amber-400
 ]
 
-type ColorMode = "type" | "community"
 type GraphThemePalette = {
   defaultEdge: string
   label: string
+  hoverLabelText: string
+  hoverLabelBackground: string
+  hoverLabelBorder: string
+  hoverLabelShadow: string
   mutedNodeMixTarget: string
   dimmedEdge: string
   activeEdge: string
@@ -74,18 +81,26 @@ type GraphThemePalette = {
 
 const BASE_NODE_SIZE = 8
 const MAX_NODE_SIZE = 28
-const DEFAULT_NODE_SCALE = 1
 const DEFAULT_GRAPH_SPACING = 1
 const GRAPH_SPACING_DEBOUNCE_MS = 180
 const WORKER_LAYOUT_NODE_THRESHOLD = 220
 
 type HoverState = { node: string; neighbors: Set<string> } | null
+type GraphPreview = {
+  path: string
+  title: string
+  content: string
+}
 
 function graphThemePalette(isDark: boolean): GraphThemePalette {
   return isDark
     ? {
         defaultEdge: "rgba(100,116,139,0.18)",
-        label: "#e2e8f0",
+        label: "#f8fafc",
+        hoverLabelText: "#f8fafc",
+        hoverLabelBackground: "rgba(15,23,42,0.94)",
+        hoverLabelBorder: "rgba(148,163,184,0.38)",
+        hoverLabelShadow: "rgba(2,6,23,0.55)",
         mutedNodeMixTarget: "#334155",
         dimmedEdge: "rgba(71,85,105,0.12)",
         activeEdge: "#38bdf8",
@@ -93,10 +108,84 @@ function graphThemePalette(isDark: boolean): GraphThemePalette {
     : {
         defaultEdge: "#cbd5e1",
         label: "#1e293b",
+        hoverLabelText: "#0f172a",
+        hoverLabelBackground: "rgba(255,255,255,0.97)",
+        hoverLabelBorder: "rgba(15,23,42,0.14)",
+        hoverLabelShadow: "rgba(15,23,42,0.18)",
         mutedNodeMixTarget: "#e2e8f0",
         dimmedEdge: "rgba(148,163,184,0.22)",
         activeEdge: "#1e293b",
       }
+}
+
+function drawRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const safeRadius = Math.min(radius, width / 2, height / 2)
+  context.beginPath()
+  context.moveTo(x + safeRadius, y)
+  context.lineTo(x + width - safeRadius, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius)
+  context.lineTo(x + width, y + height - safeRadius)
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height)
+  context.lineTo(x + safeRadius, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius)
+  context.lineTo(x, y + safeRadius)
+  context.quadraticCurveTo(x, y, x + safeRadius, y)
+  context.closePath()
+}
+
+function createGraphNodeHoverRenderer(palette: GraphThemePalette): NodeHoverDrawingFunction {
+  return (context, data, settings) => {
+    const label = typeof data.label === "string" ? data.label : ""
+    const labelSize = settings.labelSize
+    const font = settings.labelFont
+    const weight = settings.labelWeight
+    const nodeRadius = Math.max(data.size, labelSize / 2) + 3
+
+    context.save()
+    context.shadowOffsetX = 0
+    context.shadowOffsetY = 2
+    context.shadowBlur = 10
+    context.shadowColor = palette.hoverLabelShadow
+    context.fillStyle = palette.hoverLabelBackground
+    context.strokeStyle = palette.hoverLabelBorder
+    context.lineWidth = 1
+
+    context.beginPath()
+    context.arc(data.x, data.y, nodeRadius, 0, Math.PI * 2)
+    context.closePath()
+    context.fill()
+    context.stroke()
+
+    if (label) {
+      context.font = `${weight} ${labelSize}px ${font}`
+      const paddingX = 8
+      const paddingY = 4
+      const gap = 6
+      const textWidth = context.measureText(label).width
+      const boxWidth = Math.ceil(textWidth + paddingX * 2)
+      const boxHeight = Math.ceil(labelSize + paddingY * 2)
+      const boxX = data.x + nodeRadius + gap
+      const boxY = data.y - boxHeight / 2
+
+      drawRoundedRect(context, boxX, boxY, boxWidth, boxHeight, 5)
+      context.fill()
+      context.stroke()
+
+      context.shadowBlur = 0
+      context.shadowOffsetY = 0
+      context.fillStyle = palette.hoverLabelText
+      context.fillText(label, boxX + paddingX, data.y + labelSize / 3)
+    }
+
+    context.restore()
+  }
 }
 
 function useResolvedDarkMode(): boolean {
@@ -225,7 +314,7 @@ function GraphLoader({
 }: {
   nodes: GraphNode[]
   edges: GraphEdge[]
-  colorMode: ColorMode
+  colorMode: GraphColorMode
   nodeScale: number
   graphSpacing: number
 }) {
@@ -386,9 +475,11 @@ function GraphRenderSettings({
     setSettings({
       hideEdgesOnMove: true,
       hideLabelsOnMove: true,
+      labelColor: { color: palette.label },
       labelDensity: labelDensity(nodeCount),
       labelRenderedSizeThreshold: labelSizeThreshold(nodeCount),
       renderEdgeLabels: false,
+      defaultDrawNodeHover: createGraphNodeHoverRenderer(palette),
       nodeReducer: (node, attrs) => {
         const result = { ...attrs }
         const hasHover = !!hoverState
@@ -541,10 +632,9 @@ export function GraphView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
   const dataVersion = useWikiStore((s) => s.dataVersion)
-  const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
-  const setFileContent = useWikiStore((s) => s.setFileContent)
   const isDarkMode = useResolvedDarkMode()
   const graphPalette = useMemo(() => graphThemePalette(isDarkMode), [isDarkMode])
+  const drawNodeHover = useMemo(() => createGraphNodeHoverRenderer(graphPalette), [graphPalette])
 
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
@@ -554,7 +644,13 @@ export function GraphView() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hoveredType, setHoveredType] = useState<string | null>(null)
-  const [colorMode, setColorMode] = useState<ColorMode>("type")
+  const graphUiState = useWikiStore((s) => s.graphUiState)
+  const setGraphUiState = useWikiStore((s) => s.setGraphUiState)
+  const resetGraphUiState = useWikiStore((s) => s.resetGraphUiState)
+  const colorMode = graphUiState.colorMode
+  const filters = graphUiState.filters
+  const nodeScale = graphUiState.nodeScale
+  const graphSpacingDraft = graphUiState.graphSpacingDraft
   const [showInsights, setShowInsights] = useState(false)
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set())
   const [hoverState, setHoverState] = useState<HoverState>(null)
@@ -565,20 +661,33 @@ export function GraphView() {
   const [showFilters, setShowFilters] = useState(false)
   const [graphSearchOpen, setGraphSearchOpen] = useState(false)
   const [graphSearch, setGraphSearch] = useState("")
-  const [nodeScale, setNodeScale] = useState(DEFAULT_NODE_SCALE)
-  const [graphSpacingDraft, setGraphSpacingDraft] = useState(DEFAULT_GRAPH_SPACING)
-  const [graphSpacing, setGraphSpacing] = useState(DEFAULT_GRAPH_SPACING)
-  const [filters, setFilters] = useState<GraphFilterState>(() => ({
-    ...DEFAULT_GRAPH_FILTERS,
-    hiddenTypes: new Set(),
-    hiddenNodeIds: new Set(),
-  }))
+  const [graphSpacing, setGraphSpacing] = useState(graphSpacingDraft)
+  const [graphPreview, setGraphPreview] = useState<GraphPreview | null>(null)
   const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
   const graphContainerRef = useRef<HTMLDivElement>(null)
   const researchDialogTokenRef = useRef(0)
   // i18n node type labels (populated after mount to support language switching)
   const [nodeTypeLabels, setNodeTypeLabels] = useState<Record<string, string>>({})
   const graphSearchInputRef = useRef<HTMLInputElement>(null)
+
+  const setColorMode = useCallback((colorMode: GraphColorMode) => {
+    setGraphUiState((prev) => ({ ...prev, colorMode }))
+  }, [setGraphUiState])
+
+  const setFilters = useCallback((next: SetStateAction<GraphFilterState>) => {
+    setGraphUiState((prev) => ({
+      ...prev,
+      filters: typeof next === "function" ? next(prev.filters) : next,
+    }))
+  }, [setGraphUiState])
+
+  const setNodeScale = useCallback((nodeScale: number) => {
+    setGraphUiState((prev) => ({ ...prev, nodeScale }))
+  }, [setGraphUiState])
+
+  const setGraphSpacingDraft = useCallback((graphSpacingDraft: number) => {
+    setGraphUiState((prev) => ({ ...prev, graphSpacingDraft }))
+  }, [setGraphUiState])
 
   // Research confirmation dialog
   const [researchDialog, setResearchDialog] = useState<{
@@ -588,13 +697,19 @@ export function GraphView() {
     dismissKey?: string
   } | null>(null)
   const lastLoadedVersion = useRef(-1)
+  const graphLoadRequest = useRef(0)
 
   const loadGraph = useCallback(async () => {
     if (!project) return
+    const requestId = ++graphLoadRequest.current
     setLoading(true)
     setError(null)
     try {
-      const result = await buildWikiGraph(normalizePath(project.path))
+      const result = await buildWikiGraph(
+        normalizePath(project.path),
+        useWikiStore.getState().dataVersion,
+      )
+      if (requestId !== graphLoadRequest.current) return
       setNodes(result.nodes)
       setEdges(result.edges)
       setCommunities(result.communities)
@@ -602,10 +717,11 @@ export function GraphView() {
       setKnowledgeGaps(detectKnowledgeGaps(result.nodes, result.edges, result.communities))
       lastLoadedVersion.current = useWikiStore.getState().dataVersion
     } catch (err) {
+      if (requestId !== graphLoadRequest.current) return
       const message = err instanceof Error ? err.message : "Failed to build graph"
       setError(message)
     } finally {
-      setLoading(false)
+      if (requestId === graphLoadRequest.current) setLoading(false)
     }
   }, [project])
 
@@ -651,13 +767,16 @@ export function GraphView() {
       if (!node) return
       try {
         const content = await readFile(node.path)
-        setSelectedFile(node.path)
-        setFileContent(content)
+        setGraphPreview({
+          path: node.path,
+          title: node.label || getFileName(node.path),
+          content,
+        })
       } catch (err) {
         logger.error("Failed to open wiki page", { error: String(err) })
       }
     },
-    [nodes, setSelectedFile, setFileContent],
+    [nodes],
   )
 
   const handleNodeContextMenu = useCallback((nodeId: string, x: number, y: number) => {
@@ -674,16 +793,10 @@ export function GraphView() {
   }, [])
 
   const resetFilters = useCallback(() => {
-    setFilters({
-      ...DEFAULT_GRAPH_FILTERS,
-      hiddenTypes: new Set(),
-      hiddenNodeIds: new Set(),
-    })
-    setNodeScale(DEFAULT_NODE_SCALE)
-    setGraphSpacingDraft(DEFAULT_GRAPH_SPACING)
+    resetGraphUiState()
     setGraphSpacing(DEFAULT_GRAPH_SPACING)
     setNodeMenu(null)
-  }, [])
+  }, [resetGraphUiState])
 
   const knowledgeGapKey = useCallback((gap: KnowledgeGap) => (
     `gap:${gap.type}:${gap.title}:${gap.nodeIds.join(",")}`
@@ -757,10 +870,9 @@ export function GraphView() {
   // Sigma crashes with "could not find suitable program for node type circle"
   // when its canvas is resized by external layout changes.
 
-  // 1. Detect panel open/close (selectedFile, researchPanel, insights)
-  const selectedFileForLayout = useWikiStore((s) => s.selectedFile)
+  // 1. Detect panel open/close (local graph preview, researchPanel, insights)
   const researchPanelForLayout = useResearchStore((s) => s.panelOpen)
-  const layoutKey = `${!!selectedFileForLayout}-${researchPanelForLayout}-${showInsights}`
+  const layoutKey = `${!!graphPreview}-${researchPanelForLayout}-${showInsights}`
   const prevLayoutKey = useRef(layoutKey)
 
   useEffect(() => {
@@ -861,8 +973,8 @@ export function GraphView() {
   return (
     <div className="relative flex h-full flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between border-b px-4 py-2 shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 shrink-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <Network className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm font-medium">{t("graph.knowledgeGraph")}</span>
@@ -877,9 +989,9 @@ export function GraphView() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
           {graphSearchOpen || searchActive ? (
-            <div className="relative mr-1 w-52">
+            <div className="relative mr-1 w-52 max-w-full">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <input
                 ref={graphSearchInputRef}
@@ -938,7 +1050,7 @@ export function GraphView() {
               size="sm"
               onClick={resetFilters}
               className="text-xs gap-1 h-7"
-              title="Reset graph filters"
+              title={t("graph.resetFilters")}
             >
               <RotateCcw className="h-3 w-3" />
               {t("graph.reset")}
@@ -1016,6 +1128,7 @@ export function GraphView() {
                     labelSize: 13,
                     labelWeight: "bold",
                     labelColor: { color: graphPalette.label },
+                    defaultDrawNodeHover: drawNodeHover,
                     stagePadding: 30,
                   }}
                 >
@@ -1099,6 +1212,28 @@ export function GraphView() {
                 </div>
 
                 <div className="space-y-1.5">
+                  <div className="font-medium text-muted-foreground">{t("graph.minLinks")}</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      className="h-7 w-20 rounded border bg-background px-2 text-xs"
+                      value={filters.minLinks ?? ""}
+                      onChange={(e) => {
+                        const raw = e.target.value.trim()
+                        const value = Number(raw)
+                        setFilters((prev) => ({
+                          ...prev,
+                          minLinks: raw === "" || !Number.isFinite(value) ? undefined : Math.max(0, value),
+                        }))
+                      }}
+                      placeholder={t("graph.any")}
+                    />
+                    <span className="text-muted-foreground">{t("graph.minLinksHint")}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
                   <div className="font-medium text-muted-foreground">{t("graph.maxLinks")}</div>
                   <div className="flex items-center gap-2">
                     <input
@@ -1114,7 +1249,7 @@ export function GraphView() {
                           maxLinks: raw === "" || !Number.isFinite(value) ? undefined : Math.max(0, value),
                         }))
                       }}
-                      placeholder="Any"
+                      placeholder={t("graph.any")}
                     />
                     <span className="text-muted-foreground">{t("graph.maxLinksHint")}</span>
                   </div>
@@ -1257,7 +1392,7 @@ export function GraphView() {
                     size="sm"
                     className="h-6 text-[10px] px-1"
                     onClick={() => setFilters((prev) => ({ ...prev, hiddenTypes: new Set() }))}
-                    title="Show all types"
+                    title={t("graph.showAllTypes")}
                   >
                     {t("graph.showAll")}
                   </Button>
@@ -1267,7 +1402,7 @@ export function GraphView() {
                   size="sm"
                   className="h-6 w-6 p-0"
                   onClick={() => setLegendCollapsed(!legendCollapsed)}
-                  title={legendCollapsed ? "Expand legend" : "Collapse legend"}
+                  title={legendCollapsed ? t("graph.expandLegend") : t("graph.collapseLegend")}
                 >
                   {legendCollapsed ? "▶" : "▼"}
                 </Button>
@@ -1298,7 +1433,7 @@ export function GraphView() {
                                 return { ...prev, hiddenTypes: next }
                               })
                             }}
-                            title="Double-click to toggle visibility"
+                            title={t("graph.doubleClickToggle")}
                           >
                             <span
                               className="inline-block h-3 w-3 rounded-full shrink-0 shadow-sm"
@@ -1470,6 +1605,13 @@ export function GraphView() {
             </div>
           </div>
         )}
+        {graphPreview && (
+          <GraphPreviewPanel
+            preview={graphPreview}
+            onClose={() => setGraphPreview(null)}
+            onContentChange={(content) => setGraphPreview((prev) => prev ? { ...prev, content } : prev)}
+          />
+        )}
       </div>
 
       {/* Research Topic Confirmation Dialog */}
@@ -1560,6 +1702,85 @@ export function GraphView() {
         </div>
       )}
 
+    </div>
+  )
+}
+
+function GraphPreviewPanel({
+  preview,
+  onClose,
+  onContentChange,
+}: {
+  preview: GraphPreview
+  onClose: () => void
+  onContentChange: (content: string) => void
+}) {
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSavedRef = useRef(preview.content)
+  const category = getFileCategory(preview.path)
+
+  useEffect(() => {
+    lastSavedRef.current = preview.content
+  }, [preview.path, preview.content])
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
+  }, [])
+
+  const writeNow = useCallback((markdown: string) => {
+    writeFile(preview.path, markdown)
+      .then(() => {
+        lastSavedRef.current = markdown
+        onContentChange(markdown)
+      })
+      .catch((err) => console.error("Failed to save graph preview:", err))
+  }, [onContentChange, preview.path])
+
+  const handleSave = useCallback((markdown: string, options?: { immediate?: boolean }) => {
+    if (markdown === lastSavedRef.current) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    if (options?.immediate) {
+      onContentChange(markdown)
+      writeNow(markdown)
+      return
+    }
+    saveTimerRef.current = setTimeout(() => {
+      writeNow(markdown)
+    }, 1000)
+  }, [onContentChange, writeNow])
+
+  return (
+    <div className="flex w-[420px] min-w-[320px] max-w-[50vw] shrink-0 flex-col border-l bg-background">
+      <div className="flex items-center justify-between border-b px-3 py-1.5">
+        <span className="truncate text-xs text-muted-foreground" title={preview.path}>
+          {preview.title}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="min-w-0 flex-1 overflow-auto">
+        {category === "markdown" ? (
+          <WikiEditor
+            key={preview.path}
+            content={preview.content}
+            onSave={handleSave}
+            filePath={preview.path}
+          />
+        ) : (
+          <FilePreview
+            key={preview.path}
+            filePath={preview.path}
+            textContent={preview.content}
+          />
+        )}
+      </div>
     </div>
   )
 }

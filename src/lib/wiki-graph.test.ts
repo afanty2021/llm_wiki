@@ -39,10 +39,15 @@ describe("wiki-graph buildTitleIndex", () => {
 })
 
 describe("wiki-graph resolveTarget with title index", () => {
-  const nodeMap = new Map([
-    ["zoltan-dornyei", { id: "zoltan-dornyei" }],
-    ["academic-writing", { id: "academic-writing" }],
-    ["zh-note", { id: "zh-note" }],
+  // 上游 v0.6.10 重构：resolveTarget(raw, targetIndex, titleIndex?)——第二参从
+  // nodeMap 改为预构建别名索引 buildTargetIndex(nodeIds)（本测试内联构建同构）。
+  const nodeIds = ["zoltan-dornyei", "academic-writing", "zh-note"]
+  const targetIndex = new Map<string, string>([
+    ["zoltan-dornyei", "zoltan-dornyei"],
+    ["zoltan dornyei", "zoltan-dornyei"],
+    ["Zoltan Dornyei".toLowerCase(), "zoltan-dornyei"],
+    ["academic-writing", "academic-writing"],
+    ["zh-note", "zh-note"],
   ])
   const titleIndex = new Map([
     [norm("学术写作基础"), "academic-writing"],
@@ -50,28 +55,28 @@ describe("wiki-graph resolveTarget with title index", () => {
   ])
 
   it("resolves [[中文标题]] bare links via the title index", () => {
-    expect(resolveTarget("学术写作基础", nodeMap, titleIndex)).toBe("academic-writing")
+    expect(resolveTarget("学术写作基础", targetIndex, titleIndex)).toBe("academic-writing")
   })
 
   it("still resolves slug-form links with case/space tolerance first", () => {
-    expect(resolveTarget("Zoltan Dornyei", nodeMap, titleIndex)).toBe("zoltan-dornyei")
+    expect(resolveTarget("Zoltan Dornyei", targetIndex, titleIndex)).toBe("zoltan-dornyei")
   })
 
   it("prefers id match over title index on key overlap", () => {
     // "zh-note" 既是节点 id 又是某页 title 的归一化键 → id 优先
-    expect(resolveTarget("zh-note", nodeMap, titleIndex)).toBe("zh-note")
+    expect(resolveTarget("zh-note", targetIndex, titleIndex)).toBe("zh-note")
   })
 
   it("returns null for dangling links and collided titles", () => {
-    expect(resolveTarget("nonexistent", nodeMap, titleIndex)).toBeNull()
+    expect(resolveTarget("nonexistent", targetIndex, titleIndex)).toBeNull()
     const collided = new Map([[norm("同名页"), "x"]])
     // 碰撞组根本不进索引 → 查不到
-    expect(resolveTarget("同名页", nodeMap, collided)).toBe("x") // 索引有则能查
+    expect(resolveTarget("同名页", targetIndex, collided)).toBe("x") // 索引有则能查
     const emptyIdx = buildTitleIndex(new Map([
       ["x", { id: "x", label: "同名页" }],
       ["y", { id: "y", label: "同名页" }],
     ]))
-    expect(resolveTarget("同名页", nodeMap, emptyIdx)).toBeNull()
+    expect(resolveTarget("同名页", targetIndex, emptyIdx)).toBeNull()
   })
 })
 

@@ -33,8 +33,7 @@ interface ImageHit extends ImageRef {
 export function SearchView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
-  const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
-  const setFileContent = useWikiStore((s) => s.setFileContent)
+  const openFileInPreview = useWikiStore((s) => s.openFileInPreview)
   const setPendingScrollImageSrc = useWikiStore((s) => s.setPendingScrollImageSrc)
 
   const [query, setQuery] = useState("")
@@ -122,8 +121,7 @@ export function SearchView() {
   async function handleOpen(path: string) {
     try {
       const content = await readFile(path)
-      setSelectedFile(path)
-      setFileContent(content)
+      openFileInPreview(path, content)
     } catch (err) {
       logger.error("Failed to open search result", { error: String(err) })
     }
@@ -177,8 +175,7 @@ export function SearchView() {
     try {
       const content = await readFile(openPath)
       setPendingScrollImageSrc(scrollTarget)
-      setSelectedFile(openPath)
-      setFileContent(content)
+      openFileInPreview(openPath, content)
       setLightbox(null)
     } catch (err) {
       logger.error("Failed to jump to source", { error: String(err) })
@@ -198,8 +195,7 @@ export function SearchView() {
               if (isImeComposing(e)) return
               if (e.key === "Enter") doSearch(query)
             }}
-            placeholder={t("search.placeholder") + " (Enter to search)"}
-            autoFocus
+            placeholder={t("search.placeholderWithShortcut")}
             className="w-full rounded-md border bg-background py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
@@ -214,12 +210,12 @@ export function SearchView() {
        */}
       {searching ? (
         <div className="flex-1 p-4 text-center text-sm text-muted-foreground">
-          Searching...
+          {t("search.searching")}
         </div>
       ) : !hasSearched ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
           <Search className="h-8 w-8 text-muted-foreground/30" />
-          <p>Press Enter to search</p>
+          <p>{t("search.pressEnter")}</p>
         </div>
       ) : results.length === 0 ? (
         <div className="flex-1 p-4 text-center text-sm text-muted-foreground">
@@ -228,12 +224,12 @@ export function SearchView() {
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="shrink-0 px-3 pt-3 pb-1 text-xs text-muted-foreground">
-            {results.length} page{results.length !== 1 ? "s" : ""}
+            {t("search.pageCount", { count: results.length })}
             {imageHits.length > 0 && (
               <>
                 {" · "}
-                {matchingImages.length} image{matchingImages.length !== 1 ? "s" : ""} match
-                {supportingImages.length > 0 && ` · +${supportingImages.length} from matched pages`}
+                {t("search.imageMatchCount", { count: matchingImages.length })}
+                {supportingImages.length > 0 && ` · ${t("search.supportingImageCount", { count: supportingImages.length })}`}
               </>
             )}
           </div>
@@ -244,7 +240,7 @@ export function SearchView() {
               <div className="shrink-0 px-3 pt-1">
                 <SectionHeader
                   icon={<ImageIcon className="h-3.5 w-3.5" />}
-                  label="Images"
+                  label={t("search.images")}
                   count={visibleImages.length}
                   trailing={
                     supportingImages.length > 0 ? (
@@ -254,8 +250,8 @@ export function SearchView() {
                         className="text-[11px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
                       >
                         {showSupportingImages
-                          ? "Hide supporting"
-                          : `Show all (+${supportingImages.length})`}
+                          ? t("search.hideSupporting")
+                          : t("search.showAllSupporting", { count: supportingImages.length })}
                       </button>
                     ) : null
                   }
@@ -291,7 +287,7 @@ export function SearchView() {
           <div className="shrink-0 px-3 pt-1">
             <SectionHeader
               icon={<FileText className="h-3.5 w-3.5" />}
-              label="Pages"
+              label={t("search.pages")}
               count={results.length}
             />
           </div>
@@ -336,6 +332,7 @@ function Lightbox({
   onClose: () => void
   onJumpToSource: () => void
 }) {
+  const { t } = useTranslation()
   // Escape-to-close. Body-scroll-lock while open: a long search-
   // results list scrolling underneath the modal is disorienting.
   useEffect(() => {
@@ -372,16 +369,16 @@ function Lightbox({
             {hit.alt ? (
               <div className="line-clamp-3 text-sm leading-snug">{hit.alt}</div>
             ) : (
-              <div className="text-sm italic text-muted-foreground">No caption</div>
+              <div className="text-sm italic text-muted-foreground">{t("search.noCaption")}</div>
             )}
             <div className="mt-1 truncate text-[11px] text-muted-foreground">
-              From: {hit.sourceTitle}
+              {t("search.fromSource", { source: hit.sourceTitle })}
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t("common.close")}
             className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <X className="h-4 w-4" />
@@ -417,7 +414,7 @@ function Lightbox({
             className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
           >
             <ArrowUpRight className="h-3.5 w-3.5" />
-            Jump to source document
+            {t("search.jumpToSource")}
           </button>
         </div>
       </div>
@@ -457,6 +454,7 @@ function ImageHitCard({
   query: string
   onClick: () => void
 }) {
+  const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
   const projectPath = project?.path ?? null
   // Same resolver the markdown preview uses — handles absolute
@@ -514,7 +512,7 @@ function ImageHitCard({
             <HighlightedText text={hit.alt} query={query} />
           </div>
         ) : (
-          <div className="text-[11px] italic text-muted-foreground">No caption</div>
+          <div className="text-[11px] italic text-muted-foreground">{t("search.noCaption")}</div>
         )}
         <div className="mt-auto truncate text-[10px] text-muted-foreground">
           {hit.sourceTitle}

@@ -1,7 +1,7 @@
 import { useWikiStore } from "@/stores/wiki-store"
 import { enqueueIngest } from "./ingest-queue"
-import { listDirectory } from "@/commands/fs"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
+import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 
 const logger = createLogger("clip-watcher")
 import { createLogger } from "@/lib/logger"
@@ -32,12 +32,7 @@ export function startClipWatcher() {
 
         // Refresh file tree if clip is for current project
         if (project && clipProjectPath === project.path) {
-          try {
-            const tree = await listDirectory(project.path)
-            store.setFileTree(tree)
-          } catch {
-            // ignore
-          }
+          await refreshProjectFileTree(project.path, { projectId: project.id })
 
           // Enqueue (not auto-ingest directly) so the task lands in the
           // persisted queue, shows up in the activity panel, and survives

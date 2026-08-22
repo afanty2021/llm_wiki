@@ -26,11 +26,13 @@ import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
+import { useZoomStore } from "@/stores/zoom-store"
 import { loadSourceWatchConfig, saveLanguage, saveTheme, loadTheme } from "@/lib/project-store"
 import { applyTheme, type AppTheme } from "@/lib/theme"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { createLogger } from "@/lib/logger"
+import { setIngestWorkerLimit } from "@/lib/ingest-queue"
 import { LlmProviderSection } from "./sections/llm-provider-section"
 import { caps } from "@/lib/capabilities"
 
@@ -135,6 +137,7 @@ function initialDraft(
   uiLanguage: string,
   projectPath?: string,
   theme?: AppTheme,
+  zoomLevel?: number,
 ): SettingsDraft {
   // Show absolute path: if stored path is empty, show default using project path
   // If stored path is relative (legacy), prepend project path
@@ -166,6 +169,8 @@ function initialDraft(
     embeddingOutputDimensionality: embed.outputDimensionality,
     embeddingMaxChunkChars: embed.maxChunkChars,
     embeddingOverlapChunkChars: embed.overlapChunkChars,
+    embeddingConcurrency: embed.concurrency ?? 1,
+    embeddingBatchSize: embed.batchSize ?? 1,
     embeddingExtraHeaders: embed.extraHeaders ?? {},
     multimodalEnabled: multimodal.enabled,
     multimodalUseMainLlm: multimodal.useMainLlm,
@@ -183,21 +188,36 @@ function initialDraft(
     proxyEnabled: proxy.enabled,
     proxyUrl: proxy.url,
     proxyBypassLocal: proxy.bypassLocal,
+    proxyAcceptInvalidCerts: proxy.acceptInvalidCerts === true,
     scheduledImportEnabled: scheduledImport.enabled,
     scheduledImportPath: displayPath,
     scheduledImportInterval: scheduledImport.interval,
     sourceWatchConfig: normalizeSourceWatchConfig(sourceWatch),
     mineruEnabled: mineru.enabled,
+    mineruBackend: mineru.backend || "cloud",
+    mineruLocalEndpoint:
+      mineru.localEndpoint || "http://127.0.0.1:8000",
+    mineruLocalToken: mineru.localToken || "",
+    mineruLocalBackend: mineru.localBackend || "hybrid-engine",
+    mineruLocalEffort: mineru.localEffort || "medium",
+    mineruLocalParseMethod: mineru.localParseMethod || "auto",
+    mineruLocalLanguage: mineru.localLanguage || "ch",
+    mineruLocalFormulaEnabled: mineru.localFormulaEnabled !== false,
+    mineruLocalTableEnabled: mineru.localTableEnabled !== false,
+    mineruLocalImageAnalysis: mineru.localImageAnalysis !== false,
+    mineruLocalServerUrl: mineru.localServerUrl || "",
     mineruToken: mineru.token,
     mineruModelVersion: mineru.modelVersion,
     apiEnabled: apiConfig.enabled,
     apiAllowUnauthenticated: apiConfig.allowUnauthenticated,
+    apiAllowLanAccess: apiConfig.allowLanAccess,
     apiMcpEnabled: apiConfig.mcpEnabled,
     apiToken: apiConfig.token,
     autostart: generalConfig.autostart,
     closeBehavior: generalConfig.closeBehavior,
     uiLanguage,
     theme: theme ?? "system",
+    zoomLevel: zoomLevel ?? useZoomStore.getState().level,
   }
 }
 
@@ -274,11 +294,13 @@ export function SettingsView() {
       if (cancelled) return
       const normalized = normalizeSourceWatchConfig(config)
       setSourceWatchConfig(normalized)
+      setIngestWorkerLimit(normalized.ingestConcurrency)
       setDraftState((prev) => ({ ...prev, sourceWatchConfig: normalized }))
     }).catch(() => {
       if (cancelled) return
       const fallback = normalizeSourceWatchConfig()
       setSourceWatchConfig(fallback)
+      setIngestWorkerLimit(fallback.ingestConcurrency)
       setDraftState((prev) => ({ ...prev, sourceWatchConfig: fallback }))
     })
     return () => {
@@ -294,6 +316,8 @@ export function SettingsView() {
   // pick with the still-stale `i18n.language`. The next save would then
   // see draft.uiLanguage out of sync with i18n.language and silently
   // revert the UI to the previous language.
+  // Same applies to zoomLevel — preserve the user's pending value through
+  // the resync so mid-save store updates don't revert the input.
   useEffect(() => {
     setDraftState((prev) =>
       initialDraft(
@@ -311,6 +335,7 @@ export function SettingsView() {
         prev.uiLanguage,
         project?.path,
         prev.theme,
+        prev.zoomLevel,
       ),
     )
   }, [
@@ -359,6 +384,8 @@ export function SettingsView() {
       loadApiConfig,
       saveGeneralConfig,
       loadGeneralConfig,
+      saveZoomLevel,
+      loadZoomLevel,
     } = await import("@/lib/project-store")
 
     const newLlm = {
@@ -382,6 +409,8 @@ export function SettingsView() {
       outputDimensionality: draft.embeddingOutputDimensionality,
       maxChunkChars: draft.embeddingMaxChunkChars,
       overlapChunkChars: draft.embeddingOverlapChunkChars,
+      concurrency: Math.max(1, Math.min(32, Math.floor(draft.embeddingConcurrency || 1))),
+      batchSize: Math.max(1, Math.min(64, Math.floor(draft.embeddingBatchSize || 1))),
       extraHeaders: draft.embeddingExtraHeaders,
     }
     const newMultimodal = {
@@ -408,6 +437,7 @@ export function SettingsView() {
       enabled: draft.proxyEnabled,
       url: draft.proxyUrl.trim(),
       bypassLocal: draft.proxyBypassLocal,
+      acceptInvalidCerts: draft.proxyAcceptInvalidCerts,
     }
     const newSourceWatch = normalizeSourceWatchConfig(draft.sourceWatchConfig)
     const newScheduledImport = {
@@ -418,12 +448,24 @@ export function SettingsView() {
     }
     const newMineruConfig = {
       enabled: draft.mineruEnabled,
+      backend: draft.mineruBackend,
+      localEndpoint: draft.mineruLocalEndpoint.trim(),
+      localToken: draft.mineruLocalToken.trim(),
+      localBackend: draft.mineruLocalBackend,
+      localEffort: draft.mineruLocalEffort,
+      localParseMethod: draft.mineruLocalParseMethod,
+      localLanguage: draft.mineruLocalLanguage.trim(),
+      localFormulaEnabled: draft.mineruLocalFormulaEnabled,
+      localTableEnabled: draft.mineruLocalTableEnabled,
+      localImageAnalysis: draft.mineruLocalImageAnalysis,
+      localServerUrl: draft.mineruLocalServerUrl.trim(),
       token: draft.mineruToken.trim(),
       modelVersion: draft.mineruModelVersion,
     }
     const newApiConfig = {
       enabled: draft.apiEnabled,
       allowUnauthenticated: draft.apiAllowUnauthenticated,
+      allowLanAccess: draft.apiAllowLanAccess,
       mcpEnabled: draft.apiMcpEnabled,
       token: draft.apiToken.trim(),
     }
@@ -442,6 +484,7 @@ export function SettingsView() {
     setOutputLanguage(draft.outputLanguage as typeof outputLanguage)
     setProxyConfig(newProxy)
     setSourceWatchConfig(newSourceWatch)
+    setIngestWorkerLimit(newSourceWatch.ingestConcurrency)
     setScheduledImportConfig(newScheduledImport)
     setMaxHistoryMessages(draft.maxHistoryMessages)
     setMineruConfig(newMineruConfig)
@@ -477,23 +520,18 @@ export function SettingsView() {
 
       if (project) {
         await saveScheduledImportConfig(project.path, newScheduledImport)
-        const { startScheduledImport, stopScheduledImport } = await import("@/lib/scheduled-import")
-        if (
-          newScheduledImport.enabled &&
-          newScheduledImport.path &&
-          newScheduledImport.interval > 0
-        ) {
-          startScheduledImport(project, newScheduledImport)
-        } else {
-          stopScheduledImport()
-        }
+        const { startScheduledImport } = await import("@/lib/scheduled-import")
+        // Keep the cross-project scheduler alive even if the current
+        // project's own monitor was just disabled.
+        startScheduledImport(project, newScheduledImport)
       }
 
       await saveMineruConfig(newMineruConfig)
 
-      // The Rust side reads `apiConfig.{enabled,token,mcpEnabled}` from this
+      // The Rust side reads `apiConfig.{enabled,token,mcpEnabled,allowLanAccess}` from this
       // same `app-state.json` via a 5s cache, so saved changes propagate within
-      // that window without any IPC round-trip.
+      // that window without any IPC round-trip. Bind-address changes still
+      // require an app restart because the server sockets are already open.
       await saveApiConfig(newApiConfig)
       try {
         await invoke<string>("api_server_reload_config")
@@ -530,6 +568,10 @@ export function SettingsView() {
         applyTheme(draft.theme)
       }
 
+      // Apply zoom level
+      useZoomStore.getState().setLevel(draft.zoomLevel)
+      await saveZoomLevel(draft.zoomLevel)
+
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -549,6 +591,7 @@ export function SettingsView() {
           persistedMineru,
           persistedApi,
           persistedGeneral,
+          persistedZoom,
         ] = await Promise.allSettled([
           loadLlmConfig(),
           loadEmbeddingConfig(),
@@ -560,6 +603,7 @@ export function SettingsView() {
           loadMineruConfig(),
           loadApiConfig(),
           loadGeneralConfig(),
+          loadZoomLevel(),
         ] as const)
         setLlmConfig(resultValue(persistedLlm, null) ?? llmConfig)
         setEmbeddingConfig(resultValue(persistedEmbedding, null) ?? embeddingConfig)
@@ -572,6 +616,7 @@ export function SettingsView() {
         setMineruConfig(resultValue(persistedMineru, null) ?? mineruConfig)
         setApiConfig(resultValue(persistedApi, null) ?? apiConfig)
         setGeneralConfig(resultValue(persistedGeneral, generalConfig))
+        useZoomStore.getState().setLevel(resultValue(persistedZoom, useZoomStore.getState().level))
       } catch (reloadErr) {
         logger.warn("failed to reload persisted settings after save failure", { error: String(reloadErr) })
       }

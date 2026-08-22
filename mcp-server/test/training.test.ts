@@ -577,7 +577,7 @@ test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {
 
 // ── 形态注册过滤 ──
 
-test("src-server 形态：只注册 10 工具，6 个桌面工具不在 ListTools", () => {
+test("src-server 形态：只注册 10 工具，9 个桌面工具不在 ListTools", () => {
   const names = buildTools("src-server").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
     "llm_wiki_read_file",
@@ -596,16 +596,21 @@ test("src-server 形态：只注册 10 工具，6 个桌面工具不在 ListTool
     "llm_wiki_projects",
     "llm_wiki_files",
     "llm_wiki_reviews",
+    "llm_wiki_chat",
     "llm_wiki_graph",
     "llm_wiki_rescan_sources",
+    "llm_wiki_set_project",
+    "llm_wiki_embed_page",
   ]) {
     assert.ok(!names.includes(desktopOnly), `${desktopOnly} must not be registered in src-server form`)
   }
 })
 
-test("desktop 形态：保持 8 个桌面工具且无 teacher_tutor_*", () => {
+test("desktop 形态：11 个桌面工具（上游 v0.6.10 新增 set_project/chat/embed_page）且无 teacher_tutor_*", () => {
   const names = buildTools("desktop").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
+    "llm_wiki_chat",
+    "llm_wiki_embed_page",
     "llm_wiki_files",
     "llm_wiki_graph",
     "llm_wiki_projects",
@@ -613,6 +618,7 @@ test("desktop 形态：保持 8 个桌面工具且无 teacher_tutor_*", () => {
     "llm_wiki_rescan_sources",
     "llm_wiki_reviews",
     "llm_wiki_search",
+    "llm_wiki_set_project",
     "llm_wiki_status",
   ].sort())
   assert.ok(names.every((name) => !name.startsWith("teacher_tutor_")))

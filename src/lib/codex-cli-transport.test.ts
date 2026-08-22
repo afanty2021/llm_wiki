@@ -28,11 +28,19 @@ vi.mock("@tauri-apps/api/event", () => ({
 }))
 
 import { buildPrompt, parseCodexCliLine, streamCodexCli } from "./codex-cli-transport"
+import { useWikiStore } from "@/stores/wiki-store"
 
 beforeEach(() => {
   vi.clearAllMocks()
   tauriMocks.reset()
   tauriMocks.invoke.mockResolvedValue(undefined)
+  useWikiStore.setState({
+    project: {
+      id: "test-project",
+      name: "Test Project",
+      path: "/Users/me/default-wiki-project",
+    },
+  })
 })
 
 describe("parseCodexCliLine", () => {
@@ -291,6 +299,92 @@ describe("streamCodexCli", () => {
     expect(callbacks.onToken).toHaveBeenCalledWith("timeout-aware analysis")
     expect(callbacks.onDone).toHaveBeenCalledTimes(1)
     expect(callbacks.onError).not.toHaveBeenCalled()
+  })
+
+  it("passes the active project path as the Codex CLI working directory", async () => {
+    useWikiStore.setState({
+      project: {
+        id: "p1",
+        name: "Project One",
+        path: "/Users/me/wiki-project",
+      },
+    })
+    const callbacks = {
+      onToken: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+
+    const stream = streamCodexCli(
+      {
+        provider: "codex-cli",
+        apiKey: "",
+        model: "gpt-5.1-codex-mini",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 128000,
+      },
+      [{ role: "user", content: "Analyze this source." }],
+      callbacks,
+    )
+
+    await vi.waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith(
+        "codex_cli_spawn",
+        expect.objectContaining({ workingDirectory: "/Users/me/wiki-project" }),
+      )
+    })
+
+    const payload = tauriMocks.invoke.mock.calls[0]?.[1] as { streamId: string }
+    tauriMocks.emit(
+      `codex-cli:${payload.streamId}`,
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: "project-aware analysis" },
+      }),
+    )
+    tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+      code: 0,
+      stderr: "",
+      stdout: "",
+    })
+
+    await stream
+
+    expect(callbacks.onToken).toHaveBeenCalledWith("project-aware analysis")
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onError).not.toHaveBeenCalled()
+  })
+
+  it("surfaces a clear error when Codex CLI has no active project directory", async () => {
+    useWikiStore.setState({ project: null })
+    const callbacks = {
+      onToken: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+
+    await streamCodexCli(
+      {
+        provider: "codex-cli",
+        apiKey: "",
+        model: "gpt-5.1-codex-mini",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 128000,
+      },
+      [{ role: "user", content: "Analyze this source." }],
+      callbacks,
+    )
+
+    expect(tauriMocks.invoke).not.toHaveBeenCalled()
+    expect(callbacks.onToken).not.toHaveBeenCalled()
+    expect(callbacks.onDone).not.toHaveBeenCalled()
+    expect(callbacks.onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("active project"),
+      }),
+    )
   })
 
   it("does not replay done stdout when a live agent message was already emitted", async () => {

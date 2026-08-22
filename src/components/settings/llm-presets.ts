@@ -1,4 +1,4 @@
-import type { AzureModelFamily } from "@/stores/wiki-store"
+import type { AzureModelFamily, CustomLlmPreset } from "@/stores/wiki-store"
 
 /**
  * Curated LLM provider presets.
@@ -183,6 +183,35 @@ export const LLM_PRESETS: LlmPreset[] = [
       "deepseek-reasoner",
     ],
     suggestedContextSize: 64000,
+  },
+  {
+    id: "atlascloud",
+    label: "Atlas Cloud",
+    hint: "api.atlascloud.ai",
+    provider: "custom",
+    baseUrl: "https://api.atlascloud.ai/v1",
+    defaultModel: "deepseek-ai/deepseek-v4-pro",
+    apiMode: "chat_completions",
+    // Atlas Cloud is a full-modal inference platform exposing many model
+    // families (DeepSeek, Qwen, GLM, Kimi, MiniMax, Claude, GPT, Gemini…)
+    // behind a single OpenAI-compatible /v1/chat/completions endpoint, so
+    // it reuses the generic chat-completions wire like the other hosted
+    // gateways above. `deepseek-v4-pro` is a reasoning model — leave the
+    // context window generous. Full catalog is large and rotates; this is
+    // a practical subset and users can type any other id into the input.
+    suggestedModels: [
+      "deepseek-ai/deepseek-v4-pro",
+      "deepseek-ai/deepseek-v4-flash",
+      "deepseek-ai/deepseek-v3.2",
+      "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "moonshotai/kimi-k2.6",
+      "zai-org/glm-5",
+      "minimaxai/minimax-m2.7",
+      "anthropic/claude-sonnet-4.6",
+      "openai/gpt-5.5",
+      "google/gemini-3.5-flash",
+    ],
+    suggestedContextSize: 128000,
   },
   {
     id: "groq",
@@ -504,6 +533,23 @@ export const LLM_PRESETS: LlmPreset[] = [
     // No suggestedModels: user knows what their gateway exposes.
   },
 ]
+
+export function availableLlmPresets(customPresets: CustomLlmPreset[] = []): LlmPreset[] {
+  return [
+    ...LLM_PRESETS,
+    ...customPresets.map((preset) => ({
+      id: preset.id,
+      label: preset.label,
+      hint: "Custom OpenAI- or Anthropic-compatible endpoint",
+      provider: "custom" as const,
+      apiMode: "chat_completions" as const,
+    })),
+  ]
+}
+
+export function findLlmPreset(id: string, customPresets: CustomLlmPreset[] = []): LlmPreset | undefined {
+  return availableLlmPresets(customPresets).find((preset) => preset.id === id)
+}
 
 /**
  * Best-effort reverse lookup: given the current LlmConfig fields, which

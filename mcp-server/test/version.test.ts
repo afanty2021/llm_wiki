@@ -1,11 +1,27 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
-import { VERSION } from "../src/version.js"
+import { FALLBACK_VERSION, VERSION, loadMcpServerVersion } from "../src/version.js"
 
-test("VERSION is read from package.json (single source of truth, no drift)", () => {
-  // dist/test/ 与 dist/src/ 同层解析：../../package.json 都是 mcp-server/package.json
-  const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf-8")) as { version?: string }
-  assert.ok(pkg.version, "package.json must declare a version")
+const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+  version: string
+}
+
+test("MCP server version is read from package.json", () => {
   assert.equal(VERSION, pkg.version)
+})
+
+test("MCP server version supports source-layout execution", () => {
+  assert.equal(
+    loadMcpServerVersion(new URL("../../src/version.ts", import.meta.url).href),
+    pkg.version,
+  )
+})
+
+test("MCP server version falls back when package.json cannot be found", () => {
+  assert.equal(loadMcpServerVersion("file:///tmp/llm-wiki-missing/dist/src/version.js"), FALLBACK_VERSION)
+})
+
+test("MCP server version falls back for invalid meta URLs", () => {
+  assert.equal(loadMcpServerVersion("not a url"), FALLBACK_VERSION)
 })

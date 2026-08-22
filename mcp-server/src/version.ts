@@ -1,17 +1,25 @@
 import { readFileSync } from "node:fs"
 
-/**
- * 版本单一事实源：mcp-server/package.json（此前 index.ts 硬编码 "0.4.20" 已漂移至 0.4.23）。
- * 解析基准是编译产物位置：dist/src/version.js → ../../package.json 即 mcp-server/package.json
- * （bin/start 均从 dist 运行；测试 dist/test/*.test.js 同层解析，路径一致）。
- * 读取失败回落字面量——版本读取不应让 MCP server 启动崩溃（test/version.test.ts 锁对齐）。
- */
-export const VERSION = (() => {
-  try {
-    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf-8")) as { version?: string }
-    if (typeof pkg.version === "string" && pkg.version !== "") return pkg.version
-  } catch {
-    // 落到兜底字面量
+export const FALLBACK_VERSION = "0.0.0"
+
+export function loadMcpServerVersion(metaUrl: string = import.meta.url): string {
+  // These layouts are mutually exclusive: source/dev execution resolves via
+  // ../package.json, while compiled dist/src execution resolves via
+  // ../../package.json.
+  for (const relativePackageJson of ["../package.json", "../../package.json"]) {
+    try {
+      const candidate = new URL(relativePackageJson, metaUrl)
+      const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown }
+      if (typeof parsed.version === "string" && parsed.version.trim()) {
+        return parsed.version
+      }
+    } catch {
+      // Try the next layout.
+    }
   }
-  return "0.4.23"
-})()
+
+  process.stderr.write("[llm-wiki-mcp] package.json version not found; using fallback 0.0.0\n")
+  return FALLBACK_VERSION
+}
+
+export const VERSION = loadMcpServerVersion()

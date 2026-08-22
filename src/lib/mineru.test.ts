@@ -21,7 +21,7 @@ vi.mock("@/commands/fs", () => ({
   writeFileBase64: fsMocks.writeFileBase64,
 }))
 
-import { __mineruTest, parseWithMineru, testMineruConnection } from "./mineru"
+import { __mineruTest, parseWithMineru, parseWithMineruResult, testMineruConnection } from "./mineru"
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -193,6 +193,32 @@ describe("MinerU API helpers", () => {
     expect(markdown).toContain("![Remote](https://example.test/x.png)")
   })
 
+  it("returns SavedImage metadata for MinerU zip images", async () => {
+    mockHttpFetch.mockResolvedValueOnce(await zipResponse({
+      "full.md": "![Chart](images/chart.png)",
+      "images/chart.png": "chart-bytes",
+    }))
+
+    const result = await __mineruTest.downloadAndExtractMarkdownResult(
+      "https://cdn/result.zip",
+      undefined,
+      { projectPath: "/project", sourceSummarySlug: "paper" },
+    )
+
+    expect(result.markdown).toBe("![Chart](media/paper/mineru/images/chart.png)")
+    expect(result.savedImages).toHaveLength(1)
+    expect(result.savedImages[0]).toMatchObject({
+      index: 1,
+      mimeType: "image/png",
+      page: null,
+      width: 0,
+      height: 0,
+      relPath: "media/paper/mineru/images/chart.png",
+      absPath: "/project/wiki/media/paper/mineru/images/chart.png",
+    })
+    expect(result.savedImages[0].sha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
   it("rewrites Markdown image paths containing spaces", async () => {
     mockHttpFetch.mockResolvedValueOnce(await zipResponse({
       "full.md": "![Wide chart](images/wide chart.png)",
@@ -324,6 +350,189 @@ describe("MinerU API helpers", () => {
 })
 
 describe("parseWithMineru", () => {
+  it("submits a Windows-path PDF and pipeline mode to a custom local endpoint", async () => {
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({
+        task_id: "task/1",
+        status_url: "http://localhost:9000/custom/tasks/task%2F1",
+        result_url: "http://localhost:9000/custom/tasks/task%2F1/result",
+      }, { status: 202 }))
+      .mockResolvedValueOnce(jsonResponse({ status: "completed" }))
+      .mockResolvedValueOnce(jsonResponse({
+        results: { report: { md_content: "# Parsed locally" } },
+      }))
+
+    await expect(parseWithMineru({
+      enabled: true,
+      backend: "local",
+      localEndpoint: "http://localhost:9000/custom/",
+      localToken: "local-secret",
+      localBackend: "pipeline",
+      token: "",
+      modelVersion: "pipeline",
+    }, "C:\\documents\\report.pdf")).resolves.toBe("# Parsed locally")
+
+    const form = mockHttpFetch.mock.calls[0]?.[1]?.body as FormData
+    expect(form.get("files")).toBeInstanceOf(Blob)
+    expect(form.get("backend")).toBe("pipeline")
+    expect(form.get("return_md")).toBe("true")
+    expect(mockHttpFetch.mock.calls[0]?.[0]).toBe("http://localhost:9000/custom/tasks")
+    expect(mockHttpFetch.mock.calls[1]?.[0]).toContain("/tasks/task%2F1")
+    expect(mockHttpFetch.mock.calls[2]?.[0]).toContain("/tasks/task%2F1/result")
+    for (const call of mockHttpFetch.mock.calls) {
+      expect(call[1]?.headers).toEqual({ Authorization: "Bearer local-secret" })
+      expect(call[1]).toMatchObject({ redirect: "manual", maxRedirections: 0 })
+    }
+  })
+
+  it.each([
+    ["2.1.11", "hybrid-engine"],
+    ["3.1.15", "hybrid-auto-engine"],
+    ["3.4.4", "hybrid-engine"],
+  ])("submits the backend name supported by MinerU %s", async (version, expectedBackend) => {
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({ status: "healthy", version }))
+      .mockResolvedValueOnce(jsonResponse({ task_id: "task-1" }, { status: 202 }))
+      .mockResolvedValueOnce(jsonResponse({ status: "completed" }))
+      .mockResolvedValueOnce(jsonResponse({
+        results: { report: { md_content: "# Parsed locally" } },
+      }))
+
+    await expect(parseWithMineru({
+      enabled: true,
+      backend: "local",
+      localBackend: "hybrid-engine",
+      token: "",
+      modelVersion: "vlm",
+    }, "/tmp/report.pdf")).resolves.toBe("# Parsed locally")
+
+    const form = mockHttpFetch.mock.calls[1]?.[1]?.body as FormData
+    expect(form.get("backend")).toBe(expectedBackend)
+  })
+
+  it("rejects oversized local-backend files before reading or uploading", async () => {
+    fsMocks.getFileSize.mockResolvedValueOnce(__mineruTest.MAX_ACCURATE_PARSE_BYTES + 1)
+
+    await expect(parseWithMineru({
+      enabled: true,
+      backend: "local",
+      token: "",
+      modelVersion: "vlm",
+    }, "/tmp/large.pdf")).rejects.toThrow("200 MB")
+
+    expect(fsMocks.readFileAsBase64).not.toHaveBeenCalled()
+    expect(mockHttpFetch).not.toHaveBeenCalled()
+  })
+
+  it("rejects an empty local-backend result instead of caching it as success", async () => {
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({ status: "healthy", version: "3.1.15" }))
+      .mockResolvedValueOnce(jsonResponse({ task_id: "task-1" }, { status: 202 }))
+      .mockResolvedValueOnce(jsonResponse({ status: "completed" }))
+      .mockResolvedValueOnce(jsonResponse({ results: { doc: { md_content: "  " } } }))
+
+    await expect(parseWithMineru({
+      enabled: true,
+      backend: "local",
+      token: "",
+      modelVersion: "vlm",
+    }, "/tmp/doc.pdf")).rejects.toThrow("empty parsing result")
+  })
+
+  it("saves and rewrites images returned by the official local API", async () => {
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({ status: "healthy", version: "3.1.15" }))
+      .mockResolvedValueOnce(jsonResponse({ task_id: "task-1" }, { status: 202 }))
+      .mockResolvedValueOnce(jsonResponse({ status: "completed" }))
+      .mockResolvedValueOnce(jsonResponse({
+        results: {
+          doc: {
+            md_content: "![Chart](images/chart.png)",
+            images: { "chart.png": `data:image/png;base64,${btoa("image bytes")}` },
+          },
+        },
+      }))
+
+    const result = await parseWithMineruResult({
+      enabled: true,
+      backend: "local",
+      token: "",
+      modelVersion: "vlm",
+      localBackend: "hybrid-engine",
+    }, "/tmp/doc.pdf", undefined, undefined, undefined, {
+      projectPath: "/project",
+      sourceSummarySlug: "doc",
+    })
+
+    expect(result.markdown).toBe("![Chart](media/doc/mineru/images/image-1.png)")
+    expect(result.savedImages[0]?.relPath).toBe("media/doc/mineru/images/image-1.png")
+    expect(fsMocks.writeFileBase64).toHaveBeenCalledWith(
+      "/project/wiki/media/doc/mineru/images/image-1.png",
+      btoa("image bytes"),
+    )
+    const form = mockHttpFetch.mock.calls[1]?.[1]?.body as FormData
+    expect(form.get("return_images")).toBe("true")
+  })
+
+  it("uses the data URI MIME type when the MinerU filename extension disagrees", async () => {
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({ status: "healthy", version: "3.1.15" }))
+      .mockResolvedValueOnce(jsonResponse({ task_id: "task-1" }, { status: 202 }))
+      .mockResolvedValueOnce(jsonResponse({ status: "completed" }))
+      .mockResolvedValueOnce(jsonResponse({
+        results: {
+          doc: {
+            md_content: "![Chart](images/chart.jpg)",
+            images: { "chart.jpg": `data:image/png;base64,${btoa("png bytes")}` },
+          },
+        },
+      }))
+
+    const result = await parseWithMineruResult({
+      enabled: true,
+      backend: "local",
+      token: "",
+      modelVersion: "vlm",
+      localBackend: "hybrid-engine",
+    }, "/tmp/doc.pdf", undefined, undefined, undefined, {
+      projectPath: "/project",
+      sourceSummarySlug: "doc",
+    })
+
+    expect(result.markdown).toBe("![Chart](media/doc/mineru/images/image-1.png)")
+    expect(result.savedImages[0]?.mimeType).toBe("image/png")
+    expect(result.savedImages[0]?.relPath).toBe("media/doc/mineru/images/image-1.png")
+  })
+
+  it("requires a model server URL for official HTTP-client backends", async () => {
+    await expect(parseWithMineru({
+      enabled: true,
+      backend: "local",
+      token: "",
+      modelVersion: "vlm",
+      localBackend: "vlm-http-client",
+      localServerUrl: "",
+    }, "/tmp/doc.pdf")).rejects.toThrow("require a model server URL")
+
+    expect(mockHttpFetch).not.toHaveBeenCalled()
+  })
+
+  it("rejects malformed or credential-bearing local endpoints before upload", async () => {
+    await expect(parseWithMineru({
+      enabled: true,
+      backend: "local",
+      localEndpoint: "file:///tmp/mineru",
+      token: "",
+      modelVersion: "pipeline",
+    }, "/tmp/doc.pdf")).rejects.toThrow("HTTP(S)")
+
+    await expect(testMineruConnection("", {
+      backend: "local",
+      localEndpoint: "http://user:pass@localhost:8000",
+    })).rejects.toThrow("without credentials")
+    expect(mockHttpFetch).not.toHaveBeenCalled()
+  })
+
   it("rejects unsupported MinerU model versions before reading or uploading", async () => {
     await expect(parseWithMineru({
       enabled: true,
@@ -442,6 +651,42 @@ describe("parseWithMineru", () => {
       "/project/wiki/media/doc/mineru/images/chart.png",
       btoa("chart-bytes"),
     )
+  })
+
+  it("returns saved MinerU images from local parsing result", async () => {
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        msg: "ok",
+        data: { batch_id: "batch-1", file_urls: ["https://upload"] },
+      }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        msg: "ok",
+        data: {
+          batch_id: "batch-1",
+          extract_result: [{ file_name: "doc.pdf", state: "done", full_zip_url: "https://zip" }],
+        },
+      }))
+      .mockResolvedValueOnce(await zipResponse({
+        "full.md": "![Chart](images/chart.png)",
+        "images/chart.png": "chart-bytes",
+      }))
+
+    const result = await parseWithMineruResult({
+      enabled: true,
+      token: "token",
+      modelVersion: "vlm",
+    }, "/tmp/doc.pdf", undefined, undefined, undefined, {
+      projectPath: "/project",
+      sourceSummarySlug: "doc",
+    })
+
+    expect(result.markdown).toBe("![Chart](media/doc/mineru/images/chart.png)")
+    expect(result.savedImages.map((image) => image.relPath)).toEqual([
+      "media/doc/mineru/images/chart.png",
+    ])
   })
 
   it("submits URL tasks without reading or uploading a local file", async () => {
@@ -574,6 +819,31 @@ describe("parseWithMineru", () => {
 })
 
 describe("testMineruConnection", () => {
+  it("checks local health without requiring a cloud token", async () => {
+    mockHttpFetch.mockResolvedValueOnce(jsonResponse({ status: "healthy" }))
+
+    await expect(testMineruConnection("", {
+      backend: "local",
+      localToken: "health-secret",
+    })).resolves.toBeUndefined()
+    expect(mockHttpFetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/health",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer health-secret" },
+        redirect: "manual",
+        maxRedirections: 0,
+      }),
+    )
+  })
+
+  it("rejects a 200 response that is not a healthy official MinerU service", async () => {
+    mockHttpFetch.mockResolvedValueOnce(jsonResponse({ status: "unhealthy" }))
+
+    await expect(testMineruConnection("", { backend: "local" })).rejects.toThrow(
+      "invalid or unhealthy",
+    )
+  })
+
   it("resolves when MinerU accepts the connection test task", async () => {
     mockHttpFetch.mockResolvedValueOnce(jsonResponse({
       code: "0",

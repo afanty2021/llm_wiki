@@ -12,9 +12,11 @@ import {
   ApiNotFoundError,
   LlmWikiApiClient,
   resolveApiForm,
+  type ApiChatResponse,
   type ApiFileNode,
   type ApiForm,
   type ApiGraphNode,
+  type ApiProject,
   type ApiReviewItem,
   type ApiReviewsResponse,
 } from "./api-client.js"
@@ -38,19 +40,21 @@ import {
   type ToolDefinition,
 } from "./training.js"
 import { VERSION } from "./version.js"
+import { McpProjectBinding, withActiveProject } from "./project-binding.js"
 
 const DEFAULT_PROJECT_ID = "current"
 
 const apiForm = resolveApiForm(process.env)
 
 const client = new LlmWikiApiClient()
+const projectBinding = new McpProjectBinding()
 
 const server = new Server(
   { name: "llm-wiki", version: VERSION },
   { capabilities: { tools: {} } },
 )
 
-/** 桌面形态的 8 个工具（行为不变；src-server 形态下不注册后 6 个）。 */
+/** 桌面形态的 11 个工具（上游 v0.6.10 新增 set_project/chat/embed_page；src-server 形态下不注册）。 */
 function desktopToolDefinitions(): ToolDefinition[] {
   return [
     {
@@ -68,6 +72,18 @@ function desktopToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {},
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_set_project",
+      description: "Pin this MCP process session to one LLM Wiki project. Once pinned, project tools cannot access another project until this tool changes the binding.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Project UUID, exact filesystem path, or 'current'." },
+        },
+        required: ["project_id"],
         additionalProperties: false,
       },
     },
@@ -128,6 +144,31 @@ function desktopToolDefinitions(): ToolDefinition[] {
       },
     },
     {
+      name: "llm_wiki_chat",
+      description: "Ask the LLM Wiki backend Agent a question about a project. This initial backend Agent uses the desktop API's shared retrieval service and returns references.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+          message: { type: "string", description: "User message or question." },
+          session_id: { type: "string", description: "Optional caller-managed session id." },
+          mode: { type: "string", enum: ["fast", "standard", "deep", "local_first"], description: "Agent mode. Defaults to standard." },
+          top_k: { type: "number", description: "Maximum wiki references to retrieve. The API clamps to its configured maximum." },
+          include_content: { type: "boolean", description: "Include full page content in retrieval when supported by the API. Defaults to false." },
+          wiki: { type: "boolean", description: "Enable wiki retrieval. Defaults to true." },
+          web: { type: "boolean", description: "Enable backend web.search when the Agent router decides external search is useful. Defaults to false." },
+          anytxt: { type: "boolean", description: "Enable backend anytxt.search for source/local-file questions when AnyTXT is configured. Defaults to false." },
+          skills: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional project skills to inject from .llm-wiki/skills.",
+          },
+        },
+        required: ["message"],
+        additionalProperties: false,
+      },
+    },
+    {
       name: "llm_wiki_graph",
       description: "Query the project knowledge graph through the desktop app API.",
       inputSchema: {
@@ -152,14 +193,28 @@ function desktopToolDefinitions(): ToolDefinition[] {
         additionalProperties: false,
       },
     },
+    {
+      name: "llm_wiki_embed_page",
+      description: "Create or replace the vector index for one existing Markdown page under a project's wiki/ directory.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+          path: { type: "string", description: "Project-relative Markdown path, for example wiki/ideas/example.md." },
+          force: { type: "boolean", description: "Force rebuilding vectors even when the page content and embedding configuration are unchanged." },
+        },
+        required: ["path"],
+        additionalProperties: false,
+      },
+    },
   ]
 }
 
 /**
  * ListTools 工具集（按形态过滤）：
- * - desktop：8 个桌面工具（既有行为不变）
+ * - desktop：11 个桌面工具（上游 v0.6.10 起 + set_project/chat/embed_page）
  * - src-server：8 个 teacher_tutor_* + 重写的 llm_wiki_search / llm_wiki_read_file；
- *   其余 6 个桌面工具（status/projects/files/reviews/graph/rescan）不注册。
+ *   其余桌面工具（status/projects/set_project/files/reviews/chat/graph/rescan/embed）不注册。
  */
 export function buildTools(form: ApiForm = apiForm): ToolDefinition[] {
   if (form === "src-server") {
@@ -237,71 +292,115 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           client.health(),
           client.projects().catch(() => ({ projects: [], currentProject: null })),
         ])
-        return textResult(JSON.stringify({ ...health, ...projects }, null, 2))
+        return textResult(JSON.stringify({ ...health, ...projects, sessionProject: projectBinding.project }, null, 2))
       }
       case "llm_wiki_projects": {
         await assertMcpEnabled()
-        return textResult(JSON.stringify(await client.projects(), null, 2))
+        return textResult(JSON.stringify({ ...(await client.projects()), sessionProject: projectBinding.project }, null, 2))
+      }
+      case "llm_wiki_set_project": {
+        await assertMcpEnabled()
+        const requested = stringArg(args.project_id, "project_id")
+        const projects = await client.projects()
+        let pinned: ApiProject
+        try {
+          pinned = projectBinding.pin(requested, projects.projects, projects.currentProject)
+        } catch (error) {
+          throw new McpError(ErrorCode.InvalidParams, scopedErrorMessage(error))
+        }
+        return textResult(JSON.stringify({ activeProject: pinned, pinned: true }, null, 2))
       }
       case "llm_wiki_files": {
         await assertMcpEnabled()
-        const response = await client.files(projectId(args), {
+        const scope = await resolveProjectScope(args)
+        const response = await client.files(scope.id, {
           root: enumArg(args.root, ["wiki", "sources", "all"] as const, "wiki"),
           recursive: boolArg(args.recursive, true),
           maxFiles: numberArg(args.max_files),
         })
-        return textResult(formatFileTree(response.files, response.truncated))
+        return textResult(withActiveProject(formatFileTree(response.files, response.truncated), scope.project, scope.id))
       }
       case "llm_wiki_read_file": {
         await assertMcpEnabled()
         const relPath = stringArg(args.path, "path")
+        const scope = await resolveProjectScope(args)
         try {
-          const { path, content } = await client.fileContent(projectId(args), relPath)
-          return textResult(`# ${path}\n\n${truncateText(content, MAX_TEXT_BYTES)}`)
+          const { path, content } = await client.fileContent(scope.id, relPath)
+          return textResult(withActiveProject(`# ${path}\n\n${truncateText(content, MAX_TEXT_BYTES)}`, scope.project, scope.id))
         } catch (err) {
           // 404 = 应用级"未找到" → 正常返回（isError=false），不当服务故障计入客户端熔断器
           if (err instanceof ApiNotFoundError) {
-            return textResult(fileNotFoundText(relPath))
+            return textResult(withActiveProject(fileNotFoundText(relPath), scope.project, scope.id))
           }
           throw err
         }
       }
       case "llm_wiki_reviews": {
         await assertMcpEnabled()
-        const reviews = await client.reviews(projectId(args), {
+        const scope = await resolveProjectScope(args)
+        const reviews = await client.reviews(scope.id, {
           status: enumArg(args.status, ["unresolved", "resolved", "all"] as const, "unresolved"),
           type: optionalStringArg(args.type),
           limit: numberArg(args.limit),
         })
-        return textResult(formatReviews(reviews))
+        return textResult(withActiveProject(formatReviews(reviews), scope.project, scope.id))
       }
       case "llm_wiki_search": {
         await assertMcpEnabled()
         const query = stringArg(args.query, "query")
-        const search = await client.search(projectId(args), query, {
+        const scope = await resolveProjectScope(args)
+        const search = await client.search(scope.id, query, {
           topK: numberArg(args.top_k),
           includeContent: boolArg(args.include_content, false),
         })
-        return textResult(formatSearchResults(query, search))
+        return textResult(withActiveProject(formatSearchResults(query, search), scope.project, scope.id))
+      }
+      case "llm_wiki_chat": {
+        await assertMcpEnabled()
+        const message = stringArg(args.message, "message")
+        const scope = await resolveProjectScope(args)
+        const chat = await client.chat(scope.id, message, {
+          sessionId: optionalStringArg(args.session_id),
+          mode: enumArg(args.mode, ["fast", "standard", "deep", "local_first"] as const, "standard"),
+          topK: numberArg(args.top_k),
+          includeContent: boolArg(args.include_content, false),
+          wiki: boolArg(args.wiki, true),
+          web: boolArg(args.web, false),
+          anytxt: boolArg(args.anytxt, false),
+          skills: stringArrayArg(args.skills),
+          persistSession: optionalStringArg(args.session_id) !== undefined,
+        })
+        return textResult(withActiveProject(formatChatResponse(chat), scope.project, scope.id))
       }
       case "llm_wiki_graph": {
         await assertMcpEnabled()
-        const graph = await client.graph(projectId(args), {
+        const scope = await resolveProjectScope(args)
+        const graph = await client.graph(scope.id, {
           q: optionalStringArg(args.q),
           nodeType: optionalStringArg(args.node_type),
           limit: numberArg(args.limit),
         })
-        return textResult(formatGraph(graph.nodes, graph.edges))
+        return textResult(withActiveProject(formatGraph(graph.nodes, graph.edges), scope.project, scope.id))
       }
       case "llm_wiki_rescan_sources": {
         await assertMcpEnabled()
-        return textResult(JSON.stringify(await client.rescan(projectId(args)), null, 2))
+        const scope = await resolveProjectScope(args)
+        return textResult(withActiveProject(JSON.stringify(await client.rescan(scope.id), null, 2), scope.project, scope.id))
+      }
+      case "llm_wiki_embed_page": {
+        await assertMcpEnabled()
+        const path = stringArg(args.path, "path")
+        const scope = await resolveProjectScope(args)
+        const result = await client.embedPage(path, scope.id, boolArg(args.force, false))
+        return textResult(withActiveProject(JSON.stringify(result, null, 2), scope.project, scope.id))
       }
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`)
     }
   } catch (err) {
-    if (err instanceof McpError) throw err
+    if (err instanceof McpError) {
+      throw new McpError(err.code, scopedErrorMessage(err.message))
+    }
     if (err instanceof IdentityMismatchError || err instanceof IdentityUnavailableError) {
       // 身份硬拒：stderr 留痕（Step 4 对抗实测可查），错误原样回传客户端——不降级不重试
       console.error(`[identity] rejected tools/call ${request.params.name}: ${err.message}`)
@@ -315,7 +414,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     throw new McpError(
       ErrorCode.InternalError,
-      err instanceof Error ? err.message : String(err),
+      scopedErrorMessage(err),
     )
   }
 })
@@ -341,8 +440,26 @@ function asObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function projectId(args: Record<string, unknown>): string {
-  return optionalStringArg(args.project_id) ?? DEFAULT_PROJECT_ID
+async function resolveProjectScope(args: Record<string, unknown>): Promise<{ id: string; project: ApiProject | null }> {
+  let id: string
+  try {
+    id = projectBinding.resolve(optionalStringArg(args.project_id) ?? undefined)
+  } catch (error) {
+    throw new McpError(ErrorCode.InvalidParams, scopedErrorMessage(error))
+  }
+  if (projectBinding.project) return { id, project: projectBinding.project }
+  const projects = await client.projects()
+  const project = id === DEFAULT_PROJECT_ID
+    ? projects.currentProject
+    : projects.projects.find((candidate) => candidate.id === id || candidate.path === id) ?? null
+  return { id, project }
+}
+
+function scopedErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const project = projectBinding.project
+  if (!project || message.includes("[activeProject:")) return message
+  return `[activeProject: ${project.name} (${project.id})] ${message}`
 }
 
 function stringArg(value: unknown, name: string): string {
@@ -368,6 +485,11 @@ function enumArg<T extends string>(value: unknown, allowed: readonly T[], fallba
   return typeof value === "string" && allowed.includes(value as T) ? value as T : fallback
 }
 
+function stringArrayArg(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+}
+
 function formatFileTree(files: ApiFileNode[], truncated = false): string {
   if (files.length === 0) return "No files found."
   const lines: string[] = truncated
@@ -381,6 +503,43 @@ function formatFileTree(files: ApiFileNode[], truncated = false): string {
     }
   }
   walk(files, 0)
+  return lines.join("\n")
+}
+
+function formatChatResponse(chat: ApiChatResponse): string {
+  const lines = [
+    "# LLM Wiki Agent response",
+    "",
+    `Session: ${chat.sessionId || "(none)"}`,
+    chat.mode ? `Mode: ${chat.mode}` : null,
+    chat.projectId ? `Project: ${chat.projectId}` : null,
+    chat.usage
+      ? `Usage: promptChars=${chat.usage.promptChars ?? 0}, completionChars=${chat.usage.completionChars ?? 0}, references=${chat.usage.referenceCount ?? chat.references.length}`
+      : null,
+    "",
+    chat.message.content || "(empty response)",
+    "",
+  ].filter((line): line is string => line !== null)
+
+  if (chat.references.length > 0) {
+    lines.push("## References")
+    chat.references.forEach((reference, index) => {
+      lines.push(`${index + 1}. ${reference.title || reference.path}`)
+      lines.push(`   Kind: ${reference.kind}`)
+      lines.push(`   Path: ${reference.path}`)
+      if (typeof reference.score === "number") lines.push(`   Score: ${reference.score.toFixed(6)}`)
+      if (reference.snippet) lines.push(`   Snippet: ${reference.snippet}`)
+    })
+    lines.push("")
+  }
+
+  if (chat.toolEvents.length > 0) {
+    lines.push("## Tool events")
+    chat.toolEvents.forEach((event) => {
+      lines.push(`- ${event.tool}: ${event.status}${event.detail ? ` (${event.detail})` : ""}`)
+    })
+  }
+
   return lines.join("\n")
 }
 
