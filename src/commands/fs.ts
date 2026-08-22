@@ -5,9 +5,91 @@ import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
 import { isAbsolutePath } from "@/lib/path-utils"
 import { apiClient } from "@/lib/api-client"
 import { caps } from "@/lib/capabilities"
+import { parseFrontmatter } from "@/lib/frontmatter"
+import type { WikiPage } from "@/lib/api-types"
+import yaml from "js-yaml"
 
 // 运行时以 caps 为准(env 仅作构建期参考)。web 走 HTTP 降级,桌面直连 Tauri command。
 const USE_HTTP = caps.platform === "web"
+
+// ── #1(web):wiki 页面读写与 pages API 对齐 ──
+// src-server 摄取只写 wiki_pages 表、不落 storage 文件,files API 对 wiki 页恒 miss。
+// readFile 在 stat miss 且路径为 .md 时回落 pages API;writeFile 对已存在的页面
+// 走 PUT /page(If-Match 乐观锁),避免把编辑写进存储目录造成 DB/文件内容分叉。
+
+/** 页面 updated_at 缓存(readFile 回落时记录),供随后 writeFile 的 If-Match 复用。 */
+const pageUpdatedAt = new Map<string, string>()
+
+/** DB 页路径与消费方路径的双向变体:多数页无 wiki/ 前缀(entities/…),reserved 页带
+ *  (wiki/index.md)。知识树/图谱传 DB 原路径,桌面遗留消费方拼 wiki/ 前缀。 */
+function pagePathVariants(path: string): string[] {
+  const p = path.replace(/^\/+/, "")
+  const variants = [p]
+  if (p.startsWith("wiki/")) variants.push(p.slice("wiki/".length))
+  else variants.push(`wiki/${p}`)
+  return variants
+}
+
+async function fetchWikiPage(projectId: number, path: string): Promise<WikiPage | null> {
+  for (const variant of pagePathVariants(path)) {
+    try {
+      const page = await apiClient.getPage(projectId, variant)
+      pageUpdatedAt.set(`${projectId}:${page.path}`, page.updated_at)
+      return page
+    } catch {
+      // 404(或网络错)→ 试下一变体;全 miss 由调用方按 File not found 语义处理
+    }
+  }
+  return null
+}
+
+/** DB 行 → 桌面 .md 文本:content 是纯正文,frontmatter 存 JSON 列,重组 `---\nyaml\n---`。 */
+function pageToMarkdownText(page: WikiPage): string {
+  const body = page.content ?? ""
+  const fm = page.frontmatter
+  if (!fm || typeof fm !== "object" || Array.isArray(fm) || Object.keys(fm).length === 0) {
+    return body
+  }
+  return `---\n${yaml.dump(fm, { lineWidth: 120 })}---\n\n${body}`
+}
+
+/** 编辑器全文 → PUT body:拆出 frontmatter,余下为 content。 */
+function splitMarkdownContents(contents: string): {
+  content: string
+  frontmatter: Record<string, unknown> | undefined
+} {
+  const parsed = parseFrontmatter(contents)
+  if (!parsed.frontmatter) return { content: contents, frontmatter: undefined }
+  return { content: parsed.body, frontmatter: parsed.frontmatter }
+}
+
+/** 页面存在则 PUT 更新并返回 true;不存在(404)返回 false 由调用方落回 files API。 */
+async function writeWikiPageIfExists(
+  projectId: number,
+  path: string,
+  contents: string,
+): Promise<boolean> {
+  const page = await fetchWikiPage(projectId, path)
+  if (!page) return false
+  const { content, frontmatter } = splitMarkdownContents(contents)
+  const body = {
+    path: page.path,
+    title: page.title,
+    content,
+    frontmatter: frontmatter ?? {},
+  }
+  const ifMatch = pageUpdatedAt.get(`${projectId}:${page.path}`) ?? page.updated_at
+  try {
+    await apiClient.updatePage(projectId, page.path, body, ifMatch)
+  } catch (err) {
+    // 409 stale(读后被并发改):重取 updated_at 重试一次;再冲突则上抛
+    if (!/conflict|mismatch/i.test(String(err))) throw err
+    const fresh = await apiClient.getPage(projectId, page.path)
+    pageUpdatedAt.set(`${projectId}:${fresh.path}`, fresh.updated_at)
+    await apiClient.updatePage(projectId, page.path, body, fresh.updated_at)
+  }
+  return true
+}
 
 // 从 store 获取当前 project id
 function getCurrentProjectId(): number {
@@ -34,11 +116,18 @@ export async function readFile(
     // (loadChatHistory/loadLintItems/restoreQueue)首次加载无持久化文件,此守卫消除全新项目
     // 打开时的 read 404 噪声(桌面 invoke 缺失不记 HTTP error,web 需此对齐)。
     const stat = await apiClient.statFile(projectId, path)
-    if (!stat.exists) {
-      throw new Error("File not found")
+    if (stat.exists) {
+      const result = await apiClient.readFile(projectId, path)
+      return result.content
     }
-    const result = await apiClient.readFile(projectId, path)
-    return result.content
+    // #1(web):wiki 页本体在 DB(wiki_pages)不在存储目录——stat miss 且 .md 时
+    // 回落 pages API,重组 frontmatter+正文为桌面 .md 文本。知识树点页、图谱节点
+    // 点开、overview 读取都经此回落。
+    if (path.endsWith(".md")) {
+      const page = await fetchWikiPage(projectId, path)
+      if (page) return pageToMarkdownText(page)
+    }
+    throw new Error("File not found")
   }
   return invokeTraced<string>("read_file", {
     path,
@@ -49,6 +138,11 @@ export async function readFile(
 export async function writeFile(path: string, contents: string): Promise<void> {
   if (USE_HTTP) {
     const projectId = getCurrentProjectId()
+    // #1(web):已存在的 wiki 页写回 DB(PUT /page),防止落存储目录后读取走 files
+    // 分支、与 DB 页内容静默分叉。非页面(.json 等运行时文件/新文件)仍走 files API。
+    if (path.endsWith(".md") && (await writeWikiPageIfExists(projectId, path, contents))) {
+      return
+    }
     await apiClient.writeFile(projectId, path, contents)
     return
   }
