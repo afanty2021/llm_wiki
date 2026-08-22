@@ -1032,6 +1032,9 @@ async fn create_plan(
         // 新建：items 批次 + plan_created 事件（同事务）
         let mut items = Vec::with_capacity(req.items.len());
         for (i, it) in req.items.iter().enumerate() {
+            // 显式 try_from（遗留债）：items 数由请求方决定，越界 400 而非静默截断
+            let sort_order = i32::try_from(i)
+                .map_err(|_| AppError::BadRequest("too many items".into()))?;
             let item_id: i32 = sqlx::query_scalar(
                 "INSERT INTO learning_items \
                    (plan_id, kind, target_ref, timecode_start_s, timecode_end_s, label, sort_order) \
@@ -1043,7 +1046,7 @@ async fn create_plan(
             .bind(it.timecode_start_s)
             .bind(it.timecode_end_s)
             .bind(&it.label)
-            .bind(i as i32)
+            .bind(sort_order)
             .fetch_one(&mut *tx)
             .await?;
             items.push(ItemResponse {
@@ -1054,7 +1057,7 @@ async fn create_plan(
                 timecode_start_s: it.timecode_start_s,
                 timecode_end_s: it.timecode_end_s,
                 label: it.label.clone(),
-                sort_order: i as i32,
+                sort_order,
                 status: "pending".into(),
                 completed_at: None,
             });

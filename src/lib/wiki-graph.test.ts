@@ -42,13 +42,12 @@ describe("wiki-graph resolveTarget with title index", () => {
   // 上游 v0.6.10 重构：resolveTarget(raw, targetIndex, titleIndex?)——第二参从
   // nodeMap 改为预构建别名索引 buildTargetIndex(nodeIds)（本测试内联构建同构）。
   const nodeIds = ["zoltan-dornyei", "academic-writing", "zh-note"]
-  const targetIndex = new Map<string, string>([
-    ["zoltan-dornyei", "zoltan-dornyei"],
-    ["zoltan dornyei", "zoltan-dornyei"],
-    ["Zoltan Dornyei".toLowerCase(), "zoltan-dornyei"],
-    ["academic-writing", "academic-writing"],
-    ["zh-note", "zh-note"],
-  ])
+  const targetIndex = new Map<string, string>(
+    (nodeIds.map((id) => [id, id]) as [string, string][]).concat([
+      ["zoltan dornyei", "zoltan-dornyei"],
+      ["Zoltan Dornyei".toLowerCase(), "zoltan-dornyei"],
+    ]),
+  )
   const titleIndex = new Map([
     [norm("学术写作基础"), "academic-writing"],
     [norm("随记"), "zh-note"],

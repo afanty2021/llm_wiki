@@ -359,7 +359,7 @@ export function computeDecisions(pages, slugInfoByPath, { log = () => {} } = {})
  * 把正文中「解析到本次收编旧 path」的 [[...]] 改写为 [[新slug|现标题]]。
  * 其他链接一律原样（含悬空、指向 slug 页的——最小 diff）；fence 内不动（mask 保证）；
  * 已有 alias 保留（作者选择的显示文本），锚点保留（translate-core renderWikilink 同款）。
- * @param ctx        buildLinkCtx(当前页表, {}, []) —— 解析当前指向
+ * @param ctx        buildLinkCtx(当前页表, {}, [], LEGACY_LINK_RECOVERY) —— 解析当前指向
  * @param finalPath  Map<旧path, 存活path>（merge→孪生 path；rename→新 slug path）
  * @param finalTitle Map<存活path, 现标题>（rename 页沿用自身 title；merge 取孪生 title）
  * @returns {content, changes:[{from,to}]}

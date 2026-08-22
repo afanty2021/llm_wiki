@@ -30,6 +30,10 @@
         <string>__JWT_SECRET__</string>
         <key>MEDIA__SIGNING_KEY</key>
         <string>__MEDIA_SIGNING_KEY__</string>
+        <!-- SEC-2 许可根集（逗号分隔）：SIGNING_KEY 非空 + 此处为空 → 服务拒启动（fail-closed）。
+             须涵盖存量 media_ref/playback_path 的全部父目录（runbook §8 有枚举 SQL）。 -->
+        <key>MEDIA__ALLOWED_ROOTS</key>
+        <string>__MEDIA_ALLOWED_ROOTS__</string>
         <key>TRAINING__ADMIN_TOKEN</key>
         <string>__TRAINING_ADMIN_TOKEN__</string>
         <key>TRAINING__PROJECT_ID</key>

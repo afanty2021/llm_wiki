@@ -9,14 +9,16 @@
 //! 进程内（非 redis）：限流对象是单实例 src-server 的三个无鉴权端点，容量语义
 //! （爆表 → 429）不需要跨副本精确；重启清零可接受。
 //!
-//! [`PageRateLimits`] 把 t_page 的两档规格组合进一个 AppState 字段（`limiter`）：
+//! [`PageRateLimits`] 把 t_page 的三档规格组合进一个 AppState 字段（`limiter`）：
 //! - `short_link`：GET /s/:code，默认 30 次/分钟，key = code（短码即身份）；
 //! - `beacon`：POST /t/:token/seen 与 /complete，默认 60 次/分钟，key = sha256(token)
 //!   前 16 hex（与 /media fp 同法——JWT 前缀全同构，裸 token 前缀会让所有
 //!   token 共享一个桶；哈希前 16 hex 是本仓既定的 token 指纹形态）。seen 与
 //!   complete 同 key **共桶**：一个 /t/ 会话的全部 beacon 共用 60/min 预算。
-//! 两档规格经 config 注入（评审 R4：AppConfig.page_rate_limits，默认 30/60 与
-//! 旧硬编码一致，env `PAGE_RATE_LIMITS__S_PER_MIN`/`PAGE_RATE_LIMITS__BEACON_PER_MIN` 可覆盖）。
+//! - `t_page`：GET /t/:token，默认 30 次/分钟，key = token 指纹（同 beacon_key
+//!   形态、独立桶）——SEC-7：view 事件随 GET 无界写，闸在此处。
+//! 三档规格经 config 注入（评审 R4：AppConfig.page_rate_limits，默认 30/60/30，
+//! env `PAGE_RATE_LIMITS__S_PER_MIN`/`__BEACON_PER_MIN`/`__T_PER_MIN` 可覆盖）。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -76,28 +78,41 @@ pub const S_REDIRECT_CAP_PER_MIN: usize = 30;
 /// PAGE_RATE_LIMITS__BEACON_PER_MIN 可覆盖）。**默认值单一真源在此**：config.rs 的
 /// serde 缺省函数与 PageRateLimits::new 均引用本常量，改默认只改这里。
 pub const BEACON_CAP_PER_MIN: usize = 60;
+/// GET /t/:token 落地限流默认规格：30 次/分钟（key=sha256(token) 前 16 hex，与
+/// beacon 同指纹形态、独立桶）。SEC-7（终审强烈建议）：view 事件随 GET 无界写——
+/// 持任一 plan_link 者可刷库膨胀 learning_events 并污染 view 统计。30/min 对真人
+/// 足够宽裕（连续刷新/重开链接），超限 429 与 /s/ 同语义。env
+/// PAGE_RATE_LIMITS__T_PER_MIN 可覆盖。**默认值单一真源在此**（同上）。
+pub const T_VIEW_CAP_PER_MIN: usize = 30;
 
-/// t_page 三端点限流规格组合（AppState.limiter 持有，见模块注释）。
+/// t_page 端点限流规格组合（AppState.limiter 持有，见模块注释）。
 pub struct PageRateLimits {
     /// GET /s/:code（默认 30/min，key=code）
     pub short_link: FixedWindowLimiter,
     /// POST /t/:token/seen 与 /t/:token/complete（默认 60/min，key=token 指纹，共桶）
     pub beacon: FixedWindowLimiter,
+    /// GET /t/:token（默认 30/min，key=token 指纹，独立桶——view 事件写库闸门）
+    pub t_page: FixedWindowLimiter,
 }
 
 impl PageRateLimits {
     /// 按规格构造（lib.rs create_app 从 config 接线处调用）。
-    pub fn with_caps(s_per_min: usize, beacon_per_min: usize) -> Self {
+    pub fn with_caps(s_per_min: usize, beacon_per_min: usize, t_per_min: usize) -> Self {
         let minute = Duration::from_secs(60);
         Self {
             short_link: FixedWindowLimiter::new(s_per_min, minute),
             beacon: FixedWindowLimiter::new(beacon_per_min, minute),
+            t_page: FixedWindowLimiter::new(t_per_min, minute),
         }
     }
 
-    /// 默认规格（30/60 每分钟，与 config 缺省一致——规格件单测用）。
+    /// 默认规格（30/60/30 每分钟，与 config 缺省一致——规格件单测用）。
     pub fn new() -> Self {
-        Self::with_caps(S_REDIRECT_CAP_PER_MIN, BEACON_CAP_PER_MIN)
+        Self::with_caps(
+            S_REDIRECT_CAP_PER_MIN,
+            BEACON_CAP_PER_MIN,
+            T_VIEW_CAP_PER_MIN,
+        )
     }
 }
 
@@ -230,13 +245,27 @@ mod tests {
     #[test]
     fn page_rate_limits_with_caps_override() {
         // R4：规格经 config 注入——with_caps 生效即 config 覆盖生效（默认值路径
-        // 由 with_caps(S_REDIRECT_CAP_PER_MIN, BEACON_CAP_PER_MIN) 复用同一实现）
-        let limits = PageRateLimits::with_caps(1, 2);
+        // 由 with_caps(三常量) 复用同一实现）
+        let limits = PageRateLimits::with_caps(1, 2, 3);
         assert!(limits.short_link.check("c"));
         assert!(!limits.short_link.check("c"), "cap=1 → 第 2 次拒绝");
         assert!(limits.beacon.check("f1"));
         assert!(limits.beacon.check("f1"), "beacon cap=2 内放行");
         assert!(!limits.beacon.check("f1"), "beacon 第 3 次拒绝");
+        assert!(limits.t_page.check("f1"));
+        assert!(limits.t_page.check("f1"));
+        assert!(limits.t_page.check("f1"), "t_page cap=3 内放行");
+        assert!(!limits.t_page.check("f1"), "t_page 第 4 次拒绝");
+    }
+
+    /// SEC-7：t_page 桶与 beacon 桶独立——GET 落地打满不影响 beacon 上报，
+    /// 反之亦然（共指纹形态不共预算）。
+    #[test]
+    fn t_page_bucket_independent_of_beacon() {
+        let limits = PageRateLimits::with_caps(30, 1, 1);
+        assert!(limits.t_page.check("f1"));
+        assert!(!limits.t_page.check("f1"), "t_page cap=1 已打满");
+        assert!(limits.beacon.check("f1"), "beacon 桶不受 t_page 消耗影响");
     }
 
     #[test]

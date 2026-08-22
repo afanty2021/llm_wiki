@@ -4,12 +4,61 @@ import type { ApiConfig, CustomLlmPreset, GeneralConfig, LlmConfig, SearchApiCon
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 import { DEFAULT_ZOOM_LEVEL, clampZoomLevel } from "@/stores/zoom-store"
+import { caps } from "@/lib/capabilities"
 
 const STORE_NAME = "app-state.json"
 const RECENT_PROJECTS_KEY = "recentProjects"
 const LAST_PROJECT_KEY = "lastProject"
 
+/**
+ * web 形态的 plugin-store 平替（Layer-5 缺口，2026-08-22 实测补齐）：localStorage
+ * 单键 JSON 承载同款 KV 语义（get/set/delete/save）。此前 web 下 boot 直接调
+ * Tauri invoke → `window.__TAURI_INTERNALS__` undefined 崩在 App init effect
+ * （loadZoomLevel 起）——8080 同源部署的 SPA 从未真正起过主界面。桌面路径
+ * 行为零变化（caps 运行时判定，与 fs.ts 同法）。
+ */
+function webStore() {
+  // 终审 round4 Minor：合法 JSON 标量（"null"/数组）会以 TypeError 逃出 JSON.parse
+  // 之后的 as 断言路径（后续 [key] 访问崩），改为显式校验非对象即空表；
+  const read = (): Record<string, unknown> => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(STORE_NAME) ?? "{}")
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {}
+    } catch {
+      return {}
+    }
+  }
+  const write = (map: Record<string, unknown>) => {
+    try {
+      localStorage.setItem(STORE_NAME, JSON.stringify(map))
+    } catch {
+      /* 配额满：静默丢弃本次持久化（读取侧回默认，与 plugin-store 容错同语义） */
+    }
+  }
+  return {
+    async get<T>(key: string): Promise<T | undefined> {
+      return read()[key] as T | undefined
+    },
+    async set(key: string, value: unknown): Promise<void> {
+      const map = read()
+      map[key] = value
+      write(map)
+    },
+    async delete(key: string): Promise<void> {
+      const map = read()
+      delete map[key]
+      write(map)
+    },
+    async save(): Promise<void> {
+      /* localStorage 即写即持久，save 为 no-op（对齐 autoSave 语义） */
+    },
+  }
+}
+
 async function getStore() {
+  if (caps.platform === "web") return webStore()
   return load(STORE_NAME, { autoSave: true, defaults: {} })
 }
 

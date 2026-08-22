@@ -1006,3 +1006,28 @@ async fn s_short_link_redirect_matrix() {
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
+
+/// SEC-7（终审强烈建议）：GET /t/:token 落地限流——同 token 超过 t_per_min → 429。
+/// 限流先于验签（与 beacon 同位）：无效 token 也计数打满自己的桶（key=token 指纹，
+/// 无 DB 依赖即可验证闸门）；view 事件随 GET 无界写由此收口。
+#[tokio::test]
+async fn t_page_view_rate_limited_429() {
+    crate::ensure_test_jwt_secret();
+    let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
+    cfg.page_rate_limits.t_per_min = 2;
+    let (app, _state) = llm_wiki_server::create_app(cfg).await.unwrap();
+    let server = TestServer::new(app).unwrap();
+
+    let tok = "not-a-real-plan-link-token";
+    // 前 2 次：进 handler（无效 token → 403 友好页，非限流响应）
+    for i in 0..2 {
+        let r = server.get(&format!("/t/{tok}")).await;
+        assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "within cap #{i}");
+    }
+    // 第 3 次：429（red：修复前仍 403——无闸门，view 可无界刷库）
+    let r = server.get(&format!("/t/{tok}")).await;
+    assert_eq!(r.status_code(), StatusCode::TOO_MANY_REQUESTS, "over cap must 429");
+    // 其他 token 不受影响（key=指纹非全局桶）
+    let r = server.get("/t/another-distinct-token").await;
+    assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "other token unaffected");
+}

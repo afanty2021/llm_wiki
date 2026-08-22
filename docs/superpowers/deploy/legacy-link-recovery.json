@@ -1,0 +1,11 @@
+{
+  "_doc": "历史遗留恢复映射（2026-08-22 自 translate-core.mjs 挪出代码，遗留债 M4 前置项）。前任运行（已 kill）把已完成页链接目标改写为【译后中文标题】，其中指向 I4 碰撞组的中文值随恒等化从 titleMap 丢失（collisions 记录亦被后续运行覆盖）。pairs 由首发备份 translate-backup-20260821.jsonl 与当前内容按序配对回溯得到（2026-08-21 核实，共 6 对），仅用于反查链兜底：键=中文标题，值=英文标题。消费方 translate-wiki-pages.mjs 读此文件注入 lib.buildLinkCtx（lib 保持零 fs 约束）。",
+  "pairs": {
+    "IELTS阅读": "IELTS Reading",
+    "KWL图表": "KWL Chart",
+    "合作学习": "Cooperative Learning",
+    "听力微技能": "Listening Sub-skills",
+    "学生档案袋": "Student Portfolio",
+    "教师语言支架": "Scaffolding Through Teacher Language"
+  }
+}

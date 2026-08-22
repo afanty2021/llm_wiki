@@ -106,18 +106,25 @@ async fn get_user_teams(
     Ok(Json(teams))
 }
 
-/// GET /users/:id - Get user by ID (authenticated)
+/// GET /users/:id - Get user by ID (self / admin only)
 ///
 /// SEC-1（终审必修）：曾为 public——公网遍历 id 即拉全部教师 PII
 /// （username/email/full_name）。加 require_auth（同文件 /me 同款 JWT 模式）。
+/// M4 前置收窄：require_auth 后任意登录用户仍可查任意人——再收为「本人或
+/// ADMIN_USERNAMES 白名单」。sub 为签发时 user id 字符串；解析失败（非本域
+/// 签发形态）视作非本人走 admin 判定。
 /// 调用方核查（2026-08-22）：桌面端走自有 API（src/lib/api-client.ts 仅
-/// /users/me*），transcriber/mcp 只用 /training/*——无 public 形态依赖，直接落鉴权。
+/// /users/me*），transcriber/mcp 只用 /training/*——无跨用户查询依赖，直接收紧。
 async fn get_user_by_id(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<i32>,
 ) -> Result<impl IntoResponse, AppError> {
-    let _claims = require_auth(&state, &headers).await?;
+    let claims = require_auth(&state, &headers).await?;
+    let is_self = claims.sub.parse::<i32>().is_ok_and(|sid| sid == id);
+    if !is_self && !crate::middleware::is_admin(&claims.username, &state.config.admin_usernames()) {
+        return Err(AppError::PermissionDenied);
+    }
     let row = sqlx::query(
         "SELECT id, username, email, full_name, created_at FROM users WHERE id = $1"
     )

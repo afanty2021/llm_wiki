@@ -146,3 +146,28 @@ live 服务与集成测试共享单一 postgres 容器（host 5433→容器 5432
 - upstream v0.6.10 正式合并（§5.2 路径）→ 版本 0.6.10+fork。
 - M4：全量夜间批处理、按需转码缓存去留决策（依灰度多机型 HEVC 反馈）、推荐迭代、周报完成率可观测。
 - 测试残渣清理批次（§6.5）；若 M4 加图谱工具需回改 SKILL §7 步3（T4 Ruling 代价项）。
+
+## 9. Pre-M4 清理批次（2026-08-22 晚，分支 chore/pre-m4-cleanup）
+
+§6.5 与终审遗留债中"M4 前处理掉"的 16 项全部闭环（用户指令）。要点留档：
+
+- **live 测试残渣清理（§6.5）**：pg_dump 全量备份（~/kb-dumps/pre-m4-cleanup-20260822.dump，20M）
+  → 分批删除（projects 4,438 / teams 6,102 / users 6,100 / media 14，均 FK 级联核对后执行）→
+  VACUUM ANALYZE。终态：projects=1（614，633 页原封）、users=11（含灰度教师与周报 cron 目标
+  wecom_test）、teams=3、learning_plans=9（真实教师活动保留）。live /health 200。
+- **双生页归一化**：normalize 六级链干跑 0 决策（下划线页按工具 slug 正则本属合规）；语料级
+  fold 键独立复核发现唯一真双生对 scaffolding_through↔scaffolding-through-teacher-language，
+  按工具语义合并（连字符页胜出：内容长 + 10 条入链全指向），633→632 页。
+- **SEC-5 隧道 path 级收窄**：ingress 白名单 ^/(t|s|media)/.*$|^/health$，/api/v1/* 隧道层 404。
+  外网实测四态区分（见 tunnel.md 补记）。回滚备份 config.yml.bak-260822。
+- **服务端四项**（migration 018 user_id 索引 / SEC-7 /t/ 落地限流 / users/:id self-admin 收窄 /
+  i64 显式 try_from）+ snippet [mm:ss] 入窗 + LEGACY 六对映射挪出代码 + normalize 409 自愈 +
+  audit --diff + manifest v2 信封（省 31% 实测）+ CI 补 vitest/mcp job + /health degraded 集成测。
+  live 已 rebuild+kickstart 部署；017（幂等重入账）+018 经 sqlx migrate run 入账。
+- **两段式 media 签名回落分支**：验签窗口 30 天（MEDIA_SIG_MAX_LEEWAY_SECS）——旧格式签名
+  最晚于 fp 切换（M2 末，08-19/20）+30d ≈ 2026-09-18 全部自然过期，此后可删回落分支
+  （media.rs + media_sign.rs 两处）。此为唯一按时序顺延项。
+- **auth 测试卫生**：auth_test 用户前缀改挂 teardown SWEEPS 已覆盖的 t9_ 族（原 usersid_/
+  loginrl_ 前缀本身是残渣泄漏源之一）。
+- 测试底座：lib 288/288 · integration 116/117（唯一失败 = ingest_queue 已知环境 flake）·
+  mcp 65/65 · transcriber 143/143 · deploy lib 41+37 · vitest 2253/2253。

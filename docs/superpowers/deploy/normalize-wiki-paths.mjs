@@ -22,7 +22,8 @@
 //     rename 目标撞现存页/本轮已分配 → -2 后缀去重并告警。
 //  4. 入链改写：全库扫描解析到旧 path 的 [[...]]，改写为 [[新slug|现标题]]（复用
 //     translate-core 的 mask/unmask/buildLinkCtx；fence 不动、悬空不动、alias/锚点保留）；
-//     新建/合并页正文同样过一遍改写。apply 时 PUT If-Match（409 → 重取重改 ≤3 轮）。
+//     新建/合并页正文同样过一遍改写。apply 时 PUT If-Match（409 → 重取重改 ≤3 轮）；
+//     rename 的 POST 409 亦自愈（中断续跑 / 并发撞车 -2 改投，见 B 分支注释）。
 //  5. 卫生：执行前全字段备份 ~/.llm-wiki-mcp/normalize-backup-<date>.jsonl（原子写，
 //     条目形状与 translate v2 备份兼容——restore-from-backup.mjs --backup 可直接恢复）；
 //     决策清单 ~/.llm-wiki-mcp/normalize-plan.json（dry-run 也产出，供评审）。
@@ -67,6 +68,15 @@ const USAGE = `用法: node normalize-wiki-paths.mjs [--apply] [--project 614] [
 
 const ARGS = parseArgs(process.argv.slice(2));
 const HERE = fileURLToPath(new URL(".", import.meta.url));
+
+// 遗留债补齐（终审 round3 CLN-1）：六对历史链接兜底映射（translate 侧 a41de0ef 已挪
+// JSON 注入，本脚本漏带第 4 参——normalize 场景六种中文目标链接会从可解析降级为悬空）。
+// 文件缺失/畸形 → 空映射（与 translate 侧同口径，兜底链本就 best-effort）。
+let LEGACY_LINK_RECOVERY = {};
+try {
+  const j = JSON.parse(readFileSync(join(HERE, "legacy-link-recovery.json"), "utf-8"));
+  LEGACY_LINK_RECOVERY = { ...(j.pairs ?? {}) };
+} catch { /* 见上 */ }
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const BOOTSTRAP_PATH = ARGS.bootstrap ?? join(REPO_ROOT, "tools/transcriber/out/bootstrap.env");
 
@@ -345,7 +355,7 @@ async function main() {
 
   // 4. 入链改写预演（当前快照上计算；apply 时逐页重取重算）
   const sortedPages = pages.slice().sort((a, b) => a.path.localeCompare(b.path));
-  const ctx = buildLinkCtx(sortedPages, {}, []);
+  const ctx = buildLinkCtx(sortedPages, {}, [], LEGACY_LINK_RECOVERY);
   const activeDecisions = decisions.filter((d) => d.decision === "merge" || d.decision === "rename");
   const finalPath = new Map(); // 旧 path → 存活 path
   const finalTitle = new Map(); // 存活 path → 现标题
@@ -472,6 +482,11 @@ async function applyAll(snapshotPages, decisions, groups, ctx, finalPath, finalT
   }
 
   // B. rename：GET 旧页 → POST 新 slug 页 → DELETE 旧页
+  //    409 自愈（遗留债 M4 前置）：POST 撞目标分两型——①上次运行 POST 成功后中断
+  //    （目标已是我们将写的确定性内容——rewrite 为纯机械函数）→ GET 比对一致即
+  //    视为续跑，补 DELETE 旧页收尾；②目标在快照后被并发建成异质页 → -2 后缀改投
+  //    （与决策期撞车去重同法）并回写 d.target，保证后续入链改写（C pass）指向实际
+  //    落地路径。两型都不再让整个 rename 永久 FAIL。
   for (const d of decisions.filter((x) => x.decision === "rename")) {
     try {
       const src = byPath.get(d.path);
@@ -479,15 +494,41 @@ async function applyAll(snapshotPages, decisions, groups, ctx, finalPath, finalT
       let fresh;
       try { fresh = await apiJson(await apiFetch(pageUrl(d.path)), `GET ${d.path}`); }
       catch (e) { log(`  RENAME SKIP ${d.path}: ${String(e.message ?? e).slice(0, 120)}`); continue; }
-      await postPage({
-        path: d.target,
+      let target = d.target;
+      const body = {
         title: fresh.title ?? undefined,
         content: rewrite(fresh),
         frontmatter: normalizedFrontmatter(fresh, fresh.title),
-      });
-      log(`  RENAME OK ${d.path} → ${d.target}`);
+      };
+      try {
+        await postPage({ path: target, ...body });
+      } catch (e) {
+        if (!(e instanceof ConflictError)) throw e;
+        let existing;
+        try { existing = await apiJson(await apiFetch(pageUrl(target)), `GET ${target}`); }
+        catch { throw e; } // 409 但目标已不可读（并发消失）→ 还原走 FAIL
+        if (existing.content === body.content && (existing.title ?? null) === (body.title ?? null)) {
+          log(`  RENAME RESUME ${d.path} → ${target}: 目标已存在且内容一致（上次中断续跑），补删旧页`);
+        } else {
+          target = target.replace(/\.md$/, "") + "-2.md";
+          log(`  RENAME RETARGET ${d.path} → ${target}: 目标被并发占用（异质内容），-2 改投`);
+          await postPage({ path: target, ...body });
+        }
+      }
+      log(`  RENAME OK ${d.path} → ${target}`);
       await deletePage(d.path, fresh.updated_at);
       log(`  DELETE ${d.path}`);
+      // CLN-2（终审 round4）：-2 改投时同步预建映射——C pass 的 rewrite 读的是
+      // finalPath/finalTitle（main 预建），只回写 d.target 无人消费，原 target
+      // 已被并发异质页占用，不改映射则全库入链仍指向占用者。RESUME 分支目标
+      // 未变（内容一致续跑），无需处理。
+      if (finalPath.get(d.path) !== target) {
+        const plannedTarget = d.target; // 改写前留存（title 键挂在原计划目标上）
+        finalPath.set(d.path, target);
+        finalTitle.set(target, finalTitle.get(plannedTarget) ?? d.title ?? null);
+        finalTitle.delete(plannedTarget);
+      }
+      d.target = target; // C pass（入链改写）按实际落地目标
     } catch (e) {
       applyFailed++;
       log(`  RENAME FAIL ${d.path} → ${d.target}: ${String(e.message ?? e).slice(0, 200)}`);

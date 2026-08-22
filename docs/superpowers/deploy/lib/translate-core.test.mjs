@@ -6,7 +6,8 @@
 // 双 runner 兼容：根 vitest 4 会扫到 docs/**/*.test.mjs 但不收集 node:test 用例
 // （报 "No test suite found" 破坏 npm test），故在 vitest 环境（process.env.VITEST）
 // 下改 import vitest 的 test/describe；断言统一 node:assert/strict（两 runner 通用）。
-// 本文件零外部依赖、零网络/文件副作用。
+// 本文件零网络副作用；仅读 ../legacy-link-recovery.json 一个数据文件（LEGACY 挪出代码后
+// 测试自 JSON 读入，2026-08-22）。
 //
 // 四类核心用例（对应评审 W4 验收）：
 //  ① 碰撞：两组同译名 → 整组恒等 + 记录
@@ -23,12 +24,19 @@ const { test, describe } = process.env.VITEST
   : await import("node:test");
 
 import {
-  RESERVED_PAGES, ZH_RATIO_SKIP, LEGACY_LINK_RECOVERY,
+  RESERVED_PAGES, ZH_RATIO_SKIP,
   zhRatio, isChinesePage, normKey, pathStem,
   buildLinkCtx, resolveTargetPath, renderWikilink,
   maskWikilinks, unmaskWikilinks, rewriteLinksInBody,
   detectTitleCollisions, selectTranslationTargets, hasThinkingLeakOrSlotResidue,
 } from "./translate-core.mjs";
+
+// 遗留债 M4 前置：LEGACY 六对映射挪出代码后，测试自 ../legacy-link-recovery.json 读入
+// （lib 保持零 fs；测试文件无此约束）。缺失即测试环境配置错误，应显式失败。
+import { readFileSync as _rf } from "node:fs";
+const LEGACY_LINK_RECOVERY = JSON.parse(
+  _rf(new URL("../legacy-link-recovery.json", import.meta.url), "utf-8"),
+).pairs;
 
 // ── 测试夹具：迷你页表（concepts/entities + 保留页 + 转写页） ──
 const PAGES = [
@@ -45,7 +53,7 @@ const PAGES = [
 /** 常规 titleMap：IELTS Reading→IELTS阅读（与 LEGACY_LINK_RECOVERY 值相同，模拟碰撞组丢失场景外的正常译名） */
 const TITLE_MAP = { "IELTS Reading": "IELTS阅读", "KWL Chart": "KWL图表" };
 
-const ctx = buildLinkCtx(PAGES, TITLE_MAP, []);
+const ctx = buildLinkCtx(PAGES, TITLE_MAP, [], LEGACY_LINK_RECOVERY);
 
 // ══ ① 碰撞（I4）：两组同译名 → 整组恒等 + 记录 ══
 describe("① 标题碰撞 detectTitleCollisions", () => {
@@ -258,9 +266,9 @@ describe("LEGACY_LINK_RECOVERY 反查兜底", () => {
   });
 
   test("titleMap 已含同名中文值时不覆盖（recovery 仅补缺）", () => {
-    const c = buildLinkCtx(PAGES, { "IELTS Reading": "IELTS阅读" }, []);
+    const c = buildLinkCtx(PAGES, { "IELTS Reading": "IELTS阅读" }, [], LEGACY_LINK_RECOVERY);
     assert.equal(c.revTitle.get("IELTS阅读"), "IELTS Reading");
-    const c2 = buildLinkCtx(PAGES, {}, []);
+    const c2 = buildLinkCtx(PAGES, {}, [], LEGACY_LINK_RECOVERY);
     assert.equal(c2.revTitle.get("IELTS阅读"), "IELTS Reading", "无 titleMap 时由 LEGACY 兜底");
   });
 

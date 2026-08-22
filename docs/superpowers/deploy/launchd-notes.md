@@ -21,6 +21,7 @@ cd /Users/berton/Github/kb-obsidian/llm_wiki
 ENVF=tools/transcriber/out/bootstrap.env
 sed -e "s|__JWT_SECRET__|$(grep '^JWT__SECRET=' $ENVF | cut -d= -f2-)|" \
     -e "s|__MEDIA_SIGNING_KEY__|$(grep '^MEDIA__SIGNING_KEY=' $ENVF | cut -d= -f2-)|" \
+    -e "s|__MEDIA_ALLOWED_ROOTS__|$(grep '^MEDIA__ALLOWED_ROOTS=' $ENVF | cut -d= -f2-)|" \
     -e "s|__TRAINING_ADMIN_TOKEN__|$(grep '^TRAINING__ADMIN_TOKEN=' $ENVF | cut -d= -f2-)|" \
     -e "s|__TRAINING_PROJECT_ID__|$(grep '^PROJECT_ID=' $ENVF | cut -d= -f2-)|" \
     docs/superpowers/deploy/wiki.src-server.plist.template \
@@ -38,6 +39,7 @@ plutil -lint ~/Library/LaunchAgents/wiki.src-server.plist ~/Library/LaunchAgents
 |---|---|---|
 | `JWT__SECRET` | `JWT__SECRET` | 内联（启动校验必填；dotenvy 不覆盖已有 env，优先于 .env 的黑名单占位符） |
 | `MEDIA__SIGNING_KEY` | `MEDIA__SIGNING_KEY` | 内联（/media 签名） |
+| `MEDIA__ALLOWED_ROOTS` | `MEDIA__ALLOWED_ROOTS` | 内联（SEC-2 许可根集，逗号分隔；缺失→空值→拒启动。已补进 bootstrap.env 2026-08-22，值=HEVC 课程父目录——库内根集实测仅此一树；live plist 手工版多带的 h264-cache 死根已随转码退役，再生时自然去除，§5.5 手动兜底时再临时加兜底目录） |
 | `TRAINING__ADMIN_TOKEN` | `TRAINING__ADMIN_TOKEN` | 内联（/bind 鉴权） |
 | `PROJECT_ID` | `TRAINING__PROJECT_ID` | 内联改键（Task 3 惯例：`Option<i32>`） |
 | ——（任务指定） | `AUTH__REGISTRATION_ENABLED=false` | 内联（default.json 的 `true` 是 dev 遗留，env 覆盖关闭注册） |

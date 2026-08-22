@@ -25,23 +25,14 @@ export const normKey = (s) => String(s ?? "").trim().toLowerCase().replace(/\s+/
 /** path 末段去 .md（= 图谱 stem 表的键） */
 export const pathStem = (p) => String(p ?? "").split("/").pop().replace(/\.md$/, "");
 
-/** 历史遗留恢复映射：前任运行（已 kill）把已完成页链接目标改写为【译后中文标题】，
- *  其中指向 I4 碰撞组的中文值随恒等化从 titleMap 丢失（collisions 记录亦被后续运行
- *  覆盖）。以下 pairs 由首发备份 translate-backup-20260821.jsonl 与当前内容按序
- *  配对回溯得到（2026-08-21 核实，共 6 对），仅用于反查链兜底。 */
-export const LEGACY_LINK_RECOVERY = {
-  "IELTS阅读": "IELTS Reading",
-  "KWL图表": "KWL Chart",
-  "合作学习": "Cooperative Learning",
-  "听力微技能": "Listening Sub-skills",
-  "学生档案袋": "Student Portfolio",
-  "教师语言支架": "Scaffolding Through Teacher Language",
-};
-
 // ── 链接解析上下文（C1：title 表 + stem 表 + effTitle，全部页表建，不只目标集） ──
 // titleMap/collisions 由调用方注入（脚本传 PROGRESS.titleMap / PROGRESS.collisions）。
+// legacyRecovery（遗留债 M4 前置：原硬编码六对映射挪出代码，2026-08-22）亦由
+// 调用方注入——数据在 ../legacy-link-recovery.json，runner 读文件传入，本 lib
+// 保持零 fs 约束（见文件头）。来龙去脉（前任 kill 运行把链接目标改写为译后中文、
+// I4 碰撞组中文值随恒等化丢失、六对由首发备份回溯核实）记录在该 JSON 的 _doc。
 // 返回的 ctx 携带 titleMap 引用，供 resolveTargetPath 反查——与内联版读模块级 PROGRESS 等价。
-export function buildLinkCtx(pages, titleMap, collisions = []) {
+export function buildLinkCtx(pages, titleMap, collisions = [], legacyRecovery = {}) {
   const exact = new Map();    // 精确 title → path；同 title 多页 → null（歧义）
   const normTitle = new Map(); // 归一化 title → path；归一化碰撞 → null（歧义）
   for (const p of pages) {
@@ -80,7 +71,7 @@ export function buildLinkCtx(pages, titleMap, collisions = []) {
       }
     }
   }
-  for (const [zh, en] of Object.entries(LEGACY_LINK_RECOVERY)) {
+  for (const [zh, en] of Object.entries(legacyRecovery)) {
     if (!revTitle.has(zh)) revTitle.set(zh, en);
   }
   return { exact, normTitle, normStem, effTitle, revTitle, titleMap };

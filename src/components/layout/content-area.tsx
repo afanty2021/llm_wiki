@@ -18,7 +18,8 @@ export function ContentArea() {
 
   // web 下:sources 桌面是文件夹监控(本地 fs),改用 WebIngestPanel(upload→trigger→poll);
   // lint 依赖桌面 fs 读 wiki 文件,不可用(占位提示);其余视图 wiki/search/graph/review 走
-  // HTTP API,web 可用。chat-panel retrieval 内部另 web gate(见 chat-panel.tsx)。
+  // HTTP API,web 可用。chat 派发也有平台门控(useBackendAgent 仅 tauri,web 落回
+  // streamChat→src-server 代理,见 chat-panel.tsx)。
   const isWeb = caps.platform === "web"
 
   // Keep SourcesView mounted after its first visit. Opening a source uses the

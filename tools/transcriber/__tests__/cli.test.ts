@@ -6,6 +6,7 @@ import {
   parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv,
   parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible,
   applyWriteFailure, applyTranscribeFailure, runIngestPhase, transcribeExitCode,
+  parseDiffPath,
 } from "../src/cli";
 import type { ManifestEntry } from "../src/manifest";
 import type { StateLine } from "../src/whisper";
@@ -55,6 +56,26 @@ describe("参数缺值校验（M2 前置：末位缺值报错退出，不再静�
   it("合法传参不受影响：三个值型 flag 均有值时照常解析", () => {
     expect(parseTranscribeArgs(["--window", "00:00-23:59", "--limit", "3", "--demo-slug", "s1"]))
       .toEqual({ window: "00:00-23:59", limit: 3, force: false, demoSlug: "s1" });
+  });
+});
+
+describe("parseDiffPath（audit --diff 值解析，同 val() 缺值规则）", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("未传 → undefined；正常传值 → 路径字符串", () => {
+    expect(parseDiffPath([])).toBeUndefined();
+    expect(parseDiffPath(["--concurrency", "8"])).toBeUndefined();
+    expect(parseDiffPath(["--diff", "/tmp/prev-manifest.json", "--concurrency", "8"])).toBe("/tmp/prev-manifest.json");
+  });
+
+  it("末位缺值 / 下一 flag 视为缺值 → 报错退出（exit 1）", () => {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation(m => errors.push(String(m)));
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("EXIT_NOW"); });
+    expect(() => parseDiffPath(["--diff"])).toThrow("EXIT_NOW");
+    expect(() => parseDiffPath(["--diff", "--concurrency", "8"])).toThrow("EXIT_NOW");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors.some(e => /--diff 需带值/.test(e))).toBe(true);
   });
 });
 

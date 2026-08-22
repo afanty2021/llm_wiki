@@ -197,10 +197,56 @@ pub fn build_snippet(content: &str, query: &str) -> String {
     let end_char = (match_char + query_chars + SNIPPET_CONTEXT).min(char_positions.len());
     let start = char_positions[start_char];
     let end = if end_char < char_positions.len() { char_positions[end_char] } else { content.len() };
+    let window_has_marker = last_timestamp_span(content, end)
+        .is_some_and(|(t0, t1)| t0 >= start && t1 <= end);
     let mut snippet = content[start..end].replace('\n', " ");
+    // 转写页时间戳入窗（spec §4.4 M4 可选项提前收）：[mm:ss] 标记不保证落进 ±80
+    // 字符窗——窗口自身无标记时，前缀最近的 [mm:ss]/[h:mm:ss]（命中所属段落起点），
+    // 教师/agent 拿 snippet 即知时间锚点（与 MCP read_page 的消费侧解析同口径）。
+    if !window_has_marker && start > 0 {
+        if let Some((t0, t1)) = last_timestamp_span(content, start).filter(|&(_, t1)| t1 <= start) {
+            snippet = format!("{} {}", &content[t0..t1], snippet);
+        }
+    }
     if start > 0 { snippet = format!("...{snippet}"); }
     if end < content.len() { snippet.push_str("..."); }
     snippet
+}
+
+/// 字节区间扫描（ASCII 标记，字节索引即字符边界安全）：返回 end ≤ limit 的最后
+/// 一个 [mm:ss] / [h:mm:ss] 标记的 (start, end)。数字段 1-3 位、段间单冒号——
+/// 只匹配转写标记形态，普通方括号文本（[1] 引用、[备注]）不命中。
+fn last_timestamp_span(content: &str, limit: usize) -> Option<(usize, usize)> {
+    let bytes = content.as_bytes();
+    let mut best: Option<(usize, usize)> = None;
+    let mut i = 0;
+    while i < bytes.len().min(limit) {
+        if bytes[i] == b'[' {
+            if let Some(len) = timestamp_marker_len(&bytes[i..]) {
+                best = Some((i, i + len));
+                i += len;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    best
+}
+
+/// 从 `[` 起解析转写时间戳标记长度；非法形态返回 None。
+fn timestamp_marker_len(b: &[u8]) -> Option<usize> {
+    let mut j = 1;
+    let mut segs = 0;
+    loop {
+        let seg_start = j;
+        while j < b.len() && b[j].is_ascii_digit() { j += 1; }
+        let n = j - seg_start;
+        if n == 0 || n > 3 { return None; }
+        segs += 1;
+        if b.get(j) == Some(&b':') { j += 1; continue; }
+        break;
+    }
+    if b.get(j) == Some(&b']') && (segs == 2 || segs == 3) { Some(j + 1) } else { None }
 }
 
 /// snippet 锚点选择（score_page 与 vector-only 物化共用，保证一致）：
@@ -618,6 +664,45 @@ mod tests {
         let content = format!("{}query{}", "中".repeat(100), "中".repeat(100));
         let s = build_snippet(&content, "query");
         assert!(s.contains("query"), "snippet 应含 query: {}", s);
+    }
+
+    // ── 转写页 [mm:ss] 入窗（spec §4.4 可选项提前收） ──
+
+    #[test]
+    fn timestamp_marker_len_shapes() {
+        assert_eq!(timestamp_marker_len(b"[12:34]"), Some(7));
+        assert_eq!(timestamp_marker_len(b"[1:02:03]"), Some(9));
+        assert_eq!(timestamp_marker_len(b"[123:45]"), Some(8)); // 数字段 ≤3 位即形态合法
+        assert_eq!(timestamp_marker_len(b"[1]"), None, "单段不是时间戳");
+        assert_eq!(timestamp_marker_len("[备注]".as_bytes()), None, "非数字段");
+        assert_eq!(timestamp_marker_len(b"[12:34"), None, "未闭合");
+        assert_eq!(timestamp_marker_len(b"[1:2:3:4]"), None, "四段不匹配");
+    }
+
+    #[test]
+    fn build_snippet_prefixes_nearest_timestamp_when_out_of_window() {
+        // 标记距命中 > 80 字符（窗外）→ 前缀最近的标记（命中所属段落起点）
+        let content = format!("[03:25] {}", format!("很长的中文段落内容。{}", "铺垫").repeat(40));
+        let content = format!("{content}query 命中在这里 后续内容");
+        let s = build_snippet(&content, "query");
+        assert!(s.contains("query"));
+        assert!(s.starts_with("...[03:25] "), "应前缀最近标记: {}", s);
+    }
+
+    #[test]
+    fn build_snippet_leaves_snippet_untouched_when_marker_inside_window() {
+        let content = "[03:25] 短铺垫 query 命中";
+        let s = build_snippet(content, "query");
+        assert_eq!(s.matches("[03:25]").count(), 1, "窗内已有标记不再前缀: {}", s);
+    }
+
+    #[test]
+    fn build_snippet_no_timestamp_stays_plain() {
+        // 非转写页（无标记）行为不变
+        let content = format!("{}query{}", "x".repeat(200), "y".repeat(200));
+        let s = build_snippet(&content, "query");
+        assert!(s.starts_with("..."), "无标记时保持原省略号形态: {}", s);
+        assert!(!s.contains(":]"));
     }
 
     #[test]

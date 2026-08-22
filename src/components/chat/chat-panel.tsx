@@ -497,7 +497,11 @@ export function ChatPanel() {
   )
   const searchApiConfig = useWikiStore((s) => s.searchApiConfig)
   const anyTxtAvailable = hasConfiguredAnyTxt(searchApiConfig.anyTxt)
-  const imageInputAvailable = supportsImageInput(llmConfig)
+  // WEB-2（终审阻断项）：web 直发经 streamViaServer → src-server /chat/stream，
+  // 服务端 ChatMessage.content 只收 String——图片 ContentBlock[] 会导致该消息
+  // 被静默丢弃（模型看不到问题）。web 下门控图片按钮（桌面 CLI provider 仍可用）。
+  const imageInputAvailable =
+    caps.platform === "tauri" && supportsImageInput(llmConfig)
   const availableContextFiles = useMemo(() => {
     if (!project) return []
     const root = normalizePath(project.path).replace(/\/+$/g, "")
@@ -697,7 +701,9 @@ export function ChatPanel() {
 
   useEffect(() => {
     let cancelled = false
-    if (!project?.path) {
+    // web 门控：agent_list_skills 是 Tauri-only command，web 下必然 reject
+    // （无 catch 的未处理 promise 噪音）——技能面板在 web 本就不可用。
+    if (!project?.path || caps.platform === "web") {
       setAvailableSkills([])
       return
     }
@@ -772,9 +778,97 @@ export function ChatPanel() {
         activeRunIdRef.current = backendRunId
         const isCurrentRun = () => runIdRef.current === runId && !controller.signal.aborted
 
+        // 平台门控（终审 round3 WEB-1）：backend agent 走 Tauri-only invoke，
+        // web 形态必须落回 streamChat——llm-client 的 web 分支经 streamViaServer
+        // 走 src-server /chat/stream 代理（服务器侧 team provider，前端不持 key）。
+        // 合并前的旧门控被上游 agent 化重写吞掉，此处恢复。
         const useBackendAgent =
+          caps.platform === "tauri" &&
           llmConfig.provider !== "claude-code" &&
           llmConfig.provider !== "codex-cli"
+
+        if (!useBackendAgent && caps.platform === "web") {
+          // WEB-1（终审 round3 修正形态）：web 直发支路（早退）。fork 时代的
+          // 统一发送链（cc361609:513）被上游 v0.6.10 agent 化重写整体吞掉
+          // （上游亦无 else 支路），本分支按 fork 语义重建：web 下 llm-client
+          // 首行分流 streamViaServer → src-server /chat/stream（服务器自建
+          // system prompt + team provider，不消费前端 llmConfig）。无前端
+          // retrieval（web fs 不可用——与 fork 同口径，Sources chip 留空）。
+          // 错误抛给外层 catch 统一收口。
+          // 桌面 CLI provider（claude-code/codex-cli）不走本支路——WEB-3（终审
+          // round4 阻断项）：落回下方 legacy 检索混合路径（agent_start_turn
+          // 后端检索 + streamChat 终答——c0ade7da 之前的既有通路，勿再截断）。
+          const activeConvMessages = conversationMessages(convId)
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .slice(-maxHistoryMessages)
+          const priorMessages = sendOptions.suppressUserMessage
+            ? activeConvMessages
+            : activeConvMessages.slice(0, -1)
+          // WEB-2 纵深：按钮已 web 门控，此处再降级一次（粘贴/拖拽路径可绕过
+          // 按钮）——web 下服务端只收 String content，带图消息会被静默丢弃。
+          const directImages = caps.platform === "web" ? [] : images
+          const userContent: string | ContentBlock[] = directImages.length > 0
+            ? [
+                { type: "text", text },
+                ...directImages.map((image) => ({
+                  type: "image" as const,
+                  mediaType: image.mediaType,
+                  dataBase64: image.dataBase64,
+                })),
+              ]
+            : text
+          const directMessages: LlmChatMessage[] = [
+            ...(sendOptions.historyOverride ?? chatMessagesToLLM(priorMessages)),
+            { role: "user", content: userContent },
+          ]
+          let accumulated = ""
+          let thinkingOpen = false
+          let streamError: Error | null = null
+          await streamChat(
+            llmConfig,
+            directMessages,
+            {
+              onToken: (token) => {
+                if (!isCurrentRun()) return
+                if (thinkingOpen) {
+                  thinkingOpen = false
+                  accumulated += "</think>"
+                  appendStreamToken("</think>")
+                }
+                accumulated += token
+                appendStreamToken(token)
+              },
+              onReasoningToken: (token) => {
+                if (!isCurrentRun()) return
+                if (!thinkingOpen) {
+                  thinkingOpen = true
+                  accumulated += "<think>"
+                  appendStreamToken("<think>")
+                }
+                accumulated += token
+                appendStreamToken(token)
+              },
+              onDone: () => {},
+              onError: (err) => {
+                streamError = err
+              },
+            },
+            controller.signal,
+          )
+          if (streamError) throw streamError
+          if (!isCurrentRun()) return
+          if (thinkingOpen) {
+            accumulated += "</think>"
+            appendStreamToken("</think>")
+          }
+          finalized = true
+          finalizeStreamForConversation(convId, accumulated, undefined)
+          setStreamingConversationId(null)
+          abortRef.current = null
+          activeRunSessionIdRef.current = null
+          activeRunIdRef.current = null
+          return
+        }
 
         if (useBackendAgent) {
           setAgentEvents([

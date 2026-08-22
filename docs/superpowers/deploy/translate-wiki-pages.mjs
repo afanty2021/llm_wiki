@@ -311,9 +311,16 @@ async function translateTitles(titles) {
 }
 
 // ── 链接解析上下文（C1）与 wikilink 占位符族 → lib/translate-core.mjs（W4） ──
-// LEGACY_LINK_RECOVERY 历史遗留映射亦在 lib（由 buildLinkCtx 注入反查链兜底）。
+// LEGACY_LINK_RECOVERY 历史遗留映射（遗留债 M4 前置挪出代码）：数据在
+// legacy-link-recovery.json，此处读入注入 buildLinkCtx 反查链兜底（lib 零 fs）。
 // 此处注入进度态：titleMap/collisions 传 PROGRESS 值，ctx 携带 titleMap 引用
-// （与内联版读模块级 PROGRESS 等价）。
+// （与内联版读模块级 PROGRESS 等价）。文件缺失/畸形 → 空映射（兜底链本就 best-effort）。
+
+let LEGACY_LINK_RECOVERY = {};
+try {
+  const j = JSON.parse(readFileSync(join(HERE, "legacy-link-recovery.json"), "utf-8"));
+  LEGACY_LINK_RECOVERY = { ...(j.pairs ?? {}) };
+} catch { /* 见上：缺失/畸形 → 空映射 */ }
 
 // ── I4：标题碰撞检测——碰撞组全部保持英文标题不翻（核心在 lib，进度落盘留在此处） ──
 function detectAndApplyTitleCollisions(pages) {
@@ -461,8 +468,9 @@ async function main() {
   detectAndApplyTitleCollisions(pages);
   saveProgress(PROGRESS);
 
-  // C1：链接解析上下文（备份/映射定型后构建；titleMap/collisions 注入 lib.buildLinkCtx）
-  const ctx = buildLinkCtx(pages, PROGRESS.titleMap, PROGRESS.collisions);
+  // C1：链接解析上下文（备份/映射定型后构建；titleMap/collisions 注入 lib.buildLinkCtx；
+  // legacy 六对兜底映射自 legacy-link-recovery.json 注入——挪出代码后数据与逻辑分离）
+  const ctx = buildLinkCtx(pages, PROGRESS.titleMap, PROGRESS.collisions, LEGACY_LINK_RECOVERY);
 
   // C1：已完成页链接修复 pass（幂等，重跑无改动即跳过）
   await repairCompletedLinks(pages, ctx);
