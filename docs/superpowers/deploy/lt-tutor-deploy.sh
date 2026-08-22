@@ -17,7 +17,8 @@
 #   2. profile 的 mcp_servers 自动并入启用集（仅 no_mcp 排除）。【8/19 实战推翻（Hermes 0.19）：
 #      启动 MCP discovery 只读主 config——llm-wiki-training 必须声明于主 config（apply 步骤 3
 #      写入第二个托管块）；profile 内声明保留仅为未来版本兼容。】
-#   3. 内联 custom_providers[].api_key 自足（候选序先于 key_env；multiplex 下无 os.environ 回退）。
+#   3. ~~custom_providers 内联 key~~（已删，终审 round2-C）：内置 zai provider 补丁读 profile .env 的
+#      ZAI_API_KEY（600），config 不再持有任何明文 key。
 #   4. secondary profile 禁 wecom 凭证/回调 → platforms 仅 bot_id-only 块（enabled+extra.bot_id，
 #      无 secret/无 callback）：multiplex 下 cron deliver 预检/投递读 profile config 的 platforms，
 #      bot_id-only 不建第二条 ws、不入凭证指纹，ingress 恒走 default profile 的 live 适配器。
@@ -27,7 +28,7 @@
 #   7. skills 从 <profile_home>/skills/ 按 profile 加载（SKILL.md 发现机制在 profile 作用域可用）。
 #
 # 秘密处理: TRAINING__ADMIN_TOKEN 运行时读 tools/transcriber/out/bootstrap.env；
-#           zai api_key 运行时读 ~/.hermes/config.yaml custom_providers。绝不嵌入本脚本/仓库。
+#           zai key 运行时读 profile .env（ZAI_API_KEY，600）。绝不嵌入本脚本/仓库。
 # =============================================================================
 set -euo pipefail
 
@@ -95,22 +96,13 @@ read_bootstrap_token() {
   printf '%s' "${tok}"
 }
 
+# 终审 round2-C：key 源从主 config custom_providers（明文，已删）改为 profile .env——
+# 内置 zai provider 补丁读 env，config 层不再持有任何明文 key。
 read_zai_key() {
-  [[ -f "${MAIN_CONFIG}" ]] || die "主 config 不存在: ${MAIN_CONFIG}"
+  [[ -f "${PROFILE_DIR}/.env" ]] || die "profile .env 不存在: ${PROFILE_DIR}/.env"
   local key
-  key=$("${PY}" - "$MAIN_CONFIG" <<'PYEOF'
-import sys, yaml
-cfg = yaml.safe_load(open(sys.argv[1]))
-for p in (cfg.get("custom_providers") or []):
-    if isinstance(p, dict) and p.get("name") == "zai-coding-cn":
-        k = str(p.get("api_key") or "")
-        if k:
-            print(k)
-            break
-else:
-    sys.exit(1)
-PYEOF
-  ) || die "主 config custom_providers 中未找到 zai-coding-cn api_key"
+  key=$(grep -E '^\s*ZAI_API_KEY\s*=' "${PROFILE_DIR}/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+  [[ -n "${key}" ]] || die "profile .env 中未找到 ZAI_API_KEY"
   printf '%s' "${key}"
 }
 
@@ -118,14 +110,12 @@ PYEOF
 # $1 = 输出路径（"--stdout-masked" 表示打到 stdout 并脱敏）
 render_profile_config() {
   local out="$1"
-  ZAI_API_KEY_VAL="$(read_zai_key)" \
   TRAINING_ADMIN_TOKEN_VAL="$(read_bootstrap_token)" \
   LT_TUTOR_BOT_ID_VAL="${LT_TUTOR_WECOM_BOT_ID}" \
   MCPPROFILE_OUT="${out}" \
   "${PY}" <<'PYEOF'
 import os, sys, yaml
 
-zai = os.environ["ZAI_API_KEY_VAL"]
 tok = os.environ["TRAINING_ADMIN_TOKEN_VAL"]
 bot_id = os.environ["LT_TUTOR_BOT_ID_VAL"]
 out = os.environ["MCPPROFILE_OUT"]
@@ -136,15 +126,8 @@ cfg = {
         "provider": "zai-coding-cn",
         "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
     },
-    "custom_providers": [
-        {
-            "name": "zai-coding-cn",           # 内联 api_key 自足（候选序先于 key_env）
-            "api_key": zai,
-            "api_mode": "chat_completions",
-            "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
-            "model": "glm-5.2",
-        }
-    ],
+    # custom_providers 已删（终审 round2-C）：zai-coding-cn 由内置 provider 注册（读
+    # profile .env 的 ZAI_API_KEY），config 不持有任何明文 key。
     "platform_toolsets": {
         # 平台会话工具集只认 platform_toolsets.<platform>；顶层 toolsets 无人读取。
         # 只给 skills → 不注册 terminal/file/web（工具白名单）。MCP servers 自动并入。
@@ -571,8 +554,8 @@ for k in ("LLM_WIKI_API_FORM", "LLM_WIKI_API_BASE_URL", "TRAINING__ADMIN_TOKEN",
           "TRAINING__PROJECT_ID", "PUBLIC_T_BASE"):
     assert env.get(k), f"mcp env 缺 {k}"
 assert env["LLM_WIKI_API_FORM"] == "src-server"
-assert cfg["custom_providers"][0]["api_key"], "内联 api_key 缺失"
-print("profile config 自检通过（platforms=wecom bot_id-only / toolset=[skills] / mcp env 5 键 / 内联 key）")
+assert not cfg.get("custom_providers"), "custom_providers 必须为空（key 走 profile .env，round2-C）"
+print("profile config 自检通过（platforms=wecom bot_id-only / toolset=[skills] / mcp env 5 键 / 无明文 key）")
 PYEOF
   c_ok "profile config: ${PROFILE_DIR}/config.yaml (600)"
   c_ok "skill: ${PROFILE_DIR}/skills/teacher-tutor/SKILL.md"
@@ -587,7 +570,7 @@ preflight() {
   [[ -f "${MCP_DIST}" ]]       && c_ok "mcp-server dist 已构建"                   || die "mcp dist 缺失，先跑: npm --prefix mcp-server run build"
   command -v node >/dev/null   && c_ok "node 可用（gateway PATH 含 /opt/homebrew/bin）" || c_warn "node 不在当前 PATH"
   # 秘密可读但不回显
-  read_zai_key >/dev/null       && c_ok "zai api_key 可从主 config 读取（不回显）"
+  read_zai_key >/dev/null       && c_ok "ZAI_API_KEY 可从 profile .env 读取（不回显，round2-C）"
   read_bootstrap_token >/dev/null && c_ok "TRAINING__ADMIN_TOKEN 可从 bootstrap.env 读取（不回显）"
 }
 
