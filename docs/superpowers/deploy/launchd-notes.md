@@ -39,7 +39,7 @@ plutil -lint ~/Library/LaunchAgents/wiki.src-server.plist ~/Library/LaunchAgents
 |---|---|---|
 | `JWT__SECRET` | `JWT__SECRET` | 内联（启动校验必填；dotenvy 不覆盖已有 env，优先于 .env 的黑名单占位符） |
 | `MEDIA__SIGNING_KEY` | `MEDIA__SIGNING_KEY` | 内联（/media 签名） |
-| （bootstrap.env 需补此键） | `MEDIA__ALLOWED_ROOTS` | 内联（SEC-2 许可根集，逗号分隔；缺失→空值→拒启动。当前 bootstrap.env 无此键——再生成前先补，值参照 live plist 与 runbook §8 枚举） |
+| `MEDIA__ALLOWED_ROOTS` | `MEDIA__ALLOWED_ROOTS` | 内联（SEC-2 许可根集，逗号分隔；缺失→空值→拒启动。已补进 bootstrap.env 2026-08-22，值=HEVC 课程父目录——库内根集实测仅此一树；live plist 手工版多带的 h264-cache 死根已随转码退役，再生时自然去除，§5.5 手动兜底时再临时加兜底目录） |
 | `TRAINING__ADMIN_TOKEN` | `TRAINING__ADMIN_TOKEN` | 内联（/bind 鉴权） |
 | `PROJECT_ID` | `TRAINING__PROJECT_ID` | 内联改键（Task 3 惯例：`Option<i32>`） |
 | ——（任务指定） | `AUTH__REGISTRATION_ENABLED=false` | 内联（default.json 的 `true` 是 dev 遗留，env 覆盖关闭注册） |
