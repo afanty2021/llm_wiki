@@ -106,7 +106,7 @@ T8 已修 read_file 404 误计熔断（990eac2b：应用级未找到改正常返
 | 2026-08-22 | test | OPPO PHJ110 / Android 13 | ✅（T8 E2E） | ✅ | — |
 | （M2 已验） | — | iPhone 8 Plus / iOS WKWebView | ✅（playsinline 修复后） | ✅ | 原判定"不支持 HEVC"被推翻 |
 
-任一机型 HEVC 播放失败 → 记录机型与现象（黑屏/转圈/报错），M4 决策保留按需转码；连续 3+ 机型全绿 → M4 转码缓存确认退役。
+任一机型 HEVC 播放失败 → 记录机型与现象（黑屏/转圈/报错），并启用 **per-slug 手动兜底**（零代码应急：CLI 手转该集为 H.264 → `UPDATE media_assets SET playback_path='<副本绝对路径>' WHERE slug='<slug>'`——/media 的 COALESCE 会优先放副本，只影响该视频）；连续 3+ 机型全绿 → M4 转码缓存退役终判（2026-08-22 已执行退役清理：12 行 playback_path 置空 + 2.8G h264-cache 删除，全库原件直出）。
 
 ## 6. 异常处置路径（快捷回滚）
 
