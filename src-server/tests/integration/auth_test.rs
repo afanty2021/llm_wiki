@@ -147,6 +147,14 @@ mod tests {
             .await;
         let uid_a = me_a.json::<serde_json::Value>()["id"].as_i64().unwrap();
 
+        // is_self 主路径（终审 round3 顺手项）：本人查自己 → 200
+        let r = server
+            .get(&format!("/api/v1/users/{uid_a}"))
+            .add_header("authorization", format!("Bearer {}", token_a))
+            .await;
+        assert_eq!(r.status_code(), axum::http::StatusCode::OK, "self query must pass");
+        assert_eq!(r.json::<serde_json::Value>()["id"].as_i64(), Some(uid_a));
+
         let uname_b = format!("t9_uidself_b_{}", std::process::id());
         crate::register_user(
             &server,

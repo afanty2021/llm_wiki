@@ -34,7 +34,9 @@ fn default_refresh_token_ttl() -> u64 {
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
     pub path: String,
-    #[serde(default = "default_storage_type")]
+    /// env 形态 `STORAGE__TYPE`（alias "type"——字段名 storage_type 无 alias 时该键
+    /// 静默失效，终审 round3 ENV-1：alias 后 env/json 两形态都收，行为不变）。
+    #[serde(default = "default_storage_type", alias = "type")]
     pub storage_type: String,
     pub s3_endpoint: Option<String>,
     pub s3_access_key: Option<String>,
@@ -465,9 +467,10 @@ mod tests {
 
     #[test]
     fn page_rate_limits_default_30_60_and_env_shape() {
-        // R4：限流规格入 config——段缺失时 serde 默认 30/60（与旧硬编码零行为变化）；
-        // default.json 显式携带同值；Environment 覆盖键形如 PAGE_RATE_LIMITS__S_PER_MIN
-        // （"__" 分隔嵌套 + try_parsing 数字解析，与 DATABASE__MAX_CONNECTIONS 同法）。
+        // R4：限流规格入 config——段缺失时 serde 默认 30/60/30（与旧硬编码零行为变化；
+        // t_per_min = SEC-7 落地限流，round3 复核补断言）；default.json 显式携带同值；
+        // Environment 覆盖键形如 PAGE_RATE_LIMITS__S_PER_MIN（"__" 分隔嵌套 +
+        // try_parsing 数字解析，与 DATABASE__MAX_CONNECTIONS 同法）。
         let json = r#"{
             "server": {"host": "0.0.0.0", "port": 8080},
             "database": {"url": "postgres://x", "max_connections": 1},
@@ -479,12 +482,14 @@ mod tests {
         let c: AppConfig = serde_json::from_str(json).unwrap();
         assert_eq!(c.page_rate_limits.s_per_min, 30, "absent section falls back to 30");
         assert_eq!(c.page_rate_limits.beacon_per_min, 60, "absent section falls back to 60");
+        assert_eq!(c.page_rate_limits.t_per_min, 30, "absent section falls back to 30 (SEC-7)");
 
-        // default.json 显式值 = 30/60（from_env 读 cargo test cwd 的 config/default.json）
+        // default.json 显式值 = 30/60/30（from_env 读 cargo test cwd 的 config/default.json）
         std::env::set_var("JWT__SECRET", "unit-test-secret-override-not-leaked");
         let cfg = AppConfig::from_env().expect("from_env");
         assert_eq!(cfg.page_rate_limits.s_per_min, 30);
         assert_eq!(cfg.page_rate_limits.beacon_per_min, 60);
+        assert_eq!(cfg.page_rate_limits.t_per_min, 30);
 
         // env 覆盖形状（独立前缀隔离，避免与并行测试 env 竞争）
         std::env::set_var("T4RATE__S_PER_MIN", "7");
@@ -501,6 +506,29 @@ mod tests {
             .try_deserialize()
             .unwrap();
         assert_eq!((probe.s_per_min, probe.beacon_per_min), (7, 9));
+    }
+
+    /// ENV-1（终审 round3）：`STORAGE__TYPE` env 键必须能落到 storage_type 字段——
+    /// 字段名 storage_type 无 alias 时键被静默忽略（永远 local），alias "type" 修活。
+    /// json 的 storage_type 全名形态同时保持兼容。
+    #[test]
+    fn storage_type_env_alias_and_json_full_name_both_accepted() {
+        #[derive(Deserialize)]
+        struct StorageProbe {
+            #[serde(default = "default_storage_type", alias = "type")]
+            storage_type: String,
+        }
+        std::env::set_var("T4STORE__TYPE", "s3");
+        let via_env: StorageProbe = ConfigBuilder::builder()
+            .add_source(Environment::with_prefix("T4STORE").separator("__").try_parsing(true))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(via_env.storage_type, "s3", "STORAGE__TYPE 形态必须生效");
+
+        let via_json: StorageProbe = serde_json::from_str(r#"{"storage_type": "s3x"}"#).unwrap();
+        assert_eq!(via_json.storage_type, "s3x", "json 全名形态保持兼容");
     }
 
     #[test]

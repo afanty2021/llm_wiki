@@ -772,7 +772,12 @@ export function ChatPanel() {
         activeRunIdRef.current = backendRunId
         const isCurrentRun = () => runIdRef.current === runId && !controller.signal.aborted
 
+        // 平台门控（终审 round3 WEB-1）：backend agent 走 Tauri-only invoke，
+        // web 形态必须落回 streamChat——llm-client 的 web 分支经 streamViaServer
+        // 走 src-server /chat/stream 代理（服务器侧 team provider，前端不持 key）。
+        // 合并前的旧门控被上游 agent 化重写吞掉，此处恢复。
         const useBackendAgent =
+          caps.platform === "tauri" &&
           llmConfig.provider !== "claude-code" &&
           llmConfig.provider !== "codex-cli"
 

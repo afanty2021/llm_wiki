@@ -68,6 +68,15 @@ const USAGE = `用法: node normalize-wiki-paths.mjs [--apply] [--project 614] [
 
 const ARGS = parseArgs(process.argv.slice(2));
 const HERE = fileURLToPath(new URL(".", import.meta.url));
+
+// 遗留债补齐（终审 round3 CLN-1）：六对历史链接兜底映射（translate 侧 a41de0ef 已挪
+// JSON 注入，本脚本漏带第 4 参——normalize 场景六种中文目标链接会从可解析降级为悬空）。
+// 文件缺失/畸形 → 空映射（与 translate 侧同口径，兜底链本就 best-effort）。
+let LEGACY_LINK_RECOVERY = {};
+try {
+  const j = JSON.parse(readFileSync(join(HERE, "legacy-link-recovery.json"), "utf-8"));
+  LEGACY_LINK_RECOVERY = { ...(j.pairs ?? {}) };
+} catch { /* 见上 */ }
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const BOOTSTRAP_PATH = ARGS.bootstrap ?? join(REPO_ROOT, "tools/transcriber/out/bootstrap.env");
 
@@ -346,7 +355,7 @@ async function main() {
 
   // 4. 入链改写预演（当前快照上计算；apply 时逐页重取重算）
   const sortedPages = pages.slice().sort((a, b) => a.path.localeCompare(b.path));
-  const ctx = buildLinkCtx(sortedPages, {}, []);
+  const ctx = buildLinkCtx(sortedPages, {}, [], LEGACY_LINK_RECOVERY);
   const activeDecisions = decisions.filter((d) => d.decision === "merge" || d.decision === "rename");
   const finalPath = new Map(); // 旧 path → 存活 path
   const finalTitle = new Map(); // 存活 path → 现标题

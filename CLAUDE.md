@@ -3,7 +3,7 @@
 > 跨平台桌面应用（React 19 + Tauri v2 + Rust），把文档自动转化为结构化、互联的知识库。
 > 基于 Andrej Karpathy 的 [llm-wiki.md](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 设计模式——Human curates, LLM maintains。
 
-**Version**: 0.4.23 · **Last Updated**: 2026-08-22 · **Project Type**: Cross-platform Desktop (Tauri v2)
+**Version**: 0.6.10+fork · **Last Updated**: 2026-08-22 · **Project Type**: Cross-platform Desktop (Tauri v2)
 
 ---
 
