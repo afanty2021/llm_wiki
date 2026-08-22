@@ -41,6 +41,9 @@ pub struct AppState {
     /// 评审 R4：cap 经 config 注入（page_rate_limits.s_per_min / beacon_per_min，
     /// 默认 30/60 与旧硬编码一致，env PAGE_RATE_LIMITS__* 可覆盖）。
     pub limiter: Arc<services::rate_limit::PageRateLimits>,
+    /// SEC-3（终审必修）：bind/login IP 级限流（各 10/min/IP，FixedWindowLimiter
+    /// 独立两桶；key 见 rate_limit::ClientIp——Cf-Connecting-Ip 头优先回落 socket addr）。
+    pub ip_limiter: Arc<services::rate_limit::IpRateLimits>,
 }
 
 pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
@@ -80,6 +83,8 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
         config.page_rate_limits.beacon_per_min,
     ));
 
+    let ip_limiter = Arc::new(services::rate_limit::IpRateLimits::new());
+
     let state = AppState {
         db,
         redis,
@@ -89,6 +94,7 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
         vector_store,
         job_events,
         limiter,
+        ip_limiter,
     };
 
     // 构建 CORS 中间件层

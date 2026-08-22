@@ -33,7 +33,13 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("Failed to bind to address")?;
-    axum::serve(listener, app).await?;
+    // SEC-3：注入 ConnectInfo（bind/login IP 限流回落 key 的来源——Cf-Connecting-Ip
+    // 头缺省的直连场景取 socket addr；无此包装该扩展缺失，限流退化为 unknown 共桶）。
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

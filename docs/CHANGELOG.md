@@ -12,7 +12,7 @@
 - ✅ **计划外：upstream v0.6.10 试合并草稿**（merge-upstream-trial 05ac9031：40 冲突全解 + 8 处语义破损修复，三套测试绿，待正式合并）
 - ✅ **T9 重启演练**：自愈链 9/9（reboot→容器 47s→launchd 全起→隧道/omlx/iogpu→inbound 15.5s 回复）+ cron catch-up 实测（停机盖过触发→起后 5s 自动补跑）
 - 📄 **灰度 runbook**（`docs/superpowers/deploy/m3-gray-runbook.md`：3-5 教师加白/每日 5 分钟观察/一周退出判据/异常处置）
-- 🧪 src-server lib 254 + integration 107/107 · mcp 54/54 · transcriber 130 · E2E v3 live 全绿（冷启动/对抗三连/鉴权矩阵/周报三连 fire）
+- 🧪 src-server lib 269 + integration 107/107 · mcp 54/54 · transcriber 130 · E2E v3 live 全绿（冷启动/对抗三连/鉴权矩阵/周报三连 fire）
 - 📈 验收：`docs/superpowers/specs/m3-acceptance-2026-08-22.md`（计划外中文化与 upstream 试合并单列切割；偏差与遗留逐项披露）
 
 ### 2026-08-20 - LT 师训系统 M2（learning 域 + 企微通道 + 基础设施）

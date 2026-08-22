@@ -87,7 +87,34 @@ async fn get_media(
     let (path, _kind): (String, String) = row
         .map(|r| (r.get("p"), r.get("kind")))
         .ok_or_else(|| AppError::ResourceNotFound("media".into()))?;
-    let file = tokio::fs::File::open(&path)
+    // SEC-2（终审必修）服务侧：open 前对实际要打开的 COALESCE(playback_path,
+    // media_ref) 值做 canonicalize（解析符号链接）+ 许可根集（MEDIA__ALLOWED_ROOTS）
+    // 前缀校验——media_ref 与 playback_path 同标准。纵深：upsert 侧已词法挡掉
+    // 越界 playback，这里再收直插 DB 行 / 符号链接绕过。越界 404（与"不存在"同
+    // 响应，防探测）+ warn 日志（运维可见越界事件）。
+    let roots = &state.config.media.allowed_roots;
+    let canonical = tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|_| AppError::ResourceNotFound("media file".into()))?;
+    let mut under_root = false;
+    for r in roots {
+        if let Ok(cr) = tokio::fs::canonicalize(r).await {
+            if canonical.starts_with(&cr) {
+                under_root = true;
+                break;
+            }
+        }
+    }
+    if roots.is_empty() || !under_root {
+        tracing::warn!(
+            media_id = %media_id,
+            path = %path,
+            roots = roots.len(),
+            "media path outside allowed roots rejected"
+        );
+        return Err(AppError::ResourceNotFound("media file".into()));
+    }
+    let file = tokio::fs::File::open(&canonical)
         .await
         .map_err(|_| AppError::ResourceNotFound("media file".into()))?;
     let total = file

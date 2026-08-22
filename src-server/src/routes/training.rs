@@ -89,6 +89,23 @@ async fn import_media_assets(
                 it.slug.chars().take(32).collect::<String>()
             )));
         }
+        // SEC-2（终审必修）upsert 侧：playback_path 给出时校验——词法规范化后必须
+        // 落在媒体许可根集（MEDIA__ALLOWED_ROOTS，config.media.allowed_roots）之下；
+        // 根集为空 = 不可判 → 同样 400（fail-closed，utils/media_path.rs 判据）。
+        // 与下方 target_ref 拒绝对路径同款：400 + 截断回显；批内早退 → tx drop 回滚。
+        // media_ref 不在此校验（历史列语义 = 本机任意课程源路径，服务侧 canonicalize
+        // 纵深统一收口 COALESCE 后实际 open 的值）。
+        if let Some(pb) = &it.playback_path {
+            if !crate::utils::media_path::path_within_roots_lexical(
+                &state.config.media.allowed_roots,
+                pb,
+            ) {
+                return Err(AppError::BadRequest(format!(
+                    "playback_path escapes media allowed roots: {}...",
+                    pb.chars().take(32).collect::<String>()
+                )));
+            }
+        }
         // playback_path 用 COALESCE：常规 transcribe CLI 发 None，不得清空 demo/人工
         // 补登的转码覆盖值（Some 才覆盖——demo 模式注册逻辑不变）；其余列照常覆盖。
         sqlx::query(
@@ -157,8 +174,16 @@ fn require_training_admin(state: &AppState, headers: &HeaderMap) -> Result<(), A
 async fn bind(
     State(state): State<AppState>,
     headers: HeaderMap,
+    crate::services::rate_limit::ClientIp(ip): crate::services::rate_limit::ClientIp,
     Json(req): Json<BindRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
+    // SEC-3（终审必修）：IP 级固定窗口限流（10/min/IP，rate_limit::IpRateLimits），
+    // **先于** admin token 校验——防 TRAINING__ADMIN_TOKEN 暴力枚举（ct_eq 无泄漏，
+    // 限流补时间维度）。key 见 ClientIp（Cf-Connecting-Ip 头优先回落 socket addr）。
+    if !state.ip_limiter.bind.check(&ip) {
+        tracing::warn!(ip = %ip, "bind rate limited (10/min per IP)");
+        return Err(AppError::TooManyRequests);
+    }
     require_training_admin(&state, &headers)?;
     if req.wecom_userid.trim().is_empty() {
         return Err(AppError::BadRequest("wecom_userid is empty".into()));

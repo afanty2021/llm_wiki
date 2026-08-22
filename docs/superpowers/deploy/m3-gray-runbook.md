@@ -16,7 +16,7 @@
 | 使用频率 | 每周至少打开 1 次清单、有真实学习意图 | overview 打开率/完成率基线需要有效样本 |
 | 规模上限 | ≤5 人 | 周报 cron 分钟散列按 15 人容量设计，灰度期刻意留观察余量 |
 
-现 live 已有 2 名教师（`TuoMaSiXueXiGuanGuangLanGuangX` 正式 + `test` 测试小号），灰度即在此基础上扩到 3-5 真实教师。
+现 live 已有 2 名教师（`TuoMaSiXueXiGuanGuangGuLanGuangX` 正式 + `test` 测试小号），灰度即在此基础上扩到 3-5 真实教师。
 
 ## 2. 加白步骤（每名新教师约 5 分钟）
 
@@ -149,6 +149,25 @@ SKILL 是 prompt 层，**替换即生效**（新会话），无需重启任何�
 
 全部达标 → 按 spec §9 M4 行放量至 15 人；任一不达标 → 延长一周并针对短板修补；出现身份事故或连续两周五/5 不到 → 回退（§6.2 全员停 job + SKILL 回滚到 M2 版），重新评估后再启动。
 
-## 8. 灰度期记录
+## 8. 升级/迁移（schema 变更与新环境部署）
+
+- **① schema 变更对 live 库（本机实际采用 docker exec psql 直灌；`sqlx migrate run` 是 CI（ci.yml）与开发库路径，live 库按此惯例人工执行）**：
+
+  ```bash
+  docker exec -i src-server-postgres-1 psql -U llmwiki -d llmwiki \
+    < src-server/migrations/<file>.sql
+  ```
+
+  （017 即此法应用并经 `information_schema` 验证，见 SDD `task-minor-batch-c-report.md` §1/§5。）
+- **② 017 的后置步骤**（迁移保持通用不写死项目值，部署侧显式执行过一次）：
+
+  ```sql
+  UPDATE projects SET ingest_language='简体中文' WHERE id=614;
+  -- 回退（如需）：UPDATE projects SET ingest_language=NULL WHERE id=614;
+  ```
+- **③ compose 镜像内 migrations 只拷贝、不自动执行**（`src-server/Dockerfile:29` `COPY src-server/migrations /app/migrations` 仅落盘；`CMD` 只起服务，无 migrate 步骤）——**新环境用 compose 部署后必须人工跑 ①**，否则首启动即撞缺列/缺表。
+- **④ 终审必修批（SEC-2）新增必配 env**：`MEDIA__ALLOWED_ROOTS`（逗号分隔绝对路径列表）——/media 服务与 media-assets upsert 的 playback_path 许可根集；`MEDIA__SIGNING_KEY` 非空而此键为空时**启动即拒**（fail-closed）。live 重启前须在 launchd plist（`~/Library/LaunchAgents/wiki.src-server.plist`，模板 `docs/superpowers/deploy/wiki.src-server.plist.template`）注入，至少覆盖媒体实际存放根（如 transcriber out/playback 与课程源目录）。
+
+## 9. 灰度期记录
 
 每日观察结果（三项 + 异常）记入本文件同目录运营日志或 SDD 账本；周五周报核对结果与周一退出判据评估各留一次快照（overview JSON 原文存档）。

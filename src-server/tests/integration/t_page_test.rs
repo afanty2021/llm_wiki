@@ -64,6 +64,8 @@ async fn t_fixture(tag: &str) -> (TestServer, llm_wiki_server::AppState) {
     cfg.training.project_id = Some(project_id);
     cfg.training.admin_token = "tok123".to_string();
     cfg.media.signing_key = MEDIA_KEY.to_string();
+    // SEC-2：/media 许可根集 = 临时目录（seed_media_asset 的媒体文件都在 temp 下）
+    cfg.media.allowed_roots = vec![std::env::temp_dir().to_string_lossy().to_string()];
     let (app2, state) = llm_wiki_server::create_app(cfg).await.unwrap();
     (TestServer::new(app2).unwrap(), state)
 }

@@ -180,8 +180,16 @@ async fn register(
 /// stores refresh token hash, and returns AuthResponse with user data.
 async fn login(
     State(state): State<AppState>,
+    crate::services::rate_limit::ClientIp(ip): crate::services::rate_limit::ClientIp,
     Json(req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    // SEC-3（终审必修）：IP 级固定窗口限流（10/min/IP，rate_limit::IpRateLimits），
+    // 先于口令校验——防暴力猜解；超限 429（带 Retry-After: 60，error.rs 同款）。
+    // key 见 ClientIp（Cf-Connecting-Ip 头优先回落 socket addr，隧道场景真实 IP 在头）。
+    if !state.ip_limiter.login.check(&ip) {
+        tracing::warn!(ip = %ip, "login rate limited (10/min per IP)");
+        return Err(AppError::TooManyRequests);
+    }
     // Validate input
     if req.username.trim().is_empty() || req.password.is_empty() {
         return Err(AppError::ValidationError("Username and password are required".to_string()));

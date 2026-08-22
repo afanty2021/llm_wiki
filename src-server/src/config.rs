@@ -173,11 +173,18 @@ pub struct TrainingConfig {
     pub project_id: Option<i32>,
 }
 
-/// 媒体签名密钥（MEDIA__SIGNING_KEY；经环境变量注入、不入 git）
+/// 媒体签名密钥（MEDIA__SIGNING_KEY；经环境变量注入、不入 git）+ /media 许可根集。
+/// SEC-2（终审必修）：`allowed_roots`（MEDIA__ALLOWED_ROOTS，逗号分隔绝对路径列表）
+/// 是 /media 服务与 media-assets upsert 的 playback_path 共同的越界判据——
+/// media_ref/playback_path 均为本机绝对路径直开（media.rs File::open），不收口即
+/// 任意文件读。signing_key 非空（/media 开启）时 roots 必须非空（validate，fail-closed）。
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct MediaConfig {
     #[serde(default)]
     pub signing_key: String,
+    /// /media 许可根集：COALESCE(playback_path, media_ref) 规范化后必须落在其一之下。
+    #[serde(default)]
+    pub allowed_roots: Vec<String>,
 }
 
 /// t_page 三端点限流规格（评审 R4 入 config；此前 rate_limit.rs 硬编码 30/60）。
@@ -225,6 +232,18 @@ fn validate(cfg: &AppConfig) -> anyhow::Result<()> {
     // 签名纵深：HMAC-SHA256 密钥非空时至少 32 字节（有效强度）；空 = /media 功能未启用，放行
     if !cfg.media.signing_key.is_empty() && cfg.media.signing_key.len() < 32 {
         anyhow::bail!("MEDIA__SIGNING_KEY too short");
+    }
+    // SEC-2 fail-closed：/media 开启（signing_key 非空）而许可根集为空 → 启动即拒。
+    // 不收口 roots 的 /media = 任意路径读（media_ref/playback_path 为 DB 值直开）；
+    // 拒启动比运行期全 404 更早暴露配置缺失（与 JWT secret 黑名单同风格）。
+    if !cfg.media.signing_key.is_empty() && cfg.media.allowed_roots.is_empty() {
+        anyhow::bail!("MEDIA__ALLOWED_ROOTS must list at least one absolute path when MEDIA__SIGNING_KEY is set");
+    }
+    // SEC-3 fail-closed：TRAINING__ADMIN_TOKEN 非空（/bind、/overview 凭据启用）而
+    // < 32 字节 → 启动即拒——短 token 在 bind/login IP 限流（10/min）之外仍留
+    // 慢速枚举面；空 = 功能未启用放行（与 signing_key 同款语义）。
+    if !cfg.training.admin_token.is_empty() && cfg.training.admin_token.len() < 32 {
+        anyhow::bail!("TRAINING__ADMIN_TOKEN too short (must be at least 32 bytes when set)");
     }
     Ok(())
 }
@@ -275,7 +294,9 @@ impl AppConfig {
                     // 出现纯数字的 String 配置值，如密码恰好全数字）。
                     .try_parsing(true)
                     .list_separator(",")
-                    .with_list_parse_key("cors.allowed_origins"),
+                    // SEC-2：media.allowed_roots 逗号串 → Vec<String>（与 cors 同法）
+                    .with_list_parse_key("cors.allowed_origins")
+                    .with_list_parse_key("media.allowed_roots"),
             )
             .build()?;
 
@@ -530,9 +551,65 @@ mod tests {
         cfg.media.signing_key = "k".repeat(31);
         let err = validate(&cfg).unwrap_err();
         assert!(err.to_string().contains("MEDIA__SIGNING_KEY too short"));
+        // SEC-2：signing_key 非空即 /media 开启，roots 必须同步给出（见耦合测试）
+        cfg.media.allowed_roots = vec!["/media".to_string()];
         cfg.media.signing_key = "k".repeat(32);
         assert!(validate(&cfg).is_ok());
         cfg.media.signing_key = String::new();
+        assert!(validate(&cfg).is_ok());
+    }
+
+    #[test]
+    fn training_admin_token_length_validated() {
+        // SEC-3 fail-closed：admin_token 非空（bind/overview 凭据启用）而 < 32 字节
+        // → 启动即拒（暴力枚举面）；空 = 功能未启用放行（与 signing_key 同款）。
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "server": {"host": "0.0.0.0", "port": 8080},
+            "database": {"url": "postgres://x", "max_connections": 1},
+            "redis_url": "redis://x",
+            "jwt": {"secret": "x"},
+            "storage": {"path": "/tmp/x"},
+            "cors": {"allowed_origins": ["http://localhost"]}
+        }))
+        .expect("minimal AppConfig");
+        // 空串放行
+        assert!(validate(&cfg).is_ok(), "empty token = feature off, pass");
+        // 短 token 拒绝（red：修复前 is_ok）
+        cfg.training.admin_token = "tok123".to_string();
+        let err = validate(&cfg).unwrap_err();
+        assert!(
+            err.to_string().contains("TRAINING__ADMIN_TOKEN too short"),
+            "short token must fail: {err}"
+        );
+        // 32 字节放行
+        cfg.training.admin_token = "t".repeat(32);
+        assert!(validate(&cfg).is_ok(), "32-byte token passes");
+    }
+
+    #[test]
+    fn media_signing_key_requires_allowed_roots() {
+        // SEC-2 fail-closed：/media 开启（signing_key 非空）而许可根集为空 → 启动即拒
+        // （否则任意路径读仅剩运行期 404，配置漂移静默化）。signing_key 空 = 功能未启用放行。
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "server": {"host": "0.0.0.0", "port": 8080},
+            "database": {"url": "postgres://x", "max_connections": 1},
+            "redis_url": "redis://x",
+            "jwt": {"secret": "x"},
+            "storage": {"path": "/tmp/x"},
+            "cors": {"allowed_origins": ["http://localhost"]}
+        }))
+        .expect("minimal AppConfig");
+        cfg.media.signing_key = "k".repeat(32);
+        let err = validate(&cfg).unwrap_err();
+        assert!(
+            err.to_string().contains("MEDIA__ALLOWED_ROOTS"),
+            "signing key set without roots must fail: {err}"
+        );
+        cfg.media.allowed_roots = vec!["/data/media".to_string()];
+        assert!(validate(&cfg).is_ok(), "roots set → pass");
+        // 功能未启用（key 空）时 roots 可缺省
+        cfg.media.signing_key = String::new();
+        cfg.media.allowed_roots.clear();
         assert!(validate(&cfg).is_ok());
     }
 

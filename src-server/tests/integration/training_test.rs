@@ -98,11 +98,14 @@ async fn training_fixture_with_config_project(
         .await;
     assert_eq!(m2.status_code(), StatusCode::CREATED);
 
-    // 「改 config 后 create_app」（T3 模式）：TRAINING__PROJECT_ID 进程内不可变，经 config 注入
+    // 「改 config 后 create_app」（T3 模式）：TRAINING__PROJECT_ID 进程内不可变，经 config 注入。
+    // SEC-2：media.allowed_roots 注入 "/transcoded"——playback_path 校验（下方
+    // media_assets_playback_path_boundary）与 COALESCE 回归（/transcoded/*.mp4 值）共用。
     crate::ensure_test_jwt_secret();
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
     cfg.training.project_id = Some(project_id);
     cfg.training.admin_token = "tok123".to_string();
+    cfg.media.allowed_roots = vec!["/transcoded".to_string()];
     let (app2, state) = llm_wiki_server::create_app(cfg).await.unwrap();
     let server = TestServer::new(app2).unwrap();
     (server, state, admin, member)
@@ -277,8 +280,54 @@ async fn media_assets_validation_and_atomicity() {
     crate::teardown_test_data(&state).await;
 }
 
-// ============ Task 8：POST /api/v1/training/bind ============
+/// SEC-2（终审必修）upsert 侧：playback_path 越界 → 400，被拒请求不落库。
+/// fixture 的许可根集 = ["/transcoded"]：
+/// - 库外绝对路径（"/etc/passwd"）→ 400（修复前 200 直落库——/media 侧即任意文件读源）；
+/// - 相对路径 `..` 穿越越出根（"sub/../../escape.mp4"）→ 400；
+/// - 根内绝对（"/transcoded/ok.mp4"）与根内相对（"ok.mp4"）→ 200（控制组）。
+#[tokio::test]
+async fn media_assets_playback_path_boundary() {
+    let (server, state, admin, _member) = training_fixture_with_config_project("pbb").await;
 
+    let post = |item: serde_json::Value| {
+        server
+            .post("/api/v1/training/media-assets")
+            .add_header("authorization", bearer(&admin))
+            .json(&json!({"items":[item]}))
+    };
+    let item = |slug: &str, playback: Option<&str>| match playback {
+        Some(p) => json!({"slug":slug,"media_ref":"/tmp/x.mov","playback_path":p,"duration_s":60,"kind":"video","chapters":[]}),
+        None => json!({"slug":slug,"media_ref":"/tmp/x.mov","duration_s":60,"kind":"video","chapters":[]}),
+    };
+
+    // 库外绝对路径 → 400（red：修复前 200）
+    let slug_abs = unique("pabs");
+    let r = post(item(&slug_abs, Some("/etc/passwd"))).await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "absolute path outside roots must 400");
+
+    // `..` 穿越越出根 → 400（red：修复前 200）
+    let slug_trav = unique("ptrav");
+    let r = post(item(&slug_trav, Some("sub/../../escape.mp4"))).await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "traversal escaping roots must 400");
+
+    // 被拒请求零落库
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_assets WHERE slug = ANY($1)")
+        .bind(vec![slug_abs, slug_trav])
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "rejected playback_path must not persist");
+
+    // 控制组：根内绝对/相对均放行
+    let r = post(item(&unique("pok"), Some("/transcoded/ok.mp4"))).await;
+    assert_eq!(r.status_code(), StatusCode::OK, "absolute under root passes");
+    let r = post(item(&unique("prel"), Some("rel_ok.mp4"))).await;
+    assert_eq!(r.status_code(), StatusCode::OK, "relative inside root passes");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
+// ============ Task 8：POST /api/v1/training/bind ============
 #[tokio::test]
 async fn bind_lifecycle() {
     let (server, state, _admin, _member) = training_fixture_with_config_project("bind").await;
@@ -623,6 +672,35 @@ async fn bind_length_validation_matrix() {
     assert!(uname.chars().count() <= 50, "synthesized username must fit VARCHAR(50)");
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
+}
+
+/// SEC-3（终审必修）：/training/bind IP 级固定窗口限流（10/min/IP）。
+/// 同 IP 第 11 次 → 429（red：修复前永远 401）；换 IP 不受前桶影响（per-IP key）。
+/// key 取 Cf-Connecting-Ip 头（隧道场景；测试显式带头模拟）。限流先于 admin token
+/// 校验——防 TRAINING__ADMIN_TOKEN 暴力枚举。
+#[tokio::test]
+async fn bind_rate_limited_per_ip_429() {
+    let (server, _state, _admin, _member) = training_fixture_with_config_project("rate").await;
+    let body = json!({"wecom_userid": unique("rl")});
+
+    let call = |ip: &str| {
+        server
+            .post("/api/v1/training/bind")
+            .add_header("cf-connecting-ip", ip)
+            .add_header("x-training-admin-token", "wrong-token")
+            .json(&body)
+    };
+    // 同 IP 10 次（错 token → 401，但也计数）
+    for i in 0..10 {
+        let r = call("203.0.113.7").await;
+        assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED, "within cap #{i}");
+    }
+    // 第 11 次同 IP → 429（red：修复前 401）
+    let r = call("203.0.113.7").await;
+    assert_eq!(r.status_code(), StatusCode::TOO_MANY_REQUESTS, "11th same-IP bind must 429");
+    // 换 IP → 独立桶，不受前桶影响（仍 401：token 错）
+    let r = call("198.51.100.9").await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED, "different IP has its own bucket");
 }
 
 // ============ M3 Task 3：GET /training/overview + weekly period_key 自算 ============

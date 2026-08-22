@@ -113,6 +113,73 @@ pub fn beacon_key(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))[..16].to_string()
 }
 
+// ============ SEC-3（终审必修）：bind/login IP 级限流 ============
+
+/// /training/bind 与 /auth/login 的 IP 级限流默认规格：10 次/分钟/IP 每端点
+/// （防 TRAINING__ADMIN_TOKEN 暴力枚举与口令猜解）。两桶独立（bind/login 各自
+/// 计数），复用 [`FixedWindowLimiter`]（进程内固定窗口，语义同上）。
+pub const AUTH_IP_CAP_PER_MIN: usize = 10;
+
+/// bind + login 两档 IP 限流组合（AppState.ip_limiter 持有）。
+pub struct IpRateLimits {
+    /// POST /api/v1/training/bind（key = 客户端 IP）
+    pub bind: FixedWindowLimiter,
+    /// POST /api/v1/auth/login（key = 客户端 IP）
+    pub login: FixedWindowLimiter,
+}
+
+impl IpRateLimits {
+    pub fn new() -> Self {
+        let minute = Duration::from_secs(60);
+        Self {
+            bind: FixedWindowLimiter::new(AUTH_IP_CAP_PER_MIN, minute),
+            login: FixedWindowLimiter::new(AUTH_IP_CAP_PER_MIN, minute),
+        }
+    }
+}
+
+impl Default for IpRateLimits {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 客户端 IP（SEC-3 限流 key）：`Cf-Connecting-Ip` 头优先（cloudflared 隧道场景
+/// ——socket addr 是隧道回环，真实客户端 IP 只在头里）；回落 axum
+/// `ConnectInfo<SocketAddr>`（直连场景，main.rs into_make_service_with_connect_info
+/// 注入）；两者皆缺（TestServer/oneshot 直调 Router 等形态）→ `"unknown"` 共桶
+/// （fail-closed：缺 IP ≠ 放行，全部进同一桶受限流约束）。
+pub struct ClientIp(pub String);
+
+#[axum::async_trait]
+impl<S> axum::extract::FromRequestParts<S> for ClientIp
+where
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let ip = parts
+            .headers
+            .get("cf-connecting-ip")
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                parts
+                    .extensions
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|ci| ci.0.ip().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        Ok(ClientIp(ip))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +248,77 @@ mod tests {
         assert_eq!(k1.len(), 16);
         assert_ne!(k1, k2, "不同 token 的 beacon key 必须不同");
         assert!(k1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // ============ SEC-3：IpRateLimits / ClientIp ============
+
+    #[test]
+    fn ip_rate_limits_bind_login_independent_buckets() {
+        // bind/login 各自 10/min：bind 打满不影响 login（独立桶）
+        let limits = IpRateLimits::new();
+        for i in 0..AUTH_IP_CAP_PER_MIN {
+            assert!(limits.bind.check("1.2.3.4"), "bind #{i} allowed");
+        }
+        assert!(!limits.bind.check("1.2.3.4"), "bind 11th denied");
+        assert!(limits.login.check("1.2.3.4"), "login unaffected by bind bucket");
+        for i in 0..(AUTH_IP_CAP_PER_MIN - 1) {
+            assert!(limits.login.check("1.2.3.4"), "login #{i} allowed");
+        }
+        assert!(!limits.login.check("1.2.3.4"), "login 11th denied");
+        // 其他 IP 不受影响
+        assert!(limits.bind.check("5.6.7.8"));
+        assert!(limits.login.check("5.6.7.8"));
+    }
+
+    #[tokio::test]
+    async fn client_ip_prefers_cf_header_then_connect_info_then_unknown() {
+        use axum::extract::FromRequestParts;
+
+        // http::request::Parts 有私有字段，经 Request::into_parts 取（无 IO，纯构造）
+        let parts = || {
+            let req = axum::http::Request::builder().uri("/").body(()).unwrap();
+            let (p, ()) = req.into_parts();
+            p
+        };
+
+        // 无头无扩展 → unknown（fail-closed 共桶）
+        let mut p = parts();
+        let ip = ClientIp::from_request_parts(&mut p, &()).await.unwrap();
+        assert_eq!(ip.0, "unknown");
+
+        // Cf-Connecting-Ip 优先（即使 ConnectInfo 也在）
+        let mut p = parts();
+        p.headers.insert(
+            "cf-connecting-ip",
+            axum::http::HeaderValue::from_static("203.0.113.9"),
+        );
+        p.extensions.insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            8080,
+        ))));
+        let ip = ClientIp::from_request_parts(&mut p, &()).await.unwrap();
+        assert_eq!(ip.0, "203.0.113.9");
+
+        // 无头、有 ConnectInfo → socket addr 的 IP
+        let mut p = parts();
+        p.extensions.insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            8080,
+        ))));
+        let ip = ClientIp::from_request_parts(&mut p, &()).await.unwrap();
+        assert_eq!(ip.0, "127.0.0.1");
+
+        // 空白头视为缺省 → 回落 ConnectInfo（防 "  " 制造独立桶绕过）
+        let mut p = parts();
+        p.headers.insert(
+            "cf-connecting-ip",
+            axum::http::HeaderValue::from_static("   "),
+        );
+        p.extensions.insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            8080,
+        ))));
+        let ip = ClientIp::from_request_parts(&mut p, &()).await.unwrap();
+        assert_eq!(ip.0, "127.0.0.1");
     }
 }
