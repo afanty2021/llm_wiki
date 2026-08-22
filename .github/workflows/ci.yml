@@ -124,3 +124,42 @@ jobs:
       - name: cargo test (lib + integration)
         working-directory: src-server
         run: cargo test --lib --test integration
+
+  # JS 测试补覆盖：check 只验证 vite build,根 vitest(2239 个 mock 用例)
+  # 与 mcp-server 的 node --test 从不进 CI → 此 job 补齐。
+  # LLM 门控：只跑 test:mocks,该脚本自带 --exclude '**/*.real-llm.test.ts'
+  # 文件名排除。真实 LLM 用例依赖 .env.test.local 凭证/局域网端点,无凭证
+  # 时虽是 skipIf/可达性探测跳过而非 fail,但整文件 skip 等于零信号,还会
+  # 对 192.168.x.x 做网络探测;故 CI 用文件名排除确定性挡住,test:llm
+  # 留作本地 `npm test` 时跑。vitest 无独立配置,复用 vite.config.ts 的
+  # test 段(其 .env.test.local 加载器对缺失文件是 no-op,CI 安全)。
+  frontend-test:
+    name: vitest + mcp-server
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 与 check job 保持一致用 npm install(仓库虽有 package-lock.json,
+      # 但既有约定如此,不单独引入 npm ci)
+      - name: Install frontend dependencies
+        run: npm install
+
+      # mock 子集全量:本地 164 文件 / 2239 用例 ≈ 12s
+      - name: Run vitest (mock subset)
+        run: npm run test:mocks
+
+      # mcp-server 测试跑编译产物而非源码,须先 ci 装依赖
+      - name: Install mcp-server dependencies
+        run: npm --prefix mcp-server ci
+
+      # 根脚本 mcp:test = 先 tsc build 再 node --test dist/test/*.test.js
+      # (本地 65/65),测试命令内部已含构建,无需单独 mcp:build 步
+      - name: Test mcp-server (node --test)
+        run: npm run mcp:test
