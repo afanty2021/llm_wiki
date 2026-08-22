@@ -134,7 +134,7 @@ live 服务与集成测试共享单一 postgres 容器（host 5433→容器 5432
 
 ## 7. 测试汇总（M3 收官时点）
 
-- src-server：cargo lib 254 + integration **107/107**（停共享 DB release server 后复跑；ingest_queue flake 为 Global Constraints 点名项，stash 干净树甄别）
+- src-server：cargo lib 269（终审复跑，批 A 时点为 254） + integration **107/107**（停共享 DB release server 后复跑；ingest_queue flake 为 Global Constraints 点名项，stash 干净树甄别）
 - mcp-server：node --test **54/54**（990eac2b 后；此前 51/51）
 - tools/transcriber vitest 130/130 · wiki-graph vitest 10/10 · 收编工具 73 · 恢复工具/纯函数 32/32 · T2 矩阵 45/45
 - upstream 试合并草稿：vitest 2012/10 预存（基线比对一致）· cargo-tauri 441/0 · cargo-server 192/0
