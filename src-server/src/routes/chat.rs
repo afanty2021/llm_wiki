@@ -31,7 +31,10 @@ pub async fn chat_stream(
     let project_id = body
         .get("project_id")
         .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32;
+        .unwrap_or(0);
+    // 显式 try_from（遗留债）：JSON i64 越界时 400 而非静默截断
+    let project_id = i32::try_from(project_id)
+        .map_err(|_| AppError::BadRequest("project_id out of range".into()))?;
     let _user_id = check_project_access(&state, &headers, project_id).await?.0;
 
     let messages: Vec<ChatMessage> = body
@@ -60,7 +63,10 @@ pub async fn chat_message(
     let project_id = body
         .get("project_id")
         .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32;
+        .unwrap_or(0);
+    // 显式 try_from（遗留债）：JSON i64 越界时 400 而非静默截断
+    let project_id = i32::try_from(project_id)
+        .map_err(|_| AppError::BadRequest("project_id out of range".into()))?;
 
     let _user_id = check_project_access(&state, &headers, project_id).await?.0;
 

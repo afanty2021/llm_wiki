@@ -81,6 +81,7 @@ pub async fn create_app(config: AppConfig) -> Result<(axum::Router, AppState)> {
     let limiter = Arc::new(services::rate_limit::PageRateLimits::with_caps(
         config.page_rate_limits.s_per_min,
         config.page_rate_limits.beacon_per_min,
+        config.page_rate_limits.t_per_min,
     ));
 
     let ip_limiter = Arc::new(services::rate_limit::IpRateLimits::new());

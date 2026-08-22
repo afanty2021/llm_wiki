@@ -17,9 +17,10 @@
 //! - `POST /t/:token/complete`：body `{item_id}`，校验 ∈ plan（伪造 → 400）后
 //!   projection::complete_item（单调、幂等）。
 //!
-//! **限流（Task 6 r3）**：`/s/:code` 30 次/分钟（key=code）、`/t/` 的 seen/
-//! complete beacon 60 次/分钟（key=sha256(token) 前 16 hex，两端点共桶）——
-//! AppState.limiter（services/rate_limit.rs），超限 `TooManyRequests` → 429。
+//! **限流（Task 6 r3 + SEC-7）**：`/s/:code` 30 次/分钟（key=code）、`/t/` 的
+//! seen/complete beacon 60 次/分钟（key=sha256(token) 前 16 hex，两端点共桶）、
+//! `GET /t/:token` 落地 30 次/分钟（SEC-7：view 事件随 GET 无界写，同指纹形态
+//! 独立桶）——AppState.limiter（services/rate_limit.rs），超限 `TooManyRequests` → 429。
 //!
 //! **XSS 防线（存储型，本文件的安全核心）**：label 由 LLM 从老师消息生成、
 //! title/reason/content 来自 wiki——全部是不可信输入。`render_t_page` 对所有
@@ -572,6 +573,16 @@ async fn get_t_page(
     Path(token): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
+    // SEC-7（终审强烈建议）：view 事件随 GET 无界写——持任一 plan_link 者循环
+    // GET 即可刷库膨胀 learning_events 并污染 view 统计。落地 30/min（key=token
+    // 指纹，独立桶）。先于验签/DB（与 beacon 限流同位——最廉价的 DoS 闸）。
+    if !state
+        .limiter
+        .t_page
+        .check(&crate::services::rate_limit::beacon_key(&token))
+    {
+        return Err(AppError::TooManyRequests);
+    }
     let (user_id, plan_id) =
         match crate::utils::verify_plan_link_token(&token, state.config.jwt_secret()) {
             Ok(v) => v,
@@ -790,8 +801,14 @@ async fn post_seen(
         }
     }
 
-    crate::services::projection::apply_seen(&mut tx, plan_id, item_id.map(|i| i as i32), user_id)
-        .await?;
+    // 显式 try_from（遗留债）：item_id 来自客户端 JSON（i64），越界截断静默错绑行
+    let item_id_i32 = match item_id {
+        Some(i) => Some(i32::try_from(i).map_err(|_| {
+            AppError::BadRequest(format!("item_id {i} out of range"))
+        })?),
+        None => None,
+    };
+    crate::services::projection::apply_seen(&mut tx, plan_id, item_id_i32, user_id).await?;
     tx.commit().await.map_err(AppError::from)?;
     Ok(Json(serde_json::json!({ "ok": true, "item_id": item_id })))
 }
@@ -837,7 +854,11 @@ async fn post_complete(
         )));
     }
 
-    crate::services::projection::complete_item(&mut tx, body.item_id as i32, user_id).await?;
+    // 显式 try_from（遗留债）：同 seen——客户端 i64 越界时 400 而非静默截断
+    let item_id_i32 = i32::try_from(body.item_id).map_err(|_| {
+        AppError::BadRequest(format!("item_id {} out of range", body.item_id))
+    })?;
+    crate::services::projection::complete_item(&mut tx, item_id_i32, user_id).await?;
     tx.commit().await.map_err(AppError::from)?;
     Ok(Json(serde_json::json!({ "item_id": body.item_id, "status": "completed" })))
 }

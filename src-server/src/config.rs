@@ -187,28 +187,33 @@ pub struct MediaConfig {
     pub allowed_roots: Vec<String>,
 }
 
-/// t_page 三端点限流规格（评审 R4 入 config；此前 rate_limit.rs 硬编码 30/60）。
+/// t_page 端点限流规格（评审 R4 入 config；此前 rate_limit.rs 硬编码 30/60）。
 /// - `s_per_min`：GET /s/:code 每分钟上限（默认 30）
 /// - `beacon_per_min`：POST /t/:token/seen 与 /complete 每分钟上限（默认 60，共桶）
-/// 环境变量覆盖（"__" 分隔嵌套）：PAGE_RATE_LIMITS__S_PER_MIN / PAGE_RATE_LIMITS__BEACON_PER_MIN
+/// - `t_per_min`：GET /t/:token 每分钟上限（默认 30，SEC-7 view 事件写库闸门）
+/// 环境变量覆盖（"__" 分隔嵌套）：PAGE_RATE_LIMITS__S_PER_MIN / __BEACON_PER_MIN / __T_PER_MIN
 #[derive(Debug, Clone, Deserialize)]
 pub struct PageRateLimitConfig {
     #[serde(default = "default_page_rate_s_per_min")]
     pub s_per_min: usize,
     #[serde(default = "default_page_rate_beacon_per_min")]
     pub beacon_per_min: usize,
+    #[serde(default = "default_page_rate_t_per_min")]
+    pub t_per_min: usize,
 }
 
 // 单一真源：字面量只在 rate_limit 常量处存在一次，serde 缺省与 Default 均引用之，
-// 改默认值只动 rate_limit.rs 两常量（否则 serde 兜底与 new() 会静默漂移——评审 minor）。
+// 改默认值只动 rate_limit.rs 三常量（否则 serde 兜底与 new() 会静默漂移——评审 minor）。
 fn default_page_rate_s_per_min() -> usize { crate::services::rate_limit::S_REDIRECT_CAP_PER_MIN }
 fn default_page_rate_beacon_per_min() -> usize { crate::services::rate_limit::BEACON_CAP_PER_MIN }
+fn default_page_rate_t_per_min() -> usize { crate::services::rate_limit::T_VIEW_CAP_PER_MIN }
 
 impl Default for PageRateLimitConfig {
     fn default() -> Self {
         Self {
             s_per_min: default_page_rate_s_per_min(),
             beacon_per_min: default_page_rate_beacon_per_min(),
+            t_per_min: default_page_rate_t_per_min(),
         }
     }
 }

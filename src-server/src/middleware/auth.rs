@@ -49,8 +49,10 @@ pub async fn require_admin(
     Ok(claims)
 }
 
-/// 纯函数：username 是否在 admin 白名单（空白名单 → 全拒）
-fn is_admin(username: &str, admins: &[String]) -> bool {
+/// 纯函数：username 是否在 admin 白名单（空白名单 → 全拒）。
+/// pub（M4 前置收窄）：users/:id 的 self/admin 判定复用（/logs 的 require_admin
+/// 同源——admin 语义全仓一致走 ADMIN_USERNAMES 白名单）。
+pub fn is_admin(username: &str, admins: &[String]) -> bool {
     !admins.is_empty() && admins.iter().any(|a| a == username)
 }
 

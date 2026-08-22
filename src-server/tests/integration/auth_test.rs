@@ -25,6 +25,24 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    /// SEC-4 补集成面（遗留债：此前仅 200-ok 路径有覆盖）：DB 池关闭 →
+    /// degraded 路径。仍 200（外探针语义不变）、status=degraded、详情恒常量
+    /// "unavailable"（sqlx 错误原文只进 tracing，响应不泄漏 DSN/拓扑）。
+    #[tokio::test]
+    async fn health_degraded_masks_detail_and_stays_200() {
+        let (app, state) = crate::setup_test_app().await;
+        // 关池模拟 DB 不可用：health 的 SELECT 1 acquire 失败走 degraded 分支
+        // （redis 未动，degraded.redis 应为 null）
+        state.db.close().await;
+        let server = axum_test::TestServer::new(app).unwrap();
+        let r = server.get("/health").await;
+        assert_eq!(r.status_code(), StatusCode::OK, "degraded 仍 200（探针语义）");
+        let v = r.json::<serde_json::Value>();
+        assert_eq!(v["status"], "degraded");
+        assert_eq!(v["degraded"]["db"], "unavailable", "详情恒常量，不带错误原文");
+        assert!(v["degraded"]["redis"].is_null(), "redis 未动，应为 null");
+    }
+
     #[tokio::test]
     #[ignore = "Requires database — run with DATABASE_URL set"]
     async fn test_register_and_login_flow() {
@@ -87,7 +105,7 @@ mod tests {
         assert_eq!(r.status_code(), axum::http::StatusCode::UNAUTHORIZED, "bad token must be 401");
 
         // 有效 token → 200（鉴权后语义不变：任意登录用户可按 id 查）
-        let username = format!("usersid_{}", std::process::id());
+        let username = format!("t9_usersid_{}", std::process::id());
         let token = crate::register_user(
             &server,
             &username,
@@ -108,6 +126,79 @@ mod tests {
         assert_eq!(r.json::<serde_json::Value>()["id"].as_i64(), Some(uid));
     }
 
+    /// M4 前置收窄：users/:id 仅「本人或 ADMIN_USERNAMES 白名单」。
+    /// 跨用户查询 → 403（red：收窄前任意登录用户 200）；admin 白名单 → 200。
+    #[tokio::test]
+    async fn users_id_narrowed_to_self_or_admin() {
+        // 跨用户：B 的 token 查 A → 403
+        let (app, _state) = crate::setup_test_app().await;
+        let server = axum_test::TestServer::new(app).unwrap();
+        let uname_a = format!("t9_uidself_a_{}", std::process::id());
+        let token_a = crate::register_user(
+            &server,
+            &uname_a,
+            &format!("{}@t.com", uname_a),
+            "password123",
+        )
+        .await;
+        let me_a = server
+            .get("/api/v1/users/me")
+            .add_header("authorization", format!("Bearer {}", token_a))
+            .await;
+        let uid_a = me_a.json::<serde_json::Value>()["id"].as_i64().unwrap();
+
+        let uname_b = format!("t9_uidself_b_{}", std::process::id());
+        crate::register_user(
+            &server,
+            &uname_b,
+            &format!("{}@t.com", uname_b),
+            "password123",
+        )
+        .await;
+
+        // admin 白名单放进 B：需要带白名单的独立 app 实例（AppState.config 是 Arc，
+        // create_app 后不可变）。同库同用户，login 取 token（register 会 409 重复）。
+        crate::ensure_test_jwt_secret();
+        let mut config = llm_wiki_server::AppConfig::from_env().expect("test config");
+        config.auth.registration_enabled = true;
+        config.admin_usernames = uname_b.clone();
+        let app2 = llm_wiki_server::create_app(config).await.expect("test app 2");
+        let (app2, _state2) = app2;
+        let server2 = axum_test::TestServer::new(app2).unwrap();
+        let login_b = server2
+            .post("/api/v1/auth/login")
+            .content_type("application/json")
+            .json(&serde_json::json!({"username": uname_b, "password": "password123"}))
+            .await;
+        assert_eq!(login_b.status_code(), axum::http::StatusCode::OK);
+        let token_b = login_b.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("access_token")
+            .to_string();
+
+        let r = server2
+            .get(&format!("/api/v1/users/{uid_a}"))
+            .add_header("authorization", format!("Bearer {}", token_b))
+            .await;
+        assert_eq!(r.status_code(), axum::http::StatusCode::OK, "admin whitelist must pass");
+        assert_eq!(r.json::<serde_json::Value>()["id"].as_i64(), Some(uid_a));
+
+        // 同一 app2 上无白名单的普通用户视角：注册 C 查 A → 403（收窄主断言）
+        let uname_c = format!("t9_uidself_c_{}", std::process::id());
+        let token_c = crate::register_user(
+            &server2,
+            &uname_c,
+            &format!("{}@t.com", uname_c),
+            "password123",
+        )
+        .await;
+        let r = server2
+            .get(&format!("/api/v1/users/{uid_a}"))
+            .add_header("authorization", format!("Bearer {}", token_c))
+            .await;
+        assert_eq!(r.status_code(), axum::http::StatusCode::FORBIDDEN, "cross-user must be 403");
+    }
+
     /// SEC-3（终审必修）：/auth/login IP 级固定窗口限流（10/min/IP）。
     /// 同 IP 第 11 次 → 429（red：修复前永远 401）——防口令暴力猜解。
     #[tokio::test]
@@ -115,7 +206,7 @@ mod tests {
         let (app, _state) = crate::setup_test_app().await;
         let server = axum_test::TestServer::new(app).unwrap();
 
-        let username = format!("loginrl_{}", std::process::id());
+        let username = format!("t9_loginrl_{}", std::process::id());
         crate::register_user(
             &server,
             &username,
