@@ -106,7 +106,7 @@ T8 已修 read_file 404 误计熔断（990eac2b：应用级未找到改正常返
 | 2026-08-22 | test | OPPO PHJ110 / Android 13 | ✅（T8 E2E） | ✅ | — |
 | （M2 已验） | — | iPhone 8 Plus / iOS WKWebView | ✅（playsinline 修复后） | ✅ | 原判定"不支持 HEVC"被推翻 |
 
-任一机型 HEVC 播放失败 → 记录机型与现象（黑屏/转圈/报错），并启用 **per-slug 手动兜底**（零代码应急：CLI 手转该集为 H.264 → `UPDATE media_assets SET playback_path='<副本绝对路径>' WHERE slug='<slug>'`——/media 的 COALESCE 会优先放副本，只影响该视频）；连续 3+ 机型全绿 → M4 转码缓存退役终判（2026-08-22 已执行退役清理：12 行 playback_path 置空 + 2.8G h264-cache 删除，全库原件直出）。
+任一机型 HEVC 播放失败 → 记录机型与现象（黑屏/转圈/报错），并启用 **per-slug 手动兜底**（零代码应急：CLI 手转该集为 H.264 → `UPDATE media_assets SET playback_path='<副本绝对路径>' WHERE slug='<slug>'`——/media 的 COALESCE 会优先放副本，只影响该视频）；**注意（终审 round2）：应急副本所在目录必须已在 `MEDIA__ALLOWED_ROOTS` 内，否则签名 URL 会 404——症状与"转码失败"易混淆，排查时先查 roots 再查转码产物；**连续 3+ 机型全绿 → M4 转码缓存退役终判（2026-08-22 已执行退役清理：12 行 playback_path 置空 + 2.8G h264-cache 删除，全库原件直出）。
 
 ## 6. 异常处置路径（快捷回滚）
 
@@ -166,7 +166,7 @@ SKILL 是 prompt 层，**替换即生效**（新会话），无需重启任何�
   -- 回退（如需）：UPDATE projects SET ingest_language=NULL WHERE id=614;
   ```
 - **③ compose 镜像内 migrations 只拷贝、不自动执行**（`src-server/Dockerfile:29` `COPY src-server/migrations /app/migrations` 仅落盘；`CMD` 只起服务，无 migrate 步骤）——**新环境用 compose 部署后必须人工跑 ①**，否则首启动即撞缺列/缺表。
-- **④ 终审必修批（SEC-2）新增必配 env**：`MEDIA__ALLOWED_ROOTS`（逗号分隔绝对路径列表）——/media 服务与 media-assets upsert 的 playback_path 许可根集；`MEDIA__SIGNING_KEY` 非空而此键为空时**启动即拒**（fail-closed）。live 重启前须在 launchd plist（`~/Library/LaunchAgents/wiki.src-server.plist`，模板 `docs/superpowers/deploy/wiki.src-server.plist.template`）注入，至少覆盖媒体实际存放根（如 transcriber out/playback 与课程源目录）。
+- **④ 终审必修批（SEC-2）新增必配 env**：`MEDIA__ALLOWED_ROOTS`（逗号分隔绝对路径列表）——/media 服务与 media-assets upsert 的 playback_path 许可根集；`MEDIA__SIGNING_KEY` 非空而此键为空时**启动即拒**（fail-closed）。live 重启前须在 launchd plist（`~/Library/LaunchAgents/wiki.src-server.plist`，模板 `docs/superpowers/deploy/wiki.src-server.plist.template`）注入，至少覆盖媒体实际存放根（如 transcriber out/playback 与课程源目录）。**新环境/换机部署时先枚举存量实际根再定值（勿凭记忆写）**：`docker exec src-server-postgres-1 psql -U llmwiki -d llmwiki -t -c "SELECT DISTINCT regexp_replace(COALESCE(playback_path, media_ref), '/[^/]*$', '') FROM media_assets;"`——枚举结果全部纳入 roots，漏一个根该批媒体即全量 404。
 
 ## 9. 灰度期记录
 
