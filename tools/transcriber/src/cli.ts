@@ -7,7 +7,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { join, basename as pathBasename } from "node:path";
 import { scanDirectory, type ScannedFile } from "./scan";
 import { probeMedia } from "./probe";
-import { buildManifest, type ManifestRow, type ManifestEntry, type ManifestSummary } from "./manifest";
+import {
+  buildManifest, serializeManifest, parseManifest, diffManifests,
+  type ManifestRow, type ManifestEntry, type ManifestSummary,
+} from "./manifest";
 import { extractAudio, transcodePlayback, sha256File, sha8Of, audioOutPath, playbackOutPath } from "./audio";
 import { slugFor } from "./slug";
 import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
@@ -81,6 +84,15 @@ function parseConcurrency(argv: string[]): number {
   const n = Number(argv[i + 1]);
   if (!Number.isInteger(n) || n < 1) fail(`--concurrency 需为正整数（收到 ${argv[i + 1] ?? "无值"}）`);
   return n;
+}
+
+/** audit --diff 值解析：与 parseTranscribeArgs 的 val() 同规则（末位缺值/下一 flag 视为缺值 → 报错退出） */
+export function parseDiffPath(argv: string[]): string | undefined {
+  const i = argv.indexOf("--diff");
+  if (i < 0) return undefined;
+  const next = argv[i + 1];
+  if (next === undefined || next.startsWith("--")) fail(`--diff 需带值（收到 ${next ?? "无值"}）`);
+  return next;
 }
 
 // —— transcribe / sign-media 参数与纯函数（单测覆盖）——
@@ -239,7 +251,8 @@ export async function runIngestPhase(
   return { jobId, job, failedSources, warnings };
 }
 
-// —— audit（全库审计；transcribe 主循环第一步复用——重跑兼作迁移健康检查）——
+// —— audit（全库审计；transcribe 主循环第一步复用——重跑兼作迁移健康检查；
+//     --diff 对照上一份 manifest 出新增/移除/变更三类 delta，M4 前工具项）——
 
 async function runAudit(cfg: Config, concurrency: number): Promise<{ entries: ManifestEntry[]; summary: ManifestSummary }> {
   const t0 = Date.now();
@@ -298,16 +311,47 @@ async function runAudit(cfg: Config, concurrency: number): Promise<{ entries: Ma
   if (mediaCount === 0) fail("审计结果 0 媒体——config 根目录可能指错（静默空跑防线）");
 
   mkdirSync(outDir, { recursive: true });
-  writeFileSync(join(outDir, "manifest.json"), JSON.stringify(entries, null, 2));
+  // v2 信封落盘（M4 前工具项）：行内去 absPath（省 ~45% 体积），绝对根上提信封层；summary/overlap 口径不变
+  writeFileSync(join(outDir, "manifest.json"), JSON.stringify(
+    serializeManifest(entries, { main: cfg.mainRoot, hevc: cfg.hevcRoot }, summary.generatedAt), null, 2));
   writeFileSync(join(outDir, "manifest-summary.json"), JSON.stringify(summary, null, 2));
   writeFileSync(join(outDir, "overlap.json"), JSON.stringify(overlapGroups, null, 2));
   return { entries, summary };
 }
 
 async function cmdAudit(argv: string[]): Promise<void> {
+  const diffPath = parseDiffPath(argv);
+  // 先读上一份再跑审计：--diff 的典型用法就是对照 out/manifest.json，而本次审计会覆写该文件
+  let prevEntries: ManifestEntry[] | undefined;
+  if (diffPath !== undefined) {
+    try {
+      prevEntries = parseManifest(JSON.parse(readFileSync(diffPath, "utf-8")));
+    } catch (e) {
+      return fail(`--diff 无法读取/解析 ${diffPath}（${String(e).slice(0, 160)}）`);
+    }
+  }
   const cfg = await preflight();
-  const { summary } = await runAudit(cfg, parseConcurrency(argv));
+  const { entries, summary } = await runAudit(cfg, parseConcurrency(argv));
   console.log(JSON.stringify(summary, null, 2));
+  if (prevEntries === undefined) return;
+
+  // —— diff 输出：三类 delta 清单与计数；退出码非零 = 迁移健康检查失败（spec §3.1）——
+  const delta = diffManifests(prevEntries, entries);
+  console.log(`—— diff（对照 ${diffPath}：prev ${prevEntries.length} 行 / 本次 ${entries.length} 行）——`);
+  console.log(`新增 ${delta.added.length} / 移除 ${delta.removed.length} / 变更 ${delta.changed.length}（probeFailures ${delta.prevProbeFailures} → ${delta.currProbeFailures}）`);
+  for (const r of delta.added) console.log(`  + [${r.source}] ${r.relPath}${r.error ? `（error: ${r.error.slice(0, 80)}）` : ""}`);
+  for (const r of delta.removed) console.log(`  - [${r.source}] ${r.relPath}`);
+  for (const c of delta.changed) {
+    console.log(`  ~ ${c.key.replace(/^\0/, "")}：[${c.prev.source}] ${c.prev.relPath} → [${c.curr.source}] ${c.curr.relPath}（${c.fields.join(", ")}）`);
+  }
+  if (delta.newErrorRows.length > 0) {
+    console.error(`✗ 新增 error 行 ${delta.newErrorRows.length}（转换器产坏件？spec §3.1）：`);
+    for (const r of delta.newErrorRows) console.error(`    [${r.source}] ${r.relPath}: ${r.error ?? ""}`);
+  }
+  if (delta.currProbeFailures > delta.prevProbeFailures) {
+    console.error(`✗ probeFailures 涌增：${delta.prevProbeFailures} → ${delta.currProbeFailures}`);
+  }
+  if (delta.exitCode !== 0) process.exit(1);
 }
 
 // —— transcribe 主循环 ——
@@ -630,7 +674,7 @@ async function main() {
   if (cmd === "audit") return cmdAudit(rest);
   if (cmd === "transcribe") return cmdTranscribe(rest);
   if (cmd === "sign-media") return cmdSignMedia(rest);
-  console.error("用法: tsx tools/transcriber/src/cli.ts audit [--concurrency N] | transcribe [--window 23:00-08:00] [--limit N] [--force] [--demo-slug <slug>] | sign-media <slug> [--hours 12]");
+  console.error("用法: tsx tools/transcriber/src/cli.ts audit [--concurrency N] [--diff <prev-manifest.json>] | transcribe [--window 23:00-08:00] [--limit N] [--force] [--demo-slug <slug>] | sign-media <slug> [--hours 12]");
   process.exit(1);
 }
 

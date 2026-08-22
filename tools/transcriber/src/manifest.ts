@@ -165,3 +165,160 @@ export function buildManifest(
   };
   return { entries, summary, overlapGroups };
 }
+
+// —— manifest v2 信封（M4 前工具项）：行内去 absPath（实测约占体积 45%），绝对根上提到信封层 ——
+// v1 = 裸数组（无 version 字段，每行自带 absPath）；parseManifest 读取侧兼容两版，
+// 写侧（serializeManifest）默认只产 v2。manifest-summary / overlap 口径不变（本就只按 relPath 统计）。
+
+/** relPath 的基准根：双根扫描（main/hevc）单一字符串装不下，行内按 source 取对应根 */
+export type ManifestBaseDir = { main: string; hevc: string };
+
+/** v2 信封行 = ManifestEntry 去 absPath（读取侧按 baseDir[source] + "/" + relPath 重建） */
+export type ManifestEntrySlim = Omit<ManifestEntry, "absPath">;
+
+export interface ManifestEnvelope {
+  version: 2;                 // v1 无信封（裸数组），读取侧以 Array.isArray 区分新旧
+  baseDir: ManifestBaseDir;   // 行内 relPath 相对的绝对根（按行 source 取）
+  generatedAt: string;        // 与 manifest-summary.generatedAt 同源
+  rows: ManifestEntrySlim[];
+}
+
+/** 序列化为 v2 信封（写侧唯一格式）：仅剥行内 absPath，其余字段原样保留。 */
+export function serializeManifest(
+  entries: ManifestEntry[],
+  baseDir: ManifestBaseDir,
+  generatedAt: string,
+): ManifestEnvelope {
+  return {
+    version: 2,
+    baseDir,
+    generatedAt,
+    rows: entries.map(({ absPath: _absPath, ...rest }) => rest),
+  };
+}
+
+// 行形状防御：行必须是含 relPath 字符串的对象（--diff 的输入是显式指定的文件，坏形状直接抛，fail fast）
+const assertRows = (rows: unknown[], what: string): void => {
+  for (const r of rows) {
+    if (typeof r !== "object" || r === null || typeof (r as { relPath?: unknown }).relPath !== "string") {
+      throw new Error(`${what} 存在缺 relPath 的行`);
+    }
+  }
+};
+
+/**
+ * 读取侧兼容 v1/v2：v1（无 version 字段的裸数组）行含 absPath，原样透传；
+ * v2 信封行按 baseDir[source] + "/" + relPath 重建 absPath（source 无对应根或根为空串时
+ * 退化为 relPath——diff 等消费方只用 relPath/source，绝对路径仅展示用）。形状不符抛错。
+ */
+export function parseManifest(json: unknown): ManifestEntry[] {
+  if (Array.isArray(json)) {
+    assertRows(json, "v1 裸数组");
+    return json as ManifestEntry[];
+  }
+  const version = (json as { version?: unknown } | null | undefined)?.version;
+  if (version === 2) {
+    const env = json as { baseDir?: unknown; rows?: unknown };
+    if (typeof env.baseDir !== "object" || env.baseDir === null || !Array.isArray(env.rows)) {
+      throw new Error("v2 信封形状不符：需 baseDir 对象 + rows 数组");
+    }
+    assertRows(env.rows, "v2 rows");
+    const baseDir = env.baseDir as Partial<ManifestBaseDir>;
+    return (env.rows as ManifestEntrySlim[]).map(e => {
+      const root = baseDir[e.source];
+      return { ...e, absPath: root ? `${root}/${e.relPath}` : e.relPath };
+    });
+  }
+  throw new Error(`不识别的 manifest 形状（version=${version === undefined ? "无" : String(version)}）——期望 v1 裸数组或 v2 信封`);
+}
+
+// —— audit --diff（M4 前工具项，spec §3.1 迁移健康检查）：上一份 manifest 与本次扫描对比 ——
+// 配对键口径与 overlap 一致：pairingKey 忽略 source 与编号前缀——迁移期搬家（main→hevc）
+// 或改名重编号都能对上，不误报新增/移除；纯编号空键（pairingKey 返回 null）退化为
+// source/relPath 严格身份，仍参与 diff。
+
+export interface ManifestDiffRow {
+  source: "main" | "hevc";
+  relPath: string;
+  error?: string;
+}
+
+export interface ManifestDiffChanged {
+  key: string;            // 配对键（空键兜底的严格身份键以 \0 前缀区分）
+  fields: string[];       // 发生变化的字段名（人读清单）
+  prev: ManifestDiffRow;
+  curr: ManifestDiffRow;
+}
+
+export interface ManifestDiff {
+  added: ManifestDiffRow[];         // 本次独有（新键，或同键配对剩余的行）
+  removed: ManifestDiffRow[];       // 上一份独有（同上）
+  changed: ManifestDiffChanged[];
+  prevProbeFailures: number;        // 上一份 error 行数
+  currProbeFailures: number;        // 本次 error 行数
+  newErrorRows: ManifestDiffRow[];  // 新增 error 行：新行带错，或配对行由好变坏（坏→坏不算）
+  exitCode: 0 | 1;                  // probeFailures 涌增或新增 error 行 → 1（spec §3.1：转换器产坏件）
+}
+
+// 参与变更比较的字段；absPath 不比（v2 行没有，且迁移期路径漂移属预期不算变更）
+const DIFF_FIELDS = ["source", "category", "ext", "durationS", "bucket", "privacy", "inFirstBatch", "error"] as const;
+
+export function diffManifests(prev: ManifestEntry[], curr: ManifestEntry[]): ManifestDiff {
+  // pairingKey 结果不含 \0（归一化后是字母数字/中日文），严格身份键加 \0 前缀防撞
+  const keyOf = (e: ManifestEntry): string => pairingKey(e.relPath) ?? `\0${e.source}/${e.relPath}`;
+  const byKey = (rows: ManifestEntry[]): Map<string, ManifestEntry[]> => {
+    const m = new Map<string, ManifestEntry[]>();
+    for (const e of rows) m.set(keyOf(e), [...(m.get(keyOf(e)) ?? []), e]);
+    return m;
+  };
+  const prevByKey = byKey(prev);
+  const currByKey = byKey(curr);
+  const lite = (e: ManifestEntry): ManifestDiffRow =>
+    ({ source: e.source, relPath: e.relPath, ...(e.error !== undefined ? { error: e.error } : {}) });
+
+  const added: ManifestDiffRow[] = [];
+  const removed: ManifestDiffRow[] = [];
+  const changed: ManifestDiffChanged[] = [];
+  const newErrorRows: ManifestDiffRow[] = [];
+  const takeNewError = (c: ManifestEntry, prevErrorFree: boolean): void => {
+    if (c.error !== undefined && prevErrorFree) newErrorRows.push(lite(c));
+  };
+  for (const [key, currRows] of currByKey) {
+    const prevRows = prevByKey.get(key);
+    if (prevRows === undefined) {
+      for (const c of currRows) { added.push(lite(c)); takeNewError(c, true); }
+      continue;
+    }
+    // 同键贪心配对：优先同 source（未搬家的副本），再跨 source（迁移搬家）；本次多出的行归 added
+    const used = new Set<number>();
+    for (const c of currRows) {
+      let idx = prevRows.findIndex((p, i) => !used.has(i) && p.source === c.source);
+      if (idx < 0) idx = prevRows.findIndex((_p, i) => !used.has(i));
+      if (idx < 0) { added.push(lite(c)); takeNewError(c, true); continue; }
+      used.add(idx);
+      const p = prevRows[idx];
+      const fields = DIFF_FIELDS.filter(f => (p[f] ?? null) !== (c[f] ?? null));
+      if (fields.length > 0) changed.push({ key, fields, prev: lite(p), curr: lite(c) });
+      takeNewError(c, p.error === undefined); // 由好变坏才算新增（坏→坏只是 error 文案变化，归 changed）
+    }
+    prevRows.forEach((p, i) => { if (!used.has(i)) removed.push(lite(p)); });
+  }
+  for (const [key, prevRows] of prevByKey) {
+    if (currByKey.has(key)) continue;
+    for (const p of prevRows) removed.push(lite(p));
+  }
+  const byRelPath = (a: ManifestDiffRow, b: ManifestDiffRow) => a.relPath.localeCompare(b.relPath);
+  added.sort(byRelPath);
+  removed.sort(byRelPath);
+  newErrorRows.sort(byRelPath);
+  changed.sort((a, b) => a.key.localeCompare(b.key));
+  const countErrors = (rows: ManifestEntry[]): number => rows.filter(e => e.error !== undefined).length;
+  const prevProbeFailures = countErrors(prev);
+  const currProbeFailures = countErrors(curr);
+  return {
+    added, removed, changed,
+    prevProbeFailures, currProbeFailures, newErrorRows,
+    // spec §3.1：probeFailures 涌增或新增 error 行 = 转换器产坏件 → 非零（供迁移健康检查）
+    exitCode: currProbeFailures > prevProbeFailures || newErrorRows.length > 0 ? 1 : 0,
+  };
+}

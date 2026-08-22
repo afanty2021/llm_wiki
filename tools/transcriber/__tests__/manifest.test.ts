@@ -1,9 +1,9 @@
 // tools/transcriber/__tests__/manifest.test.ts
 import { describe, it, expect } from "vitest";
-import { pairingKey, buildManifest } from "../src/manifest";
+import { pairingKey, buildManifest, serializeManifest, parseManifest, diffManifests } from "../src/manifest";
 import type { ScannedFile } from "../src/scan";
 import type { ProbeResult } from "../src/probe";
-import type { ManifestRow } from "../src/manifest";
+import type { ManifestRow, ManifestEntry } from "../src/manifest";
 
 const sf = (relPath: string, source: "main" | "hevc", category: "audio" | "video" | "doc", ext?: string): ScannedFile =>
   ({ absPath: `/root/${source}/${relPath}`, relPath, source, category,
@@ -138,5 +138,143 @@ describe("buildManifest", () => {
       { file: sf("剑桥/test1/track1.mp3", "main", "audio"), probe: null, error: "Invalid data" },
     ];
     expect(buildManifest(rows6, [], "x").entries[0].bucket).toBeNull();
+  });
+});
+
+// —— v2 信封（M4 前工具项）：写侧只产信封，读取侧兼容 v1 裸数组 ——
+
+const mkEntry = (over: Partial<ManifestEntry>): ManifestEntry => ({
+  absPath: "/root/hevc/a.mp4", relPath: "a.mp4", source: "hevc", category: "video", ext: ".mp4",
+  container: "mov", videoCodec: "hevc", audioCodec: "aac", durationS: 100,
+  bucket: "B_transcode", privacy: false, inFirstBatch: false, ...over,
+});
+
+describe("serializeManifest / parseManifest（v2 信封，行内去 absPath）", () => {
+  const entries = [
+    mkEntry({ absPath: "/m/专栏/01.提问.mp4", relPath: "专栏/01.提问.mp4", source: "main", bucket: "A_playable" }),
+    mkEntry({ absPath: "/h/坏.mp4", relPath: "坏.mp4", error: "ffprobe timeout", bucket: null }),
+  ];
+  const env = serializeManifest(entries, { main: "/m", hevc: "/h" }, "2026-08-22T00:00:00Z");
+
+  it("信封形状：version=2 + baseDir + generatedAt + rows，行内无 absPath，其余字段原样", () => {
+    expect(env.version).toBe(2);
+    expect(env.baseDir).toEqual({ main: "/m", hevc: "/h" });
+    expect(env.generatedAt).toBe("2026-08-22T00:00:00Z");
+    expect(JSON.stringify(env)).not.toContain("absPath");
+    expect(env.rows[0]).toEqual({
+      relPath: "专栏/01.提问.mp4", source: "main", category: "video", ext: ".mp4",
+      container: "mov", videoCodec: "hevc", audioCodec: "aac", durationS: 100,
+      bucket: "A_playable", privacy: false, inFirstBatch: false,
+    });
+    expect(env.rows[1].error).toBe("ffprobe timeout"); // error 行其余字段照旧
+  });
+
+  it("v2 round-trip：parseManifest 按 baseDir[source] 重建 absPath，与原 entries 等价", () => {
+    expect(parseManifest(JSON.parse(JSON.stringify(env)))).toEqual(entries);
+  });
+
+  it("v1 裸数组（无 version 字段）：行含 absPath，原样透传", () => {
+    const v1 = entries.map(e => ({ ...e }));
+    expect(parseManifest(v1)).toEqual(v1);
+  });
+
+  it("v2 行 source 无对应根 → absPath 退化为 relPath（diff 消费方只用 relPath/source）", () => {
+    const slim = {
+      relPath: "a.mp4", source: "main" as const, category: "video" as const, ext: ".mp4",
+      container: "mov", videoCodec: null, audioCodec: null, durationS: 1,
+      bucket: null, privacy: false, inFirstBatch: false,
+    };
+    const parsed = parseManifest({ version: 2, baseDir: { hevc: "/h" }, rows: [slim] });
+    expect(parsed[0].absPath).toBe("a.mp4");
+  });
+
+  it("形状不符抛错：未知 version / 非数组非对象 / v2 缺 baseDir / 行缺 relPath", () => {
+    expect(() => parseManifest({ version: 3, rows: [] })).toThrow(/不识别的 manifest 形状/);
+    expect(() => parseManifest("x")).toThrow(/不识别的 manifest 形状/);
+    expect(() => parseManifest({ version: 2, rows: [] })).toThrow(/v2 信封形状不符/);
+    expect(() => parseManifest({ version: 2, baseDir: { main: "/m", hevc: "/h" }, rows: [{ relPath: 1 }] }))
+      .toThrow(/缺 relPath/);
+    expect(() => parseManifest([{ source: "main" }])).toThrow(/缺 relPath/);
+  });
+});
+
+describe("diffManifests（audit --diff：三类 delta 与退出码）", () => {
+  it("两份一致 → 三类皆空，exit 0", () => {
+    const rows = [mkEntry({ relPath: "专栏/01.提问.mp4", source: "main" })];
+    const d = diffManifests(rows, [mkEntry({ relPath: "专栏/01.提问.mp4", source: "main" })]);
+    expect(d.added).toEqual([]);
+    expect(d.removed).toEqual([]);
+    expect(d.changed).toEqual([]);
+    expect(d.exitCode).toBe(0);
+  });
+
+  it("新增/移除/变更三类齐全且无 error 信号 → exit 0", () => {
+    const prev = [
+      mkEntry({ absPath: "/m/剑桥1/test1/section1.mp3", relPath: "剑桥1/test1/section1.mp3", source: "main", category: "audio", ext: ".mp3" }),
+      mkEntry({ absPath: "/m/专栏/01.提问.mp4", relPath: "专栏/01.提问.mp4", source: "main" }),
+      mkEntry({ absPath: "/h/长.mp4", relPath: "长.mp4", source: "hevc", durationS: 100 }),
+    ];
+    const curr = [
+      mkEntry({ absPath: "/m/剑桥1/test2/section1.mp3", relPath: "剑桥1/test2/section1.mp3", source: "main", category: "audio", ext: ".mp3" }), // 父目录不同 → 新键
+      mkEntry({ absPath: "/m/专栏/01.提问.mp4", relPath: "专栏/01.提问.mp4", source: "main" }),                                          // 不变
+      mkEntry({ absPath: "/h/长.mp4", relPath: "长.mp4", source: "hevc", durationS: 200 }),                                              // 时长漂移
+    ];
+    const d = diffManifests(prev, curr);
+    expect(d.added).toEqual([{ source: "main", relPath: "剑桥1/test2/section1.mp3" }]);
+    expect(d.removed).toEqual([{ source: "main", relPath: "剑桥1/test1/section1.mp3" }]);
+    expect(d.changed).toEqual([{
+      key: "长", fields: ["durationS"],
+      prev: { source: "hevc", relPath: "长.mp4" }, curr: { source: "hevc", relPath: "长.mp4" },
+    }]);
+    expect(d.exitCode).toBe(0);
+  });
+
+  it("迁移搬家（main→hevc 同配对键、改名重编号）不误报新增/移除，计为变更 source 字段", () => {
+    const prev = [mkEntry({ absPath: "/m/专栏/421. 独立教师-线上自媒体教师.mp4", relPath: "专栏/421. 独立教师-线上自媒体教师.mp4", source: "main" })];
+    const curr = [mkEntry({ absPath: "/h/专栏/独立教师（线上自媒体教师）.mp4", relPath: "专栏/独立教师（线上自媒体教师）.mp4", source: "hevc" })];
+    const d = diffManifests(prev, curr);
+    expect(d.added).toEqual([]);
+    expect(d.removed).toEqual([]);
+    expect(d.changed).toHaveLength(1);
+    expect(d.changed[0].key).toBe("专栏/独立教师线上自媒体教师");
+    expect(d.changed[0].fields).toEqual(["source"]);
+    expect(d.exitCode).toBe(0);
+  });
+
+  it("纯编号空键（pairingKey=null）退化为严格身份：改名即新增+移除，同名同 source 稳定", () => {
+    const same = [mkEntry({ absPath: "/m/3-1.mp3", relPath: "3-1.mp3", source: "main", category: "audio", ext: ".mp3" })];
+    expect(diffManifests(same, [mkEntry({ absPath: "/m/3-1.mp3", relPath: "3-1.mp3", source: "main", category: "audio", ext: ".mp3" })]).changed).toEqual([]);
+    const d = diffManifests(same, [mkEntry({ absPath: "/m/4-1.mp3", relPath: "4-1.mp3", source: "main", category: "audio", ext: ".mp3" })]);
+    expect(d.removed.map(r => r.relPath)).toEqual(["3-1.mp3"]);
+    expect(d.added.map(r => r.relPath)).toEqual(["4-1.mp3"]);
+  });
+
+  it("配对行由好变坏 → newErrorRows + probeFailures 涌增 + exit 1", () => {
+    const prev = [mkEntry({ relPath: "专栏/01.提问.mp4", source: "main" })];
+    const curr = [mkEntry({ relPath: "专栏/01.提问.mp4", source: "main", error: "moov atom not found", bucket: null, durationS: 0 })];
+    const d = diffManifests(prev, curr);
+    expect(d.newErrorRows).toEqual([{ source: "main", relPath: "专栏/01.提问.mp4", error: "moov atom not found" }]);
+    expect(d.prevProbeFailures).toBe(0);
+    expect(d.currProbeFailures).toBe(1);
+    expect(d.exitCode).toBe(1);
+  });
+
+  it("恢复（坏→好）不触发非零；坏→坏仅文案变化归 changed、不算新增 error 行", () => {
+    const bad = mkEntry({ relPath: "专栏/01.提问.mp4", source: "main", error: "timeout A", bucket: null });
+    const good = mkEntry({ relPath: "专栏/01.提问.mp4", source: "main" });
+    expect(diffManifests([bad], [good]).exitCode).toBe(0); // 恢复：curr < prev
+    const d = diffManifests([bad], [mkEntry({ relPath: "专栏/01.提问.mp4", source: "main", error: "timeout B", bucket: null })]);
+    expect(d.newErrorRows).toEqual([]);
+    expect(d.changed[0].fields).toContain("error");
+    expect(d.exitCode).toBe(0); // 计数未涌增（1 → 1）且无新增 error 行
+  });
+
+  it("新增行自带 error → added + newErrorRows + exit 1（转换器产坏件信号）", () => {
+    const prev = [mkEntry({ relPath: "专栏/01.提问.mp4", source: "main" })];
+    const curr = [...prev, mkEntry({ relPath: "专栏/02.新坏.mp4", source: "hevc", error: "Invalid data", bucket: null })];
+    const d = diffManifests(prev, curr);
+    expect(d.added).toEqual([{ source: "hevc", relPath: "专栏/02.新坏.mp4", error: "Invalid data" }]);
+    expect(d.newErrorRows).toEqual([{ source: "hevc", relPath: "专栏/02.新坏.mp4", error: "Invalid data" }]);
+    expect(d.exitCode).toBe(1);
   });
 });
