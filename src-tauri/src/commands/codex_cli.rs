@@ -5,7 +5,7 @@
 //! spawn this fixed command; it cannot execute arbitrary shell commands.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -63,8 +63,6 @@ async fn find_codex_command() -> Result<PathBuf, String> {
 fn suppress_windows_console(_cmd: &mut Command) {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         _cmd.creation_flags(CREATE_NO_WINDOW);
     }
@@ -142,11 +140,13 @@ pub async fn codex_cli_spawn(
     prompt: String,
     isolate_local_config: bool,
     timeout_minutes: Option<u64>,
+    working_directory: Option<String>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
         return Err("No prompt to send to codex CLI".to_string());
     }
 
+    let working_directory = resolve_codex_working_directory(working_directory).await?;
     let codex = find_codex_command().await?;
     let mut cmd = Command::new(&codex);
     suppress_windows_console(&mut cmd);
@@ -156,6 +156,7 @@ pub async fn codex_cli_spawn(
         cmd.env("PATH", path_env);
     }
     cmd.args(build_codex_cli_args(&model, isolate_local_config));
+    cmd.current_dir(&working_directory);
 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -257,7 +258,9 @@ pub async fn codex_cli_spawn(
             if !stderr_text.is_empty() {
                 stderr_text.push('\n');
             }
-            stderr_text.push_str(&format!("Codex CLI timed out after {timeout_minutes} minutes."));
+            stderr_text.push_str(&format!(
+                "Codex CLI timed out after {timeout_minutes} minutes."
+            ));
         } else if stderr_text.len() >= STDERR_LIMIT_BYTES {
             stderr_text.push_str("\n[stderr truncated]");
         }
@@ -285,9 +288,10 @@ pub async fn codex_cli_spawn(
 }
 
 fn codex_spawn_timeout_minutes(value: Option<u64>) -> u64 {
-    value
-        .unwrap_or(DEFAULT_CODEX_SPAWN_TIMEOUT_MINUTES)
-        .clamp(MIN_CODEX_SPAWN_TIMEOUT_MINUTES, MAX_CODEX_SPAWN_TIMEOUT_MINUTES)
+    value.unwrap_or(DEFAULT_CODEX_SPAWN_TIMEOUT_MINUTES).clamp(
+        MIN_CODEX_SPAWN_TIMEOUT_MINUTES,
+        MAX_CODEX_SPAWN_TIMEOUT_MINUTES,
+    )
 }
 
 fn build_codex_cli_args(model: &str, isolate_local_config: bool) -> Vec<String> {
@@ -311,6 +315,41 @@ fn build_codex_cli_args(model: &str, isolate_local_config: bool) -> Vec<String> 
         "-".to_string(),
     ]);
     args
+}
+
+async fn resolve_codex_working_directory(value: Option<String>) -> Result<PathBuf, String> {
+    let raw = value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "Codex CLI requires an active project working directory".to_string())?;
+    let path = Path::new(raw.as_str());
+    if !path.is_absolute() {
+        return Err("Codex CLI working directory must be an absolute project path".to_string());
+    }
+    let path_meta = tokio::fs::metadata(path).await.map_err(|e| {
+        eprintln!("[codex-cli] failed to read working directory metadata {raw}: {e}");
+        format!("Codex CLI working directory does not exist or cannot be read: {raw}")
+    })?;
+    if !path_meta.is_dir() {
+        return Err(format!(
+            "Codex CLI working directory is not a directory: {raw}"
+        ));
+    }
+    let index_path = path.join("wiki").join("index.md");
+    let index_meta = tokio::fs::metadata(&index_path).await.map_err(|e| {
+        eprintln!("[codex-cli] failed to read wiki/index.md metadata for {raw}: {e}");
+        format!("Codex CLI working directory must be an LLM Wiki project containing wiki/index.md: {raw}")
+    })?;
+    if !index_meta.is_file() {
+        return Err(format!(
+            "Codex CLI working directory must be an LLM Wiki project containing wiki/index.md: {raw}"
+        ));
+    }
+    tokio::fs::canonicalize(path)
+        .await
+        .map_err(|e| format!("Failed to canonicalize Codex CLI working directory {raw}: {e}"))
 }
 
 #[tauri::command]
@@ -360,7 +399,10 @@ mod tests {
             codex_spawn_timeout_minutes(None),
             DEFAULT_CODEX_SPAWN_TIMEOUT_MINUTES
         );
-        assert_eq!(codex_spawn_timeout_minutes(Some(0)), MIN_CODEX_SPAWN_TIMEOUT_MINUTES);
+        assert_eq!(
+            codex_spawn_timeout_minutes(Some(0)),
+            MIN_CODEX_SPAWN_TIMEOUT_MINUTES
+        );
         assert_eq!(codex_spawn_timeout_minutes(Some(42)), 42);
         assert_eq!(
             codex_spawn_timeout_minutes(Some(999)),
@@ -396,5 +438,92 @@ mod tests {
 
         assert!(ignore_config_pos > exec_pos);
         assert!(ignore_rules_pos > exec_pos);
+    }
+
+    struct TestDir(PathBuf);
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_working_directory_requires_absolute_existing_project() {
+        assert!(resolve_codex_working_directory(None)
+            .await
+            .unwrap_err()
+            .contains("requires an active project"));
+        assert!(resolve_codex_working_directory(Some("".to_string()))
+            .await
+            .unwrap_err()
+            .contains("requires an active project"));
+        assert!(resolve_codex_working_directory(Some("   ".to_string()))
+            .await
+            .unwrap_err()
+            .contains("requires an active project"));
+        assert!(
+            resolve_codex_working_directory(Some("relative/project".to_string()))
+                .await
+                .unwrap_err()
+                .contains("absolute")
+        );
+
+        let missing =
+            std::env::temp_dir().join(format!("llm-wiki-codex-cli-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(
+            resolve_codex_working_directory(Some(missing.to_string_lossy().to_string()))
+                .await
+                .unwrap_err()
+                .contains("does not exist or cannot be read")
+        );
+
+        let file_path =
+            std::env::temp_dir().join(format!("llm-wiki-codex-cli-file-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file_path);
+        std::fs::write(&file_path, "not a directory").expect("temp file");
+        struct TestFile(PathBuf);
+        impl Drop for TestFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _file_guard = TestFile(file_path.clone());
+        assert!(
+            resolve_codex_working_directory(Some(file_path.to_string_lossy().to_string()))
+                .await
+                .unwrap_err()
+                .contains("not a directory")
+        );
+
+        let dir =
+            std::env::temp_dir().join(format!("llm-wiki-codex-cli-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("tempdir");
+        let _guard = TestDir(dir.clone());
+        assert!(
+            resolve_codex_working_directory(Some(dir.to_string_lossy().to_string()))
+                .await
+                .unwrap_err()
+                .contains("wiki/index.md")
+        );
+
+        let wiki_dir = dir.join("wiki");
+        std::fs::create_dir_all(&wiki_dir).expect("wiki dir");
+        let index_dir = wiki_dir.join("index.md");
+        std::fs::create_dir_all(&index_dir).expect("index dir");
+        assert!(
+            resolve_codex_working_directory(Some(dir.to_string_lossy().to_string()))
+                .await
+                .unwrap_err()
+                .contains("wiki/index.md")
+        );
+        std::fs::remove_dir_all(&index_dir).expect("remove index dir");
+        std::fs::write(wiki_dir.join("index.md"), "# Index\n").expect("index");
+        let resolved = resolve_codex_working_directory(Some(dir.to_string_lossy().to_string()))
+            .await
+            .expect("valid project path");
+        assert_eq!(resolved, dir.canonicalize().expect("canonical tempdir"));
     }
 }

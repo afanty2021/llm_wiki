@@ -10,6 +10,7 @@ import { checkForUpdates, toLatestReleaseUrl } from "@/lib/update-check"
 import { saveUpdateCheckState } from "@/lib/project-store"
 import { createLogger } from "@/lib/logger"
 import { caps } from "@/lib/capabilities"
+import { useAppDialog } from "@/stores/app-dialog-store"
 
 const logger = createLogger("about")
 
@@ -265,6 +266,7 @@ function UpdateAvailableBanner({
   onDismiss,
 }: UpdateAvailableBannerProps) {
   const { t } = useTranslation()
+  const appDialog = useAppDialog()
   // Use `/releases/latest` (canonical GitHub redirect to the newest
   // release) rather than the tag-specific URL from the release
   // payload. Same rationale as in the top banner — see
@@ -287,11 +289,11 @@ function UpdateAvailableBanner({
       logger.error("openUrl failed", { error: String(err) })
       try {
         await navigator.clipboard.writeText(targetUrl)
-        // eslint-disable-next-line no-alert
-        alert(`Could not open browser. URL copied to clipboard:\n${targetUrl}`)
+        await appDialog.alert({
+          message: `Could not open browser. URL copied to clipboard:\n${targetUrl}`,
+        })
       } catch {
-        // eslint-disable-next-line no-alert
-        alert(`Could not open browser. Visit:\n${targetUrl}`)
+        await appDialog.alert({ message: `Could not open browser. Visit:\n${targetUrl}` })
       }
     }
   }

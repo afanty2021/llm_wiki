@@ -26,6 +26,7 @@ interface BackendSearchResponse {
   results: SearchResult[]
   tokenHits: number
   vectorHits: number
+  graphHits?: number
 }
 
 const STOP_WORDS = new Set([

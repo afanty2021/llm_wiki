@@ -45,6 +45,9 @@ describe("lint-store addItems", () => {
         page: "entities/transformer.md",
         detail: "contradiction: conflicting claims about model size",
         affectedPages: ["a.md", "b.md"],
+        brokenTarget: "transfomer",
+        suggestedTarget: "entities/transformer.md",
+        suggestedSource: "concepts/attention.md",
       },
     ]
     useLintStore.getState().addItems(results)
@@ -54,6 +57,9 @@ describe("lint-store addItems", () => {
     expect(item.page).toBe("entities/transformer.md")
     expect(item.detail).toBe("contradiction: conflicting claims about model size")
     expect(item.affectedPages).toEqual(["a.md", "b.md"])
+    expect(item.brokenTarget).toBe("transfomer")
+    expect(item.suggestedTarget).toBe("entities/transformer.md")
+    expect(item.suggestedSource).toBe("concepts/attention.md")
   })
 })
 
@@ -108,6 +114,29 @@ describe("lint-store removeItem", () => {
     const remaining = useLintStore.getState().items
     expect(remaining).toHaveLength(1)
     expect(remaining[0].page).toBe("keep.md")
+  })
+})
+
+describe("lint-store removeItems", () => {
+  it("removes all items with matching ids", () => {
+    useLintStore.getState().addItems([
+      makeLintResult({ page: "keep.md" }),
+      makeLintResult({ page: "remove-a.md" }),
+      makeLintResult({ page: "remove-b.md" }),
+    ])
+    const items = useLintStore.getState().items
+
+    useLintStore.getState().removeItems([items[1].id, items[2].id])
+
+    const remaining = useLintStore.getState().items
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].page).toBe("keep.md")
+  })
+
+  it("is a no-op for an empty id list", () => {
+    useLintStore.getState().addItems([makeLintResult({ page: "keep.md" })])
+    useLintStore.getState().removeItems([])
+    expect(useLintStore.getState().items).toHaveLength(1)
   })
 })
 

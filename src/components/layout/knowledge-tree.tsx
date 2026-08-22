@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import {
   FileText, Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, TrendingUp, Target, ChevronRight, ChevronDown, Layout, Globe, Trash2,
 } from "lucide-react"
@@ -10,9 +10,15 @@ import { apiClient } from "@/lib/api-client"
 import { caps } from "@/lib/capabilities"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
+import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 import { inferWikiTypeFromPath, wikiTypeLabel } from "@/lib/wiki-page-types"
 import { createLogger } from "@/lib/logger"
+import { filterRawSourceTree } from "@/lib/source-filter"
+import { useTranslation } from "react-i18next"
+import { useAppDialog } from "@/stores/app-dialog-store"
+import { parseSources } from "@/lib/sources-merge"
+import { filterPagesBySource, listPageSourceIdentities } from "@/lib/knowledge-source-filter"
 
 const logger = createLogger("knowledge-tree")
 
@@ -22,6 +28,7 @@ interface WikiPageInfo {
   type: string
   tags: string[]
   origin?: string
+  sources: string[]
 }
 
 const TYPE_CONFIG: Record<string, { icon: typeof FileText; label: string; color: string; order: number }> = {
@@ -42,13 +49,15 @@ function typeConfig(type: string): { icon: typeof FileText; label: string; color
 }
 
 export function KnowledgeTree() {
+  const { t } = useTranslation()
+  const appDialog = useAppDialog()
   const project = useWikiStore((s) => s.project)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
-  const fileTree = useWikiStore((s) => s.fileTree)
-  const setFileTree = useWikiStore((s) => s.setFileTree)
-  const bumpDataVersion = useWikiStore((s) => s.bumpDataVersion)
+  const openPathInPreview = useWikiStore((s) => s.openPathInPreview)
+  const dataVersion = useWikiStore((s) => s.dataVersion)
   const [pages, setPages] = useState<WikiPageInfo[]>([])
+  const [selectedSource, setSelectedSource] = useState<string | null>(null)
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set(["overview", "entity", "concept", "source"]))
   // Two-stage delete: first click arms the row, second click executes.
   // Only one row armed at a time (clicking another row replaces).
@@ -72,6 +81,7 @@ export function KnowledgeTree() {
               type: p.page_type ?? (inferWikiTypeFromPath(p.path) || "other"),
               tags: Array.isArray(fm.tags) ? (fm.tags as string[]) : [],
               origin: typeof fm.origin === "string" ? (fm.origin as string) : undefined,
+              sources: parseSources(typeof fm.sources === "string" ? fm.sources : ""),
             }
           })
         setPages(pageInfos)
@@ -99,6 +109,7 @@ export function KnowledgeTree() {
             title: file.name.replace(".md", "").replace(/-/g, " "),
             type: "other",
             tags: [],
+            sources: [],
           })
         }
       }
@@ -109,10 +120,26 @@ export function KnowledgeTree() {
     }
   }, [project])
 
-  // Reload when file tree changes (after ingest writes new pages)
+  // Reload when wiki data changes. Do not key this off the visible
+  // sidebar file tree: lazy directory expansion mutates that tree and
+  // should not force a full wiki metadata re-parse.
   useEffect(() => {
     loadPages()
-  }, [loadPages, fileTree])
+  }, [loadPages, dataVersion])
+
+  useEffect(() => {
+    setSelectedSource(null)
+  }, [project?.id])
+
+  const sourceOptions = useMemo(() => listPageSourceIdentities(pages), [pages])
+  const visiblePages = useMemo(
+    () => filterPagesBySource(pages, selectedSource),
+    [pages, selectedSource],
+  )
+
+  useEffect(() => {
+    if (selectedSource && !sourceOptions.includes(selectedSource)) setSelectedSource(null)
+  }, [selectedSource, sourceOptions])
 
   const handleDeleteClick = useCallback(
     async (pagePath: string) => {
@@ -130,21 +157,22 @@ export function KnowledgeTree() {
         // Refresh: page list, file tree, any data-version subscribers.
         await loadPages()
         try {
-          const tree = await listDirectory(pp)
-          setFileTree(tree)
+          await refreshProjectFileTree(pp, {
+            projectId: project.id,
+            bumpDataVersion: true,
+          })
         } catch {
           // non-critical
         }
-        bumpDataVersion()
         if (selectedFile === pagePath) setSelectedFile(null)
       } catch (err) {
         logger.error("delete failed", { error: String(err) })
-        window.alert(`Failed to delete: ${err}`)
+        await appDialog.alert({ message: `Failed to delete: ${err}` })
       } finally {
         setDeletingPath(null)
       }
     },
-    [project, armedPath, loadPages, selectedFile, setSelectedFile, setFileTree, bumpDataVersion],
+    [appDialog, project, armedPath, loadPages, selectedFile, setSelectedFile],
   )
 
   if (!project) {
@@ -157,7 +185,7 @@ export function KnowledgeTree() {
 
   // Group pages by type
   const grouped = new Map<string, WikiPageInfo[]>()
-  for (const page of pages) {
+  for (const page of visiblePages) {
     const list = grouped.get(page.type) ?? []
     list.push(page)
     grouped.set(page.type, list)
@@ -187,9 +215,28 @@ export function KnowledgeTree() {
           {project.name}
         </div>
 
+        {sourceOptions.length > 1 && (
+          <div className="mb-2 px-2">
+            <label className="sr-only" htmlFor="knowledge-source-filter">
+              {t("sidebar.filterBySource")}
+            </label>
+            <select
+              id="knowledge-source-filter"
+              value={selectedSource ?? ""}
+              onChange={(event) => setSelectedSource(event.target.value || null)}
+              className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">{t("sidebar.allSources")}</option>
+              {sourceOptions.map((source) => (
+                <option key={source} value={source}>{source}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {sortedGroups.length === 0 && (
           <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-            No wiki pages yet. Import sources to get started.
+            {t("sidebar.noWikiPages")}
           </div>
         )}
 
@@ -210,7 +257,9 @@ export function KnowledgeTree() {
                   <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 )}
                 <Icon className={`h-3.5 w-3.5 shrink-0 ${config.color}`} />
-                <span className="flex-1 text-left font-medium">{config.label}</span>
+                <span className="flex-1 text-left font-medium">
+                  {t(`sidebar.typeLabels.${type}`, { defaultValue: config.label })}
+                </span>
                 <span className="text-xs text-muted-foreground">{items.length}</span>
               </button>
 
@@ -228,7 +277,7 @@ export function KnowledgeTree() {
                         }`}
                       >
                         <button
-                          onClick={() => setSelectedFile(page.path)}
+                          onClick={() => openPathInPreview(page.path)}
                           className={`flex flex-1 items-center gap-1.5 px-2 py-1 text-left text-sm min-w-0 ${
                             isSelected
                               ? "text-accent-foreground"
@@ -270,8 +319,9 @@ export function KnowledgeTree() {
 }
 
 function RawSourcesSection() {
+  const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
-  const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
+  const openPathInPreview = useWikiStore((s) => s.openPathInPreview)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const [expanded, setExpanded] = useState(false)
   const [sources, setSources] = useState<FileNode[]>([])
@@ -279,7 +329,7 @@ function RawSourcesSection() {
   useEffect(() => {
     if (!project) return
     const pp = normalizePath(project.path)
-    listDirectory(`${pp}/raw/sources`)
+    listDirectory(`${pp}/raw/sources`, true).then(filterRawSourceTree)
       .then((tree) => setSources(flattenAllFiles(tree)))
       .catch(() => setSources([]))
   }, [project])
@@ -298,7 +348,7 @@ function RawSourcesSection() {
           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
         <BookOpen className="h-3.5 w-3.5 shrink-0 text-amber-600" />
-        <span className="flex-1 text-left font-medium text-muted-foreground">Raw Sources</span>
+        <span className="flex-1 text-left font-medium text-muted-foreground">{t("sidebar.rawSources")}</span>
         <span className="text-xs text-muted-foreground">{sources.length}</span>
       </button>
       {expanded && (
@@ -308,7 +358,7 @@ function RawSourcesSection() {
             return (
               <button
                 key={file.path}
-                onClick={() => setSelectedFile(file.path)}
+                onClick={() => openPathInPreview(file.path)}
                 className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm ${
                   isSelected
                     ? "bg-accent text-accent-foreground"
@@ -361,7 +411,7 @@ function parsePageInfo(path: string, fileName: string, content: string): WikiPag
     type = inferWikiTypeFromPath(path, fileName) ?? "other"
   }
 
-  return { path, title, type, tags, origin }
+  return { path, title, type, tags, origin, sources: parseSources(content) }
 }
 
 /**

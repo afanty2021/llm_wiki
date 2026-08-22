@@ -26,6 +26,306 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.6.10",
+    date: "2026-08-21",
+    highlights: {
+      en: [
+        "Added source-based knowledge filtering.",
+        "Added batch Deep Research for review items and support for rerunning completed or failed research tasks.",
+        "Added support for MinerU 3.0-3.2 backend names and made image captions follow the configured output language.",
+        "Added detailed reporting for files skipped during source import.",
+        "Improved large duplicate scans and fixed Deep Research concurrency, file naming, vector indexing, and wikilink consistency.",
+        "Improved Agent model routing and provider compatibility, and fixed language detection, retry behavior, and Windows CRLF data integrity issues.",
+      ],
+      zh: [
+        "新增按原始资料来源筛选知识内容。",
+        "Review 支持批量执行深度研究，并可重新运行已完成或失败的研究任务。",
+        "支持 MinerU 3.0-3.2 后端名称，图片描述会遵循配置的输出语言。",
+        "文件导入新增跳过文件及具体原因的详细报告。",
+        "优化大规模重复文件扫描，并修复深度研究并发、文件命名、向量索引和 Wiki 链接一致性问题。",
+        "完善 Agent 模型路由与 Provider 兼容性，并修复语言误判、重试行为和 Windows CRLF 数据完整性问题。",
+      ],
+    },
+  },
+  {
+    version: "0.6.9",
+    date: "2026-08-14",
+    highlights: {
+      en: [
+        "Added a single-page Wiki vector indexing API and MCP tool with safe incremental updates.",
+        "Added an answer context details panel for inspecting context size, categorized references, and knowledge-graph evidence.",
+        "Added streaming Chat API responses and concurrent Ingest processing for faster external integrations and bulk imports.",
+        "Made file history opt-in and configurable, with bounded version retention.",
+        "Expanded scheduled imports with cross-project monitoring and source name or path filtering.",
+        "Added external source-file opening, a global Settings shortcut, and Russian and Italian interface translations.",
+        "Added support for authenticated local MinerU and improved trusted proxy TLS options, CJK filenames, and structured data preservation during Ingest.",
+        "Improved existing features and fixed stability, compatibility, indexing, and data-integrity issues.",
+      ],
+      zh: [
+        "新增单个 Wiki 页面向量索引 API 和 MCP 工具，并支持安全的增量更新。",
+        "新增回答上下文详情面板，可查看上下文长度、分类引用和知识图谱证据。",
+        "Chat API 新增流式输出，并支持并发 Ingest，提升外部集成和批量导入效率。",
+        "文件历史改为可选功能，并支持配置有限的版本保留数量。",
+        "扩展定时导入，支持跨项目监控以及按来源名称或路径过滤。",
+        "支持使用系统默认程序打开原始资料，新增全局设置快捷键，并加入俄语和意大利语界面。",
+        "完善本地 MinerU 鉴权、受信任代理 TLS 选项、CJK 文件名和 Ingest 结构化数据保留。",
+        "优化现有功能，并修复稳定性、兼容性、索引和数据完整性问题。",
+      ],
+    },
+  },
+  {
+    version: "0.6.8",
+    date: "2026-08-07",
+    highlights: {
+      en: [
+        "Integrated AnyDoc document parsing with broader Word, PowerPoint, Excel, OpenDocument, and RTF support, richer structure preservation, safe legacy fallback, and versioned extraction caches.",
+        "Improved large knowledge graph loading, caching, and community analysis performance.",
+        "Added file version history usage and cleanup controls.",
+        "Improved scheduled import cleanup when source files are removed or excluded.",
+        "Fixed incomplete Deep Research output being saved as successful and added retry support.",
+        "Improved GPT-5, OpenAI o-series, and Azure model parameter compatibility.",
+        "Improved existing features and fixed stability and compatibility issues.",
+      ],
+      zh: [
+        "集成 AnyDoc 文档解析，扩展 Word、PowerPoint、Excel、OpenDocument 和 RTF 格式支持，增强结构保留，并支持旧解析器安全回退与解析缓存版本管理。",
+        "优化大型知识图谱的加载、缓存和社区分析性能。",
+        "新增文件版本历史占用查看与清理功能。",
+        "完善定时导入源文件删除或排除后的同步清理。",
+        "修复深度研究内容不完整仍被保存为成功的问题，并支持失败重试。",
+        "改进 GPT-5、OpenAI o 系列及 Azure 模型参数兼容性。",
+        "优化现有功能，并修复稳定性与兼容性问题。",
+      ],
+    },
+  },
+  {
+    version: "0.6.6",
+    date: "2026-07-27",
+    highlights: {
+      en: [
+        "Added Bocha Web Search as an external search provider for Agent, Deep Research, API, and MCP workflows.",
+        "Added targeted recovery for truncated Ingest output so missing Wiki files can be regenerated automatically.",
+        "Improved cross-platform PDF preview support.",
+        "Improved Windows scheduled imports, nested paths, drive-letter and UNC path handling, Clip Server recovery, and overall stability.",
+      ],
+      zh: [
+        "新增博查网页搜索 Provider，可用于 Agent、Deep Research、API 和 MCP 工作流。",
+        "新增 Ingest 截断定向恢复，可自动重新生成缺失的 Wiki 文件。",
+        "完善 PDF 跨平台预览支持。",
+        "优化 Windows 计划导入、嵌套目录、盘符和 UNC 路径处理，并改进 Clip Server 恢复与整体稳定性。",
+      ],
+    },
+  },
+  {
+    version: "0.6.5",
+    date: "2026-07-20",
+    highlights: {
+      en: [
+        "Added project-specific model configuration, including separate model routing for Chat and Ingest tasks.",
+        "Added multiple custom LLM providers, custom request headers, and a configurable streaming output option.",
+        "Added batch URL import and native Org mode source ingestion.",
+        "Added a Read Sources Only answer mode that grounds responses exclusively in original source material.",
+        "Improved embedding indexing performance and wiki-link repair for large projects.",
+        "Bound MCP sessions to their projects to prevent context from leaking between projects.",
+        "Added secure LAN support and customizable keyboard shortcuts to the Chrome Clipper.",
+        "Made Chat retrieval modes and Agent depth modes more compact and easier to switch.",
+        "Improved existing features and fixed stability, compatibility, and error-handling issues.",
+      ],
+      zh: [
+        "新增项目级模型配置，并支持 Chat、Ingest 等任务使用不同模型。",
+        "支持创建和切换多个自定义 LLM Provider，并新增自定义请求头和流式输出开关。",
+        "新增批量 URL 导入与 Org mode 文件摄取。",
+        "新增“只读原文”回答模式，仅依据原始资料提供答案。",
+        "优化 Embedding 索引速度和大项目 Wiki 链接修复性能。",
+        "MCP 会话与具体项目绑定，避免跨项目上下文混用。",
+        "Chrome 剪藏支持安全 LAN 连接与可自定义快捷键。",
+        "Chat 检索模式和 Agent 深度模式改为更紧凑的选择方式。",
+        "优化现有功能，并修复稳定性、兼容性和错误处理问题。",
+      ],
+    },
+  },
+  {
+    version: "0.6.4",
+    date: "2026-07-16",
+    highlights: {
+      en: [
+        "Added EPUB and MOBI source support so ebooks can be imported, previewed, and ingested into a project.",
+        "Added support for the official local MinerU API, including configurable service endpoints and Pipeline mode.",
+        "Added ZIP-based project export and import for migrating wiki content, source files, and project state.",
+        "Added deterministic wiki index rebuilding from the pages currently stored in the project.",
+        "Added configurable LLM request timeouts for long-running cloud models and local services.",
+        "Expanded Firecrawl configuration with API key authentication and custom service URLs.",
+        "Added a persistent collapsible knowledge sidebar that preserves more space for the active workspace.",
+        "Added Czech as an AI output language option.",
+        "Improved existing features and fixed bugs across document import, frontmatter handling, source links, knowledge graphs, missing-page checks, and cross-platform compatibility.",
+      ],
+      zh: [
+        "新增 EPUB 和 MOBI 原始资料支持，电子书可直接导入、预览并摄取到项目中。",
+        "新增官方 Local MinerU API 支持，可配置服务地址并使用 Pipeline 模式。",
+        "新增 ZIP 项目导出与导入功能，可迁移 Wiki 内容、原始资料和项目状态。",
+        "新增 Wiki 索引重建功能，可根据项目中现有页面确定性生成索引。",
+        "新增 LLM 请求超时时间设置，适配耗时较长的云端模型和本地服务。",
+        "扩展 Firecrawl 配置，支持 API Key 鉴权和自定义服务地址。",
+        "新增可持久保存状态的知识库侧栏折叠功能，为当前工作区释放更多空间。",
+        "新增捷克语 AI 输出语言选项。",
+        "优化现有功能并修复文档导入、Frontmatter、来源链接、知识图谱、缺失页面检查和跨平台兼容等问题。",
+      ],
+    },
+  },
+  {
+    version: "0.6.1",
+    date: "2026-07-10",
+    highlights: {
+      en: [
+        "Improved Agent context so selected files, Skills, project knowledge, and retrieval evidence remain available throughout a turn.",
+        "Expanded Hybrid Search with adaptive keyword, vector, and knowledge-graph retrieval, including graph-aware references and an interactive local graph preview.",
+        "Added Agent file activity with per-file change summaries, diffs, and guarded undo when the file has not changed again.",
+        "Improved generated output handling with consolidated output browsing, automatic previews, enlarged viewing, and support for common document, image, and web formats.",
+        "Added file history comparison and restore controls for recorded project file versions.",
+        "Improved Agent loop convergence by limiting duplicate retrieval, budgeting tool iterations, and producing a final answer before the retrieval budget is exhausted.",
+      ],
+      zh: [
+        "增强 Agent 上下文能力，选中的文件、Skill、项目知识和检索证据可在整轮执行中持续使用。",
+        "扩展 Hybrid Search：自适应融合关键词、向量与知识图谱召回，并新增图谱引用和可交互的局部知识图谱预览。",
+        "新增 Agent 文件修改记录，支持按文件查看变更摘要、Diff，以及在文件未被再次修改时安全撤销。",
+        "完善生成物体验：支持集中浏览、自动预览、放大查看，以及常见文档、图片和网页格式预览。",
+        "新增文件历史比较和恢复功能，可查看并恢复已记录的项目文件版本。",
+        "优化 Agent 工具循环：限制重复检索、控制工具调用预算，并在检索预算耗尽前主动生成最终回答。",
+      ],
+    },
+  },
+  {
+    version: "0.6.0",
+    date: "2026-07-08",
+    highlights: {
+      en: [
+        "Rebuilt Chat Agent on the Rust backend for more reliable tool execution, session handling, cancellation, permissions, and LLM streaming.",
+        "Added Agent tools and Skill workflows, including wiki/source/graph/web search, workspace file generation, shell execution, user input forms, skill discovery, and per-conversation skill selection.",
+        "Improved generated output handling with a dedicated output panel, previews, enlarged modal viewing, and quick access to the output folder.",
+        "Improved Chat and Skill UI with a dedicated Skill management entry, slash skill completion, Mermaid diagram rendering, and better conversation isolation.",
+        "Strengthened path sandboxing, workspace restrictions, command approval, hidden/sensitive file filtering, and Windows/Linux path compatibility.",
+        "Expanded test coverage across the Rust Agent, tools, skills, search providers, chat sessions, layout, and Mermaid rendering.",
+      ],
+      zh: [
+        "重构 Chat Agent 底座：核心逻辑迁移到 Rust 后端，提升工具执行、会话、取消、权限和 LLM 流式调用的稳定性。",
+        "新增 Agent 工具与 Skill 工作流：支持 Wiki/Source/Graph/Web 检索、workspace 文件生成、shell 执行、用户交互表单、Skill 发现和每会话 Skill 选择。",
+        "完善生成物体验：生成文件会独立展示，支持右侧生成物面板、预览、弹窗放大和快速打开输出目录。",
+        "优化 Chat 与 Skill UI：新增独立 Skill 管理入口、/skill 补全、Mermaid 图表渲染，并修复会话内容串扰问题。",
+        "增强安全与跨平台兼容：加强路径沙箱、workspace 限制、命令审批、隐藏/敏感文件过滤，以及 Windows/Linux 路径兼容。",
+        "补充 Rust Agent、工具调用、Skill、搜索 Provider、Chat 会话、布局和 Mermaid 渲染相关测试。",
+      ],
+    },
+  },
+  {
+    version: "0.5.2",
+    date: "2026-06-25",
+    highlights: {
+      en: [
+        "Fixed knowledge graph node previews so clicked pages open in the graph-side preview panel instead of switching to the Wiki page.",
+      ],
+      zh: [
+        "修复知识图谱节点预览：点击页面节点时会在图谱右侧预览栏打开，不再跳转到 Wiki 页面。",
+      ],
+    },
+  },
+  {
+    version: "0.5.1",
+    date: "2026-06-24",
+    highlights: {
+      en: [
+        "Added Chat Agent modes, persisted tool progress, and project file tools for local inspection.",
+        "Improved reasoning-model handling so chat can recover when an endpoint returns thinking text but no final answer.",
+      ],
+      zh: [
+        "新增聊天 Agent 模式、持久化工具调用进度，并加入项目文件查看工具。",
+        "改进推理模型兼容性：当端点只返回思考内容而没有最终回答时，聊天会自动兜底恢复。",
+      ],
+    },
+  },
+  {
+    version: "0.5.0",
+    date: "2026-06-24",
+    highlights: {
+      en: [
+        "Added the new chat Agent flow with query understanding, local/wiki graph tools, external search tools, and visible tool progress.",
+        "Improved chat references with an in-chat preview panel, resizable preview width, source snippets, and persisted search toggles.",
+        "Improved Agent routing by using each project overview to decide when local wiki search should be preferred over external search.",
+        "Removed the Intel macOS release build from GitHub Actions.",
+      ],
+      zh: [
+        "新增聊天 Agent 流程，支持问题理解、本地 Wiki/图谱工具、外部搜索工具，以及可见的工具调用进度。",
+        "改进聊天引用体验：支持对话内引用预览、可调预览宽度、来源片段展示，以及搜索开关持久化。",
+        "改进 Agent 路由判断：使用每个项目的 overview 来判断何时优先搜索当前知识库而不是外部网页。",
+        "移除 GitHub Actions 中的 Intel Mac 发布构建。",
+      ],
+    },
+  },
+  {
+    version: "0.4.26",
+    date: "2026-06-23",
+    highlights: {
+      en: [
+        "Merged recent community PR fixes and cleaned up release documentation.",
+        "Fixed release build issues around bundled resources and PDFium binaries.",
+        "Added Intel x86_64 macOS client support to the release build.",
+      ],
+      zh: [
+        "合并近期社区 PR 修复，并清理发布文档。",
+        "修复发布构建中随包资源和 PDFium 二进制相关问题。",
+        "新增 Intel x86_64 Mac 客户端的发布构建支持。",
+      ],
+    },
+  },
+  {
+    version: "0.4.25",
+    date: "2026-06-23",
+    highlights: {
+      en: [
+        "Added Firecrawl as a Web Search provider with friendlier handling for anonymous search limits.",
+        "Fixed a batch of reported UI, import, search, and provider compatibility bugs.",
+        "Improved release build preparation for bundled MCP resources.",
+      ],
+      zh: [
+        "新增 Firecrawl 网页搜索 Provider，并优化匿名搜索受限时的提示。",
+        "修复一批用户反馈的界面、导入、搜索和 Provider 兼容性问题。",
+        "改进发布构建中 MCP 随包资源的准备流程。",
+      ],
+    },
+  },
+  {
+    version: "0.4.24",
+    date: "2026-06-16",
+    highlights: {
+      en: [
+        "Improved project creation visibility, lint repair suggestions, zoom controls, autosave, and review persistence across project switches.",
+        "Fixed vector index cleanup, Unicode page IDs, duplicate scan prefiltering, and local embedding requests so indexes and rebuilds stay accurate.",
+        "Improved MCP and local CLI provider reliability, including MCP version reporting and running Codex CLI from the project root.",
+        "Improved language prompts so technical names, model names, tool names, and code identifiers are preserved more reliably.",
+        "Hardened Windows startup with a native title bar, earlier API startup, and a visible startup-error fallback instead of a blank window.",
+      ],
+      zh: [
+        "改进项目创建字段可见性、检查修复建议、缩放控制、自动保存，以及切换项目后的待审阅项保留。",
+        "修复向量索引清理、Unicode 页面 ID、重复扫描预筛选和本地 Embedding 请求，确保索引与重建结果更准确。",
+        "改进 MCP 与本地 CLI Provider 稳定性，包括 MCP 版本显示，以及从项目根目录运行 Codex CLI。",
+        "改进语言提示词，更可靠地保留技术名、模型名、工具名和代码标识符。",
+        "增强 Windows 启动稳定性：使用原生标题栏、提前启动 API，并在前端启动失败时显示错误信息而不是白屏。",
+      ],
+    },
+  },
+  {
+    version: "0.4.23",
+    date: "2026-06-08",
+    highlights: {
+      en: [
+        "Added Doubao embedding compatibility and improved embedding rebuild safety.",
+        "Fixed dedup scan hangs, Codex CLI PATH detection from login shells, and several ingest / scheduled import reliability issues.",
+      ],
+      zh: [
+        "新增 Doubao Embedding 兼容，并提升 Embedding 重建过程的安全性。",
+        "修复去重扫描卡住、Codex CLI 登录 shell PATH 检测，以及多处摄取和定时导入稳定性问题。",
+      ],
+    },
+  },
+  {
     version: "0.4.22",
     date: "2026-06-08",
     highlights: {

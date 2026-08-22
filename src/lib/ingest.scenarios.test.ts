@@ -23,10 +23,15 @@ vi.mock("@/commands/fs", () => realFs)
 // generationResponse. Any further calls return empty (shouldn't happen in a
 // typical autoIngest run).
 let pendingResponses: string[] = []
+let streamCallCount = 0
+let afterStreamToken: ((callIndex: number, token: string) => void) | null = null
 vi.mock("./llm-client", () => ({
   streamChat: vi.fn(async (_cfg, _msgs, cb) => {
+    streamCallCount += 1
+    const callIndex = streamCallCount
     const resp = pendingResponses.shift() ?? ""
     cb.onToken(resp)
+    afterStreamToken?.(callIndex, resp)
     cb.onDone()
   }),
 }))
@@ -54,6 +59,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   pendingResponses = []
+  streamCallCount = 0
+  afterStreamToken = null
   useReviewStore.setState({ items: [] })
   useActivityStore.setState({ items: [] })
   useChatStore.setState({
@@ -195,6 +202,90 @@ describe("ingest scenarios (fixture-driven)", () => {
       await assertOutcome(scenario, ctx.tmp.path)
     },
   )
+
+  it("routes project mutations through the injected commit runner", async () => {
+    const scenario = ingestScenarios[0]
+    ctx = await setup(scenario)
+    const sourceFullPath = path.join(ctx.tmp.path, scenario.source.path)
+    let commitCalls = 0
+    let commitActive = false
+    let writeCallbacks = 0
+
+    const written = await autoIngest(
+      ctx.tmp.path,
+      sourceFullPath,
+      useWikiStore.getState().llmConfig,
+      undefined,
+      undefined,
+      (relativePath) => {
+        writeCallbacks += 1
+        expect(commitActive, `write callback escaped commit boundary: ${relativePath}`).toBe(true)
+      },
+      {
+        runCommit: async (operation) => {
+          commitCalls += 1
+          commitActive = true
+          try {
+            return await operation()
+          } finally {
+            commitActive = false
+          }
+        },
+      },
+    )
+
+    expect(commitCalls).toBe(1)
+    expect(written.length).toBeGreaterThan(0)
+    expect(writeCallbacks).toBeGreaterThan(0)
+  })
+
+  it("routes cache-hit mutations through the injected commit runner", async () => {
+    const scenario = ingestScenarios[0]
+    ctx = await setup(scenario)
+    const sourceFullPath = path.join(ctx.tmp.path, scenario.source.path)
+    const firstWritten = await autoIngest(
+      ctx.tmp.path,
+      sourceFullPath,
+      useWikiStore.getState().llmConfig,
+    )
+    let commitCalls = 0
+
+    const cachedWritten = await autoIngest(
+      ctx.tmp.path,
+      sourceFullPath,
+      useWikiStore.getState().llmConfig,
+      undefined,
+      undefined,
+      undefined,
+      {
+        runCommit: async (operation) => {
+          commitCalls += 1
+          return operation()
+        },
+      },
+    )
+
+    expect(commitCalls).toBe(1)
+    expect(cachedWritten).toEqual(firstWritten)
+    const activities = useActivityStore.getState().items
+    expect(activities.some((item) => item.detail.includes("Skipped (unchanged)"))).toBe(true)
+  })
+
+  it("serializes concurrent ingestion of the same source and reuses its cache", async () => {
+    const scenario = ingestScenarios[0]
+    ctx = await setup(scenario)
+    const sourceFullPath = path.join(ctx.tmp.path, scenario.source.path)
+
+    const [firstWritten, secondWritten] = await Promise.all([
+      autoIngest(ctx.tmp.path, sourceFullPath, useWikiStore.getState().llmConfig),
+      autoIngest(ctx.tmp.path, sourceFullPath, useWikiStore.getState().llmConfig),
+    ])
+
+    expect(streamCallCount).toBe(2)
+    expect(secondWritten).toEqual(firstWritten)
+    const activities = useActivityStore.getState().items
+    expect(activities.some((item) => item.detail.includes("Skipped (unchanged)"))).toBe(true)
+  })
 
   it("drops generated pages whose frontmatter type disagrees with schema routing", async () => {
     ctx = { tmp: await createTempProject("ingest-schema-routing") }
@@ -361,5 +452,76 @@ describe("ingest scenarios (fixture-driven)", () => {
     expect(projectA).toContain("analysis for project A")
     expect(projectB).toContain('sources: ["project-b/config.yaml"]')
     expect(projectB).toContain("analysis for project B")
+  })
+
+  it("does not write partial generation output after cancellation", async () => {
+    ctx = { tmp: await createTempProject("ingest-cancel-generation") }
+    const projectPath = ctx.tmp.path
+
+    await writeFileRaw(`${projectPath}/schema.md`, "")
+    await writeFileRaw(`${projectPath}/purpose.md`, "")
+    await writeFileRaw(`${projectPath}/wiki/index.md`, "# Index\n")
+    await writeFileRaw(`${projectPath}/wiki/overview.md`, "# Overview\n")
+    await writeFileRaw(`${projectPath}/raw/sources/cancel.md`, "source")
+
+    useWikiStore.setState({
+      project: {
+        name: "t",
+        path: projectPath,
+        createdAt: 0,
+        purposeText: "",
+        fileTree: [],
+      } as unknown as ReturnType<typeof useWikiStore.getState>["project"],
+    })
+    useWikiStore.getState().setLlmConfig({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4",
+      ollamaUrl: "",
+      customEndpoint: "",
+      maxContextSize: 128000,
+    })
+
+    const controller = new AbortController()
+    pendingResponses = [
+      "analysis",
+      [
+        "---FILE: wiki/concepts/partial.md---",
+        "---",
+        "type: concept",
+        "title: Partial",
+        "sources: [cancel.md]",
+        "tags: []",
+        "related: []",
+        "---",
+        "",
+        "# Partial",
+        "---END FILE---",
+        "",
+        "---REVIEW: missing-page | Partial follow-up---",
+        "This should not be parsed.",
+        "---END REVIEW---",
+      ].join("\n"),
+    ]
+    afterStreamToken = (_callIndex, token) => {
+      if (token.includes("---FILE:")) controller.abort()
+    }
+
+    await expect(
+      autoIngest(
+        projectPath,
+        `${projectPath}/raw/sources/cancel.md`,
+        useWikiStore.getState().llmConfig,
+        controller.signal,
+      ),
+    ).rejects.toThrow(/Ingest cancelled/)
+
+    expect(await fileExists(`${projectPath}/wiki/concepts/partial.md`)).toBe(false)
+    expect(await fileExists(`${projectPath}/wiki/sources/cancel.md`)).toBe(false)
+    expect(useReviewStore.getState().items).toHaveLength(0)
+    expect(useActivityStore.getState().items[0]).toMatchObject({
+      status: "error",
+      detail: "Ingest cancelled",
+    })
   })
 })
