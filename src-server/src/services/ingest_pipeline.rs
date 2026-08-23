@@ -799,6 +799,48 @@ fn repair_json_text(s: &str) -> Option<String> {
     }
 }
 
+/// §2 清单 cap 与 context 预算联动（评审 I3/I-5）：合算式
+/// 清单 ≤ (context_size - 8000) / 4 / 12（path 实测 8-12 token/行），clamp 到 [1, 2000]。
+/// 128k → 2500 → 取 2000；32k → 500。
+fn existing_paths_cap(context_size: u32) -> i64 {
+    (((context_size.saturating_sub(8000)) / 4 / 12) as i64).clamp(1, 2000)
+}
+
+/// §2 slug 对齐：既有 concepts/entities 页清单（前缀即白名单，评审 A-M7——
+/// 手动建页的任意脏 path 不匹配前缀不入清单）。每 job 查一次；LIMIT 与 budget 联动。
+async fn fetch_concept_entity_paths(state: &AppState, project_id: i32, cap: i64) -> Vec<String> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT path FROM wiki_pages WHERE project_id = $1 \
+         AND (path LIKE 'concepts/%' OR path LIKE 'entities/%') ORDER BY path LIMIT $2",
+    )
+    .bind(project_id)
+    .bind(cap)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    rows.into_iter().map(|r| r.0).collect()
+}
+
+/// step2 清单注入段（纯函数供单测；空清单 → 空串；触顶 cap → 注明截断，评审 I3）。
+fn existing_paths_section(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let note = if paths.len() >= existing_paths_cap(u32::MAX) as usize {
+        "\n(list truncated — only the first entries are shown)"
+    } else {
+        ""
+    };
+    let list = paths.iter().map(|p| format!("- {}", p)).collect::<Vec<_>>().join("\n");
+    format!(
+        "\n\n## Existing concept/entity pages\n\
+         The following wiki pages already exist. When a page you generate describes the \
+         same concept as one of them, REUSE its exact path so knowledge accumulates on \
+         one page. Only create a new path for genuinely new concepts.\n{}\n{}",
+        list, note
+    )
+}
+
 /// Step 2：基于 step1 分析 JSON + 原文，生成 FILE blocks 形式的 wiki 页面。
 /// W3：`language` 来自 projects.ingest_language（None → prompt 不注入语言指令，
 /// path slug 约束等普适段始终在模板本体）。
@@ -808,11 +850,13 @@ async fn step2_generate(
     original_text: &str,
     step1_json: &serde_json::Value,
     language: Option<&str>,
+    existing_paths: &[String],
 ) -> Result<String, AppError> {
     let provider = llm_stream::provider_for_project(state, project_id).await?;
     let prompt = step2_prompt(language);
     let system = "You generate wiki pages. Output each page as a FILE block.";
-    step2_generate_via(&*provider, system, &prompt, original_text, step1_json).await
+    step2_generate_via(&*provider, system, &prompt, original_text, step1_json, existing_paths)
+        .await
 }
 
 /// step2 的 LLM 调用（provider 注入，与 step1_analyze_via 同模式——prompt 注入单测
@@ -823,6 +867,7 @@ async fn step2_generate_via(
     prompt: &str,
     original_text: &str,
     step1_json: &serde_json::Value,
+    existing_paths: &[String],
 ) -> Result<String, AppError> {
     // 【编译陷阱】AppError 无 From<serde_json::Error>，必须 map_err。
     let analysis = serde_json::to_string_pretty(step1_json)
@@ -830,8 +875,11 @@ async fn step2_generate_via(
     let messages = vec![ChatMessage {
         role: "user".into(),
         content: format!(
-            "{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
-            prompt, analysis, original_text
+            "{}{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
+            prompt,
+            existing_paths_section(existing_paths),
+            analysis,
+            original_text
         ),
     }];
     let opts = ChatOpts {
@@ -1024,6 +1072,15 @@ pub async fn run_ingest_job(
     // 注意：不能用 job.item_states 快照（不含本次 run 的写入，会误判 all-failed）。
     let mut done_this_run = 0usize;
 
+    // §2 清单 + cap 联动（I-5）：context_size 与 process_source_path 内同源逻辑
+    // （LlmConfig.context_size 为 i32，负值兜底按 0 → cap 下限 1）
+    let context_size = crate::services::llm::get_llm_config(&state.db, job.project_id)
+        .await
+        .map(|c| c.context_size.max(0) as u32)
+        .unwrap_or(128_000);
+    let existing_paths =
+        fetch_concept_entity_paths(state, job.project_id, existing_paths_cap(context_size)).await;
+
     let total = job.source_paths.len();
     for (i, sp) in job.source_paths.iter().enumerate() {
         // 取消检查点（每 source 前）
@@ -1051,7 +1108,9 @@ pub async fn run_ingest_job(
         let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
             .await;
 
-        match process_source_path(state, job.project_id, team_id, sp, language).await {
+        match process_source_path(state, job.project_id, team_id, sp, language, &existing_paths)
+            .await
+        {
             Ok(None) => {
                 // 内容未变，视为 done
                 let _ =
@@ -1274,12 +1333,15 @@ pub async fn run_ingest_job(
 /// 单 source_path 处理：A（llm-wiki-parser 全格式解析）+ B（两步 LLM 生成 wiki pages）。
 /// 返回 Some(ProcessedSource) 表示需落库；返回 None 表示内容未变已跳过（不再重复 mark）。
 /// W3：`language` 来自 projects.ingest_language，穿透到 step1/step2/dedicated review 三处 prompt。
+/// §2：`existing_paths` 为既有 concepts/entities 页清单（run_ingest_job 每 job 查一次），
+/// 注入 step2 prompt 促成跨源 slug 收敛。
 async fn process_source_path(
     state: &AppState,
     project_id: i32,
     team_id: i32,
     source_path: &str,
     language: Option<&str>,
+    existing_paths: &[String],
 ) -> Result<Option<ProcessedSource>, AppError> {
     // 经 StorageBackend trait 读字节（Phase 1 抽象收敛：与 files.rs docx/xlsx 分支一致，S3 就绪）
     let bytes = state.storage.read_bytes(team_id, project_id, source_path).await?;
@@ -1337,7 +1399,8 @@ async fn process_source_path(
         merged
     };
 
-    let llm_output = step2_generate(state, project_id, &text, &step1_result, language).await?;
+    let llm_output =
+        step2_generate(state, project_id, &text, &step1_result, language, existing_paths).await?;
     let blocks = parse_file_blocks(&llm_output);
     let pages: Vec<WikiPageInsert> = blocks
         .into_iter()
@@ -2446,6 +2509,7 @@ mod tests {
             &step2_prompt(Some("简体中文")),
             "src text",
             &serde_json::json!({"entities":[]}),
+            &[],
         )
         .await
         .unwrap();
@@ -2475,6 +2539,7 @@ mod tests {
             &step2_prompt(None),
             "src text",
             &serde_json::json!({"entities":[]}),
+            &[],
         )
         .await
         .unwrap();
@@ -2482,6 +2547,43 @@ mod tests {
         assert!(!content.contains("LANGUAGE RULE"), "{content}");
         assert!(content.contains(SLUG_CONSTRAINT_ANCHOR), "{content}");
         assert!(!content.contains("{{"), "{content}");
+    }
+
+    // ── Task 4：§2 slug 对齐清单注入 ──
+
+    #[test]
+    fn existing_paths_section_lists_and_notes_truncation() {
+        let one = existing_paths_section(&["concepts/a.md".into()]);
+        assert!(one.contains("## Existing concept/entity pages"), "{one}");
+        assert!(one.contains("- concepts/a.md"), "{one}");
+        assert!(!one.contains("truncated"), "{one}");
+
+        let many: Vec<String> = (0..2000).map(|i| format!("concepts/p{}.md", i)).collect();
+        let sec = existing_paths_section(&many);
+        assert!(sec.contains("list truncated"), "{sec}");
+
+        assert_eq!(existing_paths_section(&[]), "");
+    }
+
+    #[test]
+    fn existing_paths_cap_links_budget() {
+        // 128k → 2500 → clamp 2000；32k → 500；8000 → 0 → clamp 1
+        assert_eq!(existing_paths_cap(128_000), 2000);
+        assert_eq!(existing_paths_cap(32_000), 500);
+        assert_eq!(existing_paths_cap(8_000), 1);
+    }
+
+    #[tokio::test]
+    async fn step2_prompt_injects_existing_paths_section() {
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("---FILE: concepts/a.md ---\nx\n---END FILE---".into()),
+            TokenDelta::Done,
+        ])]);
+        step2_generate_via(&provider, "sys", &step2_prompt(None), "src",
+            &serde_json::json!({"entities": []}), &["concepts/a.md".to_string()]).await.unwrap();
+        let content = provider.user_message_content(0);
+        assert!(content.contains("REUSE its exact path"), "{content}");
+        assert!(content.contains("- concepts/a.md"), "{content}");
     }
 
     // ── Task 2：step4 merge prompt + merge_pages_via ──
