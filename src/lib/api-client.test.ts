@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, afterEach } from "vitest"
 
 describe("api-client resolveApiBase", () => {
   it("undefined→localhost:8080(桌面无 env 默认连 src-server)", async () => {
@@ -230,6 +230,58 @@ describe("ApiClient 新方法(按 src-server routes 实际 serde 核对)", () =>
     expect(mockFetch).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/teams/2/search-providers"),
       expect.objectContaining({ method: "GET" }),
+    )
+    vi.unstubAllGlobals()
+  })
+})
+
+describe("ApiClient 认证收尾（logout 吊销 + refresh 轮换持久化，评审 Important 修）", () => {
+  afterEach(async () => {
+    const { apiClient } = await import("./api-client") as typeof import("./api-client")
+    apiClient.clearTokens()
+  })
+
+  it("logout 带 refresh_token body——缺 body 时服务端 Json extractor 422、吊销从未执行", async () => {
+    const { apiClient } = await import("./api-client")
+    apiClient.setTokens("acc-1", "ref-1")
+    const mockFetch = mockFetchJson({ message: "Logged out successfully" })
+    vi.stubGlobal("fetch", mockFetch)
+    await apiClient.logout()
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/auth/logout"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ refresh_token: "ref-1" }),
+      }),
+    )
+    vi.unstubAllGlobals()
+  })
+
+  it("logout 无 refresh 时不发请求（无可吊销，仅清本地）", async () => {
+    const { apiClient } = await import("./api-client")
+    apiClient.clearTokens()
+    const mockFetch = vi.fn()
+    vi.stubGlobal("fetch", mockFetch)
+    await apiClient.logout()
+    expect(mockFetch).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it("refresh 轮换后新 refresh_token 被持久化——下一次 logout 吊销的是新 token 而非已 revoke 的旧 token", async () => {
+    const { apiClient } = await import("./api-client")
+    apiClient.setTokens("acc-1", "ref-old")
+    const refreshResp = mockFetchJson({ access_token: "acc-2", refresh_token: "ref-new" })
+    vi.stubGlobal("fetch", refreshResp)
+    await apiClient.refreshSession()
+    const logoutResp = mockFetchJson({ message: "Logged out successfully" })
+    vi.stubGlobal("fetch", logoutResp)
+    await apiClient.logout()
+    expect(logoutResp).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/auth/logout"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ refresh_token: "ref-new" }),
+      }),
     )
     vi.unstubAllGlobals()
   })
