@@ -433,9 +433,18 @@ async fn step1_analyze_via(
     // 行原文比 head/tail 更直接（line 122 col 21 实测一出即锁定非法字符）。
     let mut last_err: Option<serde_json::Error> = None;
     let mut last_err_text: Option<String> = None;
+    // 末次失败"原因种类"（评审 Minor-2）：合法非对象时 serde 无错误可言——以
+    // shape 记因并清掉上一轮的陈旧 parse 诊断，保证终错指向真实的最终失败原因。
+    let mut last_shape: Option<&'static str> = None;
     let mut repair_fired = false;
     for attempt in 1..=2 {
         if attempt > 1 {
+            // 评审 Minor-1：fired 每 attempt 复位——首轮修复介入失败、次轮纯解析
+            // 失败时，终错若仍报 fired=true 会误导复盘。
+            repair_fired = false;
+            last_err = None;
+            last_err_text = None;
+            last_shape = None;
             tracing::warn!(project_id, "step1 parse failed, retrying once (transient model output)");
             let (r, u, m) = step1_chat(provider, project_id, system, prompt, text).await?;
             response = r;
@@ -458,14 +467,21 @@ async fn step1_analyze_via(
         // 与截断无关），转义后重跑两段解析，避免无谓的整次 LLM 重试。
         match serde_json::from_str::<serde_json::Value>(&response) {
             Ok(v) if v.is_object() => return Ok(v),
-            Ok(v) => tracing::warn!(
-                project_id,
-                "step1 JSON is not an object (got {}), treating as parse failure",
-                type_of_value(&v)
-            ),
+            Ok(v) => {
+                let shape = type_of_value(&v);
+                last_shape = Some(shape);
+                last_err = None;
+                last_err_text = None;
+                tracing::warn!(
+                    project_id,
+                    "step1 JSON is not an object (got {}), treating as parse failure",
+                    shape
+                );
+            }
             Err(e) => {
                 last_err = Some(e);
                 last_err_text = Some(response.clone());
+                last_shape = None;
                 if let Some(v) = extract_json_object(&response) {
                     tracing::warn!("step1: 直接 JSON 解析失败，fuzzy 提取兜底成功");
                     return Ok(v); // extract_json_object 只产出最外层 {...}，必为对象
@@ -475,19 +491,26 @@ async fn step1_analyze_via(
                     tracing::warn!(project_id, "step1: JSON 内容畸形（缺开引号/裸控制字符），修复层介入");
                     match serde_json::from_str::<serde_json::Value>(&repaired) {
                         Ok(v) if v.is_object() => {
-                            tracing::warn!(project_id, "step1: 控制字符修复后直接解析成功");
+                            tracing::warn!(project_id, "step1: 修复层（缺开引号/控制字符）直接解析成功");
                             return Ok(v);
                         }
-                        Ok(v) => tracing::warn!(
-                            project_id,
-                            "step1: 修复后合法但仍非对象（{}），按解析失败处理",
-                            type_of_value(&v)
-                        ),
+                        Ok(v) => {
+                            let shape = type_of_value(&v);
+                            last_shape = Some(shape);
+                            last_err = None;
+                            last_err_text = None;
+                            tracing::warn!(
+                                project_id,
+                                "step1: 修复后合法但仍非对象（{}），按解析失败处理",
+                                shape
+                            );
+                        }
                         Err(e2) => {
                             last_err = Some(e2);
                             last_err_text = Some(repaired.clone());
+                            last_shape = None;
                             if let Some(v) = extract_json_object(&repaired) {
-                                tracing::warn!(project_id, "step1: 控制字符修复后 fuzzy 提取成功");
+                                tracing::warn!(project_id, "step1: 修复层（缺开引号/控制字符）fuzzy 提取成功");
                                 return Ok(v);
                             }
                         }
@@ -503,20 +526,26 @@ async fn step1_analyze_via(
         .chars()
         .skip(response.chars().count().saturating_sub(80))
         .collect();
-    let (diag, line_text) = match (&last_err, last_err_text) {
-        (Some(e), Some(t)) => {
-            let snippet = e
-                .line()
-                .checked_sub(1)
-                .and_then(|i| t.lines().nth(i))
-                .map(|l| l.chars().take(160).collect::<String>())
-                .unwrap_or_default();
-            (
-                format!("{:?} at line {} col {}", e.classify(), e.line(), e.column()),
-                snippet,
-            )
+    let (diag, line_text) = if let Some(shape) = last_shape {
+        // 末次失败是"合法但非对象"（评审 Minor-2：以真实原因入错误上下文，
+        // 不携带上一轮的陈旧 serde 定位）
+        (format!("not an object (got {shape})"), String::new())
+    } else {
+        match (&last_err, last_err_text) {
+            (Some(e), Some(t)) => {
+                let snippet = e
+                    .line()
+                    .checked_sub(1)
+                    .and_then(|i| t.lines().nth(i))
+                    .map(|l| l.chars().take(160).collect::<String>())
+                    .unwrap_or_default();
+                (
+                    format!("{:?} at line {} col {}", e.classify(), e.line(), e.column()),
+                    snippet,
+                )
+            }
+            _ => ("n/a".to_string(), String::new()),
         }
-        _ => ("n/a".to_string(), String::new()),
     };
     Err(AppError::LlmApiError(format!(
         "step1 JSON parse failed（无有效 JSON 对象，retried once + 控制字符修复层 fired={repair_fired}）| serde: {diag} | line_text: {line_text:?} | head: {head:?} | tail: {tail:?}",
@@ -661,17 +690,35 @@ fn repair_json_missing_value_quotes(s: &str) -> Option<String> {
             out.push(ch);
             continue;
         }
+        // 结构位非法空白（NBSP/U+2028 等——合法 JSON 空白仅空格/\t/\n/\r）→
+        // 归一化为空格（评审 Minor-5 覆盖扩展：值前导 NBSP 此前会让补引号
+        // 落在 NBSP 之后仍非法）。只作用于结构态，串内合法不动。
+        if ch.is_whitespace() && !matches!(ch, ' ' | '\t' | '\n' | '\r') {
+            changed = true;
+            out.push(' ');
+            continue;
+        }
         if expect_value && !ch.is_whitespace() {
             expect_value = false;
             let legal_value_start = matches!(ch, '"' | '{' | '[' | '-' | 't' | 'f' | 'n')
                 || ch.is_ascii_digit();
             if !legal_value_start && ch != '}' && ch != ']' {
-                // 值位置既非合法起始也非收尾（尾逗号）→ 模型漏了开引号
+                // 值位置既非合法起始也非收尾 → 模型漏了开引号
                 changed = true;
                 out.push('"');
                 in_str = true;
                 out.push(ch);
                 continue;
+            }
+            if ch == '}' || ch == ']' {
+                // 尾逗号（评审 Minor-5 覆盖扩展）：`["a",]` / `{"a":1, }`——
+                // 逗号紧邻收尾括号在本已非法的输入上才可能出现，剥掉它
+                //（回看时跳过其间已归一/原生的结构空白）。
+                let cut = out.trim_end().len();
+                if out[..cut].ends_with(',') {
+                    changed = true;
+                    out.truncate(cut - 1);
+                }
             }
         }
         match ch {
@@ -1742,6 +1789,141 @@ mod tests {
                 assert!(msg.contains("tail:"), "须含 tail 上下文，实际: {msg}");
                 assert!(msg.contains("line_text:"), "须含出错行原文，实际: {msg}");
                 assert!(msg.contains("retried once"), "须保留重试语义标注，实际: {msg}");
+            }
+            other => panic!("expected LlmApiError, got {:?}", other),
+        }
+    }
+
+    // ── 评审 Minor-6 转正（对抗评审的 E1/E2/A2 临时用例）+ Minor-1/2/5 行为断言 ──
+
+    #[tokio::test]
+    async fn step1_repair_fails_then_llm_retry_recovers() {
+        // E1：首答畸形（修复介入但产物仍非法）→ 次答干净 → 重试救回，恰 2 次调用
+        let provider = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text("{\"a\":1,,\"b\":2}".into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 10 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text(
+                    "{\"entities\":[{\"name\":\"E1\"}],\"connections\":[],\"contradictions\":[]}".into(),
+                ),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 50 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let v = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap();
+        assert_eq!(v["entities"][0]["name"], "E1");
+        assert_eq!(provider.calls.lock().unwrap().len(), 2, "修复失败须走恰好一次 LLM 重试");
+    }
+
+    #[tokio::test]
+    async fn step1_repaired_valid_array_still_rejected() {
+        // E2：修复后合法但为数组（非对象）→ r3 守卫不放行，重试后终错，恰 2 次调用
+        let provider = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text("[{\"a\":\"x\ty\"}]".into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 10 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text("[{\"a\":\"x\ty\"}]".into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 10 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let err = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap_err();
+        match err {
+            AppError::LlmApiError(msg) => assert!(
+                msg.contains("not an object"),
+                "末次失败为非对象时错误上下文须记 shape 而非陈旧 serde 定位，实际: {msg}"
+            ),
+            other => panic!("expected LlmApiError, got {:?}", other),
+        }
+        assert_eq!(provider.calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn repair_misrepair_forms_stay_invalid() {
+        // A2（节选）：吞边界误修形态的产物必须仍非法——serde 安全拒绝，不会以
+        // 错误语义进入缓存
+        for raw in [
+            "{\"a\":1,,\"b\":2}",
+            "[aaa, \"\"]",
+            "{\"a\":xxx, \"b\":1}",
+            "[xx,\"y\",1]",
+        ] {
+            let repaired = repair_json_text(raw);
+            if let Some(r) = repaired {
+                assert!(
+                    serde_json::from_str::<serde_json::Value>(&r).is_err(),
+                    "误修产物必须仍非法（输入 {raw:?}）"
+                );
+            }
+            // 产物为 None（无需修复）也合法——原文本就非法不会被返回 None 以外路径放行
+        }
+    }
+
+    #[test]
+    fn repair_trailing_comma_and_structural_nbsp() {
+        // Minor-5 覆盖扩展：尾逗号剥除（含收尾前空白）+ 结构位 NBSP 归一化
+        let r1 = repair_json_text("[\"a\",]").expect("尾逗号须剥除");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&r1).unwrap()[0], "a");
+        let r2 = repair_json_text("{\"a\":1, }").expect("带空白的尾逗号须剥除");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&r2).unwrap()["a"], 1);
+        let r3 = repair_json_text("{\u{00A0}\"a\": 1}").expect("结构位 NBSP 须归一化");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&r3).unwrap()["a"], 1);
+        // 值前导 NBSP + 缺开引号（评审边界场景，现在可救）
+        let r4 = repair_json_text("{\u{00A0}\"a\":\u{00A0}中文\", \"b\": 2}").expect("前导 NBSP 归一后补引号");
+        let v4: serde_json::Value = serde_json::from_str(&r4).unwrap();
+        assert_eq!(v4["a"], "中文");
+        // 串内 NBSP 合法且不受影响
+        assert_eq!(repair_json_control_chars("{\"a\":\"x\u{00A0}y\"}"), None);
+    }
+
+    #[tokio::test]
+    async fn step1_fired_resets_per_attempt_and_shape_context_current() {
+        // Minor-1/2：首轮修复介入失败 + 次轮纯解析失败 → 终错 fired=false（不复位
+        // 会误报 true）；首轮解析失败 + 次轮合法非对象 → 上下文记 shape 非陈旧定位
+        let provider = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text("{\"a\":1,,\"b\":2}".into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 10 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text(PARTIAL_JSON.into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 40 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let err = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap_err();
+        match err {
+            AppError::LlmApiError(msg) => assert!(
+                msg.contains("fired=false"),
+                "次轮未触发修复层时 fired 须复位，实际: {msg}"
+            ),
+            other => panic!("expected LlmApiError, got {:?}", other),
+        }
+
+        let provider2 = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text(PARTIAL_JSON.into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 40 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text("[]".into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 5 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let err2 = step1_analyze_via(&provider2, 614, "sys", "prompt", "doc").await.unwrap_err();
+        match err2 {
+            AppError::LlmApiError(msg) => {
+                assert!(msg.contains("not an object"), "末轮非对象须为终错原因，实际: {msg}");
+                assert!(!msg.contains("at line"), "不得携带次轮已失效的 serde 定位，实际: {msg}");
             }
             other => panic!("expected LlmApiError, got {:?}", other),
         }

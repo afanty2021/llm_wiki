@@ -25,6 +25,8 @@ async fn main() -> Result<()> {
     // 启动 ingest worker（同进程 tokio task）
     llm_wiki_server::services::ingest_worker::spawn_worker(state.clone());
     llm_wiki_server::services::research::worker::spawn_worker(state.clone());
+    // refresh_tokens 每小时清理（过期即删 + 吊销 7 天观测窗；评审遗留项收口）
+    llm_wiki_server::services::token_cleanup::spawn_token_cleanup(state.clone());
 
     // 启动服务器
     let addr = format!("{}:{}", state.config.host(), state.config.port());

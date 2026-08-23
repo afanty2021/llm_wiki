@@ -16,6 +16,7 @@ mod permissions_test;
 mod research_test;
 mod registration_gate_test;
 mod techdebt_r3_test;
+mod token_cleanup_test;
 mod training_test;
 mod learning_api_test;
 mod media_test;

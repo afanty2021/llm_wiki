@@ -182,7 +182,8 @@ learning_events
 **资源归属规则（正文统一陈述）**：一切单资源端点强制 owner 链校验（plan→user、item→plan→user 与 token 用户一致），非本人资源按 404 处理；collection 端点（GET /plans）天然只返回本人数据，不适用 404 措辞；入 §8 鉴权矩阵测试。
 
 **凭证模型（三层，JWT 带 `typ`，`require_auth` 增加 typ 校验）**：
-- access/refresh（300s/7d，refresh 一次性旋转）：老师与服务账号持有，MCP/CLI 持久化每次新 refresh；MCP 并发刷新 **single-flight**（合并为单次，防旋转竞态丢 token）
+- access/refresh（300s/7d，refresh 一次性旋转）：老师与服务账号持有，MCP/CLI 持久化每次新 refresh；MCP 并发刷新 **single-flight**（合并为单次，防旋转竞态丢 token）<!-- 2026-08-23 勘误：access TTL 已调 14400s/4h（对齐夜批 job 轮询上限，auth 面不公网可达；refresh 仍 7d），见 config/default.json -->
+
 - plan_link：一链一清单，TTL 7 天；到期 /plans/:id/link 重发
 - /s/ 短链（v6 新增层）：plan 存活期内**永活**的 capability URL，点击时现签 7 天 plan_link；泄露止血 = `UPDATE learning_plans SET status='archived'`（/s/、/t/、beacon 三面同判 active）
 - /media 签名：渲染时现签，HMAC 消息含当次 plan_link 指纹（受众绑定；12h 时限为主要失效边界；plan 归档后新渲染停止——存量 URL 至多再流 12h，v6 口径）
