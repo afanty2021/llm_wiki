@@ -1089,6 +1089,7 @@
     }
   },
   "preview": {
+    "saveFailed": "Salvataggio non riuscito",
     "selectFile": "Seleziona un file da visualizzare",
     "notAvailable": "Anteprima non disponibile per questo tipo di file",
     "viewAsText": "Visualizza come testo",

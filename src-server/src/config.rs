@@ -24,7 +24,9 @@ pub struct JwtConfig {
 }
 
 fn default_access_token_ttl() -> u64 {
-    3600 // 1 hour in seconds
+    // 4 小时：对齐夜批 job 轮询上限（20df08ea 调整 default.json 时漏了本兜底，
+    // 评审 Minor 补齐——纯 env 部署下以此为准）
+    14400
 }
 
 fn default_refresh_token_ttl() -> u64 {
@@ -405,7 +407,7 @@ mod tests {
             refresh_token_ttl: default_refresh_token_ttl(),
         };
 
-        assert_eq!(jwt_config.access_token_ttl, 3600);
+        assert_eq!(jwt_config.access_token_ttl, 14400);
         assert_eq!(jwt_config.refresh_token_ttl, 604800);
     }
 

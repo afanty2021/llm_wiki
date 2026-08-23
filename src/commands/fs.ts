@@ -3,7 +3,7 @@ import { invokeTraced } from "@/lib/invoke-traced"
 import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
 import { isAbsolutePath } from "@/lib/path-utils"
-import { apiClient } from "@/lib/api-client"
+import { apiClient, ApiRequestError } from "@/lib/api-client"
 import { caps } from "@/lib/capabilities"
 import { parseFrontmatter } from "@/lib/frontmatter"
 import type { WikiPage } from "@/lib/api-types"
@@ -36,8 +36,11 @@ async function fetchWikiPage(projectId: number, path: string): Promise<WikiPage 
       const page = await apiClient.getPage(projectId, variant)
       pageUpdatedAt.set(`${projectId}:${page.path}`, page.updated_at)
       return page
-    } catch {
-      // 404(或网络错)→ 试下一变体;全 miss 由调用方按 File not found 语义处理
+    } catch (err) {
+      // FS-1：仅 404 当「页不存在」试下一变体。瞬时 500/网络错必须上抛——
+      // 否则 writeWikiPageIfExists 误判 miss，保存静默落存储目录造成 DB/文件
+      // 永久分叉（此后 stat 恒命中，读取再也不走 pages API）。
+      if (!(err instanceof ApiRequestError) || !err.isNotFound) throw err
     }
   }
   return null
@@ -63,7 +66,7 @@ function splitMarkdownContents(contents: string): {
   return { content: parsed.body, frontmatter: parsed.frontmatter }
 }
 
-/** 页面存在则 PUT 更新并返回 true;不存在(404)返回 false 由调用方落回 files API。 */
+/** 页面存在则 PUT 更新并返回 true;不存在(404)返回 false 由调用方落回建页/files。 */
 async function writeWikiPageIfExists(
   projectId: number,
   path: string,
@@ -72,23 +75,58 @@ async function writeWikiPageIfExists(
   const page = await fetchWikiPage(projectId, path)
   if (!page) return false
   const { content, frontmatter } = splitMarkdownContents(contents)
-  const body = {
-    path: page.path,
-    title: page.title,
-    content,
-    frontmatter: frontmatter ?? {},
-  }
-  const ifMatch = pageUpdatedAt.get(`${projectId}:${page.path}`) ?? page.updated_at
+  // 不传 title：pages.rs denormalize 的 req_title 优先分支会压过 frontmatter
+  // .title——编辑器改了 frontmatter 标题时 DB 列要跟着走（#6 顺手修）。
+  const body = { path: page.path, content, frontmatter: frontmatter ?? {} }
   try {
-    await apiClient.updatePage(projectId, page.path, body, ifMatch)
+    await putWikiPage(projectId, page.path, body, pageUpdatedAt.get(`${projectId}:${page.path}`) ?? page.updated_at)
   } catch (err) {
     // 409 stale(读后被并发改):重取 updated_at 重试一次;再冲突则上抛
-    if (!/conflict|mismatch/i.test(String(err))) throw err
+    if (!isStaleConflict(err)) throw err
     const fresh = await apiClient.getPage(projectId, page.path)
     pageUpdatedAt.set(`${projectId}:${fresh.path}`, fresh.updated_at)
-    await apiClient.updatePage(projectId, page.path, body, fresh.updated_at)
+    await putWikiPage(projectId, page.path, body, fresh.updated_at)
   }
   return true
+}
+
+/** #7：web 下新 .md = 建 wiki 页（POST /pages）而非写存储目录——src-server
+ *  语义里页面本体在 DB（chat「保存到 wiki」/研究笔记落盘都经此），写目录
+ *  产出的 .md 不进图谱/搜索/知识树。409（与并发建页竞态）转 PUT 收尾。 */
+async function createWikiPage(projectId: number, path: string, contents: string): Promise<boolean> {
+  const { content, frontmatter } = splitMarkdownContents(contents)
+  const variant = pagePathVariants(path)[0]
+  try {
+    const page = await apiClient.createPage(projectId, {
+      path: variant,
+      content,
+      frontmatter: frontmatter ?? {},
+    })
+    pageUpdatedAt.set(`${projectId}:${page.path}`, page.updated_at)
+    return true
+  } catch (err) {
+    if (err instanceof ApiRequestError && err.isConflict) {
+      return writeWikiPageIfExists(projectId, path, contents)
+    }
+    throw err
+  }
+}
+
+async function putWikiPage(
+  projectId: number,
+  path: string,
+  body: { path: string; content: string; frontmatter: unknown },
+  ifMatch: string,
+): Promise<void> {
+  await apiClient.updatePage(projectId, path, body, ifMatch)
+}
+
+/** 409 判定：优先类型化(status/code),保留 message 正则兜底（旧 mock/网关
+ *  剥 body 后的裸 "HTTP 409" 场景——#6 顺手修补齐。不锚定行首：String(err)
+ *  形态为 "Error: HTTP 409"）。 */
+function isStaleConflict(err: unknown): boolean {
+  if (err instanceof ApiRequestError) return err.isConflict
+  return /conflict|mismatch|HTTP 409/i.test(String(err))
 }
 
 // 从 store 获取当前 project id
@@ -138,10 +176,12 @@ export async function readFile(
 export async function writeFile(path: string, contents: string): Promise<void> {
   if (USE_HTTP) {
     const projectId = getCurrentProjectId()
-    // #1(web):已存在的 wiki 页写回 DB(PUT /page),防止落存储目录后读取走 files
-    // 分支、与 DB 页内容静默分叉。非页面(.json 等运行时文件/新文件)仍走 files API。
-    if (path.endsWith(".md") && (await writeWikiPageIfExists(projectId, path, contents))) {
-      return
+    // #1/#7(web):.md 走页面语义——已存在的页 PUT 更新(If-Match),不存在的页
+    // POST 建页,均不落存储目录(防 DB/文件分叉)。非 .md(.json 运行时文件等)
+    // 仍走 files API 写存储。
+    if (path.endsWith(".md")) {
+      if (await writeWikiPageIfExists(projectId, path, contents)) return
+      if (await createWikiPage(projectId, path, contents)) return
     }
     await apiClient.writeFile(projectId, path, contents)
     return

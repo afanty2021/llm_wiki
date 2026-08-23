@@ -1715,8 +1715,11 @@ function GraphPreviewPanel({
   onClose: () => void
   onContentChange: (content: string) => void
 }) {
+  const { t } = useTranslation()
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedRef = useRef(preview.content)
+  // #6：保存失败可视化（同 PreviewPanel——web 下 PUT 失败只进 console 用户无感）
+  const [saveError, setSaveError] = useState<string | null>(null)
   const category = getFileCategory(preview.path)
 
   useEffect(() => {
@@ -1733,9 +1736,13 @@ function GraphPreviewPanel({
     writeFile(preview.path, markdown)
       .then(() => {
         lastSavedRef.current = markdown
+        setSaveError(null)
         onContentChange(markdown)
       })
-      .catch((err) => console.error("Failed to save graph preview:", err))
+      .catch((err) => {
+        console.error("Failed to save graph preview:", err)
+        setSaveError(String(err instanceof Error ? err.message : err))
+      })
   }, [onContentChange, preview.path])
 
   const handleSave = useCallback((markdown: string, options?: { immediate?: boolean }) => {
@@ -1765,6 +1772,19 @@ function GraphPreviewPanel({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+      {saveError && (
+        <div className="flex items-start justify-between gap-2 border-b bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <span className="min-w-0 break-all">{t("preview.saveFailed")}: {saveError}</span>
+          <button
+            type="button"
+            onClick={() => setSaveError(null)}
+            className="shrink-0 rounded p-0.5 hover:bg-destructive/20"
+            aria-label={t("common.dismiss")}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       <div className="min-w-0 flex-1 overflow-auto">
         {category === "markdown" ? (
           <WikiEditor

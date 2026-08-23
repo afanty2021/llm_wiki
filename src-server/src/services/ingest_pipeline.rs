@@ -427,6 +427,13 @@ async fn step1_analyze_via(
 ) -> Result<serde_json::Value, AppError> {
     let (mut response, mut usage, mut effective_max_tokens) =
         step1_chat(provider, project_id, system, prompt, text).await?;
+    // 末次直接解析的 serde 诊断（分类 + 行列）——错误信息升级（2026-08-23）：
+    // 此前只留 80 字符 head，曾把"内容非法 JSON"误诊为"截断"。
+    // v2（同日）：连带保留出错原文（response 或修复后文本）——line/col 定位 +
+    // 行原文比 head/tail 更直接（line 122 col 21 实测一出即锁定非法字符）。
+    let mut last_err: Option<serde_json::Error> = None;
+    let mut last_err_text: Option<String> = None;
+    let mut repair_fired = false;
     for attempt in 1..=2 {
         if attempt > 1 {
             tracing::warn!(project_id, "step1 parse failed, retrying once (transient model output)");
@@ -446,24 +453,73 @@ async fn step1_analyze_via(
         // **形状校验（Task 6 r3）**：合法 JSON 但非对象（"[]"/"null"/标量——serde 能
         // 解析的形态）与解析失败同路径：不返回、走重试；绝不放行非对象进 step2 /
         // step1 缓存（一次放行 = 同 content-hash 永久污染）。
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&response) {
-            if v.is_object() {
-                return Ok(v);
-            }
-            tracing::warn!(
+        // **修复层（2026-08-23）**：直接与 fuzzy 均败后，若响应字符串值内含裸控制
+        // 字符（基础阶夜批 2 失败件根因——omlx 对特定内容确定性输出内容非法 JSON，
+        // 与截断无关），转义后重跑两段解析，避免无谓的整次 LLM 重试。
+        match serde_json::from_str::<serde_json::Value>(&response) {
+            Ok(v) if v.is_object() => return Ok(v),
+            Ok(v) => tracing::warn!(
                 project_id,
                 "step1 JSON is not an object (got {}), treating as parse failure",
                 type_of_value(&v)
-            );
-        } else if let Some(v) = extract_json_object(&response) {
-            tracing::warn!("step1: 直接 JSON 解析失败，fuzzy 提取兜底成功");
-            return Ok(v); // extract_json_object 只产出最外层 {...}，必为对象
+            ),
+            Err(e) => {
+                last_err = Some(e);
+                last_err_text = Some(response.clone());
+                if let Some(v) = extract_json_object(&response) {
+                    tracing::warn!("step1: 直接 JSON 解析失败，fuzzy 提取兜底成功");
+                    return Ok(v); // extract_json_object 只产出最外层 {...}，必为对象
+                }
+                if let Some(repaired) = repair_json_text(&response) {
+                    repair_fired = true;
+                    tracing::warn!(project_id, "step1: JSON 内容畸形（缺开引号/裸控制字符），修复层介入");
+                    match serde_json::from_str::<serde_json::Value>(&repaired) {
+                        Ok(v) if v.is_object() => {
+                            tracing::warn!(project_id, "step1: 控制字符修复后直接解析成功");
+                            return Ok(v);
+                        }
+                        Ok(v) => tracing::warn!(
+                            project_id,
+                            "step1: 修复后合法但仍非对象（{}），按解析失败处理",
+                            type_of_value(&v)
+                        ),
+                        Err(e2) => {
+                            last_err = Some(e2);
+                            last_err_text = Some(repaired.clone());
+                            if let Some(v) = extract_json_object(&repaired) {
+                                tracing::warn!(project_id, "step1: 控制字符修复后 fuzzy 提取成功");
+                                return Ok(v);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+    // 错误上下文（2026-08-23 升级）：head + tail + serde 定位 + 出错行原文。
+    // head 曾致"截断"误诊——JSON 断在结尾才是截断，断在中间是内容非法。
     let head: String = response.chars().take(80).collect();
+    let tail: String = response
+        .chars()
+        .skip(response.chars().count().saturating_sub(80))
+        .collect();
+    let (diag, line_text) = match (&last_err, last_err_text) {
+        (Some(e), Some(t)) => {
+            let snippet = e
+                .line()
+                .checked_sub(1)
+                .and_then(|i| t.lines().nth(i))
+                .map(|l| l.chars().take(160).collect::<String>())
+                .unwrap_or_default();
+            (
+                format!("{:?} at line {} col {}", e.classify(), e.line(), e.column()),
+                snippet,
+            )
+        }
+        _ => ("n/a".to_string(), String::new()),
+    };
     Err(AppError::LlmApiError(format!(
-        "step1 JSON parse failed（无有效 JSON 对象，retried once）| head: {:?}",
-        head
+        "step1 JSON parse failed（无有效 JSON 对象，retried once + 控制字符修复层 fired={repair_fired}）| serde: {diag} | line_text: {line_text:?} | head: {head:?} | tail: {tail:?}",
     )))
 }
 
@@ -512,6 +568,131 @@ fn extract_json_object(s: &str) -> Option<serde_json::Value> {
         }
     }
     None
+}
+
+/// 转义 JSON 字符串值内的裸控制字符（2026-08-23 基础阶夜批 2 失败件根因：
+/// omlx 对特定内容确定性输出内容非法 JSON——字符串里嵌裸 \n/\t，serde 与
+/// fuzzy 提取均死于内容而非截断）。状态机与 extract_json_object 同款（in_str /
+/// esc），只处理字符串**内部**：字符串外的裸换行/制表本就是合法 JSON 空白，
+/// 不动。已转义的 `\n`（反斜杠+n 两字符）自然穿透。返回 None = 无需修复。
+fn repair_json_control_chars(s: &str) -> Option<String> {
+    let mut in_str = false;
+    let mut esc = false;
+    let mut changed = false;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if in_str {
+            if esc {
+                esc = false;
+                out.push(ch);
+                continue;
+            }
+            match ch {
+                '\\' => {
+                    esc = true;
+                    out.push(ch);
+                }
+                '"' => {
+                    in_str = false;
+                    out.push(ch);
+                }
+                '\n' => {
+                    changed = true;
+                    out.push_str("\\n");
+                }
+                '\r' => {
+                    changed = true;
+                    out.push_str("\\r");
+                }
+                '\t' => {
+                    changed = true;
+                    out.push_str("\\t");
+                }
+                '\u{8}' => {
+                    changed = true;
+                    out.push_str("\\b");
+                }
+                '\u{c}' => {
+                    changed = true;
+                    out.push_str("\\f");
+                }
+                c if (c as u32) < 0x20 => {
+                    // 无标准短转义的其余控制字符（NUL/垂直制表等）：\u00XX 保留原字符
+                    changed = true;
+                    out.push_str(&format!("\\u{:04x}", c as u32));
+                }
+                c => out.push(c),
+            }
+        } else if ch == '"' {
+            in_str = true;
+            out.push(ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    if changed { Some(out) } else { None }
+}
+
+/// 修复"值缺开引号"畸形（2026-08-23 line_text 实锤的第二类：omlx 输出
+/// `"description":主要受外部奖励…",`——冒号后直接跟文本、闭合引号健在）。
+/// 规则：值位置（结构态下 `:` / `,` / `[` 之后）的下一非空白字符若非合法
+/// JSON 值起始（`"` `{` `[` `-` 数字 t/f/n）且非收尾 `}` `]`，则插入开引号、
+/// 进入字符串态吃到模型已给的闭合引号。启发式只在本已非法的输入上触发，
+/// 不可能破坏合法 JSON。先跑本修复（缺引号的值区间内可能还藏裸控制字符），
+/// 再跑 repair_json_control_chars。
+fn repair_json_missing_value_quotes(s: &str) -> Option<String> {
+    let mut in_str = false;
+    let mut esc = false;
+    let mut expect_value = false;
+    let mut changed = false;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if in_str {
+            if esc {
+                esc = false;
+                out.push(ch);
+                continue;
+            }
+            match ch {
+                '\\' => esc = true,
+                '"' => in_str = false,
+                _ => {}
+            }
+            out.push(ch);
+            continue;
+        }
+        if expect_value && !ch.is_whitespace() {
+            expect_value = false;
+            let legal_value_start = matches!(ch, '"' | '{' | '[' | '-' | 't' | 'f' | 'n')
+                || ch.is_ascii_digit();
+            if !legal_value_start && ch != '}' && ch != ']' {
+                // 值位置既非合法起始也非收尾（尾逗号）→ 模型漏了开引号
+                changed = true;
+                out.push('"');
+                in_str = true;
+                out.push(ch);
+                continue;
+            }
+        }
+        match ch {
+            ':' | ',' | '[' => expect_value = true,
+            _ => {}
+        }
+        if ch == '"' {
+            in_str = true;
+        }
+        out.push(ch);
+    }
+    if changed { Some(out) } else { None }
+}
+
+/// step1 修复层入口：缺开引号 → 裸控制字符 两段链式修复。
+/// 返回 None = 两段均无需改动。
+fn repair_json_text(s: &str) -> Option<String> {
+    match repair_json_missing_value_quotes(s) {
+        Some(passed) => repair_json_control_chars(&passed).or(Some(passed)),
+        None => repair_json_control_chars(s),
+    }
 }
 
 /// Step 2：基于 step1 分析 JSON + 原文，生成 FILE blocks 形式的 wiki 页面。
@@ -1461,6 +1642,109 @@ mod tests {
             2,
             "重试失败后不得有第三次调用"
         );
+    }
+
+    // ── 控制字符修复层（2026-08-23：夜批 2 失败件根因——字符串内裸控制字符）──
+
+    #[test]
+    fn repair_escapes_raw_control_chars_inside_strings() {
+        // 字符串值内嵌裸 \n 与 \t（源文本真实换行/制表，非转义序列）→ 修复后合法
+        let raw = "{\"a\":\"第一行\n第二行\t结尾\",\"b\":1}";
+        let repaired = repair_json_control_chars(raw).expect("须检出并修复");
+        let v: serde_json::Value = serde_json::from_str(&repaired).expect("修复后必须可解析");
+        assert_eq!(v["a"], "第一行\n第二行\t结尾", "转义须保留原字符语义");
+    }
+
+    #[test]
+    fn repair_ignores_clean_json_and_legal_whitespace() {
+        // 干净 JSON + 字符串外裸换行（合法空白）+ 已转义 \n（两字符）→ 均无需修复
+        assert_eq!(repair_json_control_chars("{\"a\":\"x\\ny\"}"), None);
+        assert_eq!(repair_json_control_chars("{\n  \"a\": 1\n}"), None);
+    }
+
+    #[test]
+    fn repair_parity_of_escapes_across_string_boundary() {
+        // 字符串内非控制 Unicode（中文/emoji）原样穿透；转义引号 \" 不误判字符串边界
+        let raw = "{\"a\":\"说\\\"引号\\\"内\n换行\",\"b\":\"中文😀\"}";
+        let repaired = repair_json_control_chars(raw).expect("须修复裸换行");
+        let v: serde_json::Value = serde_json::from_str(&repaired).expect("修复后必须可解析");
+        assert_eq!(v["a"], "说\"引号\"内\n换行");
+        assert_eq!(v["b"], "中文😀");
+    }
+
+    #[test]
+    fn repair_missing_value_quote_observed_pattern() {
+        // 2026-08-23 实锤形态：冒号后直接中文文本、闭合引号健在（line 104 col 21）
+        let raw = "{\"description\":主要受外部奖励（如成绩）驱动的学生。\",\"n\":1}";
+        let repaired = repair_json_text(raw).expect("须检出缺开引号");
+        let v: serde_json::Value = serde_json::from_str(&repaired).expect("修复后必须可解析");
+        assert_eq!(v["description"], "主要受外部奖励（如成绩）驱动的学生。");
+    }
+
+    #[test]
+    fn repair_combined_missing_quote_and_control_char() {
+        // 两类畸形叠加（夜批失败件实测：缺开引号【闭合健在】+ 值区间内裸换行）
+        let raw = "{\"a\":第一行\n第二行\",\"b\":2}";
+        let repaired = repair_json_text(raw).expect("须链式修复两类畸形");
+        let v: serde_json::Value = serde_json::from_str(&repaired).expect("修复后必须可解析");
+        assert_eq!(v["a"], "第一行\n第二行");
+    }
+
+    #[test]
+    fn repair_no_false_positive_on_legal_json() {
+        // 合法 JSON（含数字/布尔/null/嵌套/负数/空数组）任何修复层都不得改动
+        let legal = "{\"a\":\"x\",\"n\":-1,\"t\":true,\"f\":false,\"z\":null,\"arr\":[1,\"s\",{\"k\":\"v\"}],\"obj\":{}}";
+        assert_eq!(repair_json_missing_value_quotes(legal), None);
+        assert_eq!(repair_json_control_chars(legal), None);
+        assert_eq!(repair_json_text(legal), None);
+    }
+
+    #[tokio::test]
+    async fn step1_analyze_repair_layer_rescues_without_llm_retry() {
+        // 单次响应即含裸控制字符但结构完整：修复层应救回且**不触发** LLM 重试
+        let raw = concat!(
+            "{\"entities\":[{\"name\":\"Mary\",\"notes\":\"第一行\n第二行\t第三阶\"}],",
+            "\"connections\":[],\"contradictions\":[]}"
+        );
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text(raw.into()),
+            TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 30 },
+            TokenDelta::Done,
+        ])]);
+        let v = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap();
+        assert_eq!(v["entities"][0]["name"], "Mary");
+        assert_eq!(
+            provider.calls.lock().unwrap().len(),
+            1,
+            "修复层救回后不得发起 LLM 重试"
+        );
+    }
+
+    #[tokio::test]
+    async fn step1_analyze_error_carries_tail_and_serde_diag() {
+        // 两次均败：错误信息须含 serde 行列定位与 tail（head-only 曾致截断误诊）
+        let provider = ScriptedProvider::new(vec![
+            Ok(vec![
+                TokenDelta::Text(PARTIAL_JSON.into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 40 },
+                TokenDelta::Done,
+            ]),
+            Ok(vec![
+                TokenDelta::Text(PARTIAL_JSON.into()),
+                TokenDelta::Usage { prompt_tokens: 100, completion_tokens: 40 },
+                TokenDelta::Done,
+            ]),
+        ]);
+        let err = step1_analyze_via(&provider, 614, "sys", "prompt", "doc").await.unwrap_err();
+        match err {
+            AppError::LlmApiError(msg) => {
+                assert!(msg.contains("at line"), "须含 serde 行列定位，实际: {msg}");
+                assert!(msg.contains("tail:"), "须含 tail 上下文，实际: {msg}");
+                assert!(msg.contains("line_text:"), "须含出错行原文，实际: {msg}");
+                assert!(msg.contains("retried once"), "须保留重试语义标注，实际: {msg}");
+            }
+            other => panic!("expected LlmApiError, got {:?}", other),
+        }
     }
 
     // ── step1 非对象 JSON（"[]"/"null"/标量）不缓存、不返回（Task 6 r3 收编）──

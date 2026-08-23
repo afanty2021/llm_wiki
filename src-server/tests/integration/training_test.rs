@@ -369,7 +369,7 @@ async fn bind_lifecycle() {
     assert_eq!(v["user"]["username"].as_str().unwrap(), format!("wecom_{}", wid));
     assert_eq!(v["user"]["email"].as_str().unwrap(), format!("{}@wecom.local", wid));
     assert_eq!(v["user"]["full_name"].as_str().unwrap(), "王老师");
-    assert_eq!(v["expires_in"], 300);
+    assert_eq!(v["expires_in"], 14400);
 
     // 该 access 能通过项目鉴权（team_members 已写入）：GET search → 200
     let s = server
