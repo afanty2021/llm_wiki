@@ -3,7 +3,7 @@
 // ── Task 2 主流程 imports ──
 use crate::{AppError, AppState};
 use crate::services::ingest_queue::{self, IngestJob, IngestJobResult};
-use crate::services::llm_stream::{self, ChatMessage, ChatOpts};
+use crate::services::llm_stream::{self, ChatMessage, ChatOpts, StreamChatProvider};
 use sqlx::Row;
 
 // ── 共用模型 ──
@@ -1009,12 +1009,16 @@ pub async fn run_ingest_job(
 
     let mut result = IngestJobResult {
         new_pages: vec![],
+        merged_pages: vec![],
         updated_reserved: vec![],
         warnings: vec![],
     };
 
     // 收集所有成功落库页的 (path, content) 供批量嵌入（覆盖 source 页 + reserved 页）。
     let mut collected: Vec<(String, String)> = Vec::new();
+
+    // merge provider 懒获取（评审 A-M6）：首次碰撞才取，失败并入整页回退（I1）
+    let mut merge_provider: Option<Box<dyn StreamChatProvider>> = None;
 
     // 本次 run 中成功（done）的 source 计数 —— 用于 all-failed 判定。
     // 注意：不能用 job.item_states 快照（不含本次 run 的写入，会误判 all-failed）。
@@ -1066,18 +1070,94 @@ pub async fn run_ingest_job(
                         outcomes.push(PageWriteOutcome::GuardSkipped);
                         continue;
                     }
-                    match upsert_wiki_page(state, job.project_id, page).await {
-                        Ok(path) => {
-                            result.new_pages.push(path.clone());
-                            if let Some(text) = page_content_for_embed(page) {
-                                collected.push((path, text));
-                            }
-                            outcomes.push(PageWriteOutcome::Upserted);
-                        }
-                        Err(e) => {
-                            result.warnings.push(format!("upsert {}: {}", sp, e));
+                    // —— 多源累积合并（spec §1）：碰撞检测 → Replace/Merge 分流 ——
+                    let existing = match fetch_existing_page(state, job.project_id, &page.path).await {
+                        Ok(e) => e,
+                        Err(err) => {
+                            result.warnings.push(format!("fetch existing {}: {}", page.path, err));
                             outcomes.push(PageWriteOutcome::UpsertFailed);
+                            continue;
                         }
+                    };
+                    let mode = existing
+                        .as_ref()
+                        .map_or(CollisionMode::Replace, |e| collision_mode(&e.sources, &page.sources, sp));
+                    let merged_write: Option<Result<(String, serde_json::Value), String>> = match (&mode, existing.as_ref()) {
+                        (CollisionMode::Merge, Some(e)) => {
+                            if merge_provider.is_none() {
+                                match llm_stream::provider_for_project(state, job.project_id).await {
+                                    Ok(p) => merge_provider = Some(p),
+                                    Err(err) => result.warnings.push(format!("merge provider unavailable: {}", err)),
+                                }
+                            }
+                            match merge_provider.as_ref() {
+                                Some(p) => match merge_pages_via(&**p, language, sp, &e.content, &page.content).await {
+                                    Ok(merged_content) => {
+                                        // 收敛观测（评审 I-4）：超两版之和 80% 记 warning
+                                        if merged_content.len() > (e.content.len() + page.content.len()) * 4 / 5 {
+                                            result.warnings.push(format!(
+                                                "merge {}: output longer than 80% of combined inputs (inflation watch)",
+                                                page.path
+                                            ));
+                                        }
+                                        Some(Ok((merged_content, union_sources(&e.sources, &page.sources, sp))))
+                                    }
+                                    Err(err) => Some(Err(format!("merge {}: {} — fallback replace", page.path, err))),
+                                },
+                                None => Some(Err(format!("merge {}: no provider — fallback replace", page.path))),
+                            }
+                        }
+                        _ => None, // Replace 或无既有行 → 原路径
+                    };
+                    match merged_write {
+                        Some(Ok((merged_content, merged_sources))) => match existing.as_ref() {
+                            Some(e) => {
+                                match update_merged_page(state, job.project_id, &page.path, &merged_content, &merged_sources, &e.frontmatter).await {
+                                    Ok(()) => {
+                                        result.merged_pages.push(page.path.clone());
+                                        if !merged_content.trim().is_empty() {
+                                            collected.push((page.path.clone(), merged_content));
+                                        }
+                                        outcomes.push(PageWriteOutcome::Upserted);
+                                    }
+                                    Err(err) => {
+                                        result.warnings.push(format!("update merged {}: {}", page.path, err));
+                                        outcomes.push(PageWriteOutcome::UpsertFailed);
+                                    }
+                                }
+                            }
+                            None => unreachable!("merge 分支必有 existing"),
+                        },
+                        Some(Err(warn)) => {
+                            // 整页回退（评审 I1 写死）：content/sources/frontmatter 均 incoming，走既有 upsert
+                            result.warnings.push(warn);
+                            match upsert_wiki_page(state, job.project_id, page).await {
+                                Ok(path) => {
+                                    result.new_pages.push(path.clone());
+                                    if let Some(text) = page_content_for_embed(page) {
+                                        collected.push((path, text));
+                                    }
+                                    outcomes.push(PageWriteOutcome::Upserted);
+                                }
+                                Err(err) => {
+                                    result.warnings.push(format!("upsert {}: {}", sp, err));
+                                    outcomes.push(PageWriteOutcome::UpsertFailed);
+                                }
+                            }
+                        }
+                        None => match upsert_wiki_page(state, job.project_id, page).await {
+                            Ok(path) => {
+                                result.new_pages.push(path.clone());
+                                if let Some(text) = page_content_for_embed(page) {
+                                    collected.push((path, text));
+                                }
+                                outcomes.push(PageWriteOutcome::Upserted);
+                            }
+                            Err(err) => {
+                                result.warnings.push(format!("upsert {}: {}", sp, err));
+                                outcomes.push(PageWriteOutcome::UpsertFailed);
+                            }
+                        },
                     }
                 }
                 let (pages_written, all_upserted) = fold_page_write_outcomes(&outcomes);
@@ -1335,6 +1415,60 @@ pub(crate) async fn upsert_wiki_page(
     .execute(&state.db)
     .await?;
     Ok(page.path.clone())
+}
+
+/// 同路径既有页（合并所需列子集；NULL 列容错为空值——老行可能未写）。
+struct ExistingPage {
+    content: String,
+    sources: serde_json::Value,
+    frontmatter: serde_json::Value,
+}
+
+async fn fetch_existing_page(
+    state: &AppState,
+    project_id: i32,
+    path: &str,
+) -> Result<Option<ExistingPage>, AppError> {
+    let row = sqlx::query_as::<_, (String, Option<serde_json::Value>, Option<serde_json::Value>)>(
+        "SELECT content, sources, frontmatter FROM wiki_pages WHERE project_id = $1 AND path = $2",
+    )
+    .bind(project_id)
+    .bind(path)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(row.map(|(content, sources, frontmatter)| ExistingPage {
+        content,
+        sources: sources.unwrap_or(serde_json::json!([])),
+        frontmatter: frontmatter.unwrap_or(serde_json::json!({})),
+    }))
+}
+
+/// 合并页落库：content/sources 用合并结果；frontmatter 保留 existing 仅同步 sources 键；
+/// title/page_type/images 不动（保留 existing，wikilink/图谱锚稳定，spec §1）。
+async fn update_merged_page(
+    state: &AppState,
+    project_id: i32,
+    path: &str,
+    merged_content: &str,
+    merged_sources: &serde_json::Value,
+    existing_frontmatter: &serde_json::Value,
+) -> Result<(), AppError> {
+    let mut fm = existing_frontmatter.clone();
+    if let Some(obj) = fm.as_object_mut() {
+        obj.insert("sources".into(), merged_sources.clone());
+    }
+    sqlx::query(
+        "UPDATE wiki_pages SET content = $3, sources = $4, frontmatter = $5, updated_at = NOW() \
+         WHERE project_id = $1 AND path = $2",
+    )
+    .bind(project_id)
+    .bind(path)
+    .bind(merged_content)
+    .bind(merged_sources)
+    .bind(&fm)
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 /// reserved 三模板的纯渲染（W3：按 language 分流中英文案）。
