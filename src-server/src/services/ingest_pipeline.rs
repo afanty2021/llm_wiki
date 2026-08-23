@@ -255,6 +255,63 @@ fn merge_analyses(analyses: &[serde_json::Value]) -> serde_json::Value {
     merged
 }
 
+/// 同路径碰撞的处置模式（spec §1 多源累积合并）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CollisionMode {
+    /// 同源重生成：整页覆盖（现状语义），零 LLM 调用。
+    Replace,
+    /// 跨源碰撞：LLM 合并 + sources 并集。
+    Merge,
+}
+
+/// sources JSONB → 去重集合（字符串数组语义；畸变元素忽略、重复元素去重）。
+fn sources_set(v: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    v.as_array()
+        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+/// 碰撞判定（评审 I2 收紧）：仅「集合相等 且 incoming 恰为 {当前源}」判 Replace；
+/// 多元素巧合相等（LLM 自由引用）走 Merge——最坏同内容融合，不丢数据。
+fn collision_mode(
+    existing_sources: &serde_json::Value,
+    incoming_sources: &serde_json::Value,
+    current_source: &str,
+) -> CollisionMode {
+    let existing = sources_set(existing_sources);
+    let incoming = sources_set(incoming_sources);
+    let only_current = incoming.len() == 1 && incoming.contains(current_source);
+    if existing == incoming && only_current {
+        CollisionMode::Replace
+    } else {
+        CollisionMode::Merge
+    }
+}
+
+/// sources 并集：existing 序在前、去重保序、当前 sp 强制尾插（评审 A-M4）。
+fn union_sources(
+    existing: &serde_json::Value,
+    incoming: &serde_json::Value,
+    current_source: &str,
+) -> serde_json::Value {
+    let mut out: Vec<String> = Vec::new();
+    for src in [existing, incoming] {
+        if let Some(arr) = src.as_array() {
+            for x in arr {
+                if let Some(s) = x.as_str() {
+                    if !out.iter().any(|o| o == s) {
+                        out.push(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if !out.iter().any(|o| o == current_source) {
+        out.push(current_source.to_string());
+    }
+    serde_json::json!(out)
+}
+
 /// R10（m3-impl-review 次级收编）：step1 merged 结果形状守卫——非对象直接报错
 /// （走解析失败路径），不再放行进 step2。Task 6 r3 时仅跳过缓存写但仍流向 step2：
 /// 非对象分析（"[]"/"null"/标量）进 step2 会基于空分析产出无效 wiki 页；宁可本次
@@ -1361,6 +1418,58 @@ mod tests {
         let budget = estimate_tokens(&sentences[..10].join(""));
         let chunks = chunk_document(&text, budget);
         assert!(chunks.len() > 1, "long paragraph should be split");
+    }
+
+    // —— 多源累积合并 §1：碰撞判定（评审 I2 收紧 + A-M3 set 语义）——
+    #[test]
+    fn collision_mode_single_current_source_equal_replaces() {
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md"]), &serde_json::json!(["raw/a.md"]), "raw/a.md"),
+            CollisionMode::Replace
+        );
+    }
+
+    #[test]
+    fn collision_mode_duplicate_elements_set_semantics() {
+        // 畸变重复元素：set 语义判 Replace
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md"]), &serde_json::json!(["raw/a.md", "raw/a.md"]), "raw/a.md"),
+            CollisionMode::Replace
+        );
+    }
+
+    #[test]
+    fn collision_mode_multi_element_equal_set_merges() {
+        // 多元素巧合相等不得静默覆盖多源累积页（评审 I2）
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md", "raw/b.md"]), &serde_json::json!(["raw/b.md", "raw/a.md"]), "raw/a.md"),
+            CollisionMode::Merge
+        );
+    }
+
+    #[test]
+    fn collision_mode_disjoint_or_null_merges() {
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md"]), &serde_json::json!(["raw/b.md"]), "raw/b.md"),
+            CollisionMode::Merge
+        );
+        assert_eq!(
+            collision_mode(&serde_json::Value::Null, &serde_json::json!(["raw/b.md"]), "raw/b.md"),
+            CollisionMode::Merge
+        );
+    }
+
+    // —— union_sources：去重保序 + 当前 sp 尾插（评审 A-M4）——
+    #[test]
+    fn union_sources_dedup_order_tail_append_current() {
+        let u = union_sources(&serde_json::json!(["a.md"]), &serde_json::json!(["b.md", "a.md"]), "c.md");
+        assert_eq!(u, serde_json::json!(["a.md", "b.md", "c.md"]));
+    }
+
+    #[test]
+    fn union_sources_malformed_tolerated() {
+        let u = union_sources(&serde_json::Value::Null, &serde_json::json!(["b.md", 42]), "c.md");
+        assert_eq!(u, serde_json::json!(["b.md", "c.md"]));
     }
 
     #[test]
