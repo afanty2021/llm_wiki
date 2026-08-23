@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-22T17:00:42.076Z",
-  "elapsedS": 7.6,
+  "generatedAt": "2026-08-23T08:36:42.717Z",
+  "elapsedS": 7.5,
   "totalFiles": 1861,
   "totalDurationH": 404.51,
   "byBucket": {
@@ -33,12 +33,12 @@
     "hevcOnly": 1387
   },
   "firstBatch": {
-    "dir": "LT教学法系统知识库（基础阶）",
-    "files": 79,
-    "durationH": 29.89,
+    "dir": "LT教学法系统知识库（高阶版）",
+    "files": 48,
+    "durationH": 25.98,
     "bySource": {
       "main": 0,
-      "hevc": 79
+      "hevc": 48
     }
   }
 }
