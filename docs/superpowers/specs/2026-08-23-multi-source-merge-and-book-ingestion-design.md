@@ -104,7 +104,8 @@ A 重生成（incoming=[A]，existing=[A,B] 集合不等）→ 仍走 merge（ex
   复用；omlx thinking 残留已知坑）。
 
 **Provider 懒获取**：job 内首次碰撞才 `provider_for_project`（provider 每 source
-已有两调，懒获取避免无碰撞批次再加一调），取一次存局部复用。
+已有三处调用——step1 按 chunk 多调、step2、dedicated review，懒获取增益有限但零
+成本），取一次存局部复用。
 
 **不动**：transcripts/ 命名空间守卫；reserved 三页；pages API 手动 PUT 编辑路径。
 
@@ -160,9 +161,10 @@ TTT/TBLT 等术语保英文）。
    - **云端**：mineru.net token → 建任务 → 轮询（5min 上限）→ `full_zip_url`
      下载 zip → 解出 .md。
    - **本地 mineru-api**：multipart `POST {base}/tasks`（`response_format_zip=false`、
-     `return_md=true`、`backend`/`effort`/`parse_method` 用桌面默认：auto/medium/auto，
-     `table_enable=true`）→ 轮询 `GET /tasks/:id` 至 `status=completed`（60min 上限，
-     模型冷启动）→ `GET /tasks/:id/result` 取 `results[].md_content`（**无 zip**）。
+     `return_md=true`、`backend`/`effort`/`parse_method` 用桌面默认：
+     hybrid-engine/medium/auto，`table_enable=true`）→ 轮询 `GET /tasks/:id` 至
+     `status=completed`（60min 上限，模型冷启动）→ `GET /tasks/:id/result` 取
+     `results[].md_content`（**无 zip**）。
      本地返回的 md 可能含 HTML 表格 → 桥接脚本实现 `convertHtmlTablesToMarkdown`
      同款转换（协议与转换均参 mineru.ts:698-853）。
 3. **清洗 + 质量闸**：

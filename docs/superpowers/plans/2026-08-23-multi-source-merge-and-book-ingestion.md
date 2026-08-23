@@ -156,7 +156,7 @@ fn union_sources(
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cd src-server && cargo test --lib collision_mode union_sources 2>&1 | tail -3`
-Expected: 8 passed
+Expected: 6 passed（4 collision + 2 union；无存量同名测试）
 
 - [ ] **Step 5: Commit**
 
@@ -188,7 +188,8 @@ Rules:
 - Keep the output compact: it must never be significantly longer than the longer input.
 - When the two versions state the same concept differently, prefer the clearer
   formulation; for genuinely conflicting claims, present both and attribute them by
-  source type as indicated below.
+  source type: a path starting with `transcripts/` is a video lesson, a path starting
+  with `raw/sources/` is an uploaded document or book chapter.
 - Keep the union of all [[wikilinks]] from both versions.
 - Output ONLY the merged page body as Markdown. No frontmatter, no FILE blocks,
   no explanations, no preamble.
@@ -314,7 +315,7 @@ async fn merge_pages_via(
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cd src-server && cargo test --lib merge 2>&1 | tail -3`
-Expected: 4 passed
+Expected: 7 passed（4 新增 + 3 存量同名滤中：merged_step1_result_nonobject / merge_analyses_single / merge_analyses_dedup）
 
 - [ ] **Step 6: Commit**
 
@@ -331,6 +332,7 @@ git commit -m "feat(ingest): step4_merge prompt + merge_pages_via（截断防线
 - Modify: `src-server/src/services/ingest_pipeline.rs:952-974`（页循环）、`:903-909`（result 初始化）
 - Modify: `src-server/src/services/ingest_queue.rs:71-76`（IngestJobResult）
 - Modify: `src-server/src/services/ingest_worker.rs:95-121`（完成日志）
+- Modify: `src-server/tests/integration/ingest_queue_test.rs:115`（IngestJobResult 结构体字面量构造——加字段即编译错；`--lib` 不编译 tests/，不补则 Task 5 才爆）
 
 **Interfaces:**
 - Consumes: Task 1 `collision_mode`/`union_sources`、Task 2 `merge_pages_via`
@@ -525,15 +527,26 @@ async fn update_merged_page(
 tracing::info!(job_id = %job.id, new_pages = result.new_pages.len(), merged_pages = result.merged_pages.len(), "ingest job succeeded");
 ```
 
-- [ ] **Step 6: 编译 + 全量 lib 测试**
+- [ ] **Step 6: 补 ingest_queue_test.rs:115 的构造**（IngestJobResult 字面量加一行）
 
-Run: `cd src-server && cargo test --lib 2>&1 | tail -3`
-Expected: 全部通过（原 295+ 新增，零 DB）
+```rust
+    let result = IngestJobResult {
+        new_pages: vec!["concepts/x.md".into()],
+        merged_pages: vec![],
+        updated_reserved: vec![],
+        warnings: vec![],
+    };
+```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: 编译 + 全量 lib 测试**
+
+Run: `cd src-server && cargo test --lib 2>&1 | tail -3 && cargo test --test integration --no-run 2>&1 | tail -3`
+Expected: lib 全过（原 295+ 新增，零 DB）；integration 编译通过
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src-server/src/services/ingest_pipeline.rs src-server/src/services/ingest_queue.rs src-server/src/services/ingest_worker.rs
+git add src-server/src/services/ingest_pipeline.rs src-server/src/services/ingest_queue.rs src-server/src/services/ingest_worker.rs src-server/tests/integration/ingest_queue_test.rs
 git commit -m "feat(ingest): 页写入循环碰撞分流——Merge(合并+并集)/Replace(收紧)/整页回退 + merged_pages 观测"
 ```
 
@@ -559,9 +572,17 @@ fn existing_paths_section_lists_and_notes_truncation() {
 
     let many: Vec<String> = (0..2000).map(|i| format!("concepts/p{}.md", i)).collect();
     let sec = existing_paths_section(&many);
-    assert!(sec.contains("list truncated at 2000"), "{sec}");
+    assert!(sec.contains("list truncated"), "{sec}");
 
     assert_eq!(existing_paths_section(&[]), "");
+}
+
+#[test]
+fn existing_paths_cap_links_budget() {
+    // 128k → 2500 → clamp 2000；32k → 500；8000 → 0 → clamp 1
+    assert_eq!(existing_paths_cap(128_000), 2000);
+    assert_eq!(existing_paths_cap(32_000), 500);
+    assert_eq!(existing_paths_cap(8_000), 1);
 }
 
 #[tokio::test]
@@ -585,26 +606,38 @@ Run: `cd src-server && cargo test --lib existing_paths_section step2_prompt_inje
 - [ ] **Step 3: 实现**
 
 ```rust
+/// §2 清单 cap 与 context 预算联动（评审 I3/I-5）：合算式
+/// 清单 ≤ (context_size - 8000) / 4 / 12（path 实测 8-12 token/行），clamp 到 [1, 2000]。
+/// 128k → 2500 → 取 2000；32k → 500。
+fn existing_paths_cap(context_size: u32) -> i64 {
+    (((context_size.saturating_sub(8000)) / 4 / 12) as i64).clamp(1, 2000)
+}
+
 /// §2 slug 对齐：既有 concepts/entities 页清单（前缀即白名单，评审 A-M7——
-/// 手动建页的任意脏 path 不匹配前缀不入清单）。每 job 查一次。
-async fn fetch_concept_entity_paths(state: &AppState, project_id: i32) -> Vec<String> {
+/// 手动建页的任意脏 path 不匹配前缀不入清单）。每 job 查一次；LIMIT 与 budget 联动。
+async fn fetch_concept_entity_paths(state: &AppState, project_id: i32, cap: i64) -> Vec<String> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT path FROM wiki_pages WHERE project_id = $1 \
-         AND (path LIKE 'concepts/%' OR path LIKE 'entities/%') ORDER BY path LIMIT 2000",
+         AND (path LIKE 'concepts/%' OR path LIKE 'entities/%') ORDER BY path LIMIT $2",
     )
     .bind(project_id)
+    .bind(cap)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
     rows.into_iter().map(|r| r.0).collect()
 }
 
-/// step2 清单注入段（纯函数供单测；空清单 → 空串；满 2000 → 注明截断，评审 I3）。
+/// step2 清单注入段（纯函数供单测；空清单 → 空串；触顶 cap → 注明截断，评审 I3）。
 fn existing_paths_section(paths: &[String]) -> String {
     if paths.is_empty() {
         return String::new();
     }
-    let note = if paths.len() >= 2000 { "\n(list truncated at 2000 entries)" } else { "" };
+    let note = if paths.len() >= existing_paths_cap(u32::MAX) as usize {
+        "\n(list truncated — only the first entries are shown)"
+    } else {
+        ""
+    };
     let list = paths.iter().map(|p| format!("- {}", p)).collect::<Vec<_>>().join("\n");
     format!(
         "\n\n## Existing concept/entity pages\n\
@@ -616,10 +649,23 @@ fn existing_paths_section(paths: &[String]) -> String {
 }
 ```
 
+（`existing_paths_cap(u32::MAX)` 恒为 2000——注入段以 2000 行为截断判定，与 SQL 侧 cap 一致或更小；cap < 2000 时清单不会超 cap，同样不误报截断。）
+
 签名链改造（全部加 `existing_paths: &[String]` 并透传）：
 - `step2_generate_via(..., step1_json, existing_paths)`：user message 从 `format!("{prompt}\n\n<analysis>...")` 改为 `format!("{prompt}{}\n\n<analysis>...", existing_paths_section(existing_paths))`
 - `step2_generate` / `process_source_path` 同步加参透传
-- `run_ingest_job` 循环前：`let existing_paths = fetch_concept_entity_paths(state, job.project_id).await;`，传 `&existing_paths`
+- `run_ingest_job` 循环前：
+
+```rust
+// §2 清单 + cap 联动（I-5）：context_size 与 process_source_path 内同源逻辑
+let context_size = crate::services::llm::get_llm_config(&state.db, job.project_id)
+    .await
+    .map(|c| c.context_size)
+    .unwrap_or(128_000);
+let existing_paths =
+    fetch_concept_entity_paths(state, job.project_id, existing_paths_cap(context_size)).await;
+```
+
 - 既有两处测试调用（:2149/:2178）补 `&[]` 实参
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -647,7 +693,15 @@ git commit -m "feat(ingest): step2 注入既有 concepts/entities 清单——�
 
 - [ ] **Step 1: mod.rs 接线 + SWEEPS 扩族**
 
-在 `pub mod t_page_test;` 后加 `pub mod merge_ingest_test;`。在 `teardown_test_data` 的 SWEEPS 内把 t8_ 并入四前缀族（grep `t3_` 找到前缀清单处，同样式加 `t8_`），并更新函数头注释「四套 unique()」→「五套」+ 注明 t8_ = merge_ingest_test。
+在 `pub mod t_page_test;` 后加 `pub mod merge_ingest_test;`。SWEEPS 三条 DELETE **逐条**加 t8 模式（mod.rs:62-81，评审 C-1——漏任何一条都会连环 FK panic）：
+
+```rust
+// 1) projects：name LIKE 'LT项目_t8\_%'（与 t3_/t6_/t7_/t9_ 并列）
+// 2) users：username LIKE 't8\_%' + email LIKE '%t8\_%'
+// 3) media_assets：slug LIKE 't8\_%'
+```
+
+并更新函数头注释「四套 unique()」→「五套」+ 注明 t8_ = merge_ingest_test。
 
 - [ ] **Step 2: stub 服务器**（merge_ingest_test.rs 头部）
 
@@ -702,15 +756,16 @@ pub(crate) async fn spawn_stub_chat_server(script: Vec<StubResp>) -> (String, to
 
 （axum 在 dev-dependency 树可用——主 crate 依赖 axum；若 tests crate 引用报错，在 Cargo.toml `[dev-dependencies]` 加 `axum` 与主 crate 同版本。）
 
-- [ ] **Step 3: t8_ fixture helper**（同文件；参考 reviews_test.rs 的 setup_project 模式）
+- [ ] **Step 3: t8_ fixture helper**（同文件；评审 C-1 写死命名——**勿照抄 reviews_test.rs 的项目名**，其固定串 `test-proj` 不匹配 SWEEPS 的 `LT项目_t8\_%` 模式）
 
 ```rust
-/// t8_ 前缀 fixture（并入 SWEEPS；勿用 rev-* 模式——那族不在清理范围，mod.rs:53-56）。
+/// t8_ fixture（评审 C-1）：命名必须与 Task 5 Step 1 扩入的 SWEEPS 模式逐字匹配——
+/// 项目名 LT项目_t8_{uuid}、username t8_merge_{uuid}、email t8_merge_{uuid}@t8.com。
+/// 注册→建队→建项目的 HTTP 序序可参考 reviews_test.rs::setup_project，但三处命名如上。
 async fn t8_setup_project(state: &llm_wiki_server::AppState) -> i32 {
-    // 注册用户 t8_merge_{uuid} → 建 team t8_team_{uuid} → POST /projects（t8_proj_{uuid}）
-    // 照抄 reviews_test.rs::setup_project 的注册/建队/建项目序列，仅换前缀。
-    // 返回 project_id。实现时直接复制该函数体改前缀（本仓库集成测试的既定模式）。
-    todo!("复制 reviews_test.rs setup_project 并改 t8_ 前缀")
+    // 以 reviews_test.rs 的 setup 序列为模板（注册用户 / POST /teams / POST /projects），
+    // 命名替换为上述 t8_ 形态；返回 project_id。
+    todo!("按上述命名落地（模板序序参考 reviews_test.rs，命名不可照抄）")
 }
 ```
 
@@ -730,7 +785,7 @@ git commit -m "test(integration): t8_ 前缀并入 SWEEPS + stub chat 服务器�
 
 ---
 
-### Task 6: 合并集成测试（e2e 成功 / 回退 / A→B→A / slug 复用）
+### Task 6: 合并集成测试（e2e 成功 / 回退 / A→B→A / 单源重生成）
 
 **Files:**
 - Modify: `src-server/tests/integration/merge_ingest_test.rs`
@@ -738,33 +793,44 @@ git commit -m "test(integration): t8_ 前缀并入 SWEEPS + stub chat 服务器�
 **Interfaces:**
 - Consumes: Task 5 基建、Task 3 生产代码（经 run_ingest_job）
 
+**编排铁律（评审 C-3 写死）**：
+- **绝不 HTTP enqueue**——job 会被 LPUSH 进共享 live Redis，launchd 的 live worker 会抢走它对进程内 stub 双跑竞态。照 ingest_reliability_test:198-217 模式：**直接 INSERT ingest_jobs 行 + 直接 `run_ingest_job`，不经 worker**。
+- **两 job 模型**：job1（Ch01 建页）与 job2（Ch02 撞入）分别 INSERT 分别跑；断言一律针对 **job2 的 result**（单 job 下 Ch01 建页必进 new_pages，"new_pages 不含"断言只在 job2 成立）。
+- **防 step1 缓存错位（评审 C-2）**：`ingest:cache:{content_hash}` 是无 project 维度的全局 Redis 键、TTL 7 天——fixture source 文本**内嵌每次运行唯一 uuid**（如 `A 版正文（视频课视角）[run-{uuid}]`），否则重跑/并行同内容互相污染，症状为"第一次过、重跑挂"。
+- **stub step2 输出约束（评审 M-15）**：每响应 **<4 个 FILE 块且 <10000 字符**——否则触发 dedicated review 第三次 LLM 调用（review.rs:267-273 阈值），脚本序列错位。当前各用例脚本恰低于阈值，新增内容时必须守住此上限。
+- slug 复用（spec §5 集成清单第 5 条）**不设独立集成用例**：机制层由 Task 4 单测覆盖（prompt 注入清单+复用指令），行为层与 case 1 同构（stub 已脚本化"LLM 选择复用 path"这一步，集成用例无增量信息）。Self-Review 已记录此映射。
+
 **用例与脚本序列**（全部 `#[tokio::test] #[ignore = "requires PG + Redis"]`，跑法 `cargo test --test integration t8_ -- --ignored`；**跑前核对 docker PG/Redis 在**，且批次 4 摄取已终态——避免与 live job 互扰）：
 
 - [ ] **Step 1: t8_merge_success_accumulates**
 
-脚本序列（stub 依次返回）：
-1. step1(A)→`{"entities":[],"connections":[],"contradictions":[]}`（shape 以 step1_analyze.txt 为准，执行时核对）
-2. step2(A)→`---FILE: concepts/t8-demo.md ---\n---\ntitle: A\nsources: ["raw/sources/t8-book/Ch01.md"]\n---\nA 版正文（视频课视角）\n---END FILE---`（格式对齐 parse_single_block 的 FILE 块解析）
-3. step1(B)→同上最小 JSON
-4. step2(B)→同 path FILE 块，`sources: ["raw/sources/t8-book/Ch02.md"]`，B 版正文
+fixture：`LT项目_t8_{uuid}` 项目 + storage 预写 `raw/sources/t8-book/Ch01.md`、`Ch02.md`（内容各内嵌 `[run-{uuid}]`；写入方式看 storage.rs 的 write 方法签名，或走 upload HTTP）→ team provider base_url 指向 stub。
+
+job1 脚本（INSERT + run_ingest_job）：
+1. step1(Ch01)→`{"entities":[],"connections":[],"contradictions":[]}`（shape 以 step1_analyze.txt 为准，执行时核对）
+2. step2(Ch01)→`---FILE: concepts/t8-demo.md ---\n---\ntitle: A\nsources: ["raw/sources/t8-book/Ch01.md"]\n---\nA 版正文（视频课视角）[run-{uuid}]\n---END FILE---`（格式对齐 parse_single_block 的 FILE 块解析；单 FILE 块，低于 review 阈值）
+
+job2 脚本（新 INSERT + run_ingest_job，source=Ch02）：
+3. step1(Ch02)→同上最小 JSON
+4. step2(Ch02)→同 path FILE 块，`sources: ["raw/sources/t8-book/Ch02.md"]`，B 版正文（内嵌 run-uuid）
 5. merge→`A+B 融合正文（含两版关键内容）`
 
-流程：storage 预写 `raw/sources/t8-book/Ch01.md`、`Ch02.md`（经 state.storage 写入或 upload HTTP；执行时看 storage.rs 的 write 方法签名）→ team provider 指向 stub → `enqueue` 两个 source → 直接 `run_ingest_job`（照 ingest_reliability_test:209 模式）。
-
-断言：DB 行 `concepts/t8-demo.md` 的 sources == `["raw/sources/t8-book/Ch01.md","raw/sources/t8-book/Ch02.md"]`（并集序）；content 含 A 与 B 关键词；`result.merged_pages` 含 path 且 `new_pages` **不含**；`updated_at > created_at`。
+断言（**对 job2 的 result 与 DB**）：DB 行 `concepts/t8-demo.md` 的 sources == `["raw/sources/t8-book/Ch01.md","raw/sources/t8-book/Ch02.md"]`（并集序）；content 含 A 与 B 关键词；job2 `result.merged_pages` 含 path 且 `new_pages` **不含**；`updated_at > created_at`；job2 warnings 不含 `"fallback replace"`。
 
 - [ ] **Step 2: t8_merge_fallback_replaces_wholesale**
 
-脚本：step1(A)、step2(A)、step1(B)、step2(B)（同上），merge 调用返回 `StubResp::Error(500)`。
-断言：页 content == B 版正文（incoming 原样，非融合）、sources == `["raw/sources/t8-book/Ch02.md"]`（**非并集**，评审 I1）、merged_pages 空、warnings 含 "fallback replace"。
+job1 同上（step1/step2 建页）；job2 脚本：step1、step2（同上），merge 调用返回 `StubResp::Error(500)`。
+断言：页 content == B 版正文（incoming 原样，非融合）、sources == `["raw/sources/t8-book/Ch02.md"]`（**非并集**，评审 I1）、merged_pages 空、job2 warnings 含 "fallback replace"。
 
 - [ ] **Step 3: t8_single_source_regeneration_replaces**
 
-脚本：step1(A)、step2(A)（建页 sources=[Ch01]）→ 重写 Ch01.md 内容（hash 变）→ step1(A2)、step2(A2)（同 path、sources 仍 [Ch01]）。
-断言：content == A2 原样（走了 Replace 非自 merge）、merged_pages 空、无 merge stub 调用（stub 只给 4 个响应，若 merge 被调会耗尽报 500 → 测试失败，天然断言）。
+job1（Ch01 v1）建页后，重写 storage 的 Ch01.md 内容（含新 `[run-{uuid}]`，hash 变）；job2 = 同一 source path 再 INSERT 再跑。
+脚本：step1(v2)、step2(v2)（同 path、sources 仍 [Ch01]）——stub 只给这 4 个响应（含 job1 的 2 个）。
+断言：content == v2 原样（走了 Replace 非自 merge）；merged_pages 空；**job2 warnings 不含 `"fallback replace"`**（评审 I-6——stub 耗尽返回 500 会触发 fallback，终态与正确 Replace 完全一致，必须靠 warnings 区分，"天然断言"不成立）。
 
 - [ ] **Step 4: t8_sequence_a_b_a2_preserves_b**
 
+三个 job：A 建页 → B 撞入（merge A+B）→ A 内容改写重摄（merge A2+AB）。
 脚本：step1(A)、step2(A)、step1(B)、step2(B)、merge(A+B)、step1(A2)、step2(A2)、merge(A2+AB)。
 断言：最终 content 含 B 关键词（B 存续）且长度 < A2+AB 之和（无逐字膨胀）；sources == 两源并集。
 
@@ -931,8 +997,9 @@ git commit -m "feat(books): 拆章脚本——书签 outline + 40k token 预算�
 
 ```ts
 // tools/books/mineru_parse.ts —— MinerU 桥接（spec §3 双协议，参 src/lib/mineru.ts:698-853）
-// 用法：npx tsx tools/books/mineru_parse.ts --book <slug> --dir /tmp/books
+// 用法：npx tsx tools/books/mineru_parse.ts --book <slug> --dir /tmp/books [--only Ch01]
 // 产出 staged/*.md + parse-report.json（量化闸：<200 字符/页 → gate_blocked 不进 staged）
+// --only：只解析文件名含该子串的章（单章实测/调试用；Step 3 会用到）
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { parseArgs } from "node:util"
 
@@ -943,7 +1010,7 @@ const CLOUD_POLL_TIMEOUT_MS = 300_000
 async function parseLocal(pdf: Buffer, name: string, cfg: LocalCfg): Promise<string> {
   const form = new FormData()
   form.append("files", new Blob([pdf], { type: "application/pdf" }), name)
-  form.append("backend", "auto"); form.append("effort", "medium")
+  form.append("backend", "hybrid-engine"); form.append("effort", "medium")  // backend 默认=hybrid-engine（mineru.ts:711），非 auto
   form.append("parse_method", "auto"); form.append("lang_list", "en")
   form.append("formula_enable", "true"); form.append("table_enable", "true")
   form.append("return_md", "true"); form.append("return_images", "false")
@@ -967,9 +1034,11 @@ async function parseLocal(pdf: Buffer, name: string, cfg: LocalCfg): Promise<str
   throw new Error("local MinerU poll timeout (60min)")
 }
 
-// —— 云端协议：建任务 → 轮询 → full_zip_url → zip 解出 .md ——
-// （参 mineru.ts 云端分支：POST https://mineru.net/api/v4/extract/task 带 Bearer token，
-//   轮询 batch/task 状态，下载 full_zip_url 用 jszip（root node_modules 已有）取 .md）
+// —— 云端协议（条件任务，评审 I-8：仅先决检查选云 token 时实现）——
+// 锚点：src/lib/mineru.ts:429-571（云端分支完整实现）
+// 要点：POST https://mineru.net/api/v4/extract/task 带 Bearer token → 轮询 task/batch
+// 状态 → full_zip_url 下载 zip（jszip，root node_modules 已有）→ 解出 .md。
+// 若先决选本地 docker，本分支保持 TODO 注释即可（骨架不展开）。
 
 // —— convertHtmlTablesToMarkdown：从 src/lib/mineru.ts 移植（grep 函数体整段复制，
 //     去掉 Tauri 依赖——该函数应为纯字符串处理；若含依赖则按逻辑重写） ——
@@ -1031,6 +1100,8 @@ git commit -m "feat(books): 断言式上传摄取——凭证续期 + raw/source
 
 **Files:** 无代码；运维步骤
 
+- [ ] **Step 0: 提前告知用户部署窗口**（spec §4 B-M3 落实——重启期间 15 位教师的 web 访问瞬断，选低峰并预告）
+
 - [ ] **Step 1: 守卫——确认无 running/pending ingest job**
 
 Run: `docker exec src-server-postgres-1 psql -U llmwiki -d llmwiki -t -A -c "SELECT count(*) FROM ingest_jobs WHERE status IN ('pending','running');"`
@@ -1051,10 +1122,10 @@ launchctl kickstart -k gui/$(id -u)/<src-server-label>   # label 以 launchctl l
 - [ ] **Step 4: 验证**
 
 ```bash
-curl -s http://127.0.0.1:8080/api/v1/health          # 或既有健康路径
+curl -s http://127.0.0.1:8080/health                  # 健康路径是顶层 /health（routes/mod.rs:37），非 /api/v1/health
 tail -20 src-server/logs/llm-wiki.log                 # 无 panic/error
 ```
-重摄一个 hash 未变 source（挑一个已有 transcript 路径 enqueue ingest）→ job succeeded 且该 source skip（`pages_to_write==0` 判 done 路径）→ 确认零回归。
+重摄一个 hash 未变 source（挑一个已摄入的 source 路径直接 INSERT job 再跑）→ job succeeded 且该 source 走 `check_ingested_file` 的 content-hash 命中分支（`Ok(None)` 跳过，ingest_pipeline.rs:1110-1116）→ 确认零回归。
 
 - [ ] **Step 5: 部署记录 Commit**（若有配置/文档跟随变更；否则无 commit）
 
@@ -1064,6 +1135,8 @@ tail -20 src-server/logs/llm-wiki.log                 # 无 panic/error
 
 **Files:**
 - Create: `.superpowers/books-pilot/report.md`（评审/执行分会话约定；gitignored）
+
+- [ ] **Step 0: 前置确认**——Task 10 已部署（live 跑的是含 merge 的 release）；/tmp/books 产物在（缺失则重跑 Task 7/8 对应步骤——拆章与解析产物不落 git，丢失需重建）
 
 - [ ] **Step 1: 全链执行**（Task 7 产物已就绪）
 
@@ -1088,12 +1161,19 @@ SELECT count(*) FROM wiki_pages WHERE updated_at >= '<试点开始>' AND (conten
 
 - [ ] **Step 3: 验收五条**（spec §5）：中文+术语英文（抽 ≥5 章）；merged_pages>0 且**全量人工过审**；污染 0；页数下限核对；闸命中清单复核。报告落 `.superpowers/books-pilot/report.md` 附外部访问账目。
 
+**全量过审操作定义（评审 I-7）**：
+- 聚合 SQL（选定 wiki_pages 检索式）：`SELECT path FROM wiki_pages WHERE updated_at >= '<试点开始>' AND sources::text LIKE '%raw/sources/LT-%' ORDER BY path;`
+- 判据 checklist（每页过四问）：① 双源共存——书定义与视频实例都在；② 无重复膨胀——无逐字重复段；③ 术语正确——中英形态符合现行规则；④ 无污染——无 thinking 痕迹/占位符。
+- 不通过处置（二选一，记入报告）：a) 人工修页（web PUT 编辑，If-Match）；b) 删该 source 的 `ingested_files` 行触发重摄（走新版 merge 重算）。
+
 - [ ] **Step 4: 记忆更新 + 向用户汇报验收结果**（含其余 4 本推进建议）
 
 ---
 
-## Self-Review 记录
+## Self-Review 记录（r2 评审后修订）
 
-- **Spec 覆盖**：§1→Task 1/2/3；§2→Task 4；§3→Task 7/8/9；§4→Task 10；§5→Task 5/6（单测+集成）+Task 11（试点验收）。spec §5 集成清单中"嵌入刷新断言"落 Task 6 注记（embedding 依赖 live bge，断言非确定性——试点覆盖）；"cap 截断"落 Task 4 单测。
-- **占位符**：Task 5 Step 3 的 `todo!` 是文档展示（计划内已注明以 reviews_test.rs 为模板落全）；其余步骤均含实际代码/命令。
-- **类型一致**：collision_mode/union_sources/merge_pages_via/fetch_concept_entity_paths/existing_paths_section 的签名在 Task 1/2/4 定义、Task 3/6 消费一致；IngestJobResult.merged_pages 全计划统一命名。
+- **Spec 覆盖**：§1→Task 1/2/3；§2→Task 4（**含 cap 与 context 联动**：`existing_paths_cap` 纯函数 + LIMIT 绑参 + 单测，评审 I-5 落实）；§3→Task 7/8/9；§4→Task 10（含 Step 0 用户告知）；§5→Task 5/6（单测+集成）+Task 11（试点验收）。
+- **slug 复用映射（评审 I-4 降级记录）**：spec §5 集成清单第 5 条不设独立集成用例——机制层由 Task 4 单测覆盖（prompt 注入清单+复用指令），行为层与 Task 6 case 1 同构（stub 脚本化了"LLM 复用 path"，集成用例无增量断言面）。
+- **评审 r2 三 Critical 落实**：C-1 t8 命名与 SWEEPS 逐字匹配（Task 5 Step 1/3）；C-2 fixture 内嵌 run-uuid 防 step1 全局缓存错位（Task 6 编排铁律）；C-3 直接 INSERT + 绝不 HTTP enqueue + 断言针对 job2（Task 6 编排铁律）。
+- **占位符**：Task 5 Step 3 的 `todo!` 是文档展示（计划内已注明以 reviews_test.rs 序列为模板、命名不可照抄）；其余步骤均含实际代码/命令。
+- **类型一致**：collision_mode/union_sources/merge_pages_via/fetch_concept_entity_paths(含 cap 参)/existing_paths_cap/existing_paths_section 的签名在 Task 1/2/4 定义、Task 3/6 消费一致；IngestJobResult.merged_pages 全计划统一命名。
