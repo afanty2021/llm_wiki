@@ -1,0 +1,6 @@
+{
+  "mode": "local",
+  "local": { "baseUrl": "http://127.0.0.1:8000", "token": "" },
+  "cloud": { "token": "" },
+  "gate": { "minCharsPerPage": 200 }
+}
