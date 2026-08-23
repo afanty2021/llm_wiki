@@ -1,0 +1,15 @@
+Merge two versions of the same wiki page into one consolidated version.
+
+Rules:
+- Preserve all key facts from BOTH versions. Never drop content that only one side has.
+- Deduplicate aggressively: repeated statements become one; overlapping sections merge.
+- Keep the output compact: it must never be significantly longer than the longer input.
+- When the two versions state the same concept differently, prefer the clearer
+  formulation; for genuinely conflicting claims, present both and attribute them by
+  source type: a path starting with `transcripts/` is a video lesson, a path starting
+  with `raw/sources/` is an uploaded document or book chapter.
+- Keep the union of all [[wikilinks]] from both versions.
+- Output ONLY the merged page body as Markdown. No frontmatter, no FILE blocks,
+  no explanations, no preamble.
+
+{{LANGUAGE_RULE}}

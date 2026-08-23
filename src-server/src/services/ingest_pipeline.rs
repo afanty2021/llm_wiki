@@ -848,6 +848,57 @@ async fn step2_generate_via(
     Ok(response)
 }
 
+/// step4 merge prompt（含占位符渲染）。抽为独立函数供 prompt 注入单测。
+pub(crate) fn merge_prompt(language: Option<&str>) -> String {
+    render_prompt(include_str!("prompts/step4_merge.txt"), language)
+}
+
+/// 页面合并 LLM 调用（provider 注入，同 step2_generate_via 模式）。
+/// 截断防线（评审 C1）：completion_tokens >= max_tokens → Err，调用方走整页回退
+/// Replace——截断半截 markdown 落库后，下轮 merge 会把残页当 existing，
+/// 累积内容不可恢复丢失。空输出（strip_thinking 后）同样 Err。
+async fn merge_pages_via(
+    provider: &dyn llm_stream::StreamChatProvider,
+    language: Option<&str>,
+    source_path: &str,
+    existing_content: &str,
+    incoming_content: &str,
+) -> Result<String, AppError> {
+    const MERGE_MAX_TOKENS: u32 = 8000;
+    let prompt = merge_prompt(language);
+    let system = "You merge two versions of a wiki page into one consolidated version.";
+    let user = format!(
+        "{prompt}\n\nIncoming source: {source_path}\n\n\
+         <existing>\n{existing_content}\n</existing>\n\n\
+         <incoming>\n{incoming_content}\n</incoming>"
+    );
+    let messages = vec![ChatMessage { role: "user".into(), content: user }];
+    let opts = ChatOpts {
+        model: provider.model_name().into(),
+        temperature: 0.3,
+        max_tokens: MERGE_MAX_TOKENS,
+        system_prompt: Some(system.into()),
+        timeout_secs: None,
+    };
+    let (response, usage) = provider
+        .chat_to_string(messages, opts)
+        .await
+        .map_err(|e| AppError::LlmApiError(format!("merge page: {}", e)))?;
+    if let Some((_, ct)) = usage {
+        if ct >= MERGE_MAX_TOKENS {
+            return Err(AppError::LlmApiError(format!(
+                "merge output likely truncated (completion {} >= max {})",
+                ct, MERGE_MAX_TOKENS
+            )));
+        }
+    }
+    let cleaned = crate::services::research::synthesize::strip_thinking(&response);
+    if cleaned.trim().is_empty() {
+        return Err(AppError::LlmApiError("merge output empty after strip_thinking".into()));
+    }
+    Ok(cleaned)
+}
+
 struct IngestedFileStatus {
     content_hash: String,
     file_size: i64,
@@ -2297,6 +2348,57 @@ mod tests {
         assert!(!content.contains("LANGUAGE RULE"), "{content}");
         assert!(content.contains(SLUG_CONSTRAINT_ANCHOR), "{content}");
         assert!(!content.contains("{{"), "{content}");
+    }
+
+    // ── Task 2：step4 merge prompt + merge_pages_via ──
+
+    #[tokio::test]
+    async fn merge_pages_via_injects_framing_source_and_language() {
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("融合正文".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 100 },
+            TokenDelta::Done,
+        ])]);
+        let out = merge_pages_via(&provider, Some("简体中文"), "raw/sources/bk/Ch01.md", "旧版", "新版")
+            .await
+            .unwrap();
+        assert_eq!(out, "融合正文");
+        let content = provider.user_message_content(0);
+        assert!(content.contains("<existing>\n旧版\n</existing>"), "{content}");
+        assert!(content.contains("<incoming>\n新版\n</incoming>"), "{content}");
+        assert!(content.contains("raw/sources/bk/Ch01.md"), "{content}");
+        assert!(content.contains("MUST be in 简体中文"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn merge_pages_via_rejects_truncated_output() {
+        // 评审 C1：completion >= max_tokens 视为失败（调用方走整页回退）
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("half".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 8000 },
+            TokenDelta::Done,
+        ])]);
+        let err = merge_pages_via(&provider, None, "raw/a.md", "old", "new").await.unwrap_err();
+        assert!(err.to_string().contains("truncated"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn merge_pages_via_rejects_empty_after_strip_thinking() {
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("<think>reasoning</think>".into()),
+            TokenDelta::Done,
+        ])]);
+        let err = merge_pages_via(&provider, None, "raw/a.md", "old", "new").await.unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn merge_prompt_renders_language_rule_no_placeholder_left() {
+        let p = merge_prompt(Some("简体中文"));
+        assert!(p.contains("MUST be in 简体中文"), "{p}");
+        assert!(!p.contains("{{"), "{p}");
+        let e = merge_prompt(None);
+        assert!(!e.contains("{{") && !e.contains("LANGUAGE RULE"), "{e}");
     }
 
     #[test]
