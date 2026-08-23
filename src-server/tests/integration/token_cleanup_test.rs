@@ -64,7 +64,11 @@ mod tests {
         insert_token(&state, user_id, "recent-revoked", 86400, Some(-86400)).await;
 
         let removed = cleanup_once(&state).await.expect("cleanup_once");
-        assert!(removed >= 2, "至少删掉本测试的 2 行，实际 {removed}");
+        // 不对 removed 数值做断言：live 部署的 cleanup job 与本测试共用 5433 库，
+        // 若恰在 insert 与本调用之间的毫秒窗内清扫，目标行可能已被其删走（评审
+        // Minor：竞态闪挂）。正确性由下方 left==2 与 survivors 断言独立兜底——
+        // cleanup 失效（一行不删）时 left 必为 4。
+        let _ = removed;
 
         let left = count_tokens(&state, user_id).await;
         assert_eq!(left, 2, "活跃行与观测窗内吊销行必须保留");
