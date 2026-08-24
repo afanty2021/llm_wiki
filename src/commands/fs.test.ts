@@ -578,4 +578,80 @@ describe("fs.ts web 适配", () => {
     delete (globalThis as any).__currentProjectId
     delete (globalThis as Record<string, unknown>).window
   })
+
+  // ── 存储源前缀(sources-card follow-up):sources/transcripts/** 与 raw/sources/**
+  //    在 DB 无同名页(衍生页在 transcripts/ 等),读写必须同源直走 files API。
+  //    走页面语义 = 404→POST 幽灵页,编辑静默丢失(读取 stat 恒命中存储旧文件)。 ──
+
+  it("writeFile(web) sources/transcripts/** → 直写 files API,零页面调用(防幽灵页)", async () => {
+    vi.resetModules()
+    const api = webFsMocks({})
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await fs.writeFile("sources/transcripts/44a4fa7f.md", "# 编辑后的转写源")
+    expect(api.writeFile).toHaveBeenCalledWith(7, "sources/transcripts/44a4fa7f.md", "# 编辑后的转写源")
+    expect(api.getPage).not.toHaveBeenCalled()
+    expect(api.createPage).not.toHaveBeenCalled()
+    expect(api.updatePage).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("writeFile(web) raw/sources/**(含前导斜杠变体)同款直写 files API", async () => {
+    vi.resetModules()
+    const api = webFsMocks({})
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await fs.writeFile("/raw/sources/LT-LearningTeaching-3rd/Ch05-chapter-4-who-are-the-learners.md", "# 章节")
+    expect(api.writeFile).toHaveBeenCalledWith(7, "/raw/sources/LT-LearningTeaching-3rd/Ch05-chapter-4-who-are-the-learners.md", "# 章节")
+    expect(api.createPage).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("writeFile(web) 非 .md 存储路径不受影响;前缀外 .md 仍走页面语义", async () => {
+    vi.resetModules()
+    const api = webFsMocks({ getPage: vi.fn().mockResolvedValue(samplePage) })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    // sources/raw 顶层非 transcripts/sources 子路径(如未来 sources/notes.md)不误伤:
+    // isStorageSourcePath 只匹配完整前缀,页面语义照常
+    await fs.writeFile("sources/notes.md", "# n")
+    expect(api.updatePage).toHaveBeenCalledTimes(1)
+    expect(api.writeFile).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("readFile(web) 存储源 stat miss → File not found,不走 pages 回落(幽灵页不可见)", async () => {
+    vi.resetModules()
+    const api = webFsMocks({})
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await expect(fs.readFile("sources/transcripts/gone.md")).rejects.toThrow("File not found")
+    expect(api.getPage).not.toHaveBeenCalled()
+    expect(api.readFile).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
 })

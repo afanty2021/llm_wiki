@@ -30,6 +30,18 @@ function pagePathVariants(path: string): string[] {
   return variants
 }
 
+/** 存储源文件前缀(双分支布局既成事实):sources/transcripts/**(视频转写源)与
+ *  raw/sources/**(书籍章源)。这些 .md 在 DB 无同名页——衍生 wiki 页在 transcripts/
+ *  等路径,故不得参与页面语义:write 走页面语义会 404→POST 建幽灵页,用户编辑落
+ *  DB 而读取 stat 恒命中存储旧文件,编辑静默丢失;read 的 pages 回落同理只会捞到
+ *  幽灵页。读写必须同源直走 files API(=桌面语义)。 */
+const STORAGE_SOURCE_PREFIXES = ["sources/transcripts/", "raw/sources/"]
+
+function isStorageSourcePath(path: string): boolean {
+  const p = path.replace(/^\/+/, "")
+  return STORAGE_SOURCE_PREFIXES.some((prefix) => p.startsWith(prefix))
+}
+
 async function fetchWikiPage(projectId: number, path: string): Promise<WikiPage | null> {
   for (const variant of pagePathVariants(path)) {
     try {
@@ -160,8 +172,8 @@ export async function readFile(
     }
     // #1(web):wiki 页本体在 DB(wiki_pages)不在存储目录——stat miss 且 .md 时
     // 回落 pages API,重组 frontmatter+正文为桌面 .md 文本。知识树点页、图谱节点
-    // 点开、overview 读取都经此回落。
-    if (path.endsWith(".md")) {
+    // 点开、overview 读取都经此回落。存储源前缀除外(见 isStorageSourcePath)。
+    if (path.endsWith(".md") && !isStorageSourcePath(path)) {
       const page = await fetchWikiPage(projectId, path)
       if (page) return pageToMarkdownText(page)
     }
@@ -177,9 +189,11 @@ export async function writeFile(path: string, contents: string): Promise<void> {
   if (USE_HTTP) {
     const projectId = getCurrentProjectId()
     // #1/#7(web):.md 走页面语义——已存在的页 PUT 更新(If-Match),不存在的页
-    // POST 建页,均不落存储目录(防 DB/文件分叉)。非 .md(.json 运行时文件等)
+    // POST 建页,均不落存储目录(防 DB/文件分叉)。存储源前缀(sources/transcripts/、
+    // raw/sources/)的 .md 例外:DB 无同名页,直写 files API,否则 404→建幽灵页,
+    // 编辑静默丢失(读取 stat 恒命中存储旧文件)。非 .md(.json 运行时文件等)
     // 仍走 files API 写存储。
-    if (path.endsWith(".md")) {
+    if (path.endsWith(".md") && !isStorageSourcePath(path)) {
       if (await writeWikiPageIfExists(projectId, path, contents)) return
       if (await createWikiPage(projectId, path, contents)) return
     }
