@@ -46,7 +46,14 @@ def main():
     reader = PdfReader(a.pdf)
     n = len(reader.pages)
     if a.ranges:
-        chapters = [(r["title"], r["from"] - 1, r["to"] - 1) for r in json.loads(Path(a.ranges).read_text())]
+        ranges = json.loads(Path(a.ranges).read_text())
+        # 边界校验（终审 F3）：from-1=-1 会走 Python 负索引把书末页静默混进 Ch01；
+        # 越界值中途 IndexError 且 manifest 只在结尾写（已拆 PDF 与 manifest 不一致）。
+        for r in ranges:
+            f, t = r.get("from"), r.get("to")
+            if not (isinstance(f, int) and isinstance(t, int) and 1 <= f <= t <= n):
+                sys.exit(f"--ranges 条目非法或越界: {r.get('title', '?')} from={f} to={t}（须为整数且 1<=from<=to<={n}）")
+        chapters = [(r["title"], r["from"] - 1, r["to"] - 1) for r in ranges]
     else:
         entries = outline_entries(reader, a.top_level_only)
         if not entries:

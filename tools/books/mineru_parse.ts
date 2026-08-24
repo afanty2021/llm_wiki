@@ -38,11 +38,12 @@ interface Manifest { book: string; total_pages: number; chapters: ManifestChapte
 interface ChapterReport {
   file: string
   title: string
-  status: "ok" | "gate_blocked" | "failed"
-  pages: number
-  chars: number
-  ratio: number
-  seconds: number
+  status: "ok" | "gate_blocked" | "failed" | "not_selected"
+  /** 解析指标（not_selected 未解析，不含）。 */
+  pages?: number
+  chars?: number
+  ratio?: number
+  seconds?: number
   error?: string
   cached?: boolean
 }
@@ -342,10 +343,22 @@ async function main(): Promise<void> {
     }
   }
 
+  // --only 子集运行（终审 F4）：未选章以 not_selected 记入报告，保证 parse-report.json
+  // 始终覆盖 manifest 全部章——否则报告只剩子集，随后 upload_and_ingest 直跑会静默
+  // 部分上传（upload 侧 status!==ok 一律 skip 并逐条列出，not_selected 即显式可见，
+  // 与流水线「断言防静默」立场一致）。只记 file/title，不落 staged（无解析产物）。
+  const selected = new Set(chapters)
+  for (const ch of all) {
+    if (!selected.has(ch)) {
+      reports.push({ file: ch.file, title: ch.title, status: "not_selected" })
+    }
+  }
+
   const summary = {
     ok: reports.filter((r) => r.status === "ok").length,
     gate_blocked: reports.filter((r) => r.status === "gate_blocked").length,
     failed: reports.filter((r) => r.status === "failed").length,
+    not_selected: reports.filter((r) => r.status === "not_selected").length,
   }
   const report = {
     book: manifest.book,
@@ -360,6 +373,7 @@ async function main(): Promise<void> {
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
   console.log(
     `[mineru_parse] done: ok=${summary.ok} gate_blocked=${summary.gate_blocked} failed=${summary.failed}` +
+    (summary.not_selected > 0 ? ` not_selected=${summary.not_selected}（--only 子集；报告已全量覆盖 manifest 章）` : "") +
     ` → ${reportPath}`,
   )
   if (summary.failed > 0 || summary.gate_blocked > 0) process.exit(1)

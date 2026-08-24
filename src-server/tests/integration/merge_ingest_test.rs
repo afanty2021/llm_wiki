@@ -194,7 +194,11 @@ async fn t8_write_source(env: &T8Env, rel: &str, content: &str) {
 /// 直接 INSERT ingest_jobs 行 + 直接调 run_ingest_job（不经 worker / 不 HTTP
 /// enqueue——编排铁律 C-3：enqueue 会 LPUSH 进共享 live Redis 被 launchd worker
 /// 抢走，对进程内 stub 形成双跑竞态）。模式照 ingest_reliability_test:198-217。
-/// 失败即 panic（expect 携带 Err 全文，all-failed 报文已并入 warnings 便于诊断）。
+/// 失败即 panic（携带 Err 全文，all-failed 报文已并入 warnings 便于诊断）。
+/// 终态落库（终审 F2）：run_ingest_job 本身不写终态（终态在 worker 层 finalize，
+/// 测试直调绕过 worker）——不补 UPDATE 则行永久停留 running，每轮测试向 live 库
+/// 写残留，server 重启被 recover_pending 重投（噪音）。Ok → succeeded；Err →
+/// failed + error 列留诊断（同 mark_job_failed 的列形态），落库后再 panic 上抛。
 async fn t8_insert_and_run(
     env: &T8Env,
     source: &str,
@@ -216,9 +220,27 @@ async fn t8_insert_and_run(
             .fetch_one(&env.state.db)
             .await
             .expect("回读 IngestJob");
-    llm_wiki_server::services::ingest_pipeline::run_ingest_job(&env.state, &job)
-        .await
-        .expect("run_ingest_job 应返回 Ok（脚本内全成功路径；Err 含 warnings 诊断）")
+    match llm_wiki_server::services::ingest_pipeline::run_ingest_job(&env.state, &job).await {
+        Ok(res) => {
+            sqlx::query("UPDATE ingest_jobs SET status='succeeded', finished_at=NOW() WHERE id=$1")
+                .bind(job_id)
+                .execute(&env.state.db)
+                .await
+                .expect("落 succeeded 终态");
+            res
+        }
+        Err(e) => {
+            sqlx::query(
+                "UPDATE ingest_jobs SET status='failed', error=$1, finished_at=NOW() WHERE id=$2",
+            )
+            .bind(e.to_string())
+            .bind(job_id)
+            .execute(&env.state.db)
+            .await
+            .expect("落 failed 终态");
+            panic!("run_ingest_job 应返回 Ok（脚本内全成功路径；Err 含 warnings 诊断）: {e}")
+        }
+    }
 }
 
 /// 取 DB 页行 (content, sources, created_at, updated_at)。

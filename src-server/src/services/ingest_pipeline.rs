@@ -822,11 +822,14 @@ async fn fetch_concept_entity_paths(state: &AppState, project_id: i32, cap: i64)
 }
 
 /// step2 清单注入段（纯函数供单测；空清单 → 空串；触顶 cap → 注明截断，评审 I3）。
-fn existing_paths_section(paths: &[String]) -> String {
+/// `cap` 必须与 fetch_concept_entity_paths 的 SQL LIMIT 同源（run_ingest_job 一次算出
+/// 两处传参）——终审 F5：此前硬编码 2000 与 budget 派生 cap（32k context→500）脱钩，
+/// 小 cap 下真截断不注明。语义：cap < 2000 时清单至多 cap 条，恰在 cap 处触发注明。
+fn existing_paths_section(paths: &[String], cap: usize) -> String {
     if paths.is_empty() {
         return String::new();
     }
-    let note = if paths.len() >= existing_paths_cap(u32::MAX) as usize {
+    let note = if paths.len() >= cap {
         "\n(list truncated — only the first entries are shown)"
     } else {
         ""
@@ -851,12 +854,21 @@ async fn step2_generate(
     step1_json: &serde_json::Value,
     language: Option<&str>,
     existing_paths: &[String],
+    existing_paths_cap: usize,
 ) -> Result<String, AppError> {
     let provider = llm_stream::provider_for_project(state, project_id).await?;
     let prompt = step2_prompt(language);
     let system = "You generate wiki pages. Output each page as a FILE block.";
-    step2_generate_via(&*provider, system, &prompt, original_text, step1_json, existing_paths)
-        .await
+    step2_generate_via(
+        &*provider,
+        system,
+        &prompt,
+        original_text,
+        step1_json,
+        existing_paths,
+        existing_paths_cap,
+    )
+    .await
 }
 
 /// step2 的 LLM 调用（provider 注入，与 step1_analyze_via 同模式——prompt 注入单测
@@ -868,6 +880,7 @@ async fn step2_generate_via(
     original_text: &str,
     step1_json: &serde_json::Value,
     existing_paths: &[String],
+    existing_paths_cap: usize,
 ) -> Result<String, AppError> {
     // 【编译陷阱】AppError 无 From<serde_json::Error>，必须 map_err。
     let analysis = serde_json::to_string_pretty(step1_json)
@@ -877,7 +890,7 @@ async fn step2_generate_via(
         content: format!(
             "{}{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
             prompt,
-            existing_paths_section(existing_paths),
+            existing_paths_section(existing_paths, existing_paths_cap),
             analysis,
             original_text
         ),
@@ -1078,8 +1091,10 @@ pub async fn run_ingest_job(
         .await
         .map(|c| c.context_size.max(0) as u32)
         .unwrap_or(128_000);
-    let existing_paths =
-        fetch_concept_entity_paths(state, job.project_id, existing_paths_cap(context_size)).await;
+    // cap 一次算出、两处传参（终审 F5）：SQL LIMIT 与截断注明阈值必须同源，
+    // 否则 budget 派生的小 cap（如 32k→500）下真截断不注明。
+    let paths_cap = existing_paths_cap(context_size);
+    let existing_paths = fetch_concept_entity_paths(state, job.project_id, paths_cap).await;
 
     let total = job.source_paths.len();
     for (i, sp) in job.source_paths.iter().enumerate() {
@@ -1108,8 +1123,16 @@ pub async fn run_ingest_job(
         let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
             .await;
 
-        match process_source_path(state, job.project_id, team_id, sp, language, &existing_paths)
-            .await
+        match process_source_path(
+            state,
+            job.project_id,
+            team_id,
+            sp,
+            language,
+            &existing_paths,
+            paths_cap as usize,
+        )
+        .await
         {
             Ok(None) => {
                 // 内容未变，视为 done
@@ -1121,6 +1144,13 @@ pub async fn run_ingest_job(
                 let pages_to_write = processed.pages.len();
                 let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
                 for page in &processed.pages {
+                    // 取消检查点（每页前，终审 F1）：页内可能触发一次 merge LLM 调用
+                    // （8000 token 输出、本地模型数十秒），spec §4 部署约束/单 worker 串行
+                    // ——用户取消后若继续逐页 merge，会烧完全部剩余调用并阻塞后续所有
+                    // job 小时级。语义同 source 级检查点：Cancelled 时整 job 终止。
+                    if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
+                        return Err(e); // AppError::Cancelled，已 mark_cancelled
+                    }
                     // transcripts/ 命名空间守卫（spec §3.2-⑤ 防御）：该前缀页由 transcriber
                     // CLI 写入（创建即嵌入），LLM 生成页禁止覆写。跳过计入 pages_written
                     // （计账联动，见 fold_page_write_outcomes）→ 唯一页撞前缀仍判 done。
@@ -1334,7 +1364,8 @@ pub async fn run_ingest_job(
 /// 返回 Some(ProcessedSource) 表示需落库；返回 None 表示内容未变已跳过（不再重复 mark）。
 /// W3：`language` 来自 projects.ingest_language，穿透到 step1/step2/dedicated review 三处 prompt。
 /// §2：`existing_paths` 为既有 concepts/entities 页清单（run_ingest_job 每 job 查一次），
-/// 注入 step2 prompt 促成跨源 slug 收敛。
+/// 注入 step2 prompt 促成跨源 slug 收敛。`existing_paths_cap` 为清单截断 cap（与查询
+/// LIMIT 同源，run_ingest_job 传入），控制截断注明阈值（终审 F5）。
 async fn process_source_path(
     state: &AppState,
     project_id: i32,
@@ -1342,6 +1373,7 @@ async fn process_source_path(
     source_path: &str,
     language: Option<&str>,
     existing_paths: &[String],
+    existing_paths_cap: usize,
 ) -> Result<Option<ProcessedSource>, AppError> {
     // 经 StorageBackend trait 读字节（Phase 1 抽象收敛：与 files.rs docx/xlsx 分支一致，S3 就绪）
     let bytes = state.storage.read_bytes(team_id, project_id, source_path).await?;
@@ -1399,8 +1431,16 @@ async fn process_source_path(
         merged
     };
 
-    let llm_output =
-        step2_generate(state, project_id, &text, &step1_result, language, existing_paths).await?;
+    let llm_output = step2_generate(
+        state,
+        project_id,
+        &text,
+        &step1_result,
+        language,
+        existing_paths,
+        existing_paths_cap,
+    )
+    .await?;
     let blocks = parse_file_blocks(&llm_output);
     let pages: Vec<WikiPageInsert> = blocks
         .into_iter()
@@ -2510,6 +2550,7 @@ mod tests {
             "src text",
             &serde_json::json!({"entities":[]}),
             &[],
+            2000,
         )
         .await
         .unwrap();
@@ -2540,6 +2581,7 @@ mod tests {
             "src text",
             &serde_json::json!({"entities":[]}),
             &[],
+            2000,
         )
         .await
         .unwrap();
@@ -2553,16 +2595,25 @@ mod tests {
 
     #[test]
     fn existing_paths_section_lists_and_notes_truncation() {
-        let one = existing_paths_section(&["concepts/a.md".into()]);
+        // cap 显式传参（终审 F5）：2000 与 clamp 上限一致；小 cap（如 500）时清单
+        // 至多 500 条，恰在 500 处触发注明——同一语义，此处取 2000 保持原断言规模。
+        let one = existing_paths_section(&["concepts/a.md".into()], 2000);
         assert!(one.contains("## Existing concept/entity pages"), "{one}");
         assert!(one.contains("- concepts/a.md"), "{one}");
         assert!(!one.contains("truncated"), "{one}");
 
         let many: Vec<String> = (0..2000).map(|i| format!("concepts/p{}.md", i)).collect();
-        let sec = existing_paths_section(&many);
+        let sec = existing_paths_section(&many, 2000);
         assert!(sec.contains("list truncated"), "{sec}");
 
-        assert_eq!(existing_paths_section(&[]), "");
+        // 小 cap 语义回归：cap=500、清单恰 500 条（SQL LIMIT 截断的必然形态）→ 注明。
+        let capped: Vec<String> = (0..500).map(|i| format!("concepts/c{}.md", i)).collect();
+        assert!(
+            existing_paths_section(&capped, 500).contains("list truncated"),
+            "cap=500 且清单满 500 条时必须注明截断（旧实现硬编码 2000 漏注明的场景）"
+        );
+
+        assert_eq!(existing_paths_section(&[], 2000), "");
     }
 
     #[test]
@@ -2579,8 +2630,17 @@ mod tests {
             TokenDelta::Text("---FILE: concepts/a.md ---\nx\n---END FILE---".into()),
             TokenDelta::Done,
         ])]);
-        step2_generate_via(&provider, "sys", &step2_prompt(None), "src",
-            &serde_json::json!({"entities": []}), &["concepts/a.md".to_string()]).await.unwrap();
+        step2_generate_via(
+            &provider,
+            "sys",
+            &step2_prompt(None),
+            "src",
+            &serde_json::json!({"entities": []}),
+            &["concepts/a.md".to_string()],
+            2000,
+        )
+        .await
+        .unwrap();
         let content = provider.user_message_content(0);
         assert!(content.contains("REUSE its exact path"), "{content}");
         assert!(content.contains("- concepts/a.md"), "{content}");
