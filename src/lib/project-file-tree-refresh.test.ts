@@ -6,10 +6,21 @@ import { buildProjectPathIndexFromTree } from "@/lib/wiki-page-resolver"
 
 const mocks = vi.hoisted(() => ({
   listDirectory: vi.fn(),
+  // 本文件默认按桌面语义测（node 环境无 window，真实 caps 会误判 web）；
+  // web 用例在测试内切 platform。
+  platform: "tauri" as "tauri" | "web",
 }))
 
 vi.mock("@/commands/fs", () => ({
   listDirectory: mocks.listDirectory,
+}))
+
+vi.mock("@/lib/capabilities", () => ({
+  caps: {
+    get platform() {
+      return mocks.platform
+    },
+  },
 }))
 
 const project: WikiProject = {
@@ -57,6 +68,7 @@ async function flushMicrotasks() {
 describe("refreshProjectFileTree", () => {
   beforeEach(() => {
     mocks.listDirectory.mockReset()
+    mocks.platform = "tauri"
     useWikiStore.setState({
       project,
       fileTree: [],
@@ -305,5 +317,24 @@ describe("refreshProjectFileTree", () => {
     expect(useWikiStore.getState().fileTree).toEqual([])
     expect(useWikiStore.getState().projectPathIndex.byPath.size).toBe(0)
     expect(useWikiStore.getState().dataVersion).toBe(0)
+  })
+
+  it("web: 树刷新不清掉 pages API 建的索引（refreshPathIndex 分支整体禁用）", async () => {
+    mocks.platform = "web"
+    // App.tsx ProjectPicker 形态：path 为空串；索引由 pages API 虚拟根构建。
+    useWikiStore.setState({ project: { id: "7", name: "p", path: "" } })
+    useWikiStore.getState().setProjectPathIndexFromPaths(["concepts/motivation.md"])
+    mocks.listDirectory.mockResolvedValue([])
+
+    await refreshProjectFileTree("", { projectId: "7", clearDisplayTreeFirst: true })
+    await flushMicrotasks()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // 仅浅层展示树刷新发生（1 次）；若门被移除，空清单的全量扫描会以
+    // setProjectPathIndexFromTree([]) 清掉索引——此断言即回归陷阱。
+    expect(mocks.listDirectory).toHaveBeenCalledTimes(1)
+    expect(
+      useWikiStore.getState().projectPathIndex.byPath.has("/wiki/concepts/motivation.md"),
+    ).toBe(true)
   })
 })
