@@ -1,8 +1,11 @@
 // tools/books/mineru_parse.ts —— MinerU 桥接（spec §3 双协议，参 src/lib/mineru.ts:698-853 本地分支）
-// 用法：npx tsx tools/books/mineru_parse.ts --book <slug> --dir /tmp/books [--only Ch01] [--force] [--config tools/books/books.json]
+// 用法：npx tsx tools/books/mineru_parse.ts --book <slug> --dir /tmp/books [--only Ch01] [--force] [--concurrency N] [--config tools/books/books.json]
 // 产出：<dir>/<slug>/staged/ChNN-*.md（清洗后、带上源头的章节 markdown）+ parse-report.json
 // 量化闸：非空白字符/页 < gate.minCharsPerPage（默认 200）→ gate_blocked，不落 staged（Task 9 只消费过闸章节）。
 // 断点续跑：staged 已存在的章默认跳过（--force 重解析）。
+// 并发：--concurrency N（默认 2，上限 4）——缓存命中的跳过仍串行先行；未解析章由 N 个
+// worker 并行处理（mineru-api 单进程共享已加载流水线，并发主要吃空闲 CPU 核）。单章失败
+// 仅记 failed 不影响其他章；报告条目写入前按 manifest 章序排序（并发完成序不确定）。
 //
 // 本地协议实测注记（2026-08-23，mineru-api 3.4.5 / protocol_version 2）：
 // - POST /tasks 返回 202 + {task_id, status:"pending"}；GET /tasks/:id 状态词表
@@ -52,6 +55,8 @@ const LOCAL_POLL_INTERVAL_MS = 3_000
 const LOCAL_POLL_TIMEOUT_MS = 3_600_000
 const CLOUD_POLL_TIMEOUT_MS = 300_000
 const DEFAULT_MIN_CHARS_PER_PAGE = 200
+const DEFAULT_CONCURRENCY = 2
+const MAX_CONCURRENCY = 4
 
 // ── HTML 表格 → Markdown（自 src/lib/mineru.ts:288-370 移植，纯字符串处理，无 Tauri 依赖） ──
 
@@ -252,10 +257,27 @@ async function main(): Promise<void> {
       only: { type: "string" },
       config: { type: "string" },
       force: { type: "boolean", default: false },
+      concurrency: { type: "string" },
     },
   })
   const bookSlug = values.book
   if (!bookSlug) die("--book <slug> is required (e.g. LT-LearningTeaching-3rd)")
+
+  // --concurrency N：未解析章的并行度。1 = 单 worker 依序执行，与历史串行路径行为一致。
+  let concurrency = DEFAULT_CONCURRENCY
+  if (values.concurrency !== undefined) {
+    const m = /^(\d+)$/.exec(values.concurrency)
+    const n = m ? Number(m[1]) : NaN
+    if (!Number.isInteger(n) || n < 1) {
+      die(`--concurrency must be an integer in [1, ${MAX_CONCURRENCY}] (got "${values.concurrency}")`)
+    }
+    if (n > MAX_CONCURRENCY) {
+      console.warn(`[mineru_parse] --concurrency ${n} > ${MAX_CONCURRENCY}（mineru-api 单进程共享流水线），按 ${MAX_CONCURRENCY} 执行`)
+      concurrency = MAX_CONCURRENCY
+    } else {
+      concurrency = n
+    }
+  }
   const configPath = values.config ?? fileURLToPath(new URL("books.json", import.meta.url))
 
   let cfg: BooksConfig
@@ -289,30 +311,40 @@ async function main(): Promise<void> {
 
   console.log(
     `[mineru_parse] book=${bookSlug} chapters=${chapters.length}/${all.length}` +
-    ` mode=local baseUrl=${cfg.local.baseUrl} gate=${minPerPage} chars/page` +
+    ` mode=local baseUrl=${cfg.local.baseUrl} gate=${minPerPage} chars/page concurrency=${concurrency}` +
     (values.only ? ` only="${values.only}"` : "") + (values.force ? " force" : ""),
   )
 
   const reports: ChapterReport[] = []
-  for (const ch of chapters) {
-    const pages = ch.to_page - ch.from_page + 1
-    const stagedPath = join(stagedDir, ch.file.replace(/\.pdf$/, ".md"))
-    const started = Date.now()
 
-    // 断点续跑：已有 staged 产物则跳过（--force 重解析）
-    if (!values.force && existsSync(stagedPath)) {
-      // 与新解析同一口径：闸指标不含我们自己加的来源头
-      const chars = nonWhitespaceChars(readFileSync(stagedPath, "utf8").replace(/^> 来源：[^\n]*\n\n/, ""))
-      reports.push({
-        file: ch.file, title: ch.title, status: "ok", pages,
-        chars, ratio: Math.round((chars / pages) * 10) / 10,
-        seconds: 0, cached: true,
-      })
-      console.log(`  [cached] ${ch.file} (${chars} chars)`)
+  // Pass 1（串行，缓存命中瞬时完成）：staged 已存在的章跳过（--force 重解析）。
+  const pending: ManifestChapter[] = []
+  for (const ch of chapters) {
+    const stagedPath = join(stagedDir, ch.file.replace(/\.pdf$/, ".md"))
+    if (values.force || !existsSync(stagedPath)) {
+      pending.push(ch)
       continue
     }
+    // 与新解析同一口径：闸指标不含我们自己加的来源头
+    const pages = ch.to_page - ch.from_page + 1
+    const chars = nonWhitespaceChars(readFileSync(stagedPath, "utf8").replace(/^> 来源：[^\n]*\n\n/, ""))
+    reports.push({
+      file: ch.file, title: ch.title, status: "ok", pages,
+      chars, ratio: Math.round((chars / pages) * 10) / 10,
+      seconds: 0, cached: true,
+    })
+    console.log(`  [cached] ${ch.file} (${chars} chars)`)
+  }
 
+  // Pass 2：未解析章，N 个 worker 并行。单章流程与串行版逐步一致
+  // （submit → poll → result → 表格转换 → clean → gate → stage）；
+  // processChapter 永不抛出——单章失败只记 failed 报告项，不影响其他章（错误隔离）。
+  // 日志均为整行单次 console 调用 + [ChNN] 前缀，多 worker 交错不会破行。
+  async function processChapter(ch: ManifestChapter): Promise<ChapterReport> {
+    const pages = ch.to_page - ch.from_page + 1
+    const stagedPath = join(stagedDir, ch.file.replace(/\.pdf$/, ".md"))
     const prefix = `  [${ch.file}]`
+    const started = Date.now()
     try {
       const pdfPath = join(bookDir, ch.file)
       const pdf = readFileSync(pdfPath)
@@ -324,23 +356,37 @@ async function main(): Promise<void> {
       const ratio = Math.round((chars / pages) * 10) / 10
       const seconds = Math.round((Date.now() - started) / 1000)
       if (!gate(chars, pages, minPerPage)) {
-        reports.push({
+        console.log(`${prefix} gate_blocked: ${ratio} chars/page < ${minPerPage} (${chars} chars / ${pages} pages)`)
+        return {
           file: ch.file, title: ch.title, status: "gate_blocked", pages,
           chars, ratio, seconds,
           error: `${ratio} chars/page < ${minPerPage} (pages=${pages})`,
-        })
-        console.log(`${prefix} gate_blocked: ${ratio} chars/page < ${minPerPage} (${chars} chars / ${pages} pages)`)
-        continue
+        }
       }
       writeFileSync(stagedPath, cleaned)
-      reports.push({ file: ch.file, title: ch.title, status: "ok", pages, chars, ratio, seconds })
       console.log(`${prefix} ok: ${chars} chars / ${pages} pages = ${ratio} chars/page (${seconds}s)`)
+      return { file: ch.file, title: ch.title, status: "ok", pages, chars, ratio, seconds }
     } catch (err) {
       const seconds = Math.round((Date.now() - started) / 1000)
       const message = err instanceof Error ? err.message : String(err)
-      reports.push({ file: ch.file, title: ch.title, status: "failed", pages, chars: 0, ratio: 0, seconds, error: message })
       console.error(`${prefix} failed: ${message}`)
+      return { file: ch.file, title: ch.title, status: "failed", pages, chars: 0, ratio: 0, seconds, error: message }
     }
+  }
+
+  if (pending.length > 0) {
+    console.log(`[mineru_parse] parsing ${pending.length} chapter(s), concurrency=${concurrency}`)
+    // 工人池：N 个 worker 共享递增下标拉章。取号（next++）在任一 await 前同步完成，
+    // 单线程事件循环下不会重号/漏号；concurrency=1 时退化为单 worker 依序执行。
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const i = next++
+        if (i >= pending.length) return
+        reports.push(await processChapter(pending[i]!))
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, () => worker()))
   }
 
   // --only 子集运行（终审 F4）：未选章以 not_selected 记入报告，保证 parse-report.json
@@ -353,6 +399,11 @@ async function main(): Promise<void> {
       reports.push({ file: ch.file, title: ch.title, status: "not_selected" })
     }
   }
+
+  // 并发完成序 ≠ 章序：写入前按 manifest 章序排序，报告确定可 diff（summary 只数
+  // 状态，不受顺序影响；sort 稳定，未知 file 兜底排末尾）。
+  const order = new Map(all.map((c, i) => [c.file, i]))
+  reports.sort((a, b) => (order.get(a.file) ?? all.length) - (order.get(b.file) ?? all.length))
 
   const summary = {
     ok: reports.filter((r) => r.status === "ok").length,
