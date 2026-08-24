@@ -68,7 +68,25 @@ $ curl -s http://127.0.0.1:8000/openapi.json | jq '.paths|keys'
   不用改）。**宿主 MPS 部署**（mineru-api 直接跑在 macOS 宿主）实测 hybrid-engine 慢/不可用，
   设 `"backend": "pipeline"`（配合 parse_method auto/ocr）约快 15×。
 
-### 2.4 TODO：云端 token 方案（未采用，留档）
+### 2.4 宿主 MPS 部署（推荐路径，实测 ~15× 于 docker CPU；2026-08-24 定型）
+
+模型权重**持久缓存于 `~/.modelscope`**（勿再落 /tmp——macOS 重启即清，2026-08-24 事故实证）。
+`books.json`：`mode: "local"`、`local.baseUrl: "http://127.0.0.1:8002"`、`local.backend: "pipeline"`。
+
+```bash
+# 模型下载（一次性/增量补齐；pipeline 全套 ~2.4GB）
+MODELSCOPE_CACHE=~/.modelscope MINERU_MODEL_SOURCE=modelscope \
+  /opt/homebrew/Caskroom/miniconda/base/envs/mineru-mps/bin/mineru-models-download -s modelscope -m pipeline
+
+# 起 API（端口对齐 books.json 的 8002；MPS 设备自动探测，hybrid-engine 在 MPS 慢/不可用）
+MODELSCOPE_CACHE=~/.modelscope MINERU_MODEL_SOURCE=modelscope \
+  /opt/homebrew/Caskroom/miniconda/base/envs/mineru-mps/bin/mineru-api --host 127.0.0.1 --port 8002
+```
+
+- conda env：`mineru-mps`（py3.12，宿主 PyTorch Metal）；运行时经 `MODELSCOPE_CACHE` 读同一目录，下载与解析共用。
+- 吞吐实测 ~80s/章（LT 纯扫描书，pipeline + parse_method auto/ocr）。
+
+### 2.5 TODO：云端 token 方案（未采用，留档）
 
 MinerU 也提供云端 API（token 计费，`MINERU_API_BASE`/`MINERU_API_KEY` 环境变量）。
 若未来本地 CPU 速度不可接受，可在桌面 app 配置中加 token 走云端；本流水线 Task 8
