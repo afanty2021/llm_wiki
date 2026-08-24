@@ -52,6 +52,9 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   // Daemon health check
   const [daemonStatus, setDaemonStatus] = useState<string>("starting")
   useEffect(() => {
+    // clip server 是桌面本地守护（19827 端口 + Tauri invoke）；web 无 IPC 后端，
+    // 轮询必败会把指示器钉死在"error"红点——web 不查也不渲染（见下方渲染门）。
+    if (caps.platform !== "tauri") return
     const check = async () => {
       try {
         const { clipServerStatus } = await import("@/commands/fs")
@@ -143,7 +146,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
         </div>
         {/* Bottom: daemon status + settings + switch project */}
         <div className="flex flex-col items-center gap-1 pb-1">
-          {/* Daemon status indicator */}
+          {/* Daemon status indicator — 桌面 only（web 无 clip server 概念，见 effect 门控） */}
+          {caps.platform === "tauri" && (
           <Tooltip>
             <TooltipTrigger className="flex h-6 w-6 items-center justify-center">
               <span
@@ -162,6 +166,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
               {daemonStatus === "error" && "Clip server error. Restarting..."}
             </TooltipContent>
           </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger
               onClick={() => setActiveView("settings")}
