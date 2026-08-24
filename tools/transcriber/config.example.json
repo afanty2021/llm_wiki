@@ -2,5 +2,10 @@
   "mainRoot": "/path/to/L T师训 2024-2025",
   "hevcRoot": "/path/to/L T师训 2024-2025（HEVC）",
   "privacyDirs": ["课堂教学案例", "课堂活动"],
-  "firstBatchDir": "教学新知班级管理专栏"
+  "firstBatchDir": "教学新知班级管理专栏",
+  "chaptering": {
+    "enabled": true,
+    "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+    "model": "glm-5.1"
+  }
 }

@@ -54,7 +54,13 @@ export function buildTranscriptMd(input: TranscriptInput): { md: string; chapter
     blocks.push(`${stamp} ${segs.map(s => s.text).join(" ")}`);
   }
 
-  const fm = [
+  const md = blocks.length === 0 ? `${transcriptFrontmatter(input)}\n` : `${transcriptFrontmatter(input)}\n\n${blocks.join("\n\n")}\n`;
+  return { md, chapters };
+}
+
+/** frontmatter 构造（机械切分与语义切章共用——单一来源保证两种产物逐字节同构）。 */
+export function transcriptFrontmatter(input: TranscriptInput): string {
+  return [
     "---",
     `title: ${JSON.stringify(input.title)}`, // 双引号标量：吸收标题中的 ":"/"？" 等 YAML 敏感字符
     "type: transcript",
@@ -64,7 +70,4 @@ export function buildTranscriptMd(input: TranscriptInput): { md: string; chapter
     `  - ${input.sourcePath}`,
     "---",
   ].join("\n");
-
-  const md = blocks.length === 0 ? `${fm}\n` : `${fm}\n\n${blocks.join("\n\n")}\n`;
-  return { md, chapters };
 }

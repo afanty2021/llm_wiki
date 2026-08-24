@@ -14,7 +14,11 @@ import {
 import { extractAudio, transcodePlayback, sha256File, sha8Of, audioOutPath, playbackOutPath } from "./audio";
 import { slugFor } from "./slug";
 import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
-import { buildTranscriptMd } from "./transcript";
+import { buildTranscriptMd, type TranscriptInput } from "./transcript";
+import {
+  DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor,
+  type ChapteringConfig,
+} from "./chaptering";
 import { ApiClient, sha256Hex, type MediaAssetItem, type JobStatus } from "./api-client";
 
 const execFileAsync = promisify(execFile);
@@ -31,6 +35,10 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:8080";
 interface Config {
   mainRoot: string; hevcRoot: string;
   privacyDirs: string[]; firstBatchDir: string;
+  /** 语义切章（2026-08-24 起）：开启后新摄取视频的章节按话题/教学环节 LLM 划分，
+   *  失败/守门回落机械 300s 切分（见 src/chaptering.ts）。密钥走 ZAI_API_KEY
+   *  env 或 ~/.hermes/.env，不落 config（密钥卫生）。 */
+  chaptering?: ChapteringConfig;
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -48,6 +56,24 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
 function fail(msg: string): never {
   console.error(`✗ 预检失败：${msg}`);
   process.exit(1);
+}
+
+/** 转写包装（语义切章优先，回落机械切分）——主路径与断点续跑共用。
+ *  chaptering.enabled 开启且 LLM 成功 → `## [mm:ss] 语义标题` + media chapters；
+ *  任何失败（网络/解析/守门/缺 key）在 trySemanticChapters 内 warn 并返回 null，
+ *  此处回落 buildTranscriptMd（机械 300s 窗），摄取不被阻塞、不消耗 tries。 */
+async function buildTranscriptWithChapters(
+  cfg: Config,
+  p: { title: string; segments: Segment[]; slug: string; durationS: number },
+) {
+  const chapterCfg = { ...DEFAULT_CHAPTERING, ...cfg.chaptering };
+  const input: TranscriptInput = {
+    title: p.title, segments: p.segments,
+    sourcePath: `sources/transcripts/${p.slug}.md`, mediaSlug: p.slug, durationS: p.durationS,
+  };
+  const cuts = await trySemanticChapters(input, chapterCfg);
+  if (cuts) return { md: buildSemanticMd(input, cuts), chapters: chaptersFor(p.segments, cuts) };
+  return buildTranscriptMd(input);
 }
 
 // 预检：配置可读可解析、ffprobe 可用；根目录缺失降级为警告（迁移终态主库目录将被整体删除，
@@ -508,9 +534,8 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
             }
             playback = pb;
           }
-          const { md, chapters } = buildTranscriptMd({
-            title, segments, sourcePath: `sources/transcripts/${line.slug}.md`,
-            mediaSlug: line.slug, durationS: entry.durationS,
+          const { md, chapters } = await buildTranscriptWithChapters(cfg, {
+            title, segments, slug: line.slug, durationS: entry.durationS,
           });
           // 复用路径同样刷 media_assets（幂等 upsert，与主路径同一 items 构造）：
           // 迁移期 absPath 漂移后 media_ref 过期 → /media 404，此处按重审计的最新 entry 刷新（M1 终审）
@@ -580,7 +605,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       whisperDone = true;
       const sourcePath = `sources/transcripts/${slug}.md`;
       const pagePath = `transcripts/${slug}.md`;
-      const { md, chapters } = buildTranscriptMd({ title, segments, sourcePath, mediaSlug: slug, durationS: entry.durationS });
+      const { md, chapters } = await buildTranscriptWithChapters(cfg, { title, segments, slug, durationS: entry.durationS });
 
       await api.writeSource(sourcePath, md);
       const upsert = await api.upsertTranscriptPage(pagePath, md);
