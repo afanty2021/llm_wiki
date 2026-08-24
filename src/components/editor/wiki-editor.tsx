@@ -62,6 +62,11 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
   const [selectionRunning, setSelectionRunning] = useState(false)
   const readerRef = useRef<HTMLDivElement>(null)
   const selectionAbortRef = useRef<AbortController | null>(null)
+  // 打开/切换文件即聚焦阅读区（容器 tabIndex=0）：方向键/PgUp/PgDn 立即可用，
+  // 免去先点一下正文——否则全高 overflow-hidden 布局下键盘滚动无目标。
+  useEffect(() => {
+    if (mode === "read") readerRef.current?.focus({ preventScroll: true })
+  }, [mode, filePath])
   const selectionRunIdRef = useRef(0)
   const project = useWikiStore((state) => state.project)
   const llmConfig = useWikiStore((state) => state.llmConfig)
@@ -362,7 +367,15 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
       </div>
 
       {mode === "read" ? (
-        <div ref={readerRef} className="h-full overflow-auto px-6 py-6" onMouseUp={captureRenderedSelection}>
+        <div
+          ref={readerRef}
+          // tabIndex：overflow-auto 滚动容器默认不可聚焦，body 又是全高 overflow-hidden
+          // ——点击正文无处落焦，方向键/PgUp/PgDn 全哑。可聚焦后点一下即可键盘滚动。
+          tabIndex={0}
+          aria-label={t("editor.readingPane", { defaultValue: "Reading pane" })}
+          className="h-full overflow-auto px-6 py-6 outline-none"
+          onMouseUp={captureRenderedSelection}
+        >
           {frontmatter && <StableFrontmatterPanel data={frontmatter} />}
           <StableWikiReader
             body={body}
@@ -372,7 +385,7 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
           />
         </div>
       ) : (
-        <div className="h-full overflow-auto p-6">
+        <div className="h-full overflow-auto p-6 outline-none" tabIndex={0}>
           <textarea
             aria-label={t("editor.rawMarkdownEditor")}
             value={draftMarkdown}

@@ -4,11 +4,24 @@
     "subtitle": "Build and maintain your personal knowledge base with LLMs"
   },
   "common": {
-    "retry": "Retry", "cancel": "Cancel", "ignore": "Ignore", "close": "Close", "ok": "OK", "confirm": "Confirm", "notice": "Notice",
-    "dismiss": "Dismiss", "loading": "Loading...", "optional": "optional"
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "ignore": "Ignore",
+    "close": "Close",
+    "ok": "OK",
+    "confirm": "Confirm",
+    "notice": "Notice",
+    "dismiss": "Dismiss",
+    "loading": "Loading...",
+    "optional": "optional"
   },
-  "layout": { "showSidebar": "Show sidebar", "hideSidebar": "Hide sidebar" },
-  "errors": { "generic": "Something went wrong" },
+  "layout": {
+    "showSidebar": "Show sidebar",
+    "hideSidebar": "Hide sidebar"
+  },
+  "errors": {
+    "generic": "Something went wrong"
+  },
   "mermaid": {
     "renderFailed": "Mermaid diagram could not be rendered",
     "showDetails": "Show parser details",
@@ -49,10 +62,16 @@
     "allSources": "All sources",
     "noWikiPages": "No wiki pages yet. Import sources to get started.",
     "typeLabels": {
-      "overview": "Overview", "entity": "Entities", "concept": "Concepts",
-      "source": "Sources", "synthesis": "Synthesis", "finding": "Findings",
-      "thesis": "Theses", "methodology": "Methodologies",
-      "comparison": "Comparisons", "query": "Queries"
+      "overview": "Overview",
+      "entity": "Entities",
+      "concept": "Concepts",
+      "source": "Sources",
+      "synthesis": "Synthesis",
+      "finding": "Findings",
+      "thesis": "Theses",
+      "methodology": "Methodologies",
+      "comparison": "Comparisons",
+      "query": "Queries"
     }
   },
   "editor": {
@@ -94,8 +113,12 @@
       "createFailed": "The missing page could not be created.",
       "emptyDraftError": "The model returned an empty draft."
     },
-    "frontmatter": { "origin": "Origin", "more": "More" },
-    "rawMarkdownEditor": "Raw Markdown editor"
+    "frontmatter": {
+      "origin": "Origin",
+      "more": "More"
+    },
+    "rawMarkdownEditor": "Raw Markdown editor",
+    "readingPane": "Reading pane"
   },
   "research": {
     "title": "Deep Research",
@@ -446,8 +469,7 @@
     "fixAllNoOutlinks": "Send all to review",
     "fixAllSemantic": "Send all to review",
     "fixingMultiple": "Fixing {{count}} issues...",
-    "fixedMultiple": "Fixed {{count}} issues",
-    "fixFailed": "Fix failed: {{error}}"
+    "fixedMultiple": "Fixed {{count}} issues"
   },
   "review": {
     "title": "Review",
@@ -547,7 +569,7 @@
           "activeDefault": "Use active model",
           "hint": "Choose separate models for interactive chat and document ingest. The active model remains the fallback."
         },
-      "projectOverride": {
+        "projectOverride": {
           "enabled": "Use a project-specific model",
           "provider": "Project provider",
           "selectProvider": "Select a provider",
@@ -1119,12 +1141,25 @@
     "fileSync": "File Sync",
     "rescan": "Rescan",
     "rescanTitle": "Scan project files for external changes",
-    "changeKinds": { "created": "Created", "modified": "Modified", "deleted": "Deleted" },
+    "changeKinds": {
+      "created": "Created",
+      "modified": "Modified",
+      "deleted": "Deleted"
+    },
     "fileTypes": {
-      "entity": "Entity", "concept": "Concept", "source": "Source", "query": "Query",
-      "synthesis": "Synthesis", "comparison": "Comparison", "finding": "Finding",
-      "thesis": "Thesis", "methodology": "Methodology", "overview": "Overview",
-      "index": "Index", "log": "Log", "file": "File"
+      "entity": "Entity",
+      "concept": "Concept",
+      "source": "Source",
+      "query": "Query",
+      "synthesis": "Synthesis",
+      "comparison": "Comparison",
+      "finding": "Finding",
+      "thesis": "Thesis",
+      "methodology": "Methodology",
+      "overview": "Overview",
+      "index": "Index",
+      "log": "Log",
+      "file": "File"
     }
   },
   "fileTree": {

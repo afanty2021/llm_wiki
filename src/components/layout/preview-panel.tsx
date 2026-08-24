@@ -141,7 +141,7 @@ export function PreviewPanel() {
           </button>
         </div>
       )}
-      <div className="flex-1 min-w-0 overflow-auto">
+      <div className="flex-1 min-w-0 overflow-auto outline-none" tabIndex={0}>
         {externalPreview?.path === selectedFile ? (
           <ExternalReferencePreview
             source={externalPreview.source}

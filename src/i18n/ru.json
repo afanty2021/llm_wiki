@@ -117,7 +117,8 @@
       "origin": "Источник",
       "more": "Ещё"
     },
-    "rawMarkdownEditor": "Редактор исходного Markdown"
+    "rawMarkdownEditor": "Редактор исходного Markdown",
+    "readingPane": "Область чтения"
   },
   "research": {
     "title": "Глубокое исследование",

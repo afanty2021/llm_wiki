@@ -117,7 +117,8 @@
       "origin": "Origine",
       "more": "Altro"
     },
-    "rawMarkdownEditor": "Editor Markdown grezzo"
+    "rawMarkdownEditor": "Editor Markdown grezzo",
+    "readingPane": "Area di lettura"
   },
   "research": {
     "title": "Deep Research",
