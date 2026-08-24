@@ -268,9 +268,12 @@ class ApiClient {
   }
 
   // === Files ===
-  async listFiles(projectId: number, dir?: string): Promise<{ name: string; path: string; is_dir: boolean; size: number }[]> {
-    const params = dir ? `?dir=${encodeURIComponent(dir)}` : ""
-    return this.request("GET", `/api/v1/files/${projectId}/list${params}`)
+  async listFiles(projectId: number, dir?: string, maxDepth?: number): Promise<{ name: string; path: string; is_dir: boolean; size: number }[]> {
+    const params = new URLSearchParams()
+    if (dir) params.set("dir", dir)
+    if (maxDepth && maxDepth > 1) params.set("max_depth", String(maxDepth))
+    const qs = params.toString()
+    return this.request("GET", `/api/v1/files/${projectId}/list${qs ? `?${qs}` : ""}`)
   }
 
   async readFile(projectId: number, path: string): Promise<{ path: string; content: string }> {

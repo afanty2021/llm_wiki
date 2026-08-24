@@ -229,6 +229,34 @@ describe("setProjectPathIndexFromPaths (web 文件树缺位补建)", () => {
     )
   })
 
+  it("并入存储清单：页面走 /wiki 前缀、存储条目原样路径（sources 卡片解析依赖）", () => {
+    useWikiStore.setState({ project: { id: "7", path: "", name: "p" } })
+
+    useWikiStore
+      .getState()
+      .setProjectPathIndexFromPaths(
+        ["concepts/motivation.md"],
+        ["sources/transcripts/a.md", "raw/sources/book/Ch01.md"],
+      )
+
+    const index = useWikiStore.getState().projectPathIndex
+    expect(index.byPath.has("/wiki/concepts/motivation.md")).toBe(true)
+    expect(index.byPath.has("/sources/transcripts/a.md")).toBe(true)
+    expect(index.byPath.has("/raw/sources/book/Ch01.md")).toBe(true)
+    // filesByName 合桶：同名 wiki 页与存储文件共存时两个条目都在
+    useWikiStore
+      .getState()
+      .setProjectPathIndexFromPaths(["entities/a.md"], ["sources/transcripts/a.md"])
+    expect(useWikiStore.getState().projectPathIndex.filesByName.get("a.md")).toHaveLength(2)
+  })
+
+  it("不传存储清单时行为不变（纯页面索引）", () => {
+    useWikiStore.setState({ project: { id: "7", path: "", name: "p" } })
+    useWikiStore.getState().setProjectPathIndexFromPaths(["concepts/x.md"], [])
+    expect(useWikiStore.getState().projectPathIndex.byPath.has("/wiki/concepts/x.md")).toBe(true)
+    expect(useWikiStore.getState().projectPathIndex.byPath.size).toBe(1)
+  })
+
   it("project.path 非空（桌面形态）按真实根映射", () => {
     useWikiStore.setState({ project: { id: "7", path: "/proj", name: "p" } })
 

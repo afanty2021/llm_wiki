@@ -11,6 +11,7 @@ import { caps } from "@/lib/capabilities"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
+import { fetchStoragePaths } from "@/lib/web-path-index"
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 import { inferWikiTypeFromPath, wikiTypeLabel } from "@/lib/wiki-page-types"
 import { createLogger } from "@/lib/logger"
@@ -72,9 +73,11 @@ export function KnowledgeTree() {
       try {
         const pages = await apiClient.listPages(Number(project.id))
         // #4(web)：桌面靠 setFileTree 建 projectPathIndex，web 无文件树——用
-        // pages API 的全量 DB 路径清单（含 index/log，不随显示过滤）补建，
-        // 供 wiki-reader 相关概念 wikilink 解析跳转。
-        useWikiStore.getState().setProjectPathIndexFromPaths(pages.map((p) => p.path))
+        // pages API 的全量 DB 路径清单（含 index/log，不随显示过滤）+ 存储 raw 清单
+        // （sources 卡片解析依赖）补建，供 wikilink/sources 解析；存储失败降级纯页面。
+        const storagePaths = await fetchStoragePaths(project.id).catch(() => [] as string[])
+        if (useWikiStore.getState().project?.id !== project.id) return
+        useWikiStore.getState().setProjectPathIndexFromPaths(pages.map((p) => p.path), storagePaths)
         const pageInfos: WikiPageInfo[] = pages
           .filter((p) => p.path !== "wiki/index.md" && p.path !== "wiki/log.md")
           .map((p) => {

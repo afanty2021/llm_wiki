@@ -7,9 +7,11 @@ import { render, waitFor, cleanup } from "@testing-library/react"
 const listPages = vi.fn()
 const listDirectory = vi.fn()
 
+const listFiles = vi.fn()
 vi.mock("@/lib/api-client", () => ({
   apiClient: {
     listPages: (...a: unknown[]) => listPages(...a),
+    listFiles: (...a: unknown[]) => listFiles(...a),
   },
 }))
 vi.mock("@/commands/fs", () => ({
@@ -37,6 +39,10 @@ import { KnowledgeTree } from "./knowledge-tree"
 describe("KnowledgeTree(web) projectPathIndex 补建", () => {
   beforeEach(() => {
     listPages.mockReset()
+    listFiles.mockReset()
+    listFiles.mockResolvedValue([
+      { name: "a.md", path: "sources/transcripts/a.md", is_dir: false, size: 5 },
+    ])
     listDirectory.mockReset()
     listDirectory.mockResolvedValue([])
     // App.tsx ProjectPicker 形态：path 为空串。
@@ -62,6 +68,8 @@ describe("KnowledgeTree(web) projectPathIndex 补建", () => {
       expect(useWikiStore.getState().projectPathIndex.byPath.has("/wiki/concepts/motivation.md")).toBe(true)
     })
     expect(useWikiStore.getState().projectPathIndex.byPath.has("/wiki/index.md")).toBe(true)
+    // 存储 raw 清单并入（sources 卡片解析依赖）
+    expect(useWikiStore.getState().projectPathIndex.byPath.has("/sources/transcripts/a.md")).toBe(true)
     expect(listPages).toHaveBeenCalledWith(7)
   })
 

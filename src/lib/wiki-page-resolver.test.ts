@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import type { FileNode } from "@/types/wiki"
 import {
   buildProjectPathIndexFromPagePaths,
+  buildProjectPathIndexFromStoragePaths,
   buildProjectPathIndexFromTree,
   createEmptyProjectPathIndex,
   findInTreeByName,
@@ -420,5 +421,32 @@ describe("resolveSourceReference", () => {
       kind: "external",
       url: "https://example.com/",
     })
+  })
+})
+
+describe("storage 清单索引 + resolveSourceReference（web 虚拟根）", () => {
+  const idx = buildProjectPathIndexFromStoragePaths(
+    ["sources/transcripts/44a4fa7f.md", "raw/sources/LT-Book/Ch05-chapter.md"],
+    "",
+  )
+
+  it("sources/transcripts 路径形：经第二候选 ${projectRoot}/${ref} 命中（其不在 raw/sources 下）", () => {
+    const r = resolveSourceReference(idx, "sources/transcripts/44a4fa7f.md", "/raw/sources")
+    expect(r).toEqual({ kind: "local", path: "/sources/transcripts/44a4fa7f.md" })
+  })
+
+  it("raw/sources 前缀路径形：直命中", () => {
+    const r = resolveSourceReference(idx, "raw/sources/LT-Book/Ch05-chapter.md", "/raw/sources")
+    expect(r).toEqual({ kind: "local", path: "/raw/sources/LT-Book/Ch05-chapter.md" })
+  })
+
+  it("索引缺失的目标仍 missing（不误报可点）", () => {
+    const r = resolveSourceReference(idx, "LT-LearningTeaching-3rd.md", "/raw/sources")
+    expect(r.kind).toBe("missing")
+  })
+
+  it("外部 URL 不受存储清单影响", () => {
+    const r = resolveSourceReference(idx, "https://example.com/x.pdf", "/raw/sources")
+    expect(r.kind).toBe("external")
   })
 })

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppState, AppError,
     middleware::project_guard::{check_project_access, check_project_access_with_role, RequiredRole},
-    services::storage,
+    services::storage::{self, FileEntry, FileMeta, StorageBackend},
 };
 
 const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100MB
@@ -89,9 +89,46 @@ pub async fn upload_file(
 #[derive(Deserialize)]
 struct ListQuery {
     dir: Option<String>,
+    /// 目录递归深度（默认/1 = 单层，与桌面 list_directory 的 max_depth 同义）。
+    /// web 的 sources 解析索引需要全量 raw 清单（单层端点会逼出 N+1 请求）。
+    max_depth: Option<u32>,
 }
 
-// GET /api/v1/files/:project_id/list?dir=...
+/// 递归列出的硬顶：防误指到大目录时打爆响应/内存。
+const MAX_LIST_ENTRIES: usize = 5000;
+
+/// BFS 递归列举（路由层实现，不动 StorageBackend trait）：逐层复用 list_dir 的
+/// 排序语义（目录在前组内按名）；超过深度/条数顶即截断，不报错。
+async fn walk_recursive(
+    storage: &dyn StorageBackend,
+    team_id: i32,
+    project_id: i32,
+    dir_rel: &str,
+    max_depth: u32,
+) -> Result<Vec<FileEntry>, AppError> {
+    let mut out = Vec::new();
+    let mut queue: std::collections::VecDeque<(String, u32)> =
+        std::collections::VecDeque::from([(dir_rel.to_string(), 1)]);
+    while let Some((dir, depth)) = queue.pop_front() {
+        for entry in storage.list_dir(team_id, project_id, &dir).await? {
+            if out.len() >= MAX_LIST_ENTRIES {
+                return Ok(out);
+            }
+            if entry.is_dir {
+                // entry.path 本就是项目相对路径（storage 层 strip_prefix(base) 保证）
+                if depth < max_depth {
+                    queue.push_back((entry.path.clone(), depth + 1));
+                }
+                out.push(entry);
+            } else {
+                out.push(entry);
+            }
+        }
+    }
+    Ok(out)
+}
+
+// GET /api/v1/files/:project_id/list?dir=...&max_depth=N
 pub async fn list_files(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -101,7 +138,10 @@ pub async fn list_files(
     let (_user_id, team_id) = check_project_access(&state, &headers, project_id).await?;
     // list_dir 对不存在的 base / dir 返回空 Vec（对齐原 base.exists/dir.exists 短路）。
     let dir_rel = params.dir.unwrap_or_default();
-    let entries = state.storage.list_dir(team_id, project_id, &dir_rel).await?;
+    let entries = match params.max_depth {
+        Some(n) if n > 1 => walk_recursive(&*state.storage, team_id, project_id, &dir_rel, n).await?,
+        _ => state.storage.list_dir(team_id, project_id, &dir_rel).await?,
+    };
     Ok(Json(serde_json::json!(entries)))
 }
 
@@ -356,5 +396,88 @@ mod tests {
             "应提取到样本 PDF 标题「定价未来」；got first 40 chars: {}",
             text.chars().take(40).collect::<String>()
         );
+    }
+}
+
+#[cfg(test)]
+mod walk_recursive_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+
+    /// 内存 StorageBackend：path → is_dir 的扁平表，list_dir 按前缀过滤一层。
+    struct MemStorage(HashMap<String, bool>);
+
+    fn entry(path: &str, is_dir: bool) -> FileEntry {
+        FileEntry {
+            name: path.rsplit('/').next().unwrap_or(path).to_string(),
+            path: path.to_string(),
+            is_dir,
+            size: if is_dir { 0 } else { 10 },
+            modified: 0,
+        }
+    }
+
+    #[async_trait]
+    impl StorageBackend for MemStorage {
+        async fn read_string(&self, _t: i32, _p: i32, _r: &str) -> Result<String, AppError> { unimplemented!() }
+        async fn read_bytes(&self, _t: i32, _p: i32, _r: &str) -> Result<Vec<u8>, AppError> { unimplemented!() }
+        async fn write_string(&self, _t: i32, _p: i32, _r: &str, _d: &str) -> Result<(), AppError> { unimplemented!() }
+        async fn write_bytes(&self, _t: i32, _p: i32, _r: &str, _d: &[u8]) -> Result<(), AppError> { unimplemented!() }
+        async fn list_dir(&self, _t: i32, _p: i32, dir_rel: &str) -> Result<Vec<FileEntry>, AppError> {
+            let prefix = if dir_rel.is_empty() { String::new() } else { format!("{}/", dir_rel.trim_end_matches('/')) };
+            // 直接子项：去掉前缀后不再含 '/' 即为本层条目；排序对齐 LocalStorage（目录在前组内按名）
+            let mut out: Vec<FileEntry> = self.0.iter()
+                .filter(|(p, _)| p.starts_with(&prefix))
+                .filter(|(p, _)| p.trim_start_matches(&prefix).split('/').count() == 1)
+                .map(|(p, d)| entry(p, *d))
+                .collect();
+            out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
+            });
+            Ok(out)
+        }
+        async fn metadata(&self, _t: i32, _p: i32, _r: &str) -> Result<FileMeta, AppError> { unimplemented!() }
+        async fn remove(&self, _t: i32, _p: i32, _r: &str) -> Result<(), AppError> { unimplemented!() }
+    }
+
+    fn fixture() -> MemStorage {
+        let mut m = HashMap::new();
+        for d in ["wiki", "sources", "sources/transcripts", "raw", "raw/sources", "raw/sources/book"] {
+            m.insert(d.to_string(), true);
+        }
+        for f in ["sources/transcripts/a.md", "sources/transcripts/b.md", "raw/sources/book/Ch01.md", "wiki/x.md"] {
+            m.insert(f.to_string(), false);
+        }
+        MemStorage(m)
+    }
+
+    #[tokio::test]
+    async fn depth1_is_flat_single_level() {
+        let s = fixture();
+        let out = walk_recursive(&s, 1, 1, "", 1).await.unwrap();
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["raw", "sources", "wiki"], "depth=1 与旧行为一致（仅一层）");
+    }
+
+    #[tokio::test]
+    async fn deep_walk_returns_all_files_and_dirs() {
+        let s = fixture();
+        let out = walk_recursive(&s, 1, 1, "", 6).await.unwrap();
+        let files: Vec<&str> = out.iter().filter(|e| !e.is_dir).map(|e| e.path.as_str()).collect();
+        assert!(files.contains(&"sources/transcripts/a.md"), "递归到 transcripts 文件：{files:?}");
+        assert!(files.contains(&"raw/sources/book/Ch01.md"), "递归到书籍章节：{files:?}");
+        assert!(files.contains(&"wiki/x.md"));
+        assert_eq!(out.len(), 10, "6 目录 + 4 文件全量返回");
+    }
+
+    #[tokio::test]
+    async fn depth_cap_stops_recursion() {
+        let s = fixture();
+        let out = walk_recursive(&s, 1, 1, "", 2).await.unwrap();
+        assert!(out.iter().any(|e| e.path == "sources/transcripts"), "depth=2 展开 sources 下的目录");
+        assert!(!out.iter().any(|e| e.path == "sources/transcripts/a.md"), "depth=2 不返回第三层文件");
     }
 }

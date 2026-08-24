@@ -73,12 +73,11 @@ export function FrontmatterPanel({ data }: FrontmatterPanelProps) {
   // #4(web)：与 wiki-reader 同款兜底——project.path 恒空（ProjectPicker 只带
   // id），虚拟根 "/wiki" 与 setProjectPathIndexFromPaths 构建的索引同一映射；
   // 否则 related chips 在 web 恒 resolved=false 不可点（正文可跳、面板割裂）。
-  const wikiRoot = projectPath
-    ? `${projectPath}/wiki`
-    : project && caps.platform === "web"
-      ? "/wiki"
-      : null
-  const sourcesRoot = projectPath ? `${projectPath}/raw/sources` : null
+  // sourcesRoot 同理兜底 "/raw/sources"：索引已并入存储 raw 清单，卡片可解析
+  // （sources/transcripts 条目经 resolveSourceName 的第二候选命中）。
+  const webVirtual = project && caps.platform === "web"
+  const wikiRoot = projectPath ? `${projectPath}/wiki` : webVirtual ? "/wiki" : null
+  const sourcesRoot = projectPath ? `${projectPath}/raw/sources` : webVirtual ? "/raw/sources" : null
 
   const typeStyle = getWikiTypeStyle(type)
   const TypeIcon = typeStyle.icon

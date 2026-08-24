@@ -79,6 +79,33 @@ export function buildProjectPathIndexFromPagePaths(
 }
 
 /**
+ * Storage 路径（sources/transcripts/…、raw/sources/…）构建索引：与页面构建器同构，
+ * 但不加 /wiki 前缀——存储路径本就是项目相对全路径，web 虚拟根下条目为 `/${path}`。
+ * 供 web 的 sources 卡片解析（resolveSourceName 的候选 `${projectRoot}/${ref}` 命中）。
+ */
+export function buildProjectPathIndexFromStoragePaths(
+  paths: readonly string[],
+  projectRoot: string,
+): ProjectPathIndex {
+  const byPath = new Map<string, ProjectPathIndexEntry>()
+  const filesByName = new Map<string, ProjectPathIndexEntry[]>()
+  const root = projectRoot.replace(/\/+$/, "")
+  for (const p of paths) {
+    const trimmed = p.replace(/^\/+/, "")
+    if (!trimmed) continue
+    const entryPath = `${root}/${trimmed}`
+    if (byPath.has(entryPath)) continue
+    const name = entryPath.slice(entryPath.lastIndexOf("/") + 1)
+    const entry: ProjectPathIndexEntry = { name, path: entryPath }
+    byPath.set(entryPath, entry)
+    const bucket = filesByName.get(name)
+    if (bucket) bucket.push(entry)
+    else filesByName.set(name, [entry])
+  }
+  return { byPath, filesByName }
+}
+
+/**
  * Strip Obsidian-style `[[target]]` or `[[target|alias]]` wrapping
  * from a value, returning `{ slug, label }`. Frontmatter authors
  * (humans and the LLM) sometimes write related entries as

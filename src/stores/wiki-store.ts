@@ -4,6 +4,7 @@ import { DEFAULT_SOURCE_WATCH_CONFIG } from "@/lib/source-watch-config"
 import {
   buildProjectPathIndexFromTree,
   buildProjectPathIndexFromPagePaths,
+  buildProjectPathIndexFromStoragePaths,
   createEmptyProjectPathIndex,
   type ProjectPathIndex,
 } from "@/lib/wiki-page-resolver"
@@ -441,7 +442,7 @@ interface WikiState {
   setProject: (project: WikiProject | null) => void
   setFileTree: (tree: FileNode[], options?: { syncPathIndex?: boolean }) => void
   setProjectPathIndexFromTree: (tree: FileNode[]) => void
-  setProjectPathIndexFromPaths: (paths: string[]) => void
+  setProjectPathIndexFromPaths: (paths: string[], storagePaths?: string[]) => void
   setSelectedFile: (path: string | null) => void
   setFileContent: (content: string) => void
   openPathInPreview: (path: string) => void
@@ -535,10 +536,25 @@ export const useWikiStore = create<WikiState>((set, get) => ({
   // 清单构建索引。projectRoot 与 wiki-reader 的 wikiRoot 同源——同为
   // normalizePath(project.path)（web 下为空串 → 虚拟根 "/wiki"），保证
   // resolveRelatedSlug 的 name 匹配能命中索引条目。
-  setProjectPathIndexFromPaths: (paths) => {
+  setProjectPathIndexFromPaths: (paths, storagePaths) => {
     const project = get().project
     const root = project ? normalizePath(project.path) : ""
-    set({ projectPathIndex: buildProjectPathIndexFromPagePaths(paths, root) })
+    const pageIdx = buildProjectPathIndexFromPagePaths(paths, root)
+    // 存储清单（sources/transcripts、raw/sources）并入：web 下 sources 卡片解析依赖
+    // 这些条目（resolveSourceName 的 `${projectRoot}/${ref}` 候选）；不传或为空时行为不变。
+    if (!storagePaths || storagePaths.length === 0) {
+      set({ projectPathIndex: pageIdx })
+      return
+    }
+    const storeIdx = buildProjectPathIndexFromStoragePaths(storagePaths, root)
+    const byPath = new Map([...pageIdx.byPath, ...storeIdx.byPath])
+    const filesByName = new Map(pageIdx.filesByName)
+    for (const [name, bucket] of storeIdx.filesByName) {
+      const existing = filesByName.get(name)
+      if (existing) filesByName.set(name, [...existing, ...bucket])
+      else filesByName.set(name, bucket)
+    }
+    set({ projectPathIndex: { byPath, filesByName } })
   },
   setSelectedFile: (selectedFile) =>
     set({ selectedFile, previewContentPath: null, externalPreview: null }),
