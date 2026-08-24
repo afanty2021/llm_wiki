@@ -16,8 +16,8 @@ import { slugFor } from "./slug";
 import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
 import { buildTranscriptMd, type TranscriptInput } from "./transcript";
 import {
-  DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor, validateCuts,
-  type ChapteringConfig, type ChapterCut,
+  DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor, persistCuts, loadCuts,
+  type ChapteringConfig,
 } from "./chaptering";
 import { ApiClient, sha256Hex, type MediaAssetItem, type JobStatus } from "./api-client";
 
@@ -58,21 +58,6 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-/** cuts 快照落盘（评审 C1）：语义切章成功即持久化——断点续跑按快照字节级重建，
- *  绝不重调 LLM（非确定输出必致页/源 hash 漂移 + 假「LLM 页覆写」告警）。 */
-function persistCuts(slug: string, cuts: ChapterCut[]): void {
-  const dir = join(outDir, "chapters");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${slug}.json`), JSON.stringify(cuts));
-}
-function loadCuts(slug: string, nSegs: number): ChapterCut[] | null {
-  try {
-    return validateCuts(JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8")) as ChapterCut[], nSegs);
-  } catch {
-    return null;
-  }
-}
-
 /** 主路径转写包装（语义切章优先，回落机械切分）。
  *  chaptering.enabled 开启且 LLM 成功 → `## [mm:ss] 语义标题` + media chapters + cuts 快照落盘；
  *  任何失败（网络/解析/守门/缺 key）在 trySemanticChapters 内 warn 并返回 null，
@@ -88,7 +73,7 @@ async function buildTranscriptWithChapters(
   };
   const cuts = await trySemanticChapters(input, chapterCfg);
   if (cuts) {
-    persistCuts(p.slug, cuts);
+    persistCuts(outDir, p.slug, cuts);
     return { md: buildSemanticMd(input, cuts), chapters: chaptersFor(p.segments, cuts) };
   }
   return buildTranscriptMd(input);
@@ -104,7 +89,7 @@ function buildTranscriptForReuse(
     title: p.title, segments: p.segments,
     sourcePath: `sources/transcripts/${p.slug}.md`, mediaSlug: p.slug, durationS: p.durationS,
   };
-  const cuts = loadCuts(p.slug, p.segments.length);
+  const cuts = loadCuts(outDir, p.slug, p.segments.length);
   if (cuts) {
     return { md: buildSemanticMd(input, cuts), chapters: chaptersFor(p.segments, cuts) };
   }

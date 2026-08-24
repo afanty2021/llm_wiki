@@ -2,6 +2,9 @@
 // 语义切章单元测试：解析守门（首章=0/递增/全覆盖/字符串化 JSON）、守门规则、
 // md 结构（frontmatter 同构/章头/章内 300s 行）、LLM 失败回落（fetch 注入，零网络）。
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { Segment } from "../src/whisper"
 import type { TranscriptInput } from "../src/transcript"
 import { buildTranscriptMd } from "../src/transcript"
@@ -14,6 +17,9 @@ import {
   trySemanticChapters,
   llmChapter,
   validateCuts,
+  persistCuts,
+  loadCuts,
+  type ChapterCut,
   type LlmChapterDeps,
 } from "../src/chaptering"
 
@@ -120,6 +126,31 @@ describe("llmChapter / trySemanticChapters（fetch 注入）", () => {
     expect(await llmChapter("t", segs10.slice(0, 5), DEFAULT_CHAPTERING, depsOf(impl))).toEqual([
       { startIdx: 0, title: "导入" },
     ])
+  })
+
+  it("stripThinking 与 synthesize.rs 同语义：<thinking> 变体 + 未闭合截断", async () => {
+    const impl = (async () =>
+      okResponse('<thinking>x</thinking>{"chapters":[{"start_idx":0,"title":"A"}]}')) as unknown as typeof fetch
+    expect(await llmChapter("t", segs10.slice(0, 5), DEFAULT_CHAPTERING, depsOf(impl))).toEqual([
+      { startIdx: 0, title: "A" },
+    ])
+    const unclosed = (async () =>
+      okResponse('<think>没闭合的推理{"chapters":[]}')) as unknown as typeof fetch
+    await expect(llmChapter("t", segs10.slice(0, 5), DEFAULT_CHAPTERING, depsOf(unclosed))).rejects.toThrow()
+  })
+
+  it("cuts 快照 roundtrip：persistCuts → loadCuts 字节等值；非法快照回 null", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cuts-rt-"))
+    try {
+      const cuts: ChapterCut[] = [{ startIdx: 0, title: "导入" }, { startIdx: 5, title: "正题" }]
+      persistCuts(dir, "s1", cuts)
+      expect(loadCuts(dir, "s1", 10)).toEqual(cuts)
+      // 域外下标 → null（回退机械重建）
+      expect(loadCuts(dir, "s1", 4)).toBeNull()
+      expect(loadCuts(dir, "missing", 10)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it("空转写短路：segments 为空不调 LLM 直接回落", async () => {

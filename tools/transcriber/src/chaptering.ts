@@ -4,7 +4,8 @@
 // 完全一致）与 media chapters 数组。
 // 失败语义：trySemanticChapters 永不抛出——任何失败（网络/解析/守门）返回 null，
 // 调用方回落机械切分，摄取主流程不被阻塞、不消耗 tries。
-import { readFileSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { join } from "node:path"
 import type { Segment } from "./whisper"
 import type { TranscriptInput } from "./transcript"
 import { mmss, transcriptFrontmatter, CHAPTER_WINDOW_S } from "./transcript"
@@ -124,8 +125,44 @@ async function zaiChat(
     throw new Error(`zai HTTP ${res.status}: ${text}`)
   }
   const j = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
-  // strip_thinking 防线（项目已知坑）：thinking 意外开启时内容前缀 <think>…</think> 会闷死 JSON 解析
-  return (j.choices?.[0]?.message?.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim()
+  return stripThinking(j.choices?.[0]?.message?.content ?? "").trim()
+}
+
+/** 剥离 thinking 块——与 src-server synthesize.rs strip_thinking 同语义（双标签 + 未闭合截断到结尾）。 */
+export function stripThinking(text: string): string {
+  let out = text
+  for (const tag of ["think", "thinking"]) {
+    const open = `<${tag}>`
+    const close = `</${tag}>`
+    for (;;) {
+      const start = out.indexOf(open)
+      if (start < 0) break
+      const endRel = out.indexOf(close, start)
+      if (endRel < 0) {
+        out = out.slice(0, start) // 无闭合：弃 open 起到结尾（与 Rust 版一致）
+        break
+      }
+      out = out.slice(0, start) + out.slice(endRel + close.length)
+    }
+  }
+  return out
+}
+
+/** cuts 快照落盘（评审 C1）：语义切章成功即持久化——断点续跑按快照字节级重建，
+ *  绝不重调 LLM（非确定输出必致页/源 hash 漂移）。 */
+export function persistCuts(outDir: string, slug: string, cuts: ChapterCut[]): void {
+  const dir = join(outDir, "chapters")
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `${slug}.json`), JSON.stringify(cuts))
+}
+
+/** 读取 cuts 快照并整校验（域外下标/乱序/超上限 → null，调用方回落机械重建）。 */
+export function loadCuts(outDir: string, slug: string, nSegs: number): ChapterCut[] | null {
+  try {
+    return validateCuts(JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8")) as ChapterCut[], nSegs)
+  } catch {
+    return null
+  }
 }
 
 /** LLM 切章：两次尝试（解析失败/网络错重试一次，间隔 3s），全部失败抛出。 */
