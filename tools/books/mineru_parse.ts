@@ -59,7 +59,10 @@ const LOCAL_POLL_TIMEOUT_MS = 3_600_000
 const CLOUD_POLL_TIMEOUT_MS = 300_000
 const DEFAULT_MIN_CHARS_PER_PAGE = 200
 const DEFAULT_CONCURRENCY = 2
-const MAX_CONCURRENCY = 4
+// 服务端 mineru-api 实测 max_concurrent_requests=3（/health，见 README §2.3）：第 4 个任务
+// 会在服务端排队，排队时间计入每章 60min 轮询预算——CPU 密集章可能被误判 failed，
+// 且本地协议的任务无法取消，只能等服务端跑完。客户端并发不得高于服务端槽位。
+const MAX_CONCURRENCY = 3
 
 // ── HTML 表格 → Markdown（自 src/lib/mineru.ts:288-370 移植，纯字符串处理，无 Tauri 依赖） ──
 
@@ -418,6 +421,9 @@ async function main(): Promise<void> {
     book: manifest.book,
     mode: "local",
     baseUrl: cfg.local.baseUrl,
+    // backend 实质改变解析路径与速度（pipeline vs hybrid-engine），对账工件须可区分。
+    backend: cfg.backend ?? "hybrid-engine",
+    concurrency,
     minCharsPerPage: minPerPage,
     generatedAt: new Date().toISOString(),
     summary: { ...summary, total: reports.length },

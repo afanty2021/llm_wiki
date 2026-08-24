@@ -89,8 +89,9 @@ MODELSCOPE_CACHE=~/.modelscope MINERU_MODEL_SOURCE=modelscope \
 ### 2.5 TODO：云端 token 方案（未采用，留档）
 
 MinerU 也提供云端 API（token 计费，`MINERU_API_BASE`/`MINERU_API_KEY` 环境变量）。
-若未来本地 CPU 速度不可接受，可在桌面 app 配置中加 token 走云端；本流水线 Task 8
-只依赖 `http://127.0.0.1:8000` 这一个端点，切换云端只需改 base URL。
+注意：**云端是另一套协议**，`mineru_parse.ts` 的 `mode=cloud` 分支显式 `die`（未实现）——
+不能靠改 base URL 切换。本地端点以 `books.json` 的 `local.baseUrl` 为准（docker 部署 8000，
+宿主 MPS 实跑 8002，见 §2.4）。
 
 ## 3. 拆章脚本 `split_chapters.py`
 
