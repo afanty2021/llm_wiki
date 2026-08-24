@@ -1,4 +1,5 @@
 import { listDirectory } from "@/commands/fs"
+import { caps } from "@/lib/capabilities"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath } from "@/lib/path-utils"
 import { filterRawSourceTree } from "@/lib/source-filter"
@@ -56,7 +57,10 @@ export async function refreshProjectFileTree(
   const normalizedProjectPath = normalizePath(projectPath)
   const currentProjectId = options.projectId ?? useWikiStore.getState().project?.id
   const refreshDisplayTree = options.refreshDisplayTree ?? true
-  const refreshPathIndex = options.refreshPathIndex ?? true
+  // web：storage 恒空（src-server 摄取只写 DB），路径索引权威源是 pages API
+  // （handleProjectOpened / knowledge-tree）。此分支在 web 整体禁用——否则保存/
+  // chat 完成/ingest 触发的树刷新会用空清单竞态清掉已建索引（wikilink 间歇失效）。
+  const refreshPathIndex = (options.refreshPathIndex ?? true) && caps.platform !== "web"
 
   if (options.clearDisplayTreeFirst && isStillCurrentProject(currentProjectId, normalizedProjectPath)) {
     useWikiStore.getState().setFileTree([], { syncPathIndex: false })

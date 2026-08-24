@@ -79,7 +79,14 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
   const direction = getTextDirection(renderLanguage)
   const htmlLang = getHtmlLang(renderLanguage)
   const projectPath = project ? normalizePath(project.path) : null
-  const wikiRoot = projectPath ? `${projectPath}/wiki` : null
+  // #4(web)：project.path 恒为空（ProjectPicker 只带 id/name，见 App.tsx）——
+  // 以虚拟根 "" 兜底推出 "/wiki"，与 setProjectPathIndexFromPaths 构建的
+  // "/wiki/…" 索引条目同一映射；否则 wikilink 点击在 resolve 前即短路为 no-op。
+  const wikiRoot = projectPath
+    ? `${projectPath}/wiki`
+    : project && caps.platform === "web"
+      ? "/wiki"
+      : null
   // Directory of the file being rendered (project-absolute), so
   // relative image srcs resolve against it like Obsidian does.
   const currentFileDir = useMemo(() => {

@@ -98,6 +98,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: mocks.listen,
 }))
 
+// 本文件全为桌面同步语义；node 环境无 window，真实 caps 会误判 web 而
+// 禁用树刷新里的全量索引扫描（手动重扫用例依赖它）。
+vi.mock("@/lib/capabilities", () => ({
+  caps: { platform: "tauri" },
+}))
+
 vi.mock("@/commands/file-sync", () => ({
   rescanProjectFiles: mocks.rescanProjectFiles,
   startProjectFileWatcher: mocks.startProjectFileWatcher,

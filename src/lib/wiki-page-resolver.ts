@@ -44,6 +44,40 @@ export function buildProjectPathIndexFromTree(tree: FileNode[]): ProjectPathInde
   return { byPath, filesByName }
 }
 
+/** web：由 pages API 的 DB 页路径清单构建 path 索引（无文件树可用）。
+ *  DB path 形态：内容页无 wiki/ 前缀（concepts/foo.md），reserved 页带（wiki/index.md）；
+ *  桌面树形态：<projectRoot>/wiki/<dbPath> 与 <projectRoot>/<dbPath>(reserved)——
+ *  与 fs.readFile web 分支的 pagePathVariants（issue #1）同一映射语义。
+ *  projectRoot 取 normalizePath(project.path)（web 下为空串 → 条目呈 "/wiki/…"，
+ *  与 wiki-reader 的虚拟 wikiRoot "/wiki" 对齐，name 匹配才能命中）。 */
+export function buildProjectPathIndexFromPagePaths(
+  paths: readonly string[],
+  projectRoot: string,
+): ProjectPathIndex {
+  const byPath = new Map<string, ProjectPathIndexEntry>()
+  const filesByName = new Map<string, ProjectPathIndexEntry[]>()
+  const root = projectRoot.replace(/\/+$/, "")
+
+  for (const p of paths) {
+    const trimmed = p.replace(/^\/+/, "")
+    if (!trimmed) continue
+    const entryPath = trimmed.startsWith("wiki/")
+      ? `${root}/${trimmed}`
+      : `${root}/wiki/${trimmed}`
+    // 与 buildProjectPathIndexFromTree 相同的按 path 去重语义：
+    // 重复清单不得累积 filesByName 桶。
+    if (byPath.has(entryPath)) continue
+    const name = entryPath.slice(entryPath.lastIndexOf("/") + 1)
+    const entry: ProjectPathIndexEntry = { name, path: entryPath }
+    byPath.set(entryPath, entry)
+    const bucket = filesByName.get(name)
+    if (bucket) bucket.push(entry)
+    else filesByName.set(name, [entry])
+  }
+
+  return { byPath, filesByName }
+}
+
 /**
  * Strip Obsidian-style `[[target]]` or `[[target|alias]]` wrapping
  * from a value, returning `{ slug, label }`. Frontmatter authors

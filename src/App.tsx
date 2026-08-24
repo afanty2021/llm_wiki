@@ -544,6 +544,13 @@ function App() {
       })
       // Bump data version so any cached graphs/views invalidate
       useWikiStore.getState().bumpDataVersion()
+      // #4(web)：路径索引初始构建提升到打开层——不依赖 KnowledgeTree 挂载
+      // （leftCollapsed 持久化的用户折叠侧栏时组件不渲染，wikilink 仍可用）。
+      // 失败仅 warn，不阻塞项目打开。
+      if (caps.platform === "web") {
+        const { buildWebProjectPathIndex } = await import("@/lib/web-path-index")
+        void buildWebProjectPathIndex(proj.id)
+      }
       // web 的 last-project 持久化经 project-store 的 localStorage 平替(终审 round4
       // Minor:注释原写"无 app-state.json"已过时——1fb4c035 起有 KV 平替;但 web
       // 入口本就走 team/project picker,不依赖 last-project,维持跳过)。

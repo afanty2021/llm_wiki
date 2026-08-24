@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { useWikiStore } from "./wiki-store"
 
 describe("wiki preview store actions", () => {
@@ -203,5 +203,39 @@ describe("wiki preview store actions", () => {
     expect(reset.filters.hiddenTypes.size).toBe(0)
     expect(reset.nodeScale).toBe(1)
     expect(reset.graphSpacingDraft).toBe(1)
+  })
+})
+
+describe("setProjectPathIndexFromPaths (web 文件树缺位补建)", () => {
+  afterEach(() => {
+    // store 是单例：清掉 project，避免污染同文件其他 describe。
+    useWikiStore.setState({ project: null })
+    useWikiStore.getState().setFileTree([])
+  })
+
+  it("web 虚拟根（project.path 为空串）把 DB 清单映射为 /wiki/… 索引", () => {
+    // App.tsx ProjectPicker 只带 id/name：{ id, path: "", name }。
+    useWikiStore.setState({ project: { id: "7", path: "", name: "p" } })
+
+    useWikiStore
+      .getState()
+      .setProjectPathIndexFromPaths(["concepts/motivation.md", "wiki/index.md"])
+
+    const index = useWikiStore.getState().projectPathIndex
+    expect(index.byPath.has("/wiki/concepts/motivation.md")).toBe(true)
+    expect(index.byPath.has("/wiki/index.md")).toBe(true)
+    expect(index.filesByName.get("motivation.md")?.[0]?.path).toBe(
+      "/wiki/concepts/motivation.md",
+    )
+  })
+
+  it("project.path 非空（桌面形态）按真实根映射", () => {
+    useWikiStore.setState({ project: { id: "7", path: "/proj", name: "p" } })
+
+    useWikiStore.getState().setProjectPathIndexFromPaths(["entities/foo.md"])
+
+    expect(
+      useWikiStore.getState().projectPathIndex.byPath.has("/proj/wiki/entities/foo.md"),
+    ).toBe(true)
   })
 })

@@ -24,6 +24,7 @@ import {
   unwrapWikilink,
 } from "@/lib/wiki-page-resolver"
 import { useWikiStore } from "@/stores/wiki-store"
+import { caps } from "@/lib/capabilities"
 import { normalizePath } from "@/lib/path-utils"
 import { useTranslation } from "react-i18next"
 
@@ -69,7 +70,14 @@ export function FrontmatterPanel({ data }: FrontmatterPanelProps) {
   )
 
   const projectPath = project ? normalizePath(project.path) : null
-  const wikiRoot = projectPath ? `${projectPath}/wiki` : null
+  // #4(web)：与 wiki-reader 同款兜底——project.path 恒空（ProjectPicker 只带
+  // id），虚拟根 "/wiki" 与 setProjectPathIndexFromPaths 构建的索引同一映射；
+  // 否则 related chips 在 web 恒 resolved=false 不可点（正文可跳、面板割裂）。
+  const wikiRoot = projectPath
+    ? `${projectPath}/wiki`
+    : project && caps.platform === "web"
+      ? "/wiki"
+      : null
   const sourcesRoot = projectPath ? `${projectPath}/raw/sources` : null
 
   const typeStyle = getWikiTypeStyle(type)

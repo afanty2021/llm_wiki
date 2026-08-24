@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import type { FileNode } from "@/types/wiki"
 import {
+  buildProjectPathIndexFromPagePaths,
   buildProjectPathIndexFromTree,
   createEmptyProjectPathIndex,
   findInTreeByName,
@@ -82,6 +83,61 @@ describe("buildProjectPathIndexFromTree", () => {
     expect(merged.byPath.has(`${SOURCES}/.claude/memory.md`)).toBe(true)
     expect(findInTreeByName(merged, "memory.md", `${SOURCES}/`)).toBe(
       `${SOURCES}/.claude/memory.md`,
+    )
+  })
+})
+
+describe("buildProjectPathIndexFromPagePaths", () => {
+  it("把 DB 页路径映射为桌面树形态（内容页补 wiki/ 前缀，reserved 页保留）", () => {
+    const index = buildProjectPathIndexFromPagePaths(
+      ["concepts/motivation.md", "wiki/index.md", "wiki/log.md"],
+      PP,
+    )
+    expect(index.byPath.get(`${WIKI}/concepts/motivation.md`)?.name).toBe("motivation.md")
+    expect(index.byPath.get(`${WIKI}/index.md`)?.name).toBe("index.md")
+    expect(index.byPath.get(`${WIKI}/log.md`)?.name).toBe("log.md")
+    expect(index.filesByName.get("motivation.md")).toHaveLength(1)
+  })
+
+  it("web 虚拟根（project.path 为空串）产出 /wiki/… 形态条目", () => {
+    // web 下 ProjectPicker 只带 id/name（App.tsx），project.path === ""。
+    const index = buildProjectPathIndexFromPagePaths(
+      ["concepts/motivation.md", "wiki/index.md"],
+      "",
+    )
+    expect(index.byPath.has("/wiki/concepts/motivation.md")).toBe(true)
+    expect(index.byPath.has("/wiki/index.md")).toBe(true)
+  })
+
+  it("按映射后的 entryPath 去重，同名不同目录仍各自成条", () => {
+    const index = buildProjectPathIndexFromPagePaths(
+      ["concepts/foo.md", "concepts/foo.md", "wiki/foo.md"],
+      PP,
+    )
+    expect(index.byPath.size).toBe(2)
+    expect(index.filesByName.get("foo.md")?.map((e) => e.path)).toEqual([
+      `${WIKI}/concepts/foo.md`,
+      `${WIKI}/foo.md`,
+    ])
+  })
+
+  it("roundtrip：bare slug 经 resolveRelatedSlug 命中映射路径（web 虚拟根 /wiki）", () => {
+    const index = buildProjectPathIndexFromPagePaths(
+      ["concepts/motivation.md", "wiki/index.md"],
+      "",
+    )
+    expect(resolveRelatedSlug(index, "motivation", "/wiki")).toBe(
+      "/wiki/concepts/motivation.md",
+    )
+    // reserved 页也是合法 wikilink 目标（[[index]]）
+    expect(resolveRelatedSlug(index, "index", "/wiki")).toBe("/wiki/index.md")
+  })
+
+  it("roundtrip：桌面真实根形态同样可解析", () => {
+    const index = buildProjectPathIndexFromPagePaths(["entities/dpao.md"], PP)
+    expect(resolveRelatedSlug(index, "dpao", WIKI)).toBe(`${WIKI}/entities/dpao.md`)
+    expect(resolveRelatedSlug(index, "wiki/entities/dpao.md", WIKI)).toBe(
+      `${WIKI}/entities/dpao.md`,
     )
   })
 })
