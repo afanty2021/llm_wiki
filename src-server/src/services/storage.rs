@@ -196,6 +196,13 @@ impl StorageBackend for LocalStorage {
                 modified: modified_secs(&meta),
             });
         }
+        // 对齐桌面端 list_directory 的排序语义（fs.rs build_tree）：目录在前、
+        // 组内按名排序——read_dir 是文件系统哈希序，web Files 树会得到乱序章节。
+        out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        });
         Ok(out)
     }
 
@@ -266,5 +273,33 @@ impl StorageBackend for S3Storage {
     }
     async fn remove(&self, _t: i32, _p: i32, _r: &str) -> Result<(), AppError> {
         Err(AppError::NotImplemented("s3 storage not yet implemented".into()))
+    }
+}
+
+#[cfg(test)]
+mod list_order_tests {
+    use super::*;
+
+    /// 对齐桌面端语义（fs.rs build_tree）：目录在前、组内按名排序。
+    /// read_dir 是文件系统哈希序——无排序时 web Files 树章节乱序（2026-08-24 实证）。
+    #[tokio::test]
+    async fn list_dir_sorts_dirs_first_then_name() {
+        let base = std::env::temp_dir().join(format!("llmwiki-list-sort-{}", std::process::id()));
+        let src = base.join("teams/1/projects/2/raw/sources");
+        std::fs::create_dir_all(src.join("zzz-dir")).unwrap();
+        std::fs::create_dir_all(src.join("book")).unwrap();
+        for f in ["Ch19-b.md", "Ch02-b.md", "Ch10-b.md", "Ch01-a.md"] {
+            std::fs::write(src.join(f), b"x").unwrap();
+        }
+
+        let storage = LocalStorage::new(base.to_string_lossy().to_string());
+        let entries = storage.list_dir(1, 2, "raw/sources").await.unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["book", "zzz-dir", "Ch01-a.md", "Ch02-b.md", "Ch10-b.md", "Ch19-b.md"],
+            "目录在前组内按名：章节须按 Ch01→Ch19 字典序（零填充名天然有序）"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
