@@ -71,6 +71,10 @@ export function KnowledgeTree() {
     if (caps.platform === "web") {
       try {
         const pages = await apiClient.listPages(Number(project.id))
+        // #4(web)：桌面靠 setFileTree 建 projectPathIndex，web 无文件树——用
+        // pages API 的全量 DB 路径清单（含 index/log，不随显示过滤）补建，
+        // 供 wiki-reader 相关概念 wikilink 解析跳转。
+        useWikiStore.getState().setProjectPathIndexFromPaths(pages.map((p) => p.path))
         const pageInfos: WikiPageInfo[] = pages
           .filter((p) => p.path !== "wiki/index.md" && p.path !== "wiki/log.md")
           .map((p) => {

@@ -3,9 +3,11 @@ import type { WikiProject, FileNode } from "@/types/wiki"
 import { DEFAULT_SOURCE_WATCH_CONFIG } from "@/lib/source-watch-config"
 import {
   buildProjectPathIndexFromTree,
+  buildProjectPathIndexFromPagePaths,
   createEmptyProjectPathIndex,
   type ProjectPathIndex,
 } from "@/lib/wiki-page-resolver"
+import { normalizePath } from "@/lib/path-utils"
 import { DEFAULT_GRAPH_FILTERS, type GraphFilterState } from "@/lib/graph-filters"
 import type { OutputLanguage } from "@/lib/output-language-options"
 
@@ -439,6 +441,7 @@ interface WikiState {
   setProject: (project: WikiProject | null) => void
   setFileTree: (tree: FileNode[], options?: { syncPathIndex?: boolean }) => void
   setProjectPathIndexFromTree: (tree: FileNode[]) => void
+  setProjectPathIndexFromPaths: (paths: string[]) => void
   setSelectedFile: (path: string | null) => void
   setFileContent: (content: string) => void
   openPathInPreview: (path: string) => void
@@ -469,7 +472,7 @@ interface WikiState {
   bumpDataVersion: () => void
 }
 
-export const useWikiStore = create<WikiState>((set) => ({
+export const useWikiStore = create<WikiState>((set, get) => ({
   project: null,
   fileTree: [],
   projectPathIndex: createEmptyProjectPathIndex(),
@@ -528,6 +531,15 @@ export const useWikiStore = create<WikiState>((set) => ({
   },
   setProjectPathIndexFromTree: (tree) =>
     set({ projectPathIndex: buildProjectPathIndexFromTree(tree) }),
+  // #4(web)：文件树缺位（setFileTree 只在桌面发生），由 pages API 的 DB 路径
+  // 清单构建索引。projectRoot 与 wiki-reader 的 wikiRoot 同源——同为
+  // normalizePath(project.path)（web 下为空串 → 虚拟根 "/wiki"），保证
+  // resolveRelatedSlug 的 name 匹配能命中索引条目。
+  setProjectPathIndexFromPaths: (paths) => {
+    const project = get().project
+    const root = project ? normalizePath(project.path) : ""
+    set({ projectPathIndex: buildProjectPathIndexFromPagePaths(paths, root) })
+  },
   setSelectedFile: (selectedFile) =>
     set({ selectedFile, previewContentPath: null, externalPreview: null }),
   setFileContent: (fileContent) => set({ fileContent }),
