@@ -1,0 +1,34 @@
+# mineru-api 本地 CPU 镜像（macOS Apple Silicon / 无 NVIDIA GPU 环境用）
+#
+# 背景：MinerU 官方未发布预构建 Docker 镜像（opendatalab/MinerU#1845），官方
+# docker/global/Dockerfile 基于 vllm/vllm-openai（CUDA、仅 Linux/WSL2 + NVIDIA
+# GPU），在 macOS 上无法运行。本镜像改用官方 PyPI 包 mineru[core] + 官方
+# mineru-api 入口，pipeline 后端 CPU 推理——API 面与官方 compose 的 api 服务
+# 完全一致（mineru-api --host 0.0.0.0 --port 8000）。
+# 版本与官方 Dockerfile 对齐策略：官方要求 mineru[core]>=3.4.0，此处钉死 3.4.5。
+#
+# 镜像源：本机走国内镜像（deb.debian.org 实测仅 ~38KB/s，tuna ~22MB/s）；与
+# MinerU 官方 docker/china/ 变体同理。海外环境可用 --build-arg 覆盖回官方源：
+#   --build-arg DEB_MIRROR=http://deb.debian.org/debian \
+#   --build-arg PYPI_INDEX=https://pypi.org/simple
+ARG DEB_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+
+FROM python:3.12-slim
+
+ARG DEB_MIRROR
+ARG PYPI_INDEX
+RUN sed -i "s|http://deb.debian.org/debian|${DEB_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        fonts-noto-core fonts-noto-cjk fontconfig libgl1 libglib2.0-0 \
+    && fc-cache -fv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir -i ${PYPI_INDEX} "mineru[core]==3.4.5"
+
+# 容器内无 cuda/mps，显式走 CPU；模型权重首次解析时下载并缓存于 /root/.cache
+ENV MINERU_DEVICE_MODE=cpu \
+    MINERU_MODEL_SOURCE=modelscope
+
+EXPOSE 8000
+CMD ["mineru-api", "--host", "0.0.0.0", "--port", "8000"]

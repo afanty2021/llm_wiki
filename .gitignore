@@ -80,3 +80,5 @@ tools/transcriber/out/search-*.json
 # 验收演示页（内含限时限验签 URL，本地播放验证用）
 tools/transcriber/out/media-demo.html
 tools/transcriber/out/h264-cache/
+# 书籍流水线本地配置（upload 段含 svc 账号/密码），勿入库
+tools/books/books.json

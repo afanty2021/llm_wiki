@@ -1,0 +1,12 @@
+{
+  "mode": "local",
+  "local": { "baseUrl": "http://127.0.0.1:8000", "token": "", "backend": "hybrid-engine" },
+  "cloud": { "token": "" },
+  "gate": { "minCharsPerPage": 200 },
+  "upload": {
+    "apiBase": "http://127.0.0.1:8080",
+    "username": "",
+    "password": "",
+    "projectId": 0
+  }
+}

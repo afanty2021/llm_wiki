@@ -3,7 +3,7 @@
 // ── Task 2 主流程 imports ──
 use crate::{AppError, AppState};
 use crate::services::ingest_queue::{self, IngestJob, IngestJobResult};
-use crate::services::llm_stream::{self, ChatMessage, ChatOpts};
+use crate::services::llm_stream::{self, ChatMessage, ChatOpts, StreamChatProvider};
 use sqlx::Row;
 
 // ── 共用模型 ──
@@ -253,6 +253,63 @@ fn merge_analyses(analyses: &[serde_json::Value]) -> serde_json::Value {
         }
     }
     merged
+}
+
+/// 同路径碰撞的处置模式（spec §1 多源累积合并）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CollisionMode {
+    /// 同源重生成：整页覆盖（现状语义），零 LLM 调用。
+    Replace,
+    /// 跨源碰撞：LLM 合并 + sources 并集。
+    Merge,
+}
+
+/// sources JSONB → 去重集合（字符串数组语义；畸变元素忽略、重复元素去重）。
+fn sources_set(v: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    v.as_array()
+        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+/// 碰撞判定（评审 I2 收紧）：仅「集合相等 且 incoming 恰为 {当前源}」判 Replace；
+/// 多元素巧合相等（LLM 自由引用）走 Merge——最坏同内容融合，不丢数据。
+fn collision_mode(
+    existing_sources: &serde_json::Value,
+    incoming_sources: &serde_json::Value,
+    current_source: &str,
+) -> CollisionMode {
+    let existing = sources_set(existing_sources);
+    let incoming = sources_set(incoming_sources);
+    let only_current = incoming.len() == 1 && incoming.contains(current_source);
+    if existing == incoming && only_current {
+        CollisionMode::Replace
+    } else {
+        CollisionMode::Merge
+    }
+}
+
+/// sources 并集：existing 序在前、去重保序、当前 sp 强制尾插（评审 A-M4）。
+fn union_sources(
+    existing: &serde_json::Value,
+    incoming: &serde_json::Value,
+    current_source: &str,
+) -> serde_json::Value {
+    let mut out: Vec<String> = Vec::new();
+    for src in [existing, incoming] {
+        if let Some(arr) = src.as_array() {
+            for x in arr {
+                if let Some(s) = x.as_str() {
+                    if !out.iter().any(|o| o == s) {
+                        out.push(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if !out.iter().any(|o| o == current_source) {
+        out.push(current_source.to_string());
+    }
+    serde_json::json!(out)
 }
 
 /// R10（m3-impl-review 次级收编）：step1 merged 结果形状守卫——非对象直接报错
@@ -742,6 +799,51 @@ fn repair_json_text(s: &str) -> Option<String> {
     }
 }
 
+/// §2 清单 cap 与 context 预算联动（评审 I3/I-5）：合算式
+/// 清单 ≤ (context_size - 8000) / 4 / 12（path 实测 8-12 token/行），clamp 到 [1, 2000]。
+/// 128k → 2500 → 取 2000；32k → 500。
+fn existing_paths_cap(context_size: u32) -> i64 {
+    (((context_size.saturating_sub(8000)) / 4 / 12) as i64).clamp(1, 2000)
+}
+
+/// §2 slug 对齐：既有 concepts/entities 页清单（前缀即白名单，评审 A-M7——
+/// 手动建页的任意脏 path 不匹配前缀不入清单）。每 job 查一次；LIMIT 与 budget 联动。
+async fn fetch_concept_entity_paths(state: &AppState, project_id: i32, cap: i64) -> Vec<String> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT path FROM wiki_pages WHERE project_id = $1 \
+         AND (path LIKE 'concepts/%' OR path LIKE 'entities/%') ORDER BY path LIMIT $2",
+    )
+    .bind(project_id)
+    .bind(cap)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    rows.into_iter().map(|r| r.0).collect()
+}
+
+/// step2 清单注入段（纯函数供单测；空清单 → 空串；触顶 cap → 注明截断，评审 I3）。
+/// `cap` 必须与 fetch_concept_entity_paths 的 SQL LIMIT 同源（run_ingest_job 一次算出
+/// 两处传参）——终审 F5：此前硬编码 2000 与 budget 派生 cap（32k context→500）脱钩，
+/// 小 cap 下真截断不注明。语义：cap < 2000 时清单至多 cap 条，恰在 cap 处触发注明。
+fn existing_paths_section(paths: &[String], cap: usize) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let note = if paths.len() >= cap {
+        "\n(list truncated — only the first entries are shown)"
+    } else {
+        ""
+    };
+    let list = paths.iter().map(|p| format!("- {}", p)).collect::<Vec<_>>().join("\n");
+    format!(
+        "\n\n## Existing concept/entity pages\n\
+         The following wiki pages already exist. When a page you generate describes the \
+         same concept as one of them, REUSE its exact path so knowledge accumulates on \
+         one page. Only create a new path for genuinely new concepts.\n{}\n{}",
+        list, note
+    )
+}
+
 /// Step 2：基于 step1 分析 JSON + 原文，生成 FILE blocks 形式的 wiki 页面。
 /// W3：`language` 来自 projects.ingest_language（None → prompt 不注入语言指令，
 /// path slug 约束等普适段始终在模板本体）。
@@ -751,11 +853,22 @@ async fn step2_generate(
     original_text: &str,
     step1_json: &serde_json::Value,
     language: Option<&str>,
+    existing_paths: &[String],
+    existing_paths_cap: usize,
 ) -> Result<String, AppError> {
     let provider = llm_stream::provider_for_project(state, project_id).await?;
     let prompt = step2_prompt(language);
     let system = "You generate wiki pages. Output each page as a FILE block.";
-    step2_generate_via(&*provider, system, &prompt, original_text, step1_json).await
+    step2_generate_via(
+        &*provider,
+        system,
+        &prompt,
+        original_text,
+        step1_json,
+        existing_paths,
+        existing_paths_cap,
+    )
+    .await
 }
 
 /// step2 的 LLM 调用（provider 注入，与 step1_analyze_via 同模式——prompt 注入单测
@@ -766,6 +879,8 @@ async fn step2_generate_via(
     prompt: &str,
     original_text: &str,
     step1_json: &serde_json::Value,
+    existing_paths: &[String],
+    existing_paths_cap: usize,
 ) -> Result<String, AppError> {
     // 【编译陷阱】AppError 无 From<serde_json::Error>，必须 map_err。
     let analysis = serde_json::to_string_pretty(step1_json)
@@ -773,8 +888,11 @@ async fn step2_generate_via(
     let messages = vec![ChatMessage {
         role: "user".into(),
         content: format!(
-            "{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
-            prompt, analysis, original_text
+            "{}{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
+            prompt,
+            existing_paths_section(existing_paths, existing_paths_cap),
+            analysis,
+            original_text
         ),
     }];
     let opts = ChatOpts {
@@ -789,6 +907,57 @@ async fn step2_generate_via(
         .await
         .map_err(|e| AppError::LlmApiError(format!("step2: {}", e)))?;
     Ok(response)
+}
+
+/// step4 merge prompt（含占位符渲染）。抽为独立函数供 prompt 注入单测。
+pub(crate) fn merge_prompt(language: Option<&str>) -> String {
+    render_prompt(include_str!("prompts/step4_merge.txt"), language)
+}
+
+/// 页面合并 LLM 调用（provider 注入，同 step2_generate_via 模式）。
+/// 截断防线（评审 C1）：completion_tokens >= max_tokens → Err，调用方走整页回退
+/// Replace——截断半截 markdown 落库后，下轮 merge 会把残页当 existing，
+/// 累积内容不可恢复丢失。空输出（strip_thinking 后）同样 Err。
+async fn merge_pages_via(
+    provider: &dyn llm_stream::StreamChatProvider,
+    language: Option<&str>,
+    source_path: &str,
+    existing_content: &str,
+    incoming_content: &str,
+) -> Result<String, AppError> {
+    const MERGE_MAX_TOKENS: u32 = 8000;
+    let prompt = merge_prompt(language);
+    let system = "You merge two versions of a wiki page into one consolidated version.";
+    let user = format!(
+        "{prompt}\n\nIncoming source: {source_path}\n\n\
+         <existing>\n{existing_content}\n</existing>\n\n\
+         <incoming>\n{incoming_content}\n</incoming>"
+    );
+    let messages = vec![ChatMessage { role: "user".into(), content: user }];
+    let opts = ChatOpts {
+        model: provider.model_name().into(),
+        temperature: 0.3,
+        max_tokens: MERGE_MAX_TOKENS,
+        system_prompt: Some(system.into()),
+        timeout_secs: None,
+    };
+    let (response, usage) = provider
+        .chat_to_string(messages, opts)
+        .await
+        .map_err(|e| AppError::LlmApiError(format!("merge page: {}", e)))?;
+    if let Some((_, ct)) = usage {
+        if ct >= MERGE_MAX_TOKENS {
+            return Err(AppError::LlmApiError(format!(
+                "merge output likely truncated (completion {} >= max {})",
+                ct, MERGE_MAX_TOKENS
+            )));
+        }
+    }
+    let cleaned = crate::services::research::synthesize::strip_thinking(&response);
+    if cleaned.trim().is_empty() {
+        return Err(AppError::LlmApiError("merge output empty after strip_thinking".into()));
+    }
+    Ok(cleaned)
 }
 
 struct IngestedFileStatus {
@@ -901,6 +1070,7 @@ pub async fn run_ingest_job(
 
     let mut result = IngestJobResult {
         new_pages: vec![],
+        merged_pages: vec![],
         updated_reserved: vec![],
         warnings: vec![],
     };
@@ -908,9 +1078,23 @@ pub async fn run_ingest_job(
     // 收集所有成功落库页的 (path, content) 供批量嵌入（覆盖 source 页 + reserved 页）。
     let mut collected: Vec<(String, String)> = Vec::new();
 
+    // merge provider 懒获取（评审 A-M6）：首次碰撞才取，失败并入整页回退（I1）
+    let mut merge_provider: Option<Box<dyn StreamChatProvider>> = None;
+
     // 本次 run 中成功（done）的 source 计数 —— 用于 all-failed 判定。
     // 注意：不能用 job.item_states 快照（不含本次 run 的写入，会误判 all-failed）。
     let mut done_this_run = 0usize;
+
+    // §2 清单 + cap 联动（I-5）：context_size 与 process_source_path 内同源逻辑
+    // （LlmConfig.context_size 为 i32，负值兜底按 0 → cap 下限 1）
+    let context_size = crate::services::llm::get_llm_config(&state.db, job.project_id)
+        .await
+        .map(|c| c.context_size.max(0) as u32)
+        .unwrap_or(128_000);
+    // cap 一次算出、两处传参（终审 F5）：SQL LIMIT 与截断注明阈值必须同源，
+    // 否则 budget 派生的小 cap（如 32k→500）下真截断不注明。
+    let paths_cap = existing_paths_cap(context_size);
+    let existing_paths = fetch_concept_entity_paths(state, job.project_id, paths_cap).await;
 
     let total = job.source_paths.len();
     for (i, sp) in job.source_paths.iter().enumerate() {
@@ -939,7 +1123,17 @@ pub async fn run_ingest_job(
         let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
             .await;
 
-        match process_source_path(state, job.project_id, team_id, sp, language).await {
+        match process_source_path(
+            state,
+            job.project_id,
+            team_id,
+            sp,
+            language,
+            &existing_paths,
+            paths_cap as usize,
+        )
+        .await
+        {
             Ok(None) => {
                 // 内容未变，视为 done
                 let _ =
@@ -950,6 +1144,13 @@ pub async fn run_ingest_job(
                 let pages_to_write = processed.pages.len();
                 let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
                 for page in &processed.pages {
+                    // 取消检查点（每页前，终审 F1）：页内可能触发一次 merge LLM 调用
+                    // （8000 token 输出、本地模型数十秒），spec §4 部署约束/单 worker 串行
+                    // ——用户取消后若继续逐页 merge，会烧完全部剩余调用并阻塞后续所有
+                    // job 小时级。语义同 source 级检查点：Cancelled 时整 job 终止。
+                    if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
+                        return Err(e); // AppError::Cancelled，已 mark_cancelled
+                    }
                     // transcripts/ 命名空间守卫（spec §3.2-⑤ 防御）：该前缀页由 transcriber
                     // CLI 写入（创建即嵌入），LLM 生成页禁止覆写。跳过计入 pages_written
                     // （计账联动，见 fold_page_write_outcomes）→ 唯一页撞前缀仍判 done。
@@ -958,18 +1159,94 @@ pub async fn run_ingest_job(
                         outcomes.push(PageWriteOutcome::GuardSkipped);
                         continue;
                     }
-                    match upsert_wiki_page(state, job.project_id, page).await {
-                        Ok(path) => {
-                            result.new_pages.push(path.clone());
-                            if let Some(text) = page_content_for_embed(page) {
-                                collected.push((path, text));
-                            }
-                            outcomes.push(PageWriteOutcome::Upserted);
-                        }
-                        Err(e) => {
-                            result.warnings.push(format!("upsert {}: {}", sp, e));
+                    // —— 多源累积合并（spec §1）：碰撞检测 → Replace/Merge 分流 ——
+                    let existing = match fetch_existing_page(state, job.project_id, &page.path).await {
+                        Ok(e) => e,
+                        Err(err) => {
+                            result.warnings.push(format!("fetch existing {}: {}", page.path, err));
                             outcomes.push(PageWriteOutcome::UpsertFailed);
+                            continue;
                         }
+                    };
+                    let mode = existing
+                        .as_ref()
+                        .map_or(CollisionMode::Replace, |e| collision_mode(&e.sources, &page.sources, sp));
+                    let merged_write: Option<Result<(String, serde_json::Value), String>> = match (&mode, existing.as_ref()) {
+                        (CollisionMode::Merge, Some(e)) => {
+                            if merge_provider.is_none() {
+                                match llm_stream::provider_for_project(state, job.project_id).await {
+                                    Ok(p) => merge_provider = Some(p),
+                                    Err(err) => result.warnings.push(format!("merge provider unavailable: {}", err)),
+                                }
+                            }
+                            match merge_provider.as_ref() {
+                                Some(p) => match merge_pages_via(&**p, language, sp, &e.content, &page.content).await {
+                                    Ok(merged_content) => {
+                                        // 收敛观测（评审 I-4）：超两版之和 80% 记 warning
+                                        if merged_content.len() > (e.content.len() + page.content.len()) * 4 / 5 {
+                                            result.warnings.push(format!(
+                                                "merge {}: output longer than 80% of combined inputs (inflation watch)",
+                                                page.path
+                                            ));
+                                        }
+                                        Some(Ok((merged_content, union_sources(&e.sources, &page.sources, sp))))
+                                    }
+                                    Err(err) => Some(Err(format!("merge {}: {} — fallback replace", page.path, err))),
+                                },
+                                None => Some(Err(format!("merge {}: no provider — fallback replace", page.path))),
+                            }
+                        }
+                        _ => None, // Replace 或无既有行 → 原路径
+                    };
+                    match merged_write {
+                        Some(Ok((merged_content, merged_sources))) => match existing.as_ref() {
+                            Some(e) => {
+                                match update_merged_page(state, job.project_id, &page.path, &merged_content, &merged_sources, &e.frontmatter).await {
+                                    Ok(()) => {
+                                        result.merged_pages.push(page.path.clone());
+                                        if !merged_content.trim().is_empty() {
+                                            collected.push((page.path.clone(), merged_content));
+                                        }
+                                        outcomes.push(PageWriteOutcome::Upserted);
+                                    }
+                                    Err(err) => {
+                                        result.warnings.push(format!("update merged {}: {}", page.path, err));
+                                        outcomes.push(PageWriteOutcome::UpsertFailed);
+                                    }
+                                }
+                            }
+                            None => unreachable!("merge 分支必有 existing"),
+                        },
+                        Some(Err(warn)) => {
+                            // 整页回退（评审 I1 写死）：content/sources/frontmatter 均 incoming，走既有 upsert
+                            result.warnings.push(warn);
+                            match upsert_wiki_page(state, job.project_id, page).await {
+                                Ok(path) => {
+                                    result.new_pages.push(path.clone());
+                                    if let Some(text) = page_content_for_embed(page) {
+                                        collected.push((path, text));
+                                    }
+                                    outcomes.push(PageWriteOutcome::Upserted);
+                                }
+                                Err(err) => {
+                                    result.warnings.push(format!("upsert {}: {}", sp, err));
+                                    outcomes.push(PageWriteOutcome::UpsertFailed);
+                                }
+                            }
+                        }
+                        None => match upsert_wiki_page(state, job.project_id, page).await {
+                            Ok(path) => {
+                                result.new_pages.push(path.clone());
+                                if let Some(text) = page_content_for_embed(page) {
+                                    collected.push((path, text));
+                                }
+                                outcomes.push(PageWriteOutcome::Upserted);
+                            }
+                            Err(err) => {
+                                result.warnings.push(format!("upsert {}: {}", sp, err));
+                                outcomes.push(PageWriteOutcome::UpsertFailed);
+                            }
+                        },
                     }
                 }
                 let (pages_written, all_upserted) = fold_page_write_outcomes(&outcomes);
@@ -1086,12 +1363,17 @@ pub async fn run_ingest_job(
 /// 单 source_path 处理：A（llm-wiki-parser 全格式解析）+ B（两步 LLM 生成 wiki pages）。
 /// 返回 Some(ProcessedSource) 表示需落库；返回 None 表示内容未变已跳过（不再重复 mark）。
 /// W3：`language` 来自 projects.ingest_language，穿透到 step1/step2/dedicated review 三处 prompt。
+/// §2：`existing_paths` 为既有 concepts/entities 页清单（run_ingest_job 每 job 查一次），
+/// 注入 step2 prompt 促成跨源 slug 收敛。`existing_paths_cap` 为清单截断 cap（与查询
+/// LIMIT 同源，run_ingest_job 传入），控制截断注明阈值（终审 F5）。
 async fn process_source_path(
     state: &AppState,
     project_id: i32,
     team_id: i32,
     source_path: &str,
     language: Option<&str>,
+    existing_paths: &[String],
+    existing_paths_cap: usize,
 ) -> Result<Option<ProcessedSource>, AppError> {
     // 经 StorageBackend trait 读字节（Phase 1 抽象收敛：与 files.rs docx/xlsx 分支一致，S3 就绪）
     let bytes = state.storage.read_bytes(team_id, project_id, source_path).await?;
@@ -1149,7 +1431,16 @@ async fn process_source_path(
         merged
     };
 
-    let llm_output = step2_generate(state, project_id, &text, &step1_result, language).await?;
+    let llm_output = step2_generate(
+        state,
+        project_id,
+        &text,
+        &step1_result,
+        language,
+        existing_paths,
+        existing_paths_cap,
+    )
+    .await?;
     let blocks = parse_file_blocks(&llm_output);
     let pages: Vec<WikiPageInsert> = blocks
         .into_iter()
@@ -1227,6 +1518,60 @@ pub(crate) async fn upsert_wiki_page(
     .execute(&state.db)
     .await?;
     Ok(page.path.clone())
+}
+
+/// 同路径既有页（合并所需列子集；NULL 列容错为空值——老行可能未写）。
+struct ExistingPage {
+    content: String,
+    sources: serde_json::Value,
+    frontmatter: serde_json::Value,
+}
+
+async fn fetch_existing_page(
+    state: &AppState,
+    project_id: i32,
+    path: &str,
+) -> Result<Option<ExistingPage>, AppError> {
+    let row = sqlx::query_as::<_, (String, Option<serde_json::Value>, Option<serde_json::Value>)>(
+        "SELECT content, sources, frontmatter FROM wiki_pages WHERE project_id = $1 AND path = $2",
+    )
+    .bind(project_id)
+    .bind(path)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(row.map(|(content, sources, frontmatter)| ExistingPage {
+        content,
+        sources: sources.unwrap_or(serde_json::json!([])),
+        frontmatter: frontmatter.unwrap_or(serde_json::json!({})),
+    }))
+}
+
+/// 合并页落库：content/sources 用合并结果；frontmatter 保留 existing 仅同步 sources 键；
+/// title/page_type/images 不动（保留 existing，wikilink/图谱锚稳定，spec §1）。
+async fn update_merged_page(
+    state: &AppState,
+    project_id: i32,
+    path: &str,
+    merged_content: &str,
+    merged_sources: &serde_json::Value,
+    existing_frontmatter: &serde_json::Value,
+) -> Result<(), AppError> {
+    let mut fm = existing_frontmatter.clone();
+    if let Some(obj) = fm.as_object_mut() {
+        obj.insert("sources".into(), merged_sources.clone());
+    }
+    sqlx::query(
+        "UPDATE wiki_pages SET content = $3, sources = $4, frontmatter = $5, updated_at = NOW() \
+         WHERE project_id = $1 AND path = $2",
+    )
+    .bind(project_id)
+    .bind(path)
+    .bind(merged_content)
+    .bind(merged_sources)
+    .bind(&fm)
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 /// reserved 三模板的纯渲染（W3：按 language 分流中英文案）。
@@ -1361,6 +1706,58 @@ mod tests {
         let budget = estimate_tokens(&sentences[..10].join(""));
         let chunks = chunk_document(&text, budget);
         assert!(chunks.len() > 1, "long paragraph should be split");
+    }
+
+    // —— 多源累积合并 §1：碰撞判定（评审 I2 收紧 + A-M3 set 语义）——
+    #[test]
+    fn collision_mode_single_current_source_equal_replaces() {
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md"]), &serde_json::json!(["raw/a.md"]), "raw/a.md"),
+            CollisionMode::Replace
+        );
+    }
+
+    #[test]
+    fn collision_mode_duplicate_elements_set_semantics() {
+        // 畸变重复元素：set 语义判 Replace
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md"]), &serde_json::json!(["raw/a.md", "raw/a.md"]), "raw/a.md"),
+            CollisionMode::Replace
+        );
+    }
+
+    #[test]
+    fn collision_mode_multi_element_equal_set_merges() {
+        // 多元素巧合相等不得静默覆盖多源累积页（评审 I2）
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md", "raw/b.md"]), &serde_json::json!(["raw/b.md", "raw/a.md"]), "raw/a.md"),
+            CollisionMode::Merge
+        );
+    }
+
+    #[test]
+    fn collision_mode_disjoint_or_null_merges() {
+        assert_eq!(
+            collision_mode(&serde_json::json!(["raw/a.md"]), &serde_json::json!(["raw/b.md"]), "raw/b.md"),
+            CollisionMode::Merge
+        );
+        assert_eq!(
+            collision_mode(&serde_json::Value::Null, &serde_json::json!(["raw/b.md"]), "raw/b.md"),
+            CollisionMode::Merge
+        );
+    }
+
+    // —— union_sources：去重保序 + 当前 sp 尾插（评审 A-M4）——
+    #[test]
+    fn union_sources_dedup_order_tail_append_current() {
+        let u = union_sources(&serde_json::json!(["a.md"]), &serde_json::json!(["b.md", "a.md"]), "c.md");
+        assert_eq!(u, serde_json::json!(["a.md", "b.md", "c.md"]));
+    }
+
+    #[test]
+    fn union_sources_malformed_tolerated() {
+        let u = union_sources(&serde_json::Value::Null, &serde_json::json!(["b.md", 42]), "c.md");
+        assert_eq!(u, serde_json::json!(["b.md", "c.md"]));
     }
 
     #[test]
@@ -2152,6 +2549,8 @@ mod tests {
             &step2_prompt(Some("简体中文")),
             "src text",
             &serde_json::json!({"entities":[]}),
+            &[],
+            2000,
         )
         .await
         .unwrap();
@@ -2181,6 +2580,8 @@ mod tests {
             &step2_prompt(None),
             "src text",
             &serde_json::json!({"entities":[]}),
+            &[],
+            2000,
         )
         .await
         .unwrap();
@@ -2188,6 +2589,112 @@ mod tests {
         assert!(!content.contains("LANGUAGE RULE"), "{content}");
         assert!(content.contains(SLUG_CONSTRAINT_ANCHOR), "{content}");
         assert!(!content.contains("{{"), "{content}");
+    }
+
+    // ── Task 4：§2 slug 对齐清单注入 ──
+
+    #[test]
+    fn existing_paths_section_lists_and_notes_truncation() {
+        // cap 显式传参（终审 F5）：2000 与 clamp 上限一致；小 cap（如 500）时清单
+        // 至多 500 条，恰在 500 处触发注明——同一语义，此处取 2000 保持原断言规模。
+        let one = existing_paths_section(&["concepts/a.md".into()], 2000);
+        assert!(one.contains("## Existing concept/entity pages"), "{one}");
+        assert!(one.contains("- concepts/a.md"), "{one}");
+        assert!(!one.contains("truncated"), "{one}");
+
+        let many: Vec<String> = (0..2000).map(|i| format!("concepts/p{}.md", i)).collect();
+        let sec = existing_paths_section(&many, 2000);
+        assert!(sec.contains("list truncated"), "{sec}");
+
+        // 小 cap 语义回归：cap=500、清单恰 500 条（SQL LIMIT 截断的必然形态）→ 注明。
+        let capped: Vec<String> = (0..500).map(|i| format!("concepts/c{}.md", i)).collect();
+        assert!(
+            existing_paths_section(&capped, 500).contains("list truncated"),
+            "cap=500 且清单满 500 条时必须注明截断（旧实现硬编码 2000 漏注明的场景）"
+        );
+
+        assert_eq!(existing_paths_section(&[], 2000), "");
+    }
+
+    #[test]
+    fn existing_paths_cap_links_budget() {
+        // 128k → 2500 → clamp 2000；32k → 500；8000 → 0 → clamp 1
+        assert_eq!(existing_paths_cap(128_000), 2000);
+        assert_eq!(existing_paths_cap(32_000), 500);
+        assert_eq!(existing_paths_cap(8_000), 1);
+    }
+
+    #[tokio::test]
+    async fn step2_prompt_injects_existing_paths_section() {
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("---FILE: concepts/a.md ---\nx\n---END FILE---".into()),
+            TokenDelta::Done,
+        ])]);
+        step2_generate_via(
+            &provider,
+            "sys",
+            &step2_prompt(None),
+            "src",
+            &serde_json::json!({"entities": []}),
+            &["concepts/a.md".to_string()],
+            2000,
+        )
+        .await
+        .unwrap();
+        let content = provider.user_message_content(0);
+        assert!(content.contains("REUSE its exact path"), "{content}");
+        assert!(content.contains("- concepts/a.md"), "{content}");
+    }
+
+    // ── Task 2：step4 merge prompt + merge_pages_via ──
+
+    #[tokio::test]
+    async fn merge_pages_via_injects_framing_source_and_language() {
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("融合正文".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 100 },
+            TokenDelta::Done,
+        ])]);
+        let out = merge_pages_via(&provider, Some("简体中文"), "raw/sources/bk/Ch01.md", "旧版", "新版")
+            .await
+            .unwrap();
+        assert_eq!(out, "融合正文");
+        let content = provider.user_message_content(0);
+        assert!(content.contains("<existing>\n旧版\n</existing>"), "{content}");
+        assert!(content.contains("<incoming>\n新版\n</incoming>"), "{content}");
+        assert!(content.contains("raw/sources/bk/Ch01.md"), "{content}");
+        assert!(content.contains("MUST be in 简体中文"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn merge_pages_via_rejects_truncated_output() {
+        // 评审 C1：completion >= max_tokens 视为失败（调用方走整页回退）
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("half".into()),
+            TokenDelta::Usage { prompt_tokens: 10, completion_tokens: 8000 },
+            TokenDelta::Done,
+        ])]);
+        let err = merge_pages_via(&provider, None, "raw/a.md", "old", "new").await.unwrap_err();
+        assert!(err.to_string().contains("truncated"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn merge_pages_via_rejects_empty_after_strip_thinking() {
+        let provider = ScriptedProvider::new(vec![Ok(vec![
+            TokenDelta::Text("<think>reasoning</think>".into()),
+            TokenDelta::Done,
+        ])]);
+        let err = merge_pages_via(&provider, None, "raw/a.md", "old", "new").await.unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn merge_prompt_renders_language_rule_no_placeholder_left() {
+        let p = merge_prompt(Some("简体中文"));
+        assert!(p.contains("MUST be in 简体中文"), "{p}");
+        assert!(!p.contains("{{"), "{p}");
+        let e = merge_prompt(None);
+        assert!(!e.contains("{{") && !e.contains("LANGUAGE RULE"), "{e}");
     }
 
     #[test]

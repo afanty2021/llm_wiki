@@ -85,9 +85,10 @@ async fn worker_loop(state: AppState) {
         match crate::services::ingest_pipeline::run_ingest_job(&state, &job).await {
             Ok(result) => {
                 tracing::info!(
-                    "job {} done: {} new pages, {} reserved, {} warnings",
+                    "job {} done: {} new pages, {} merged pages, {} reserved, {} warnings",
                     job_id,
                     result.new_pages.len(),
+                    result.merged_pages.len(),
                     result.updated_reserved.len(),
                     result.warnings.len()
                 );

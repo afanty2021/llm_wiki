@@ -70,6 +70,9 @@ pub struct IngestJob {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IngestJobResult {
     pub new_pages: Vec<String>,
+    /// 多源累积合并页（只进此列表不进 new_pages，评审 A-M1）。
+    #[serde(default)]
+    pub merged_pages: Vec<String>,
     pub updated_reserved: Vec<String>,
     pub warnings: Vec<String>,
 }
