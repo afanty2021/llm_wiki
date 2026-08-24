@@ -3,7 +3,7 @@
 // 产出：<dir>/<slug>/staged/ChNN-*.md（清洗后、带上源头的章节 markdown）+ parse-report.json
 // 量化闸：非空白字符/页 < gate.minCharsPerPage（默认 200）→ gate_blocked，不落 staged（Task 9 只消费过闸章节）。
 // 断点续跑：staged 已存在的章默认跳过（--force 重解析）。
-// 并发：--concurrency N（默认 2，上限 4）——缓存命中的跳过仍串行先行；未解析章由 N 个
+// 并发：--concurrency N（默认 2，上限 3，对齐 mineru-api 实测 max_concurrent_requests=3）——缓存命中的跳过仍串行先行；未解析章由 N 个
 // worker 并行处理（mineru-api 单进程共享已加载流水线，并发主要吃空闲 CPU 核）。单章失败
 // 仅记 failed 不影响其他章；报告条目写入前按 manifest 章序排序（并发完成序不确定）。
 //
@@ -421,8 +421,9 @@ async function main(): Promise<void> {
     book: manifest.book,
     mode: "local",
     baseUrl: cfg.local.baseUrl,
+    // 注意层级：backend 在 local 段（顶层 BooksConfig 无此键，读错层级会恒 undefined）
+    backend: cfg.local?.backend ?? "hybrid-engine",
     // backend 实质改变解析路径与速度（pipeline vs hybrid-engine），对账工件须可区分。
-    backend: cfg.backend ?? "hybrid-engine",
     concurrency,
     minCharsPerPage: minPerPage,
     generatedAt: new Date().toISOString(),

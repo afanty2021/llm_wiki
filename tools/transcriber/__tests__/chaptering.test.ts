@@ -13,6 +13,7 @@ import {
   buildSemanticMd,
   trySemanticChapters,
   llmChapter,
+  validateCuts,
   type LlmChapterDeps,
 } from "../src/chaptering"
 
@@ -96,10 +97,12 @@ describe("llmChapter / trySemanticChapters（fetch 注入）", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {})
   })
 
-  it("成功路径 + thinking 400 降级重试", async () => {
+  it("成功路径 + thinking 400 降级重试 + 请求带 90s 超时信号", async () => {
     let calls = 0
+    let sawSignal = false
     const impl = (async (_url: unknown, init?: RequestInit) => {
       calls++
+      sawSignal = !!init?.signal
       const body = JSON.parse(String(init?.body))
       if (calls === 1) return new Response('{"error":{"message":"thinking param not allowed"}}', { status: 400 })
       expect(body.thinking).toBeUndefined() // 降级重试不再带 thinking
@@ -108,6 +111,28 @@ describe("llmChapter / trySemanticChapters（fetch 注入）", () => {
     const cuts = await llmChapter("t", segs10.slice(0, 5), DEFAULT_CHAPTERING, depsOf(impl))
     expect(cuts).toEqual([{ startIdx: 0, title: "全片" }])
     expect(calls).toBe(2)
+    expect(sawSignal).toBe(true)
+  })
+
+  it("strip_thinking 防线：内容前缀 <think> 块不影响 JSON 解析", async () => {
+    const impl = (async () =>
+      okResponse('<think>推理过程…</think>{"chapters":[{"start_idx":0,"title":"导入"}]}')) as unknown as typeof fetch
+    expect(await llmChapter("t", segs10.slice(0, 5), DEFAULT_CHAPTERING, depsOf(impl))).toEqual([
+      { startIdx: 0, title: "导入" },
+    ])
+  })
+
+  it("空转写短路：segments 为空不调 LLM 直接回落", async () => {
+    const impl = vi.fn() as unknown as typeof fetch
+    const cfg = { ...DEFAULT_CHAPTERING, enabled: true }
+    expect(await trySemanticChapters({ title: "t", segments: [], durationS: 60 }, cfg, depsOf(impl))).toBeNull()
+    expect(impl).not.toHaveBeenCalled()
+  })
+
+  it("章数上限：幻觉微章（>50）守门拦截", () => {
+    const many = Array.from({ length: 51 }, (_, i) => ({ startIdx: i, title: `章${i}` }))
+    expect(guardrailReason(many, segs10, 600)).toMatch(/超上限/)
+    expect(parseCuts(JSON.stringify({ chapters: many.map((c, i) => ({ start_idx: i, title: `章${i}` })) }), 60)).toBeNull()
   })
 
   it("解析失败重试一次后成功", async () => {

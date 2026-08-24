@@ -16,8 +16,8 @@ import { slugFor } from "./slug";
 import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
 import { buildTranscriptMd, type TranscriptInput } from "./transcript";
 import {
-  DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor,
-  type ChapteringConfig,
+  DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor, validateCuts,
+  type ChapteringConfig, type ChapterCut,
 } from "./chaptering";
 import { ApiClient, sha256Hex, type MediaAssetItem, type JobStatus } from "./api-client";
 
@@ -58,8 +58,23 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-/** 转写包装（语义切章优先，回落机械切分）——主路径与断点续跑共用。
- *  chaptering.enabled 开启且 LLM 成功 → `## [mm:ss] 语义标题` + media chapters；
+/** cuts 快照落盘（评审 C1）：语义切章成功即持久化——断点续跑按快照字节级重建，
+ *  绝不重调 LLM（非确定输出必致页/源 hash 漂移 + 假「LLM 页覆写」告警）。 */
+function persistCuts(slug: string, cuts: ChapterCut[]): void {
+  const dir = join(outDir, "chapters");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${slug}.json`), JSON.stringify(cuts));
+}
+function loadCuts(slug: string, nSegs: number): ChapterCut[] | null {
+  try {
+    return validateCuts(JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8")) as ChapterCut[], nSegs);
+  } catch {
+    return null;
+  }
+}
+
+/** 主路径转写包装（语义切章优先，回落机械切分）。
+ *  chaptering.enabled 开启且 LLM 成功 → `## [mm:ss] 语义标题` + media chapters + cuts 快照落盘；
  *  任何失败（网络/解析/守门/缺 key）在 trySemanticChapters 内 warn 并返回 null，
  *  此处回落 buildTranscriptMd（机械 300s 窗），摄取不被阻塞、不消耗 tries。 */
 async function buildTranscriptWithChapters(
@@ -72,7 +87,27 @@ async function buildTranscriptWithChapters(
     sourcePath: `sources/transcripts/${p.slug}.md`, mediaSlug: p.slug, durationS: p.durationS,
   };
   const cuts = await trySemanticChapters(input, chapterCfg);
-  if (cuts) return { md: buildSemanticMd(input, cuts), chapters: chaptersFor(p.segments, cuts) };
+  if (cuts) {
+    persistCuts(p.slug, cuts);
+    return { md: buildSemanticMd(input, cuts), chapters: chaptersFor(p.segments, cuts) };
+  }
+  return buildTranscriptMd(input);
+}
+
+/** 断点续跑复用路径专用（评审 C1）：**绝不调 LLM**——有 cuts 快照按快照重建（与首次
+ *  产物字节一致，hash 对账稳定）；无快照（历史上从未语义切章的条目）机械重建。 */
+function buildTranscriptForReuse(
+  cfg: Config,
+  p: { title: string; segments: Segment[]; slug: string; durationS: number },
+) {
+  const input: TranscriptInput = {
+    title: p.title, segments: p.segments,
+    sourcePath: `sources/transcripts/${p.slug}.md`, mediaSlug: p.slug, durationS: p.durationS,
+  };
+  const cuts = loadCuts(p.slug, p.segments.length);
+  if (cuts) {
+    return { md: buildSemanticMd(input, cuts), chapters: chaptersFor(p.segments, cuts) };
+  }
   return buildTranscriptMd(input);
 }
 
@@ -534,7 +569,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
             }
             playback = pb;
           }
-          const { md, chapters } = await buildTranscriptWithChapters(cfg, {
+          const { md, chapters } = buildTranscriptForReuse(cfg, {
             title, segments, slug: line.slug, durationS: entry.durationS,
           });
           // 复用路径同样刷 media_assets（幂等 upsert，与主路径同一 items 构造）：

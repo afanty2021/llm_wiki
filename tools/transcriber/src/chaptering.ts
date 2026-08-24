@@ -26,6 +26,8 @@ export const DEFAULT_CHAPTERING: Required<ChapteringConfig> = {
 const TITLE_MAX = 30            // LLM 侧要求 ≤20 字，防御性放宽截断
 const GUARD_MIN_DURATION_S = 600 // ≥10min 视频仅 1 章 → 回落机械切分
 const GUARD_MAX_SPAN_S = 2700    // 单章 >45min → 回落机械切分
+const GUARD_MAX_CHAPTERS = 50    // 章数上限：幻觉微章（几十上百章）拦截
+const LLM_TIMEOUT_MS = 90_000    // undici 默认 300s 兜底太长——慢阻塞会卡住转写主流程
 
 /** ZAI_API_KEY：env 优先，回落 ~/.hermes/.env（不打印、不落 config——密钥卫生）。 */
 export function loadZaiKey(): string {
@@ -49,6 +51,19 @@ const SYS = [
   "3. 只输出 JSON，形如 {\"chapters\":[{\"start_idx\":0,\"title\":\"…\"},{\"start_idx\":37,\"title\":\"…\"}]}，不要任何其他文字。",
 ].join("\n")
 
+/** 校验已构造的切分（首章=0、严格递增、编号域内、章数上限）——parseCuts 与 cuts 快照回读共用。 */
+export function validateCuts(cuts: ChapterCut[], nSegs: number): ChapterCut[] | null {
+  if (cuts.length === 0 || cuts.length > GUARD_MAX_CHAPTERS) return null
+  for (const c of cuts) {
+    if (!Number.isInteger(c.startIdx) || c.startIdx < 0 || c.startIdx >= nSegs) return null
+    if (typeof c.title !== "string" || !c.title.trim()) return null
+  }
+  const sorted = [...cuts].sort((a, b) => a.startIdx - b.startIdx)
+  if (sorted[0].startIdx !== 0) return null
+  for (let i = 1; i < sorted.length; i++) if (sorted[i].startIdx <= sorted[i - 1].startIdx) return null
+  return sorted
+}
+
 /** 解析 LLM 输出为合法切分（首章=0、严格递增、全覆盖编号域）；任何违规 → null。 */
 export function parseCuts(raw: string, nSegs: number): ChapterCut[] | null {
   // 某些模型把 JSON 整体再字符串化一层（content = "\"{\\\"chapters\\\"…}\""）——先解一层
@@ -69,10 +84,7 @@ export function parseCuts(raw: string, nSegs: number): ChapterCut[] | null {
     if (!Number.isInteger(idx) || idx < 0 || idx >= nSegs || !title) return null
     cuts.push({ startIdx: idx, title })
   }
-  cuts.sort((a, b) => a.startIdx - b.startIdx)
-  if (cuts[0].startIdx !== 0) return null
-  for (let i = 1; i < cuts.length; i++) if (cuts[i].startIdx <= cuts[i - 1].startIdx) return null
-  return cuts
+  return validateCuts(cuts, nSegs)
 }
 
 export interface LlmChapterDeps {
@@ -103,6 +115,7 @@ async function zaiChat(
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${deps.apiKey ?? loadZaiKey()}` },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
   })
   if (!res.ok) {
     const text = (await res.text()).slice(0, 200)
@@ -111,7 +124,8 @@ async function zaiChat(
     throw new Error(`zai HTTP ${res.status}: ${text}`)
   }
   const j = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
-  return j.choices?.[0]?.message?.content ?? ""
+  // strip_thinking 防线（项目已知坑）：thinking 意外开启时内容前缀 <think>…</think> 会闷死 JSON 解析
+  return (j.choices?.[0]?.message?.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim()
 }
 
 /** LLM 切章：两次尝试（解析失败/网络错重试一次，间隔 3s），全部失败抛出。 */
@@ -139,8 +153,9 @@ export async function llmChapter(
   throw new Error(lastErr)
 }
 
-/** 守门：切分退化（≥10min 仅 1 章 / 单章 >45min）→ 返回原因，调用方回落。 */
+/** 守门：切分退化（≥10min 仅 1 章 / 单章 >45min / 幻觉微章 >50 章）→ 返回原因，调用方回落。 */
 export function guardrailReason(cuts: ChapterCut[], segments: Segment[], durationS: number): string | null {
+  if (cuts.length > GUARD_MAX_CHAPTERS) return `守门：${cuts.length} 章超上限 ${GUARD_MAX_CHAPTERS}`
   if (durationS >= GUARD_MIN_DURATION_S && cuts.length < 2) {
     return `守门：${Math.round(durationS / 60)}min 视频仅 ${cuts.length} 章`
   }
@@ -204,6 +219,8 @@ export async function trySemanticChapters(
   deps: LlmChapterDeps = {},
 ): Promise<ChapterCut[] | null> {
   if (!cfg.enabled) return null
+  // 空转写短路：无 segment 时 LLM 必然产不出合法切分，不白打 2 次调用
+  if (input.segments.length === 0) return null
   if (!deps.apiKey && !process.env.ZAI_API_KEY && !loadZaiKey()) {
     console.warn("[chaptering] 缺 ZAI_API_KEY（env 或 ~/.hermes/.env），回落机械切分")
     return null
