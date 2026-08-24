@@ -189,3 +189,7 @@ python3 tools/books/split_chapters.py <book.pdf> <out_dir> <book_slug> --ranges 
 
 `est_tokens=0` 是扫描件无文本层所致（非预算超标）；Task 8 MinerU OCR 产文后按实文
 长度复核预算。
+
+- 首次下载成功后 `~/mineru.json` 固化 pipeline 模型绝对路径（`models-dir.pipeline` →
+  `~/.modelscope/.../snapshots/master`），此后 mineru-api 运行时不再依赖上述 env（env 仅供
+  再下载/换目录）。`models-dir.vlm` 仍指旧 /tmp 路径——本流水线固定 `backend: "pipeline"`，不受影响。
