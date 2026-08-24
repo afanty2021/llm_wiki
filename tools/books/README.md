@@ -64,6 +64,9 @@ $ curl -s http://127.0.0.1:8000/openapi.json | jq '.paths|keys'
   `mineru-models-cache` volume——Task 8 第一次跑会先下模型。
 - CPU pipeline 解析扫描版书籍较慢（估计每页数十秒），Task 8 做整书 418 页时需分章
   批量、可断点续跑（按 manifest 逐章）。
+- **解析后端可配**：`books.json` 的 `local.backend`（默认 `"hybrid-engine"`，docker 部署
+  不用改）。**宿主 MPS 部署**（mineru-api 直接跑在 macOS 宿主）实测 hybrid-engine 慢/不可用，
+  设 `"backend": "pipeline"`（配合 parse_method auto/ocr）约快 15×。
 
 ### 2.4 TODO：云端 token 方案（未采用，留档）
 

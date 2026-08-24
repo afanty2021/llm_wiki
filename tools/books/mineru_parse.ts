@@ -20,7 +20,10 @@ import { parseArgs } from "node:util"
 
 // ── 配置 ──
 
-interface LocalCfg { baseUrl: string; token?: string }
+// backend：multipart 表单的解析后端，默认 "hybrid-engine"（同桌面端 mineru.ts:711）。
+// 宿主 MPS 部署（mineru-api 直接跑在 macOS 宿主）实测 hybrid-engine 慢/不可用，
+// books.json 设 "pipeline"（parse_method auto/ocr 兜底走 OCR）约快 15×。
+interface LocalCfg { baseUrl: string; token?: string; backend?: string }
 interface GateCfg { minCharsPerPage?: number }
 interface BooksConfig {
   mode: "local" | "cloud"
@@ -164,7 +167,7 @@ async function parseLocal(pdf: Buffer, name: string, cfg: LocalCfg, log: (msg: s
   const form = new FormData()
   form.append("files", new Blob([pdf], { type: "application/pdf" }), name)
   form.append("lang_list", "en")
-  form.append("backend", "hybrid-engine") // backend 默认=hybrid-engine（mineru.ts:711），非 auto
+  form.append("backend", cfg.backend ?? "hybrid-engine") // 默认 hybrid-engine（mineru.ts:711）；宿主 MPS 部署经 books.json local.backend 配 "pipeline"
   form.append("effort", "medium")
   form.append("parse_method", "auto")
   form.append("formula_enable", "true")
