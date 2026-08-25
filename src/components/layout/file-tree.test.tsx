@@ -46,6 +46,14 @@ describe("hashTranscriptDerivedPagePath", () => {
     expect(hashTranscriptDerivedPagePath(node("5-Improving-reading-speed-c05108cd.md", "/sources/transcripts/5-Improving-reading-speed-c05108cd.md"))).toBeNull()
     expect(hashTranscriptDerivedPagePath(node("123-LT-607820ef.md", "/sources/transcripts/123-LT-607820ef.md"))).toBeNull()
   })
+  it("形态③：CJK stem（新规则中文 slug）有意纳入——slug 化有损，真标题更完整", () => {
+    expect(hashTranscriptDerivedPagePath(node("01-提问-ab12cd34.md", "/sources/transcripts/01-提问-ab12cd34.md")))
+      .toBe("transcripts/01-提问-ab12cd34.md")
+    expect(hashTranscriptDerivedPagePath(node("当我们教词汇的时候-我们都在教什么-二阶段-ab12cd34.md", "/sources/transcripts/当我们教词汇的时候-我们都在教什么-二阶段-ab12cd34.md")))
+      .toBe("transcripts/当我们教词汇的时候-我们都在教什么-二阶段-ab12cd34.md")
+    // 混合：stem 含 ASCII 字母部分则不触发（slug 已含可读英文段）
+    expect(hashTranscriptDerivedPagePath(node("137-IBL-Inquiry-based-learning-ab12cd34.md", "/sources/transcripts/137-IBL-Inquiry-based-learning-ab12cd34.md"))).toBeNull()
+  })
 })
 
 describe("FileTree 哈希名标题副标签", () => {
