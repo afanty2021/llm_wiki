@@ -267,16 +267,16 @@ test("集成·system 模式缺 wecom_userid：无 meta 且省略 → ToolArgumen
   assert.deepEqual(seen, [])
 })
 
-// ── schema：10 工具 wecom_userid 全部放开为可选 ──
+// ── schema：10 工具不暴露 wecom_userid（2026-08-24 事故加固，运行时仍接受）──
 
-test("schema：全部 10 个 src-server 工具 wecom_userid 可选（required 不含），其余 required 保留", () => {
+test("schema：全部 10 个 src-server 工具不暴露 wecom_userid，其余 required 保留", () => {
   const tools = [...srcServerToolDefinitions(), ...trainingToolDefinitions()]
   assert.equal(tools.length, 10)
   for (const tool of tools) {
-    assert.ok(tool.inputSchema.properties.wecom_userid, `${tool.name}: wecom_userid property kept`)
-    assert.ok(
-      !tool.inputSchema.required?.includes("wecom_userid"),
-      `${tool.name}: wecom_userid must not be required`,
+    assert.equal(
+      "wecom_userid" in (tool.inputSchema.properties ?? {}),
+      false,
+      `${tool.name}: wecom_userid must NOT be exposed in inputSchema (weak-fallback models copy example values into it; identity lock refusals then trip client breakers)`,
     )
   }
   // 其余必填位不受牵连

@@ -191,10 +191,12 @@ export interface SrcServerHandlerDeps {
   getPublicTBase: () => string
 }
 
-const wecomUseridProperty = {
-  type: "string",
-  description: "教师的企业微信 userid。正常会话无需提供（身份已由系统会话锁定）；仅系统调用（cron/运维/cli）必须显式提供；若提供与会话身份不符将被拒绝（凭证由服务端凭证库注入，无需也不可传入 token）",
-}
+// wecom_userid 不进 inputSchema（2026-08-24 事故）：wecom 会话身份由 Hermes
+// `_meta` 注入、服务端 identity.ts 锁定，模型不需要也不应传该参数——弱回退模型
+// 曾照抄示例值硬传（-32602 身份拒绝 ×4），配合客户端熔断器误判整出「服务器还在
+// 恢复中」假故障。运行时仍接受该参数（handler 直读 args，不经 schema 校验）：
+// 系统模式调用（cron/运维，prompt 明确指示传参）不受影响；wecom 会话若模型仍
+// 幻觉传参，identity 锁照常拒绝（纵深防御保留）。
 
 /** src-server 形态下重写的 2 个通用工具（project_id 来自 env，token 经 store 注入）。 */
 export function srcServerToolDefinitions(): ToolDefinition[] {
@@ -205,7 +207,6 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           query: { type: "string", description: "Search query." },
           limit: { type: "number", description: "Maximum results (server clamps 1..50, default 20)." },
         },
@@ -219,7 +220,6 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           path: { type: "string", description: "Project-relative file path, for example wiki/index.md." },
         },
         required: ["path"],
@@ -237,7 +237,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       description: "读取教师档案（subject / grade_levels / goals / interests / onboarding_state）。",
       inputSchema: {
         type: "object",
-        properties: { wecom_userid: wecomUseridProperty },
+        properties: {},
         additionalProperties: false,
       },
     },
@@ -247,7 +247,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           display_name: { type: "string", description: "显示名（≤100 chars）" },
           subject: { type: "string", description: "任教科目（≤100 chars）" },
           grade_levels: { type: "array", items: { type: "string" }, description: "任教年级" },
@@ -264,7 +263,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           payload: { type: "object", description: "提问上下文（缺省 {}）" },
         },
         additionalProperties: false,
@@ -276,7 +274,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           title: { type: "string", description: "计划标题（非空，≤200 chars）" },
           reason: { type: "string", description: "创建理由" },
           origin: { type: "string", enum: ["chat", "weekly"] },
@@ -308,7 +305,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           status: { type: "string", enum: ["active", "archived"] },
         },
         additionalProperties: false,
@@ -320,7 +316,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           item_id: { type: "number", description: "learning_items.id" },
         },
         required: ["item_id"],
@@ -333,7 +328,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: wecomUseridProperty,
           plan_id: { type: "number", description: "learning_plans.id" },
         },
         required: ["plan_id"],
@@ -345,7 +339,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       description: "学习进度总览：全部计划（含 items 计数）+ 最近 20 条学习事件。",
       inputSchema: {
         type: "object",
-        properties: { wecom_userid: wecomUseridProperty },
+        properties: {},
         additionalProperties: false,
       },
     },
