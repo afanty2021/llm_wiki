@@ -717,7 +717,9 @@ async function cmdSignMedia(argv: string[]): Promise<void> {
   const key = process.env.MEDIA__SIGNING_KEY ?? bootstrap.MEDIA__SIGNING_KEY;
   if (!key) fail("MEDIA__SIGNING_KEY 未知——设环境变量或写入 out/bootstrap.env（须与服务端一致）");
   const client = new ApiClient(process.env.TRANSCRIBER_BASE_URL ?? DEFAULT_BASE_URL, { projectId: 0, mediaSigningKey: key });
-  console.log(client.signMediaUrl(slug, hours));
+  // 三段式（2026-08-25 起唯一格式）：调试合成 fp，不绑定 /t/ token——安全性等价
+  // （秘密仍是 key 持有），服务端验签只把 fp 当 HMAC 消息段。
+  console.log(client.signMediaUrl(slug, hours, undefined, "0000000000000000"));
 }
 
 async function main() {

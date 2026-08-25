@@ -91,13 +91,17 @@ export function sha256Hex(s: string): string {
 /**
  * 媒体 URL 签名——与 src-server utils/media_sign.rs 同算法（Rust/TS 双锁，
  * 预计算向量见两侧测试，漂移即红）：
- * - 两段式（M1）：HMAC-SHA256(key, `${mediaId}:${exp}`) → hex；
- * - 三段式（fp 提供，Task 9 /t/ 落地页同款）：消息追加 `:${fp}`——
- *   fp = sha256(plan_link token) 前 16 hex，服务端 verify_media_sig 双格式验签。
+ * - 三段式（唯一格式）：HMAC-SHA256(key, `${mediaId}:${exp}:${fp}`) → hex；
+ *   fp = sha256(plan_link token) 前 16 hex（/t/ 落地页）；调试 CLI 用合成 fp。
+ * - M1 两段式兼容回落已于 2026-08-25 移除（服务端 verify 严格三段式），
+ *   本函数缺 fp 直接抛错，防手滑产出服务端必拒的票据。
  */
-export function signMedia(key: string, mediaId: string, exp: number, fp?: string): string {
-  const msg = fp === undefined ? `${mediaId}:${exp}` : `${mediaId}:${exp}:${fp}`;
-  return createHmac("sha256", key).update(msg).digest("hex");
+export function signMedia(key: string, mediaId: string, exp: number, fp: string): string {
+  if (fp === undefined) {
+    // 运行时守卫：类型必填不拦 JS 调用方（两段式已移除，缺 fp 票据服务端必拒）
+    throw new Error("fp required (two-part signatures removed 2026-08-25)");
+  }
+  return createHmac("sha256", key).update(`${mediaId}:${exp}:${fp}`).digest("hex");
 }
 
 /**
@@ -387,14 +391,15 @@ export class ApiClient {
 
   // ── 媒体签名（T15 sign-media 子命令消费）──
 
-  /** 生成 `${base}/media/<slug>?exp=<unix>&sig=<hex>[&fp=<16 hex>]`；key 缺失 fail fast
-   * （服务端同样拒签）。fp（可选，Task 9）：三段式签名 + URL 附 fp 参数——与 /t/
-   * 落地页签发的票据同形。 */
+  /** 生成 `${base}/media/<slug>?exp=<unix>&sig=<hex>&fp=<16 hex>`；key 缺失 fail fast
+   * （服务端同样拒签）。fp 必填（两段式回落已移除，缺 fp 的票据服务端必拒）：
+   * /t/ 落地页用 token 派生 fp，调试 CLI 用合成 fp（DEBUG_FP）。 */
   signMediaUrl(mediaId: string, hours = 12, key = this.opts.mediaSigningKey ?? process.env.MEDIA__SIGNING_KEY ?? "", fp?: string): string {
     if (!key) throw new Error("media signing key required (options.mediaSigningKey or MEDIA__SIGNING_KEY");
+    if (fp === undefined) throw new Error("fp required (two-part signatures removed 2026-08-25; pass a token-derived or debug fp)");
     const exp = Math.floor(Date.now() / 1000) + Math.round(hours * 3600);
     const sig = signMedia(key, mediaId, exp, fp);
-    return `${this.baseUrl}/media/${mediaId}?exp=${exp}&sig=${sig}${fp === undefined ? "" : `&fp=${fp}`}`;
+    return `${this.baseUrl}/media/${mediaId}?exp=${exp}&sig=${sig}&fp=${fp}`;
   }
 
   private async parseJson<T = unknown>(res: Response, what: string): Promise<T> {
