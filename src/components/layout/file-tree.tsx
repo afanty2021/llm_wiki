@@ -6,7 +6,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
 import { listDirectory, openProjectFolder } from "@/commands/fs"
-import { replaceNodeChildren } from "./file-tree-utils"
+import { replaceNodeChildren, hashTranscriptDerivedPagePath } from "./file-tree-utils"
 import { createLogger } from "@/lib/logger"
 import { caps } from "@/lib/capabilities"
 
@@ -26,6 +26,11 @@ function TreeNode({
   const [loadingChildren, setLoadingChildren] = useState(false)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const openPathInPreview = useWikiStore((s) => s.openPathInPreview)
+  // 纯哈希名转写源文件显示衍生 DB 页标题（web 填充 pageTitleByPath；桌面空表查不到=行为不变）
+  const derivedTitle = useWikiStore((s) => {
+    const pagePath = hashTranscriptDerivedPagePath(node)
+    return pagePath ? s.pageTitleByPath[pagePath] : undefined
+  })
 
   const isSelected = selectedFile === node.path
   const paddingLeft = 12 + depth * 16
@@ -78,6 +83,7 @@ function TreeNode({
   return (
     <button
       onClick={() => openPathInPreview(node.path)}
+      title={derivedTitle ?? node.name}
       className={`flex w-full items-center gap-1 py-1 text-sm ${
         isSelected
           ? "bg-accent text-accent-foreground"
@@ -86,7 +92,12 @@ function TreeNode({
       style={{ paddingLeft: paddingLeft + 14 }}
     >
       <File className="h-3.5 w-3.5 shrink-0" />
-      <span className="truncate">{node.name}</span>
+      <span className="shrink-0 truncate">{node.name}</span>
+      {derivedTitle && (
+        <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground/70">
+          {derivedTitle}
+        </span>
+      )}
     </button>
   )
 }

@@ -33,6 +33,8 @@ export async function buildWebProjectPathIndex(projectId: string | number): Prom
     // 切项目竞态：响应在飞期间项目已换则丢弃，避免旧路径落进新会话索引。
     if (useWikiStore.getState().project?.id !== String(projectId)) return
     useWikiStore.getState().setProjectPathIndexFromPaths(pages.map((p) => p.path), storagePaths)
+    // 同一响应顺带填充 path→title（Files 树存储源文件显示衍生页标题），零额外请求。
+    useWikiStore.getState().setPageTitles(pages)
   } catch (err) {
     console.warn("[web-path-index] listPages 路径清单构建失败:", err)
   }

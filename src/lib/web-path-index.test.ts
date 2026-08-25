@@ -29,7 +29,7 @@ describe("buildWebProjectPathIndex", () => {
 
   it("成功后由 DB 页面 + 存储 raw 清单合并构建（页 /wiki 前缀、存储原样路径）", async () => {
     listPages.mockResolvedValue([
-      { path: "concepts/motivation.md" },
+      { path: "concepts/motivation.md", title: "学习动机" },
       { path: "wiki/index.md" },
     ])
     listFiles.mockResolvedValue([
@@ -49,6 +49,10 @@ describe("buildWebProjectPathIndex", () => {
     expect(index.byPath.has("/raw/sources/book/Ch01.md")).toBe(true)
     // 目录条目不入索引
     expect(index.byPath.has("/sources/transcripts")).toBe(false)
+    // 同一响应填充 path→title（Files 树哈希名副标签），空标题不入表
+    const titles = useWikiStore.getState().pageTitleByPath
+    expect(titles["concepts/motivation.md"]).toBe("学习动机")
+    expect(Object.keys(titles)).toHaveLength(1)
   })
 
   it("存储清单获取失败 → 降级纯页面索引（不抛出、有 warn）", async () => {

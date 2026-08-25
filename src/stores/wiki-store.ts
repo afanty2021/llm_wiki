@@ -390,6 +390,12 @@ interface WikiState {
    * do not read path resolution.
    */
   projectPathIndex: ProjectPathIndex
+  /**
+   * DB 页 path → title 映射（web 由 pages API 填充，桌面为空对象）。
+   * Files 树存储源文件（如纯哈希名 transcripts 源）用它显示衍生页标题；
+   * 桌面不填充 → 查不到即不显示，行为不变。
+   */
+  pageTitleByPath: Record<string, string>
   selectedFile: string | null
   fileContent: string
   previewContentPath: string | null
@@ -443,6 +449,7 @@ interface WikiState {
   setFileTree: (tree: FileNode[], options?: { syncPathIndex?: boolean }) => void
   setProjectPathIndexFromTree: (tree: FileNode[]) => void
   setProjectPathIndexFromPaths: (paths: string[], storagePaths?: string[]) => void
+  setPageTitles: (pages: { path: string; title?: string | null }[]) => void
   setSelectedFile: (path: string | null) => void
   setFileContent: (content: string) => void
   openPathInPreview: (path: string) => void
@@ -477,6 +484,7 @@ export const useWikiStore = create<WikiState>((set, get) => ({
   project: null,
   fileTree: [],
   projectPathIndex: createEmptyProjectPathIndex(),
+  pageTitleByPath: {},
   selectedFile: null,
   fileContent: "",
   previewContentPath: null,
@@ -532,6 +540,14 @@ export const useWikiStore = create<WikiState>((set, get) => ({
   },
   setProjectPathIndexFromTree: (tree) =>
     set({ projectPathIndex: buildProjectPathIndexFromTree(tree) }),
+  /** web：pages API 的 path→title 填充（Files 树存储源文件显示衍生页标题）。 */
+  setPageTitles: (pages: { path: string; title?: string | null }[]) => {
+    const map: Record<string, string> = {}
+    for (const p of pages) {
+      if (p.title && p.title.trim()) map[p.path] = p.title
+    }
+    set({ pageTitleByPath: map })
+  },
   // #4(web)：文件树缺位（setFileTree 只在桌面发生），由 pages API 的 DB 路径
   // 清单构建索引。projectRoot 与 wiki-reader 的 wikiRoot 同源——同为
   // normalizePath(project.path)（web 下为空串 → 虚拟根 "/wiki"），保证
