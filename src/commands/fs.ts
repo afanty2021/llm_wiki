@@ -449,7 +449,84 @@ export interface PageLinksResponse {
 }
 
 export async function getPageLinks(projectPath: string, filePath: string): Promise<PageLinksResponse> {
+  if (USE_HTTP) {
+    // web：页面本体在 DB，链接计算在服务端完成（解析器与图谱构建同源，
+    // 镜像桌面 get_page_links 三段语义）。路径变体（/wiki 前缀等）由服务端归一。
+    return apiClient.getPageLinks(getCurrentProjectId(), filePath)
+  }
   return invoke<PageLinksResponse>("get_page_links", { projectPath, filePath })
+}
+
+/** 桌面 safe_missing_page_stem 同构：非法字符折 '-'、去首尾、Windows 设备名
+ *  加前缀、≤120 chars——保证双平台生成同一路径。 */
+function safeMissingPageStem(title: string): string {
+  let stem = [...title]
+    .map((character) =>
+      /[\u0000-\u001f\u007f<>:"/\\|?*]/.test(character)
+        ? "-"
+        : /\s/.test(character)
+          ? " "
+          : character,
+    )
+    .join("")
+  stem = stem.replace(/-{2,}/g, "-")
+  stem = stem.replace(/^[ .-]+|[ .-]+$/g, "")
+  if (!stem) stem = "untitled"
+  const device = (stem.split(".")[0] || "").toUpperCase()
+  if (
+    ["CON", "PRN", "AUX", "NUL"].includes(device) ||
+    ((device.startsWith("COM") || device.startsWith("LPT")) &&
+      device.length === 4 &&
+      /[1-9]/.test(device[3]))
+  ) {
+    stem = `page-${stem}`
+  }
+  return [...stem].slice(0, 120).join("")
+}
+
+/** web 版 createMissingWikiPage：桌面语义——落 concepts/<slug>.md（DB 页），
+ *  默认 frontmatter(type: concept/created/updated/tags/related)，碰撞 -2..-9999
+ *  （409=已存在 → 试下一后缀，桌面 create_new 同语义），返回
+ *  wiki/concepts/<slug>.md（openEntry 拼路径后 readFile 变体可解析 DB 页）。 */
+async function createMissingWikiPageWeb(
+  projectId: number,
+  rawTitle: string,
+  content?: string,
+): Promise<string> {
+  const title = rawTitle
+    .split("")
+    .map((c) => (/[\u0000-\u001f\u007f]/.test(c) ? " " : c))
+    .join("")
+    .trim()
+  if (!title || [...title].length > 200) {
+    throw new Error("Missing-link page title must contain 1 to 200 characters")
+  }
+  const base = safeMissingPageStem(title)
+  const today = new Date().toISOString().slice(0, 10)
+  let suffix: number | undefined = undefined
+  while ((suffix ?? 1) + 1 <= 9999) {
+    const rel = `concepts/${suffix ? `${base}-${suffix}` : base}.md`
+    let body: { content: string; frontmatter?: Record<string, unknown> }
+    if (content && content.trim()) {
+      body = splitMarkdownContents(content)
+    } else {
+      body = {
+        content: `# ${title}\n`,
+        frontmatter: { type: "concept", title, created: today, updated: today, tags: [], related: [] },
+      }
+    }
+    try {
+      await apiClient.createPage(projectId, { path: rel, ...body })
+      return `wiki/${rel}`
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.isConflict) {
+        suffix = (suffix ?? 1) + 1
+        continue
+      }
+      throw err
+    }
+  }
+  throw new Error("Could not allocate a unique wiki page filename")
 }
 
 export async function createMissingWikiPage(
@@ -457,6 +534,9 @@ export async function createMissingWikiPage(
   title: string,
   content?: string,
 ): Promise<string> {
+  if (USE_HTTP) {
+    return createMissingWikiPageWeb(getCurrentProjectId(), title, content)
+  }
   return invoke<string>("create_missing_wiki_page", { projectPath, title, content })
 }
 

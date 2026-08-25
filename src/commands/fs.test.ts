@@ -148,7 +148,7 @@ describe("fs.ts web 适配", () => {
 
   const notFound = () => new ApiRequestError("not found", 404, "RESOURCE_NOT_FOUND")
 
-  function webFsMocks(overrides: Partial<Record<"statFile" | "readFile" | "getPage" | "updatePage" | "createPage" | "writeFile", ReturnType<typeof vi.fn>>>) {
+  function webFsMocks(overrides: Partial<Record<"statFile" | "readFile" | "getPage" | "updatePage" | "createPage" | "writeFile" | "getPageLinks", ReturnType<typeof vi.fn>>>) {
     return {
       statFile: overrides.statFile ?? vi.fn().mockResolvedValue({ exists: false, is_dir: false, size: 0, modified: 0 }),
       readFile: overrides.readFile ?? vi.fn(),
@@ -156,6 +156,7 @@ describe("fs.ts web 适配", () => {
       updatePage: overrides.updatePage ?? vi.fn(),
       createPage: overrides.createPage ?? vi.fn(),
       writeFile: overrides.writeFile ?? vi.fn().mockResolvedValue(undefined),
+      getPageLinks: overrides.getPageLinks ?? vi.fn().mockResolvedValue({ outgoing: [], backlinks: [], missing: [] }),
     }
   }
 
@@ -649,6 +650,93 @@ describe("fs.ts web 适配", () => {
     await expect(fs.readFile("sources/transcripts/gone.md")).rejects.toThrow("File not found")
     expect(api.getPage).not.toHaveBeenCalled()
     expect(api.readFile).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+  // ── Page links / create-missing web 分支（Links 面板）──
+
+  it("getPageLinks(web) 走 graph links 端点,不带 Tauri invoke", async () => {
+    vi.resetModules()
+    const payload = { outgoing: [{ title: "Skimming", path: "concepts/skimming.md" }], backlinks: [], missing: [{ title: "缺失页" }] }
+    const api = webFsMocks({ getPageLinks: vi.fn().mockResolvedValue(payload) })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    const result = await fs.getPageLinks("", "/wiki/entities/kwl-chart.md")
+    expect(api.getPageLinks).toHaveBeenCalledWith(7, "/wiki/entities/kwl-chart.md")
+    expect(result).toEqual(payload)
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("createMissingWikiPage(web) 默认 frontmatter 落 concepts/<slug>.md,返回 wiki/ 前缀", async () => {
+    vi.resetModules()
+    const api = webFsMocks({ createPage: vi.fn().mockResolvedValue({ ...samplePage, path: "concepts/kwl-chart.md" }) })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    const rel = await fs.createMissingWikiPage("", "KWL Chart")
+    expect(rel).toBe("wiki/concepts/KWL Chart.md")
+    expect(api.createPage).toHaveBeenCalledTimes(1)
+    const body = api.createPage.mock.calls[0][1]
+    expect(body.path).toBe("concepts/KWL Chart.md")
+    expect(body.frontmatter).toMatchObject({ type: "concept", title: "KWL Chart", tags: [], related: [] })
+    expect(body.content).toBe("# KWL Chart\n")
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("createMissingWikiPage(web) 409 碰撞依次试 -2/-3 后缀,非 409 上抛", async () => {
+    vi.resetModules()
+    const api = webFsMocks({
+      createPage: vi.fn()
+        .mockRejectedValueOnce(new ApiRequestError("exists", 409, "CONFLICT"))
+        .mockRejectedValueOnce(new ApiRequestError("exists", 409, "CONFLICT"))
+        .mockResolvedValueOnce({ ...samplePage, path: "concepts/t-3.md" }),
+    })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    const rel = await fs.createMissingWikiPage("", "t")
+    expect(rel).toBe("wiki/concepts/t-3.md")
+    expect(api.createPage.mock.calls.map((c: any[]) => c[1].path)).toEqual([
+      "concepts/t.md", "concepts/t-2.md", "concepts/t-3.md",
+    ])
+    // 非 409 上抛
+    api.createPage.mockRejectedValueOnce(new ApiRequestError("boom", 500, "INTERNAL"))
+    await expect(fs.createMissingWikiPage("", "u")).rejects.toThrow("boom")
+    vi.doUnmock("@/lib/capabilities")
+    vi.doUnmock("@/lib/api-client")
+    delete (globalThis as any).__currentProjectId
+    delete (globalThis as Record<string, unknown>).window
+  })
+
+  it("createMissingWikiPage(web) 草稿内容拆 frontmatter,非法字符标题折 ' '", async () => {
+    vi.resetModules()
+    const api = webFsMocks({ createPage: vi.fn().mockResolvedValue(samplePage) })
+    vi.doMock("@/lib/capabilities", () => ({ caps: { platform: "web" } }))
+    vi.doMock("@/lib/api-client", () => ({ apiClient: api, ApiRequestError }))
+    ;(globalThis as Record<string, unknown>).window = globalThis
+    ;(globalThis as any).__currentProjectId = 7
+    const fs = await import("./fs")
+    await fs.createMissingWikiPage("", "A/B: C?", "---\ntype: concept\ntitle: A/B C\n---\n\n正文")
+    const body = api.createPage.mock.calls[0][1]
+    expect(body.path).toBe("concepts/A-B- C.md")
+    expect(body.frontmatter).toMatchObject({ type: "concept", title: "A/B C" })
+    expect(body.content).toBe("正文")
     vi.doUnmock("@/lib/capabilities")
     vi.doUnmock("@/lib/api-client")
     delete (globalThis as any).__currentProjectId

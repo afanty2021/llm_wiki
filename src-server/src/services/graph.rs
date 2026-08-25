@@ -1019,3 +1019,210 @@ mod tests {
         assert!(!iso.unwrap().node_ids.contains(&"sys".to_string()));
     }
 }
+
+
+#[cfg(test)]
+mod page_links_tests {
+    use super::*;
+
+    fn page(path: &str, title: &str, content: &str) -> WikiPageRow {
+        WikiPageRow { path: path.into(), title: title.into(), page_type: Some("entity".into()), content: Some(content.into()), sources: None }
+    }
+
+    fn pages() -> Vec<WikiPageRow> {
+        vec![
+            page("entities/kwl-chart.md", "KWL Chart", "参见 [[Skimming]] 与 [[不存在的页]]。"),
+            page("concepts/skimming.md", "Skimming", "回看 [[KWL Chart]] 的 [[KWL Chart]] 自链。"),
+            page("concepts/other.md", "Other", "无链接。"),
+        ]
+    }
+
+    #[test]
+    fn three_sections_match_desktop_semantics() {
+        let data = page_links_from_pages(&pages(), "entities/kwl-chart.md").unwrap();
+        assert_eq!(data.outgoing.len(), 1);
+        assert_eq!(data.outgoing[0].path.as_deref(), Some("concepts/skimming.md"));
+        assert_eq!(data.outgoing[0].title, "Skimming");
+        assert_eq!(data.missing.len(), 1);
+        assert_eq!(data.missing[0].title, "不存在的页");
+        // 反链：skimming 链回本页（自链重复不影响），snippet 以本页 title 定位
+        assert_eq!(data.backlinks.len(), 1);
+        assert_eq!(data.backlinks[0].path.as_deref(), Some("concepts/skimming.md"));
+        assert!(data.backlinks[0].snippet.as_deref().unwrap().contains("KWL Chart"));
+    }
+
+    #[test]
+    fn self_links_skipped_and_not_missing() {
+        let data = page_links_from_pages(&pages(), "concepts/skimming.md").unwrap();
+        assert!(data.outgoing.iter().all(|e| e.path.as_deref() != Some("concepts/skimming.md")));
+        assert!(data.missing.is_empty(), "self-link must be skipped, not missing");
+    }
+
+    #[test]
+    fn path_variants_resolve_to_same_page() {
+        for variant in [
+            "entities/kwl-chart.md",
+            "/entities/kwl-chart.md",
+            "/wiki/entities/kwl-chart.md",
+            "wiki/entities/kwl-chart.md",
+        ] {
+            let data = page_links_from_pages(&pages(), variant);
+            assert!(data.is_ok(), "variant {variant} must resolve");
+        }
+    }
+
+    #[test]
+    fn unknown_path_is_not_found() {
+        let err = page_links_from_pages(&pages(), "entities/nope.md").unwrap_err();
+        assert!(matches!(err, AppError::ResourceNotFound(_)));
+    }
+
+    #[test]
+    fn title_resolution_fallback_works() {
+        // [[KWL Chart]] 走 title_to_path 命中（stem 不匹配）
+        let data = page_links_from_pages(&pages(), "concepts/other.md").unwrap();
+        let _ = data; // other 无链接，仅确保构造不炸
+        let pages2 = vec![
+            page("a.md", "A", "链 [[B Title]]"),
+            page("b/actual-stem.md", "B Title", ""),
+        ];
+        let d = page_links_from_pages(&pages2, "a.md").unwrap();
+        assert_eq!(d.outgoing[0].path.as_deref(), Some("b/actual-stem.md"));
+    }
+}
+
+// ── Page links（Links 面板，镜像桌面 get_page_links_inner 三段语义）──
+
+#[derive(Serialize, Clone, Debug)]
+pub struct PageLinkEntry {
+    pub title: String,
+    pub path: Option<String>,
+    pub snippet: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct PageLinksData {
+    pub outgoing: Vec<PageLinkEntry>,
+    pub backlinks: Vec<PageLinkEntry>,
+    pub missing: Vec<PageLinkEntry>,
+}
+
+/// 桌面 build_snippet 同构：query（lowercase）定位，±80 字符窗口，换行折空格，截断加省略号。
+fn build_snippet(content: &str, query: &str) -> String {
+    const SNIPPET_CONTEXT: usize = 80;
+    let lower = content.to_lowercase();
+    let q = query.to_lowercase();
+    let idx = lower.find(&q).unwrap_or(0);
+    let char_positions: Vec<usize> = content.char_indices().map(|(i, _)| i).collect();
+    if char_positions.is_empty() {
+        return String::new();
+    }
+    let match_char = char_positions
+        .iter()
+        .position(|byte| *byte >= idx)
+        .unwrap_or(char_positions.len().saturating_sub(1));
+    let query_chars = query.chars().count().max(1);
+    let start_char = match_char.saturating_sub(SNIPPET_CONTEXT);
+    let end_char = (match_char + query_chars + SNIPPET_CONTEXT).min(char_positions.len());
+    let start = char_positions[start_char];
+    let end = if end_char < char_positions.len() {
+        char_positions[end_char]
+    } else {
+        content.len()
+    };
+    let mut snippet = content[start..end].replace('\n', " ");
+    if start > 0 {
+        snippet = format!("...{snippet}");
+    }
+    if end < content.len() {
+        snippet.push_str("...");
+    }
+    snippet
+}
+
+/// path 归一：消费方可能传 DB 原路径（entities/x.md）、前导斜杠、或 /wiki 虚拟根
+/// 前缀形态（web 知识树）——统一剥到 DB 原路径再查 pages。
+fn normalize_page_path(path: &str) -> String {
+    let mut p = path.trim().trim_start_matches('/').to_string();
+    if let Some(stripped) = p.strip_prefix("wiki/") {
+        p = stripped.to_string();
+    }
+    p
+}
+
+/// 计算 target 页的 outgoing/backlinks/missing（镜像桌面 get_page_links_inner：
+/// resolve 用的 stem/title 双 map 与 build_graph 同源，resolve 失败进 missing）。
+fn page_links_from_pages(
+    pages: &[WikiPageRow],
+    target_raw: &str,
+) -> Result<PageLinksData, AppError> {
+    let target = normalize_page_path(target_raw);
+    let paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
+    let stem_to_path = build_stem_to_path(&paths);
+    let title_to_path = build_title_to_path(
+        &pages.iter().map(|p| (p.title.clone(), p.path.clone())).collect::<Vec<_>>(),
+    );
+    let by_path: HashMap<&str, &WikiPageRow> =
+        pages.iter().map(|p| (p.path.as_str(), p)).collect();
+    let current = by_path
+        .get(target.as_str())
+        .ok_or_else(|| AppError::ResourceNotFound("page not in project".into()))?;
+
+    let mut outgoing: Vec<PageLinkEntry> = Vec::new();
+    let mut missing: Vec<PageLinkEntry> = Vec::new();
+    for raw in extract_wikilinks(current.content.as_deref().unwrap_or("")) {
+        match resolve_wikilink(&raw, &stem_to_path, &title_to_path) {
+            Some(tgt) if tgt != current.path => {
+                if let Some(t) = by_path.get(tgt.as_str()) {
+                    outgoing.push(PageLinkEntry {
+                        title: t.title.clone(),
+                        path: Some(t.path.clone()),
+                        snippet: None,
+                    });
+                }
+            }
+            Some(_) => {} // 自链接：桌面跳过
+            None => missing.push(PageLinkEntry {
+                title: raw,
+                path: None,
+                snippet: None,
+            }),
+        }
+    }
+
+    let mut backlinks: Vec<PageLinkEntry> = Vec::new();
+    for page in pages {
+        if page.path == current.path {
+            continue;
+        }
+        let links_here = extract_wikilinks(page.content.as_deref().unwrap_or("")).iter().any(|raw| {
+            resolve_wikilink(raw, &stem_to_path, &title_to_path)
+                .is_some_and(|tgt| tgt == current.path)
+        });
+        if links_here {
+            backlinks.push(PageLinkEntry {
+                title: page.title.clone(),
+                path: Some(page.path.clone()),
+                snippet: Some(build_snippet(
+                    page.content.as_deref().unwrap_or(""),
+                    &current.title,
+                )),
+            });
+        }
+    }
+
+    outgoing.sort_by(|a, b| a.title.cmp(&b.title));
+    outgoing.dedup_by(|a, b| a.path == b.path);
+    backlinks.sort_by(|a, b| a.title.cmp(&b.title));
+    missing.sort_by(|a, b| a.title.cmp(&b.title));
+    missing.dedup_by(|a, b| a.title == b.title);
+    Ok(PageLinksData { outgoing, backlinks, missing })
+}
+
+pub async fn page_links(pool: &PgPool, project_id: i32, path: &str) -> Result<PageLinksData, AppError> {
+    let pages: Vec<WikiPageRow> = sqlx::query_as::<_, WikiPageRow>(
+        "SELECT path, COALESCE(title,'') AS title, page_type, content, sources \
+         FROM wiki_pages WHERE project_id = $1 AND COALESCE(page_type,'') != 'query'"
+    ).bind(project_id).fetch_all(pool).await.map_err(AppError::DatabaseError)?;
+    page_links_from_pages(&pages, path)
+}

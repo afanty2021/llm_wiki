@@ -267,6 +267,16 @@ class ApiClient {
     )
   }
 
+  /** GET /graph/:id/links?path= —— Links 面板（outgoing/backlinks/missing），
+   *  服务端镜像桌面 get_page_links，解析器与图谱构建同源。 */
+  async getPageLinks(
+    projectId: number,
+    path: string,
+  ): Promise<{ outgoing: { title: string; path?: string; snippet?: string }[]; backlinks: { title: string; path?: string; snippet?: string }[]; missing: { title: string; path?: string; snippet?: string }[] }> {
+    const params = `?path=${encodeURIComponent(path)}`
+    return this.request("GET", `/api/v1/graph/${projectId}/links${params}`)
+  }
+
   // === Files ===
   async listFiles(projectId: number, dir?: string, maxDepth?: number): Promise<{ name: string; path: string; is_dir: boolean; size: number }[]> {
     const params = new URLSearchParams()

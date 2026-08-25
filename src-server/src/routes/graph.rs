@@ -11,6 +11,7 @@ pub fn graph_routes() -> axum::Router<AppState> {
         .route("/:project_id", axum::routing::get(get_graph))
         .route("/:project_id/insights", axum::routing::get(get_insights))
         .route("/:project_id/related", axum::routing::get(get_related))
+        .route("/:project_id/links", axum::routing::get(get_page_links))
 }
 
 pub async fn get_graph(
@@ -57,4 +58,22 @@ pub async fn get_related(
     }
     let limit = q.limit.unwrap_or(10).min(50);
     Ok(Json(crate::services::graph::related_nodes(&g, &q.path, limit)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct LinksQuery {
+    pub path: String,
+}
+
+/// GET /:project_id/links?path= — Links 面板（outgoing/backlinks/missing），
+/// 镜像桌面 get_page_links 语义；解析器与 build_graph 同源（stem/title 双 map）。
+pub async fn get_page_links(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(project_id): Path<i32>,
+    axum::extract::Query(q): axum::extract::Query<LinksQuery>,
+) -> Result<Json<crate::services::graph::PageLinksData>, AppError> {
+    let (_user_id, _team_id) = check_project_access(&state, &headers, project_id).await?;
+    let data = crate::services::graph::page_links(&state.db, project_id, &q.path).await?;
+    Ok(Json(data))
 }
