@@ -37,6 +37,15 @@ describe("hashTranscriptDerivedPagePath", () => {
     expect(hashTranscriptDerivedPagePath(node("06ad7ef1.md", "/raw/sources/06ad7ef1.md"))).toBeNull()
     expect(hashTranscriptDerivedPagePath(node("06ad7ef1", "/sources/transcripts/06ad7ef1"))).toBeNull()
   })
+  it("形态②：无字母数字 stem + 哈希（1-2a892ab6）也触发；含字母 stem 不触发", () => {
+    expect(hashTranscriptDerivedPagePath(node("1-2a892ab6.md", "/sources/transcripts/1-2a892ab6.md")))
+      .toBe("transcripts/1-2a892ab6.md")
+    expect(hashTranscriptDerivedPagePath(node("116-3f89a942.md", "/sources/transcripts/116-3f89a942.md")))
+      .toBe("transcripts/116-3f89a942.md")
+    // stem 含字母 = 可读名
+    expect(hashTranscriptDerivedPagePath(node("5-Improving-reading-speed-c05108cd.md", "/sources/transcripts/5-Improving-reading-speed-c05108cd.md"))).toBeNull()
+    expect(hashTranscriptDerivedPagePath(node("123-LT-607820ef.md", "/sources/transcripts/123-LT-607820ef.md"))).toBeNull()
+  })
 })
 
 describe("FileTree 哈希名标题副标签", () => {
