@@ -1072,6 +1072,26 @@ mod page_links_tests {
     }
 
     #[test]
+    fn sources_transcripts_maps_to_derived_page() {
+        // Files 树点存储源文件 → 计算同 slug 衍生 DB 页的链接（M1 约定）
+        let mut pp = pages();
+        pp.push(page("transcripts/src-x.md", "Src X 页", "链 [[Skimming]]"));
+        let data = page_links_from_pages(&pp, "sources/transcripts/src-x.md").unwrap();
+        assert_eq!(data.outgoing.len(), 1);
+        assert_eq!(data.outgoing[0].path.as_deref(), Some("concepts/skimming.md"));
+        // 前导斜杠变体同样命中
+        assert!(page_links_from_pages(&pp, "/sources/transcripts/src-x.md").is_ok());
+    }
+
+    #[test]
+    fn sources_without_derived_page_and_raw_sources_stay_404() {
+        let err = page_links_from_pages(&pages(), "sources/transcripts/never-transcribed.md").unwrap_err();
+        assert!(matches!(err, AppError::ResourceNotFound(_)));
+        let err = page_links_from_pages(&pages(), "raw/sources/LT-Book/Ch01-lesson.md").unwrap_err();
+        assert!(matches!(err, AppError::ResourceNotFound(_)), "book chapters have no same-slug derived page");
+    }
+
+    #[test]
     fn unknown_path_is_not_found() {
         let err = page_links_from_pages(&pages(), "entities/nope.md").unwrap_err();
         assert!(matches!(err, AppError::ResourceNotFound(_)));
@@ -1150,13 +1170,28 @@ fn normalize_page_path(path: &str) -> String {
     p
 }
 
+/// Links 查找候选：DB 原路径 + 存储源文件→衍生页映射。Files 树点开
+/// `sources/transcripts/<slug>.md`（存储源，DB 无同名页）时，计算其同 slug
+/// 衍生页 `transcripts/<slug>.md` 的链接（M1 约定，239 个全成立）。
+/// raw/sources/**（书籍章节）无同 slug 衍生页（衍生内容并入 concepts 等），
+/// 维持 404（与桌面 wiki/ 外报错同语义）。
+fn page_link_candidates(target_raw: &str) -> Vec<String> {
+    let norm = normalize_page_path(target_raw);
+    let mut candidates = vec![norm.clone()];
+    if let Some(rest) = norm.strip_prefix("sources/transcripts/") {
+        if !rest.is_empty() {
+            candidates.push(format!("transcripts/{rest}"));
+        }
+    }
+    candidates
+}
+
 /// 计算 target 页的 outgoing/backlinks/missing（镜像桌面 get_page_links_inner：
 /// resolve 用的 stem/title 双 map 与 build_graph 同源，resolve 失败进 missing）。
 fn page_links_from_pages(
     pages: &[WikiPageRow],
     target_raw: &str,
 ) -> Result<PageLinksData, AppError> {
-    let target = normalize_page_path(target_raw);
     let paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
     let stem_to_path = build_stem_to_path(&paths);
     let title_to_path = build_title_to_path(
@@ -1164,8 +1199,9 @@ fn page_links_from_pages(
     );
     let by_path: HashMap<&str, &WikiPageRow> =
         pages.iter().map(|p| (p.path.as_str(), p)).collect();
-    let current = by_path
-        .get(target.as_str())
+    let current = page_link_candidates(target_raw)
+        .iter()
+        .find_map(|c| by_path.get(c.as_str()))
         .ok_or_else(|| AppError::ResourceNotFound("page not in project".into()))?;
 
     let mut outgoing: Vec<PageLinkEntry> = Vec::new();
