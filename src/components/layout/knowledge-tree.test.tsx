@@ -68,6 +68,9 @@ describe("KnowledgeTree(web) projectPathIndex 补建", () => {
       expect(useWikiStore.getState().projectPathIndex.byPath.has("/wiki/concepts/motivation.md")).toBe(true)
     })
     expect(useWikiStore.getState().projectPathIndex.byPath.has("/wiki/index.md")).toBe(true)
+    // dataVersion 刷新路径同步填充标题（Files 树副标签依赖，防陈旧）
+    expect(useWikiStore.getState().pageTitleByPath["concepts/motivation.md"]).toBe("Motivation")
+    expect(useWikiStore.getState().pageTitleByPath["wiki/index.md"]).toBe("Index")
     // 存储 raw 清单并入（sources 卡片解析依赖）
     expect(useWikiStore.getState().projectPathIndex.byPath.has("/sources/transcripts/a.md")).toBe(true)
     expect(listPages).toHaveBeenCalledWith(7)

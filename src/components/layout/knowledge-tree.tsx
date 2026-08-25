@@ -78,6 +78,9 @@ export function KnowledgeTree() {
         const storagePaths = await fetchStoragePaths(project.id).catch(() => [] as string[])
         if (useWikiStore.getState().project?.id !== project.id) return
         useWikiStore.getState().setProjectPathIndexFromPaths(pages.map((p) => p.path), storagePaths)
+        // dataVersion 刷新路径同步刷标题（Files 树副标签依赖 pageTitleByPath；
+        // 否则新建/改题页在项目重开前显示旧标题）
+        useWikiStore.getState().setPageTitles(pages)
         const pageInfos: WikiPageInfo[] = pages
           .filter((p) => p.path !== "wiki/index.md" && p.path !== "wiki/log.md")
           .map((p) => {

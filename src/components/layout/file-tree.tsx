@@ -92,7 +92,10 @@ function TreeNode({
       style={{ paddingLeft: paddingLeft + 14 }}
     >
       <File className="h-3.5 w-3.5 shrink-0" />
-      <span className="shrink-0 truncate">{node.name}</span>
+      {/* shrink-0 会废掉 truncate（flex-shrink:0 → 永不收缩 → 长名溢出行宽，
+          fe8f11d5 的中文长文件名首当其冲）——文件名保持可收缩，靠 overflow:hidden
+          的自动最小尺寸归零触发 ellipsis；短哈希名不受影响。 */}
+      <span className="truncate">{node.name}</span>
       {derivedTitle && (
         <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground/70">
           {derivedTitle}
