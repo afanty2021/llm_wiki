@@ -594,7 +594,15 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       failed++; processed++;
       continue;
     }
-    const slug = slugFor(base, sha8);
+    const slug0 = slugFor(base, sha8);
+    // 规则升级桥（2026-08-25 slug 中文化）：同一 wav 已有 state 行（旧规则 slug，含 39 个
+    // 纯哈希名）→ 沿用旧 slug，保证同内容跨规则幂等（重跑/迁移不产生重复页）；仅全新内容
+    // 走新规则。wav 漂移场景天然排除（漂移行 wavSha ≠ 实算 sha，find 不命中，照走新 slug）。
+    const bySha = lines.find((l) => l.wavSha === sha8 && l.slug && l.slug !== slug0);
+    const slug = bySha ? bySha.slug : slug0;
+    if (bySha) {
+      console.log(`ℹ ${entry.relPath} 命中 state wavSha 桥：沿用旧规则 slug ${bySha.slug}（新规则将为 ${slug0}）`);
+    }
     // 漂移按新内容处理（M1 评审 #4）：源变/wav 缺失重抽后实算 sha 与 state 记录不符 →
     // 更新该行 wavSha/slug（下方 cur.slug/cur.wavSha 赋值），走新 slug 新转写，不抛错
     if (line?.wavSha && sha8 !== line.wavSha) {
