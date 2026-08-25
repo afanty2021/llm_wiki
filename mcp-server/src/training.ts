@@ -197,6 +197,12 @@ export interface SrcServerHandlerDeps {
 // 恢复中」假故障。运行时仍接受该参数（handler 直读 args，不经 schema 校验）：
 // 系统模式调用（cron/运维，prompt 明确指示传参）不受影响；wecom 会话若模型仍
 // 幻觉传参，identity 锁照常拒绝（纵深防御保留）。
+//
+// ⚠️ 前提依赖：schema 对外宣告该参数「不存在」（additionalProperties:false），
+// 运行时接受完全依赖 index.ts 低层 setRequestHandler + asObject 透传、SDK 客户端
+// 不校验未声明参数（identity.test.ts 管线透传测试钉住此前提）。若未来迁移
+// registerTool/校验型分发，必须保留对 wecom_userid 的显式接受，否则 cron 系统
+// 调用会静默断裂。
 
 /** src-server 形态下重写的 2 个通用工具（project_id 来自 env，token 经 store 注入）。 */
 export function srcServerToolDefinitions(): ToolDefinition[] {

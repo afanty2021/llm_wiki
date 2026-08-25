@@ -331,3 +331,35 @@ test("链路：client callTool _meta 经 SDK 真实管线到达 handler 的 requ
   await client.close()
   await server.close()
 })
+
+test("链路：schema 未声明的 wecom_userid 经 SDK 管线原样到达 handler（cron 系统调用依赖）", async () => {
+  const { Server } = await import("@modelcontextprotocol/sdk/server/index.js")
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js")
+  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js")
+  const { CallToolRequestSchema } = await import("@modelcontextprotocol/sdk/types.js")
+
+  // 镜像 index.ts 的分发习语：低层 setRequestHandler + asObject 透传（不经
+  // schema 校验）。2026-08-24 加固后 wecom_userid 不在 inputSchema，但 cron
+  // 系统调用（prompt 指示显式传参）必须仍能送达——本测试钉住 SDK 客户端与
+  // CallToolRequestSchema 不剥离未声明参数这一前提；若迁移 registerTool/校验型
+  // 分发弄断此链路，此处会红。
+  let seenArgs: Record<string, unknown> | undefined
+  const server = new Server({ name: "passthrough-test", version: "0.0.0" }, { capabilities: { tools: {} } })
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    seenArgs = request.params.arguments as Record<string, unknown>
+    return { content: [{ type: "text" as const, text: "ok" }] }
+  })
+
+  const client = new Client({ name: "passthrough-client", version: "0.0.0" })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+  await client.callTool({
+    name: "teacher_tutor_profile_get",
+    arguments: { wecom_userid: "cron-teacher" },
+  })
+
+  assert.equal((seenArgs as Record<string, unknown> | undefined)?.wecom_userid, "cron-teacher")
+  await client.close()
+  await server.close()
+})
