@@ -1084,6 +1084,24 @@ mod page_links_tests {
     }
 
     #[test]
+    fn full_path_wikilinks_resolve_by_direct_lookup() {
+        // 全路径形（含 .md）直查命中；缺 .md / 大小写不符 → missing（桌面同构）
+        let pp = vec![
+            page("a.md", "A", "链 [[concepts/skimming]]、[[concepts/skimming.md]]、[[Concepts/Skimming.md]]"),
+            page("concepts/skimming.md", "Skimming", ""),
+        ];
+        let d = page_links_from_pages(&pp, "a.md").unwrap();
+        assert_eq!(d.outgoing.len(), 1, "only the exact .md form resolves");
+        assert_eq!(d.outgoing[0].path.as_deref(), Some("concepts/skimming.md"));
+        assert_eq!(d.missing.len(), 2, "no-.md and case-mismatch stay missing");
+
+        // 反链：全路径形链接的目标页也能探测到 backlink
+        let d2 = page_links_from_pages(&pp, "concepts/skimming.md").unwrap();
+        assert_eq!(d2.backlinks.len(), 1);
+        assert_eq!(d2.backlinks[0].path.as_deref(), Some("a.md"));
+    }
+
+    #[test]
     fn sources_without_derived_page_and_raw_sources_stay_404() {
         let err = page_links_from_pages(&pages(), "sources/transcripts/never-transcribed.md").unwrap_err();
         assert!(matches!(err, AppError::ResourceNotFound(_)));
@@ -1186,6 +1204,27 @@ fn page_link_candidates(target_raw: &str) -> Vec<String> {
     candidates
 }
 
+/// wikilink 解析（page_links 专用）：全路径形（含 '/'）by_path 直查——镜像桌面
+/// resolve_reader_wikilink 第一分支（须含 .md、大小写敏感、miss 不回落 basename，
+/// 否则全路径形在 web 恒 missing，Create 按钮会以链接原文建近垃圾页）；裸链接照旧
+/// 走 stem/title 双 map（与图谱解析同源）。
+fn resolve_link_with_path_form(
+    raw: &str,
+    by_path: &HashMap<&str, &WikiPageRow>,
+    stem_to_path: &HashMap<String, String>,
+    title_to_path: &HashMap<String, String>,
+) -> Option<String> {
+    let link = raw.trim().replace('\\', "/");
+    if link.contains('/') {
+        return if by_path.contains_key(link.as_str()) {
+            Some(link)
+        } else {
+            None
+        };
+    }
+    resolve_wikilink(&link, stem_to_path, title_to_path)
+}
+
 /// 计算 target 页的 outgoing/backlinks/missing（镜像桌面 get_page_links_inner：
 /// resolve 用的 stem/title 双 map 与 build_graph 同源，resolve 失败进 missing）。
 fn page_links_from_pages(
@@ -1207,7 +1246,7 @@ fn page_links_from_pages(
     let mut outgoing: Vec<PageLinkEntry> = Vec::new();
     let mut missing: Vec<PageLinkEntry> = Vec::new();
     for raw in extract_wikilinks(current.content.as_deref().unwrap_or("")) {
-        match resolve_wikilink(&raw, &stem_to_path, &title_to_path) {
+        match resolve_link_with_path_form(&raw, &by_path, &stem_to_path, &title_to_path) {
             Some(tgt) if tgt != current.path => {
                 if let Some(t) = by_path.get(tgt.as_str()) {
                     outgoing.push(PageLinkEntry {
@@ -1232,7 +1271,7 @@ fn page_links_from_pages(
             continue;
         }
         let links_here = extract_wikilinks(page.content.as_deref().unwrap_or("")).iter().any(|raw| {
-            resolve_wikilink(raw, &stem_to_path, &title_to_path)
+            resolve_link_with_path_form(raw, &by_path, &stem_to_path, &title_to_path)
                 .is_some_and(|tgt| tgt == current.path)
         });
         if links_here {

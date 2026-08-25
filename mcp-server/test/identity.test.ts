@@ -338,11 +338,12 @@ test("链路：schema 未声明的 wecom_userid 经 SDK 管线原样到达 handl
   const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js")
   const { CallToolRequestSchema } = await import("@modelcontextprotocol/sdk/types.js")
 
-  // 镜像 index.ts 的分发习语：低层 setRequestHandler + asObject 透传（不经
-  // schema 校验）。2026-08-24 加固后 wecom_userid 不在 inputSchema，但 cron
-  // 系统调用（prompt 指示显式传参）必须仍能送达——本测试钉住 SDK 客户端与
-  // CallToolRequestSchema 不剥离未声明参数这一前提；若迁移 registerTool/校验型
-  // 分发弄断此链路，此处会红。
+  // 本测试自建镜像 server（低层 setRequestHandler + asObject，同 index.ts 的
+  // 分发习语），并非 import 生产 dispatch——它钉住的前提是「SDK 客户端与
+  // CallToolRequestSchema 不剥离 schema 未声明参数」（SDK 1.29.0 源码级核实：
+  // 低层传原始 request，registerTool 则 safeParse 剥未知键）。因此若未来真把
+  // index.ts 迁到 registerTool，此测试不会红——生产侧防线是 training.ts 与
+  // index.ts 的 ⚠ 前提依赖注释，迁移前必读。
   let seenArgs: Record<string, unknown> | undefined
   const server = new Server({ name: "passthrough-test", version: "0.0.0" }, { capabilities: { tools: {} } })
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
