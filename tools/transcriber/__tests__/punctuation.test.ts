@@ -166,6 +166,38 @@ describe("punctuateMd（LLM mock）", () => {
     // 接受的就是未分段产物本身（正文内无空行）
     expect(result!.split("## [00:00] 单章\n")[1] ?? "").not.toContain("\n\n")
   })
+  it("密度门：≥400 字块偷懒回显（骨架校验通过但零标点）→ 重试一次仍懒判失败，不进二分", async () => {
+    const lines = Array.from({ length: 8 }, (_, i) => `[0${i}:00] ${"语料".repeat(28)}`)
+    const md = `---\ntitle: "偷懒"\n---\n\n## [00:00] 单章\n\n${lines.join("\n")}\n`
+    let calls = 0
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      calls++
+      const body = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }
+      // 原样回显：骨架校验必然通过（零增删改），但一个标点都没加
+      return new Response(JSON.stringify({ choices: [{ message: { content: body.messages[1].content } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
+    expect(result).toBeNull()
+    expect(calls).toBe(2) // 常规尝试耗尽即判失败，不进二分烧调用
+  })
+  it("密度门：首答偷懒、重答正常 → 采纳重答（不误杀整个文件）", async () => {
+    const lines = Array.from({ length: 8 }, (_, i) => `[0${i}:00] ${"语料".repeat(28)}`)
+    const md = `---\ntitle: "偷懒"\n---\n\n## [00:00] 单章\n\n${lines.join("\n")}\n`
+    let calls = 0
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      calls++
+      const body = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }
+      const user = body.messages[1].content
+      if (calls === 1) return new Response(JSON.stringify({ choices: [{ message: { content: user } }] }), { status: 200 })
+      // 只加纯标点（，。）——加汉字会触发骨架拒绝，那是另一条测试路径
+      const out = user.split("\n").map((l) => (/\[\d{1,3}:\d{2}\] /.test(l) ? `${l}，。` : l)).join("\n\n")
+      return new Response(JSON.stringify({ choices: [{ message: { content: out } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
+    expect(result).not.toBeNull()
+    expect(calls).toBe(2)
+    expect(result).toContain("，。")
+  })
   it("传输错误（5xx）重试一次后文件级快速失败——不进二分", async () => {
     let calls = 0
     const fetchImpl = (async () => {

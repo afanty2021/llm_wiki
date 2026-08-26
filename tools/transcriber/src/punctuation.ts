@@ -26,6 +26,8 @@ export const DEFAULT_PUNCTUATE: Required<PunctuateConfig> = {
 
 const CHUNK_MAX_CHARS = 4000   // 单次 LLM 调用正文上限（章内按窗口行边界切块）
 const PARA_MIN_LINES = 5       // 段落门：≥ 此行数的块必须至少含一个空行分段（短块/碎片豁免）
+const PUNCT_DENSITY_MIN = 0.02      // 密度门：输出标点密度下限（与回填页级门同值；实测偷懒簇≤0.013 / 合格簇≥0.033）
+const DENSITY_GATE_MIN_CHARS = 400  // 密度门只作用于完整块；二分碎片豁免（短文本密度噪声大、误杀率高）
 const LLM_TIMEOUT_MS = 180_000 // 全文重写比切章慢——放宽到 3 分钟（undici 默认 300s 兜底）
 
 const SYS = [
@@ -198,12 +200,25 @@ export async function punctuateMd(
    *  - 429 限流 → 指数退避独立重试（≤3 次，不消耗常规尝试、不进二分）。
    *  - 其他传输错误（网络/5xx）→ 重试一次后文件级中止（快速失败，不二分）。
    *  段落门：≥PARA_MIN_LINES 行的块校验通过但未分段 → 再试一次；两次都通过
-   *  但仍无分段 → 接受（标点已保真）并告警，不进二分。 */
+   *  但仍无分段 → 接受（标点已保真）并告警，不进二分。
+   *  密度门（2026-08-26 回填实测补）：≥DENSITY_GATE_MIN_CHARS 字的块校验通过但
+   *  标点密度 < PUNCT_DENSITY_MIN（模型偷懒原样回显——骨架校验只保真不保干活，
+   *  且补空行分段即可骗过段落门）→ 重试一次；仍偷懒 → 判块失败（章失败→整文件
+   *  回落），不进二分——二分治保真失败，治不了不干活，切小只会重复偷懒烧预算。 */
   const lineCount = (t: string) => t.split("\n").filter((l) => l.trim()).length
   const hasPara = (t: string) => /\n[ \t]*\n/.test(t)
+  /** 块级标点密度：剥时间戳与空白后，标点数 / 全字符数（中英混排通用——
+   *  回填页级门用 CJK 分母，纯英文块会失真，此处不用同款）。 */
+  const punctDens = (t: string) => {
+    const core = t.replace(/\[\d{1,3}:\d{2}\]/g, "").replace(/\s/g, "")
+    if (!core.length) return 1
+    const punct = (core.match(/[，。！？；：、“”‘’（）——……,.!?;:()]/g) ?? []).length
+    return punct / core.length
+  }
   const punctuateChunk = async (text: string): Promise<string | null> => {
     let lastErr = ""
     let unsegmented: string | null = null
+    let lazyEcho: string | null = null
     let transportErr: unknown = null
     let attempt = 0
     let rateLimited = 0
@@ -212,10 +227,18 @@ export async function punctuateMd(
       try {
         const raw = await zaiChatPunct(text, cfg, deps, gate)
         if (verifyPunctuated(text, raw)) {
-          if (lineCount(text) < PARA_MIN_LINES || hasPara(raw)) return raw
-          unsegmented = raw
-          lastErr = "校验通过但未分段"
+          const lazy = text.length >= DENSITY_GATE_MIN_CHARS && punctDens(raw) < PUNCT_DENSITY_MIN
+          if (lazy) {
+            lazyEcho = raw
+            lastErr = `偷懒回显（dens=${punctDens(raw).toFixed(3)}）`
+          } else if (lineCount(text) < PARA_MIN_LINES || hasPara(raw)) {
+            return raw
+          } else {
+            unsegmented = raw
+            lastErr = "校验通过但未分段"
+          }
         } else {
+          lazyEcho = null // 后续尝试转向保真失败 → 归二分语义，不按偷懒判
           lastErr = `verify: ${raw.slice(0, 60)}`
         }
         await sleep(3000)
@@ -235,6 +258,10 @@ export async function punctuateMd(
     if (unsegmented !== null) {
       console.warn(`[punctuate] ${lineCount(text)} 行块校验通过但两次都未分段，保留整块（仅标点）`)
       return unsegmented
+    }
+    if (lazyEcho !== null) {
+      console.warn(`[punctuate] ${text.length}ch 块重试后仍偷懒回显（${lastErr}），判失败`)
+      return null
     }
     if (transportErr !== null) {
       // 传输错误不进二分：切小只会产生更多注定失败的调用
