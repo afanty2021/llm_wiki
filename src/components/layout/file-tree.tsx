@@ -42,6 +42,7 @@ function TreeNode({
     // 要点两次才能展开）。
     const visuallyOpen = expanded && Boolean(node.children)
     const handleToggle = async () => {
+      if (loadingChildren) return // 加载进行中忽略重复点击（幂等 GET，不必再触发）
       if (visuallyOpen) {
         setExpanded(false)
         return
