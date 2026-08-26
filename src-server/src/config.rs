@@ -57,7 +57,7 @@ pub struct CorsConfig {
     pub allowed_origins: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct EmbeddingConfig {
     pub base_url: String,
     pub model: String,
@@ -75,6 +75,24 @@ pub struct EmbeddingConfig {
     pub ef_search: usize,
     #[serde(default = "default_embed_max_retries")]
     pub max_retries: u32,
+}
+
+/// Debug 手写脱敏（评审 omlx-auth M3）：api_key 只报已设与否，杜绝未来任何
+/// `{:?}` 打点（如 startup config dump）把钥泄进日志。其余字段照常输出。
+impl std::fmt::Debug for EmbeddingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingConfig")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("dim", &self.dim)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<set, redacted>"))
+            .field("chunk_size", &self.chunk_size)
+            .field("overlap", &self.overlap)
+            .field("ef_search", &self.ef_search)
+            .field("max_retries", &self.max_retries)
+            .finish()
+    }
 }
 
 fn default_chunk_size() -> usize { 384 }
