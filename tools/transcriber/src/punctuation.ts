@@ -134,6 +134,13 @@ class PunctFileAbort extends Error {}
 /** 429 限流：独立指数退避重试（不消耗常规尝试次数），耗尽后文件级中止。 */
 class PunctRateLimited extends Error {}
 
+/** 密度门偷懒重试的强化指令（2026-08-26 回填实测：glm-5.1 与 glm-5.3 对英语
+ *  密集块都会原样回显零标点——指令跟随率问题，非模型代次问题，换模型无效）。
+ *  指令若被模型回显，其汉字会进骨架比对被拒——不会污染产物。 */
+const nudgeUser = (chunk: string) => `${chunk}
+
+［重试指令：你上一次的输出没有插入任何标点。请重新输出全部内容，必须在词语和句子之间插入中文标点（，。！？；：等），并按语义分段。除标点与空行外逐字复制，不增、不删、不改任何字。］`
+
 /** 单文件调用预算：2h 视频正常约 40-60 块；预算是二分树最坏情况的硬顶——
  *  网络全断时不再烧完整棵递归树才放弃。 */
 const MAX_CALLS_PER_FILE = 200
@@ -144,6 +151,7 @@ async function zaiChatPunct(
   deps: LlmPunctDeps,
   gate: () => void,
   allowThinking = true,
+  nudge = false,
 ): Promise<string> {
   gate()
   const doFetch = deps.fetchImpl ?? fetch
@@ -151,7 +159,7 @@ async function zaiChatPunct(
     model: cfg.model,
     messages: [
       { role: "system", content: SYS },
-      { role: "user", content: chunk },
+      { role: "user", content: nudge ? nudgeUser(chunk) : chunk },
     ],
     temperature: 0,
     // 动态上限：输出≈输入+标点，按 2 token/字留裕量（防长块 finish=length 截断）
@@ -166,7 +174,7 @@ async function zaiChatPunct(
   })
   if (!res.ok) {
     const text = (await res.text()).slice(0, 200)
-    if (allowThinking && res.status === 400 && /thinking/i.test(text)) return zaiChatPunct(chunk, cfg, deps, gate, false)
+    if (allowThinking && res.status === 400 && /thinking/i.test(text)) return zaiChatPunct(chunk, cfg, deps, gate, false, nudge)
     if (res.status === 429) throw new PunctRateLimited(`zai 429: ${text}`)
     throw new Error(`zai HTTP ${res.status}: ${text}`)
   }
@@ -225,7 +233,8 @@ export async function punctuateMd(
     while (attempt < 2) {
       attempt += 1
       try {
-        const raw = await zaiChatPunct(text, cfg, deps, gate)
+        // 上一次尝试判偷懒 → 本次带强化指令重试（nudge 只投一次：仍懒则 post-loop 判败）
+        const raw = await zaiChatPunct(text, cfg, deps, gate, true, lazyEcho !== null)
         if (verifyPunctuated(text, raw)) {
           const lazy = text.length >= DENSITY_GATE_MIN_CHARS && punctDens(raw) < PUNCT_DENSITY_MIN
           if (lazy) {
@@ -238,7 +247,9 @@ export async function punctuateMd(
             lastErr = "校验通过但未分段"
           }
         } else {
-          lazyEcho = null // 后续尝试转向保真失败 → 归二分语义，不按偷懒判
+          // 注意：此处不清 lazyEcho——偷懒判定粘滞。否则「重试回显带指令全文 →
+          // 骨架拒 → 落二分 → 子块 <400 字逃过密度门地板 → 原文裸穿」（测试实证）。
+          // 偷懒块的出路只有两条：nudge 后正常干活，或整块判败。
           lastErr = `verify: ${raw.slice(0, 60)}`
         }
         await sleep(3000)
