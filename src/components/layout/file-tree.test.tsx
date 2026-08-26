@@ -2,7 +2,7 @@
 // Files 树纯哈希名转写源文件（sources/transcripts/<8-hex>.md，存量 39 个）显示
 // 衍生 DB 页标题——pageTitleByPath join（web 填充，桌面空表=不显示行为不变）。
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { render, screen, cleanup } from "@testing-library/react"
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react"
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ message: vi.fn() }))
 vi.mock("@/commands/fs", () => ({
@@ -85,5 +85,25 @@ describe("FileTree 哈希名标题副标签", () => {
     const { container } = render(<FileTree />)
     expect(screen.getByText("06ad7ef1.md")).toBeTruthy()
     expect(container.textContent).not.toContain("当我们教词汇")
+  })
+
+  it("未加载子节点的目录单击一次即加载展开（「要点两次才展开」回归）", async () => {
+    const { listDirectory } = await import("@/commands/fs")
+    vi.mocked(listDirectory).mockReset()
+    // depth 0 目录初始 expanded 但 children 未加载（web 存储目录形态）——
+    // 视觉上是收起态，第一次点击必须加载并展开，而不是收起空展开态
+    const root = { name: "raw", path: "/raw", is_dir: true } as FileNode
+    useWikiStore.getState().setFileTree([root], { syncPathIndex: false })
+    vi.mocked(listDirectory).mockResolvedValue([node("sources", "/raw/sources", true)])
+
+    render(<FileTree />)
+    const btn = screen.getByText("raw").closest("button")!
+    fireEvent.click(btn)
+    await waitFor(() => expect(screen.getByText("sources")).toBeTruthy())
+    expect(listDirectory).toHaveBeenCalledTimes(1)
+    // 已展开且有子节点 → 再点一次是收起（不重复加载）
+    fireEvent.click(screen.getByText("raw").closest("button")!)
+    await waitFor(() => expect(screen.queryByText("sources")).toBeNull())
+    expect(listDirectory).toHaveBeenCalledTimes(1)
   })
 })

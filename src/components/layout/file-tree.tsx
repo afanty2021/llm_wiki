@@ -36,10 +36,18 @@ function TreeNode({
   const paddingLeft = 12 + depth * 16
 
   if (node.is_dir) {
+    // 视觉展开态 = expanded 且确有已加载的子节点。初始 expanded(depth<1) 的
+    // 目录可能尚未加载子节点（web 存储目录即如此）——此时看起来是收起的，
+    // 第一次点击必须「加载并展开」，而不是把看不见的展开态收起（表现为
+    // 要点两次才能展开）。
+    const visuallyOpen = expanded && Boolean(node.children)
     const handleToggle = async () => {
-      const nextExpanded = !expanded
-      setExpanded(nextExpanded)
-      if (!nextExpanded || node.children) return
+      if (visuallyOpen) {
+        setExpanded(false)
+        return
+      }
+      setExpanded(true)
+      if (node.children) return
       setLoadingChildren(true)
       try {
         await onLoadChildren(node)
@@ -55,7 +63,7 @@ function TreeNode({
           className="flex w-full items-center gap-1 py-1 text-sm text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
           style={{ paddingLeft }}
         >
-          {expanded ? (
+          {visuallyOpen ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0" />
           ) : (
             <ChevronRight className="h-3.5 w-3.5 shrink-0" />
