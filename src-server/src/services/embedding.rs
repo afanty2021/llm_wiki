@@ -51,13 +51,16 @@ pub async fn embed_batch(
     let max_retries = cfg.max_retries;
     let mut last_err: Option<AppError> = None;
     for attempt in 0..=max_retries {
-        let res = client
+        let mut req = client
             .post(format!("{}/embeddings", cfg.base_url.trim_end_matches('/')))
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({ "model": cfg.model, "input": texts }))
-            .timeout(std::time::Duration::from_secs(cfg.timeout_secs))
-            .send()
-            .await;
+            .timeout(std::time::Duration::from_secs(cfg.timeout_secs));
+        // omlx 2026-08-26 起强制 Bearer 鉴权（无钥 401）；无鉴权端点不带头照旧兼容
+        if let Some(key) = cfg.api_key.as_deref().filter(|k| !k.is_empty()) {
+            req = req.bearer_auth(key);
+        }
+        let res = req.send().await;
         match res {
             Ok(resp) if resp.status().is_success() => {
                 // 200 但 body 解析失败/向量数不足/维度错 = 瞬态（proxy 截断/部分响应），纳入重试

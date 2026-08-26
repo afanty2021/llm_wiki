@@ -63,6 +63,10 @@ pub struct EmbeddingConfig {
     pub model: String,
     pub dim: usize,
     pub timeout_secs: u64,
+    /// Bearer 鉴权（omlx 2026-08-26 起强制）：EMBEDDING__API_KEY 覆盖，
+    /// 缺省 None = 不带 Authorization 头（兼容无鉴权端点）。
+    #[serde(default)]
+    pub api_key: Option<String>,
     #[serde(default = "default_chunk_size")]
     pub chunk_size: usize,
     #[serde(default = "default_overlap")]
