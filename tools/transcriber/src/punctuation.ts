@@ -231,9 +231,10 @@ export async function punctuateMd(
     let attempt = 0
     let rateLimited = 0
     // 偷懒重试加预算（2026-08-26 诊断实证）：glm 对英语密集块的行为随机——同输入
-    // 同温 0 三次抽样=懒 / 勤快但不忠实 / 完美各一。每次重试是独立抽样，偷懒块
-    // 给到 4 枪（~80% 累积命中）；保真失败仍 2 枪进二分。
-    const maxAttempts = () => (lazyEcho !== null ? 4 : 2)
+    // 同温 0 三次抽样=懒 / 勤快但不忠实 / 完美各一。每次重试是独立抽样。夜1c 实测
+    // 4 枪仍 53% 文件失败（平均 ~3 懒块/文件，0.8³≈49%）→ 提到 8 枪（0.96³≈88%）；
+    // 保真失败仍 2 枪进二分。zai 订阅通道 6h 零 429，预算加码无额度压力。
+    const maxAttempts = () => (lazyEcho !== null ? 8 : 2)
     while (attempt < maxAttempts()) {
       attempt += 1
       try {
