@@ -85,3 +85,5 @@ tools/books/books.json
 tools/transcriber/out/rechapter-*.json
 tools/transcriber/out/chapters/
 tools/transcriber/out/ingest-report.json
+tools/transcriber/out/punct/
+tools/transcriber/out/punctuate-*.json

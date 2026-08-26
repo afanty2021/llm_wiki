@@ -19,6 +19,7 @@ import {
   DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor, persistCuts, loadCuts,
   type ChapteringConfig,
 } from "./chaptering";
+import { DEFAULT_PUNCTUATE, maybePunctuate, type PunctuateConfig } from "./punctuation";
 import { ApiClient, sha256Hex, type MediaAssetItem, type JobStatus } from "./api-client";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,9 @@ interface Config {
    *  失败/守门回落机械 300s 切分（见 src/chaptering.ts）。密钥走 ZAI_API_KEY
    *  env 或 ~/.hermes/.env，不落 config（密钥卫生）。 */
   chaptering?: ChapteringConfig;
+  /** 标点恢复（2026-08-26 起）：开启后转写正文经 LLM 补中文标点+自然分段（三重校验
+   *  门保逐字保留，见 src/punctuation.ts），失败回落原文。密钥同 chaptering。 */
+  punctuate?: PunctuateConfig;
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -554,9 +558,12 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
             }
             playback = pb;
           }
-          const { md, chapters } = buildTranscriptForReuse(cfg, {
+          const reused = buildTranscriptForReuse(cfg, {
             title, segments, slug: line.slug, durationS: entry.durationS,
           });
+          // 标点恢复（快照优先）：旧 run 的机械 md 在续跑时补标点，快照保证字节稳定
+          const md = await maybePunctuate({ md: reused.md, slug: line.slug, outDir, cfg: cfg.punctuate });
+          const { chapters } = reused;
           // 复用路径同样刷 media_assets（幂等 upsert，与主路径同一 items 构造）：
           // 迁移期 absPath 漂移后 media_ref 过期 → /media 404，此处按重审计的最新 entry 刷新（M1 终审）
           await api.registerMediaAssets([{
@@ -633,7 +640,10 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       whisperDone = true;
       const sourcePath = `sources/transcripts/${slug}.md`;
       const pagePath = `transcripts/${slug}.md`;
-      const { md, chapters } = await buildTranscriptWithChapters(cfg, { title, segments, slug, durationS: entry.durationS });
+      const built = await buildTranscriptWithChapters(cfg, { title, segments, slug, durationS: entry.durationS });
+      // 标点恢复（2026-08-26）：正文 LLM 补标点+分段（三重校验/快照幂等，失败回落原文）
+      const md = await maybePunctuate({ md: built.md, slug, outDir, cfg: cfg.punctuate });
+      const { chapters } = built;
 
       await api.writeSource(sourcePath, md);
       const upsert = await api.upsertTranscriptPage(pagePath, md);
