@@ -30,7 +30,7 @@ const PUNCT_DENSITY_MIN = 0.02      // 密度门：输出标点密度下限（�
 const DENSITY_GATE_MIN_CHARS = 400  // 密度门只作用于完整块；二分碎片豁免（短文本密度噪声大、误杀率高）
 const LLM_TIMEOUT_MS = 180_000 // 全文重写比切章慢——放宽到 3 分钟（undici 默认 300s 兜底）
 
-const SYS = [
+export const SYS = [
   "你是逐字复制器。任务：逐字复制输入的转写文本，只允许两类编辑——",
   "① 在字符之间插入中文标点（，。！？；：、“”‘’（）——……）；",
   "② 在语义段落边界插入一个空行（连续两个换行），把正文划分为自然段。",
@@ -230,7 +230,11 @@ export async function punctuateMd(
     let transportErr: unknown = null
     let attempt = 0
     let rateLimited = 0
-    while (attempt < 2) {
+    // 偷懒重试加预算（2026-08-26 诊断实证）：glm 对英语密集块的行为随机——同输入
+    // 同温 0 三次抽样=懒 / 勤快但不忠实 / 完美各一。每次重试是独立抽样，偷懒块
+    // 给到 4 枪（~80% 累积命中）；保真失败仍 2 枪进二分。
+    const maxAttempts = () => (lazyEcho !== null ? 4 : 2)
+    while (attempt < maxAttempts()) {
       attempt += 1
       try {
         // 上一次尝试判偷懒 → 本次带强化指令重试（nudge 只投一次：仍懒则 post-loop 判败）

@@ -178,7 +178,7 @@ describe("punctuateMd（LLM mock）", () => {
     }) as unknown as typeof fetch
     const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
     expect(result).toBeNull()
-    expect(calls).toBe(2) // 常规尝试耗尽即判失败，不进二分烧调用
+    expect(calls).toBe(4) // 偷懒块预算 4 枪（后 3 枪带 nudge），耗尽判失败不进二分
   })
   it("密度门：首答偷懒 → 重试带强化指令且采纳重答（不误杀整个文件）", async () => {
     const lines = Array.from({ length: 8 }, (_, i) => `[0${i}:00] ${"语料".repeat(28)}`)
