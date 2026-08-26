@@ -51,8 +51,11 @@ export function markersOf(text: string): string[] {
 
 /** 骨架：剥时间戳、空白、一切标点/符号后的纯字符序列——逐字符比对基线。
  *  NFKC 归一 + 小写：容忍 LLM 的英文大小写规范化（okitstoo→OKitstoo，实测唯一
- *  漂移形态；whisper 英文大小写本就任意）与全宽/半宽互转（５０↔50）——中文
- *  表意字符不受两者影响，语义零放松。 */
+ *  漂移形态；whisper 英文大小写本就任意）与全宽/半宽互转（５０↔50）。
+ *  容忍面如实声明（评审 I5）：中文表意字符语义零放松；但英文词界与符号存在
+ *  不可检测等价——"no table"↔"not able"（剥空格后同骨架）、$↔¥、→↔←、
+ *  ①→1 兼容折叠。收紧（保留词间空格）会误伤中文标点插入位，权衡后维持，
+ *  已知局限记录在案。 */
 export function skeletonOf(text: string): string {
   return text
     .replace(MARKER_RE, "")
@@ -123,12 +126,24 @@ export interface LlmPunctDeps {
 }
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+/** 文件级快速失败：调用预算耗尽 / 传输错误重试耗尽——上抛后整文件回落原文，
+ *  绝不进二分（二分只会产生更多注定失败的调用，限流/断网时火上浇油）。 */
+class PunctFileAbort extends Error {}
+/** 429 限流：独立指数退避重试（不消耗常规尝试次数），耗尽后文件级中止。 */
+class PunctRateLimited extends Error {}
+
+/** 单文件调用预算：2h 视频正常约 40-60 块；预算是二分树最坏情况的硬顶——
+ *  网络全断时不再烧完整棵递归树才放弃。 */
+const MAX_CALLS_PER_FILE = 200
+
 async function zaiChatPunct(
   chunk: string,
   cfg: Required<PunctuateConfig>,
   deps: LlmPunctDeps,
+  gate: () => void,
   allowThinking = true,
 ): Promise<string> {
+  gate()
   const doFetch = deps.fetchImpl ?? fetch
   const body: Record<string, unknown> = {
     model: cfg.model,
@@ -149,7 +164,8 @@ async function zaiChatPunct(
   })
   if (!res.ok) {
     const text = (await res.text()).slice(0, 200)
-    if (allowThinking && res.status === 400 && /thinking/i.test(text)) return zaiChatPunct(chunk, cfg, deps, false)
+    if (allowThinking && res.status === 400 && /thinking/i.test(text)) return zaiChatPunct(chunk, cfg, deps, gate, false)
+    if (res.status === 429) throw new PunctRateLimited(`zai 429: ${text}`)
     throw new Error(`zai HTTP ${res.status}: ${text}`)
   }
   const j = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
@@ -171,19 +187,30 @@ export async function punctuateMd(
   const { frontmatter, chapters } = splitChapters(md)
   if (chapters.length === 0) return null
   const sleep = deps.sleepFn ?? defaultSleep
+  let calls = 0
+  const gate = () => {
+    if (++calls > MAX_CALLS_PER_FILE) throw new PunctFileAbort(`调用预算耗尽（>${MAX_CALLS_PER_FILE}）`)
+  }
 
-  /** 单块标点+分段：LLM×2 → 校验；长块另设段落门（≥PARA_MIN_LINES 行必须含空行
-   *  分段——模型偶发偷懒只加标点，未分段再试一次；两次校验通过但都未分段则接受
-   *  并告警，不进二分）。校验失败且多行 → 行边界二分递归（小上下文复制保真度高），
-   *  单行仍失败 → null（上层整文件回落）。 */
+  /** 单块标点+分段。失败分流（评审 I4）：
+   *  - verify 失败 → 重试一次 → 行边界二分递归（小上下文复制保真度高），
+   *    单行仍失败 → 字符级二分；<200 字碎片失败即放弃（上层整文件回落）。
+   *  - 429 限流 → 指数退避独立重试（≤3 次，不消耗常规尝试、不进二分）。
+   *  - 其他传输错误（网络/5xx）→ 重试一次后文件级中止（快速失败，不二分）。
+   *  段落门：≥PARA_MIN_LINES 行的块校验通过但未分段 → 再试一次；两次都通过
+   *  但仍无分段 → 接受（标点已保真）并告警，不进二分。 */
   const lineCount = (t: string) => t.split("\n").filter((l) => l.trim()).length
   const hasPara = (t: string) => /\n[ \t]*\n/.test(t)
   const punctuateChunk = async (text: string): Promise<string | null> => {
     let lastErr = ""
     let unsegmented: string | null = null
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let transportErr: unknown = null
+    let attempt = 0
+    let rateLimited = 0
+    while (attempt < 2) {
+      attempt += 1
       try {
-        const raw = await zaiChatPunct(text, cfg, deps)
+        const raw = await zaiChatPunct(text, cfg, deps, gate)
         if (verifyPunctuated(text, raw)) {
           if (lineCount(text) < PARA_MIN_LINES || hasPara(raw)) return raw
           unsegmented = raw
@@ -193,6 +220,14 @@ export async function punctuateMd(
         }
         await sleep(3000)
       } catch (e) {
+        if (e instanceof PunctFileAbort) throw e
+        if (e instanceof PunctRateLimited && rateLimited < 3) {
+          rateLimited += 1
+          attempt -= 1 // 限流退避不消耗常规尝试次数
+          await sleep(5000 * 2 ** (rateLimited - 1)) // 5s/10s/20s
+          continue
+        }
+        transportErr = e
         lastErr = String(e).slice(0, 120)
         await sleep(3000)
       }
@@ -201,6 +236,10 @@ export async function punctuateMd(
       console.warn(`[punctuate] ${lineCount(text)} 行块校验通过但两次都未分段，保留整块（仅标点）`)
       return unsegmented
     }
+    if (transportErr !== null) {
+      // 传输错误不进二分：切小只会产生更多注定失败的调用
+      throw new PunctFileAbort(`传输错误重试耗尽（${lastErr}）`)
+    }
     const lines = text.split("\n").filter((l) => l.trim())
     if (lines.length > 1) {
       const half = Math.ceil(lines.length / 2)
@@ -208,7 +247,9 @@ export async function punctuateMd(
       if (head === null) return null
       const tail = await punctuateChunk(lines.slice(half).join("\n"))
       if (tail === null) return null
-      return `${head}\n${tail}`
+      // 块/二分接缝强制空行：落在接缝处的话题转换不失分段（整段跨缝连排
+      // 是更差的读感取舍），纯空白变化不影响骨架
+      return `${head}\n\n${tail}`
     }
     // 单行仍失败 → 字符级二分：whisper 文本以空格分词，取中点最近空格切半递归
     // （只影响边界处断句质量，校验严格性不放松）；<200 字的碎片失败即放弃。
@@ -233,19 +274,27 @@ export async function punctuateMd(
   }
 
   const out: string[] = [frontmatter]
-  for (const ch of chapters) {
-    const done: string[] = []
-    let ok = true
-    for (const chunk of chunkChapterBody(ch.body)) {
-      const got = await punctuateChunk(chunk)
-      if (got === null) { ok = false; break }
-      done.push(got)
+  try {
+    for (const ch of chapters) {
+      const done: string[] = []
+      let ok = true
+      for (const chunk of chunkChapterBody(ch.body)) {
+        const got = await punctuateChunk(chunk)
+        if (got === null) { ok = false; break }
+        done.push(got)
+      }
+      if (!ok) {
+        console.warn(`[punctuate] 章「${ch.header.slice(0, 30)}」标点失败，整文件回落原文`)
+        return null
+      }
+      out.push(ch.header ? `${ch.header}\n${done.join("\n\n")}` : done.join("\n\n"))
     }
-    if (!ok) {
-      console.warn(`[punctuate] 章「${ch.header.slice(0, 30)}」标点失败，整文件回落原文`)
+  } catch (e) {
+    if (e instanceof PunctFileAbort) {
+      console.warn(`[punctuate] ${e.message}，整文件回落原文`)
       return null
     }
-    out.push(ch.header ? `${ch.header}\n${done.join("\n")}` : done.join("\n"))
+    throw e
   }
   // 重组：保留 LLM 的语义空行分段。CommonMark 单换行渲染为空格——段内多个
   // 时间戳行渲染时流式连排成一段（时间戳内联可见），空行处成自然段，正是所要。
@@ -282,7 +331,13 @@ export async function maybePunctuate(input: {
   deps?: LlmPunctDeps
 }): Promise<string> {
   const snapshot = loadPunctMd(input.outDir, input.slug)
-  if (snapshot !== null) return snapshot
+  if (snapshot !== null) {
+    // 快照一致性（评审 I2）：同 slug 不同 md（同 wav 重转写——whisper 非确定、
+    // rechapter 换 cuts）时，陈旧快照会把旧文写回。命中时廉价校验标记+骨架，
+    // 不匹配按 miss 处理（重新标点并覆盖快照）。
+    if (verifyPunctuated(input.md, snapshot)) return snapshot
+    console.warn(`[punctuate] ${input.slug}: 快照与当前正文不一致（重转写/重切章后），重新标点并覆盖快照`)
+  }
   const cfg = { ...DEFAULT_PUNCTUATE, ...input.cfg }
   if (!cfg.enabled) return input.md
   if (!input.deps?.apiKey && !process.env.ZAI_API_KEY && !loadZaiKey()) {

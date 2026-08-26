@@ -163,6 +163,53 @@ describe("punctuateMd（LLM mock）", () => {
     expect(result).not.toBeNull()
     expect(verifyPunctuated(md, result!)).toBe(true)
     expect(calls).toBe(2) // 两次尝试后接受（进入二分会产生更多调用）
+    // 接受的就是未分段产物本身（正文内无空行）
+    expect(result!.split("## [00:00] 单章\n")[1] ?? "").not.toContain("\n\n")
+  })
+  it("传输错误（5xx）重试一次后文件级快速失败——不进二分", async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls++
+      return new Response("{}", { status: 500 })
+    }) as unknown as typeof fetch
+    const result = await punctuateMd(MD, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
+    expect(result).toBeNull()
+    expect(calls).toBe(2) // 两尝试即中止，不递归二分烧调用
+  })
+  it("429 限流指数退避（5s/10s）后成功——不消耗常规尝试、不进二分", async () => {
+    let calls = 0
+    const sleeps: number[] = []
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      calls++
+      if (calls <= 2) return new Response("rate limited", { status: 429 })
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] }
+      const out = body.messages[1].content.split("\n").map((l) => (/\[\d{1,3}:\d{2}\] /.test(l) ? `${l}。` : l)).join("\n")
+      return new Response(JSON.stringify({ choices: [{ message: { content: out } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const result = await punctuateMd(MD, DEFAULT_PUNCTUATE, {
+      fetchImpl,
+      sleepFn: async (ms) => { sleeps.push(ms) },
+    })
+    expect(result).not.toBeNull()
+    expect(verifyPunctuated(MD, result!)).toBe(true)
+    expect(sleeps.slice(0, 2)).toEqual([5000, 10000])
+    expect(calls).toBe(4) // 2×429 退避 + 两章各 1 次成功
+  })
+  it("字符级二分：单行超长块 verify 恒败 → 递归切半，碎片 <200 字放弃 → 整文件 null", async () => {
+    const words = Array.from({ length: 60 }, (_, i) => `词组${i}`)
+    const longLine = `[00:00] ${words.join(" ")}` // ~300 字（≥200 才走字符二分）
+    const md = `---\ntitle: "x"\n---\n\n## [00:00] 单章\n\n${longLine}\n`
+    let calls = 0
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      calls++
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] }
+      // 恒增字 → verify 必败（驱动二分树走到底）
+      return new Response(JSON.stringify({ choices: [{ message: { content: `${body.messages[1].content}多余` } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
+    expect(result).toBeNull()
+    // 根块 2 次 + 左半块 2 次（<200 字碎片放弃）；右半因左半 null 短路不再调用
+    expect(calls).toBe(4)
   })
 })
 
@@ -188,6 +235,13 @@ describe("快照幂等（maybePunctuate）", () => {
       const boom = (async () => { throw new Error("不应被调用") }) as unknown as typeof fetch
       const out3 = await maybePunctuate({ md: MD, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: boom } })
       expect(out3).toBe(out2)
+      // 快照与当前正文不一致（同 slug 不同 md：重转写/重切章）→ 按 miss
+      // 重新标点并覆盖快照（不把陈旧文本写回）
+      const altered = MD.replace("词汇教学", "语法教学")
+      const out5 = await maybePunctuate({ md: altered, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: echo } })
+      expect(verifyPunctuated(altered, out5)).toBe(true)
+      expect(out5).not.toBe(out2)
+      expect(loadPunctMd(dir, "s2")).toBe(out5)
       // 未启用 → 原文
       const out4 = await maybePunctuate({ md: MD, slug: "s3", outDir: dir })
       expect(out4).toBe(MD)

@@ -97,8 +97,9 @@ export function sha256Hex(s: string): string {
  *   本函数缺 fp 直接抛错，防手滑产出服务端必拒的票据。
  */
 export function signMedia(key: string, mediaId: string, exp: number, fp: string): string {
-  if (fp === undefined) {
-    // 运行时守卫：类型必填不拦 JS 调用方（两段式已移除，缺 fp 票据服务端必拒）
+  if (fp == null || fp === "") {
+    // 运行时守卫：类型必填不拦 JS 调用方传 null/空串（两段式已移除，缺 fp
+    // 票据服务端必拒——不签出字面量 fp="null" 这类格式合法但无意义的票据）
     throw new Error("fp required (two-part signatures removed 2026-08-25)");
   }
   return createHmac("sha256", key).update(`${mediaId}:${exp}:${fp}`).digest("hex");
@@ -394,9 +395,9 @@ export class ApiClient {
   /** 生成 `${base}/media/<slug>?exp=<unix>&sig=<hex>&fp=<16 hex>`；key 缺失 fail fast
    * （服务端同样拒签）。fp 必填（两段式回落已移除，缺 fp 的票据服务端必拒）：
    * /t/ 落地页用 token 派生 fp，调试 CLI 用合成 fp（DEBUG_FP）。 */
-  signMediaUrl(mediaId: string, hours = 12, key = this.opts.mediaSigningKey ?? process.env.MEDIA__SIGNING_KEY ?? "", fp?: string): string {
+  signMediaUrl(mediaId: string, hours = 12, key = this.opts.mediaSigningKey ?? process.env.MEDIA__SIGNING_KEY ?? "", fp: string): string {
     if (!key) throw new Error("media signing key required (options.mediaSigningKey or MEDIA__SIGNING_KEY");
-    if (fp === undefined) throw new Error("fp required (two-part signatures removed 2026-08-25; pass a token-derived or debug fp)");
+    if (fp == null || fp === "") throw new Error("fp required (two-part signatures removed 2026-08-25; pass a token-derived or debug fp)");
     const exp = Math.floor(Date.now() / 1000) + Math.round(hours * 3600);
     const sig = signMedia(key, mediaId, exp, fp);
     return `${this.baseUrl}/media/${mediaId}?exp=${exp}&sig=${sig}&fp=${fp}`;

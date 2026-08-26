@@ -20,6 +20,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ApiClient } from "../src/api-client"
+import { loadZaiKey } from "../src/chaptering"
 import {
   DEFAULT_PUNCTUATE, punctuateMd, verifyPunctuated, persistPunctMd, loadPunctMd, splitChapters,
 } from "../src/punctuation"
@@ -34,23 +35,15 @@ const opt = (n: string, d: string) => {
   return i >= 0 ? args[i + 1] : d
 }
 const MODEL = opt("--model", "glm-5.1")
-const CONCURRENCY = Math.max(1, Math.min(4, Number(opt("--concurrency", "3"))))
+// NaN/非数字并发（--concurrency abc）→ 回落默认，而非 0 worker 静默假跑（评审 M6）
+const concurrencyArg = Number(opt("--concurrency", "3"))
+const CONCURRENCY = Number.isFinite(concurrencyArg) && concurrencyArg >= 1
+  ? Math.min(4, Math.floor(concurrencyArg))
+  : 3
 const DRY = flag("--dry-run")
 const LIMIT = Number(opt("--limit", "0"))
 const MODE = flag("--check") ? "check" : flag("--all") ? "all" : "only"
 const punctCfg = { ...DEFAULT_PUNCTUATE, enabled: true, model: MODEL }
-
-function loadZaiKey(): string {
-  if (process.env.ZAI_API_KEY) return process.env.ZAI_API_KEY
-  try {
-    const line = readFileSync(`${process.env.HOME}/.hermes/.env`, "utf-8")
-      .split("\n")
-      .find((l) => /^ZAI_API_KEY=/.test(l))
-    return line ? line.split("=").slice(1).join("=").trim() : ""
-  } catch {
-    return ""
-  }
-}
 const ZAI_KEY = process.env.ZAI_API_KEY || loadZaiKey()
 if (!ZAI_KEY && MODE !== "check") {
   console.error("缺 ZAI_API_KEY（env 或 ~/.hermes/.env）")
@@ -60,10 +53,11 @@ if (!ZAI_KEY && MODE !== "check") {
 const stateLines = readFileSync(join(outDir, "state.jsonl"), "utf-8")
   .trim().split("\n").map((l) => JSON.parse(l) as { slug: string; status: string })
 let targets = stateLines.filter((l) => l.status === "done")
+const doneTotal = targets.length
 if (MODE === "only") {
   const want = new Set(opt("--only", "").split(",").map((x) => x.trim()).filter(Boolean))
   targets = targets.filter((l) => want.has(l.slug))
-  if (targets.length === 0) { console.error(`--only 未命中（state done 共 ${targets.length}）`); process.exit(1) }
+  if (targets.length === 0) { console.error(`--only 未命中（state done 共 ${doneTotal}）`); process.exit(1) }
 }
 {
   const ex = new Set(opt("--exclude", "").split(",").map((x) => x.trim()).filter(Boolean))
@@ -147,9 +141,12 @@ async function processOne(line: { slug: string }): Promise<Outcome> {
   if (DRY) {
     return { slug, status: "ok", densityBefore: density, densityAfter: punctDensity(punctuated) }
   }
+  // 快照先于双写落盘（评审 I1）：页写成功/源写失败的 crash 窗口后，重跑走
+  // skipped_snapshot 路径（本就页+源双写自愈）——若快照后落，密度门会把
+  // punctuated 页判为已处理，源永久滞后且无自愈通道。
+  persistPunctMd(outDir, slug, punctuated)
   await api.upsertTranscriptPage(pagePath, punctuated)
   await api.writeSource(sourcePath, punctuated)
-  persistPunctMd(outDir, slug, punctuated)
   return { slug, status: "ok", densityBefore: density, densityAfter: punctDensity(punctuated) }
 }
 
@@ -179,4 +176,7 @@ for (const o of outcomes) {
 }
 writeFileSync(join(outDir, "punctuate-backfill-report.json"), `${JSON.stringify({ model: MODEL, generatedAt: new Date().toISOString(), outcomes }, null, 2)}\n`)
 console.log(`报告：${join(outDir, "punctuate-backfill-report.json")}`)
-process.exit(by("error") > 0 || (by("ok") + by("skipped_snapshot") === 0 && targets.length > 0) ? 1 : 0)
+// 退出码：有 error 或（非 check 模式下）一条都没实际处理 → 1。check 模式的
+// skipped_already_punctuated 是「全部已达标」的合法终态，不算失败（评审 M5）。
+const meaningful = MODE === "check" ? by("ok") + by("skipped_already_punctuated") : by("ok") + by("skipped_snapshot")
+process.exit(by("error") > 0 || (meaningful === 0 && targets.length > 0) ? 1 : 0)

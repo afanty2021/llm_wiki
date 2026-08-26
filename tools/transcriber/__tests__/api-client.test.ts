@@ -427,9 +427,12 @@ describe("signMedia（三段式唯一格式，2026-08-25 起服务端严格验�
     expect(signMedia("k", "media-slug-1", 1700000000, "0011223344556677")).toBe("453dc8bd833a447601595d6b4f80507beb8e52b78221e4138e7317233a143c4e");
   });
 
-  it("signMediaUrl 缺 fp 抛错（两段式移除后服务端必拒，fail fast）", () => {
+  it("signMediaUrl 缺/空/null fp 抛错（两段式移除后服务端必拒，fail fast）", () => {
     const c = new ApiClient("http://127.0.0.1:8080", { accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null", mediaSigningKey: "k" });
+    // @ts-expect-error 运行时守卫测试：JS 调用方可能漏传 fp
     expect(() => c.signMediaUrl("slug-1", 12)).toThrow(/fp required/);
+    expect(() => c.signMediaUrl("slug-1", 12, undefined, null as unknown as string)).toThrow(/fp required/);
+    expect(() => c.signMediaUrl("slug-1", 12, undefined, "")).toThrow(/fp required/);
   });
 
   it("signMediaUrl 带 fp：URL 附 &fp= 且 sig 为三段式（/t/ 落地页同形票据）", () => {
@@ -443,6 +446,6 @@ describe("signMedia（三段式唯一格式，2026-08-25 起服务端严格验�
   it("缺 key → 报错（fail fast，不发无签名 URL）", () => {
     vi.stubEnv("MEDIA__SIGNING_KEY", ""); // 隔离宿主机真实 env，确保走"无 key"分支
     const c = new ApiClient("http://x", { accessToken: "a", projectId: 1, refreshToken: "r", authPath: "/dev/null" });
-    expect(() => c.signMediaUrl("s")).toThrow(/signing key/i);
+    expect(() => c.signMediaUrl("s", 12, undefined, "0000000000000000")).toThrow(/signing key/i);
   });
 });

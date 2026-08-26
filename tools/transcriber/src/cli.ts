@@ -563,6 +563,11 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
           });
           // 标点恢复（快照优先）：旧 run 的机械 md 在续跑时补标点，快照保证字节稳定
           const md = await maybePunctuate({ md: reused.md, slug: line.slug, outDir, cfg: cfg.punctuate });
+          // 标点改变了字节 → 源文件同步重写（评审 I3）：否则 ingest reconcile 只
+          // 改页，页/源 bytes 分叉；且回填密度门读页判已处理，源侧滞后永不修复
+          if (md !== reused.md) {
+            await api.writeSource(`sources/transcripts/${line.slug}.md`, md);
+          }
           const { chapters } = reused;
           // 复用路径同样刷 media_assets（幂等 upsert，与主路径同一 items 构造）：
           // 迁移期 absPath 漂移后 media_ref 过期 → /media 404，此处按重审计的最新 entry 刷新（M1 终审）
