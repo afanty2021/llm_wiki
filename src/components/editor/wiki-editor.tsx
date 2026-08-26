@@ -382,6 +382,7 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
             sourceBody={bodySourceOffset >= 0 ? body : undefined}
             sourceOffset={bodySourceOffset >= 0 ? bodySourceOffset : undefined}
             filePath={filePath}
+            firstLineIndent
           />
         </div>
       ) : (

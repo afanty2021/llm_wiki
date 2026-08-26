@@ -29,6 +29,12 @@ interface WikiReaderProps {
    * resolution.
    */
   filePath?: string
+  /**
+   * 中文首行缩进两字符（阅读主路径开启；chat/引用预览保持不缩进）。
+   * 仅对中文正文（detectLanguage=Chinese）的顶层段落生效——
+   * `[&>p]` 直接子选择器不触及引用块/列表/表格内的段落。
+   */
+  firstLineIndent?: boolean
 }
 
 /**
@@ -43,7 +49,7 @@ interface WikiReaderProps {
  * against the project's wiki tree and routed to the wiki preview,
  * giving the user single-click navigation between pages.
  */
-export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: WikiReaderProps) {
+export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath, firstLineIndent = false }: WikiReaderProps) {
   const project = useWikiStore((s) => s.project)
   const projectPathIndex = useWikiStore((s) => s.projectPathIndex)
   const openPathInPreview = useWikiStore((s) => s.openPathInPreview)
@@ -113,7 +119,7 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
 
   return (
     <div
-      className="prose prose-invert min-w-0 max-w-none"
+      className={`prose prose-invert min-w-0 max-w-none${firstLineIndent && renderLanguage === "Chinese" ? " [&>p]:[text-indent:2em]" : ""}`}
       dir={direction}
       lang={htmlLang}
       style={{ textAlign: "start" }}
