@@ -5,6 +5,10 @@
 // 核心 import ../src/punctuation（与摄取链同源）。
 //
 // 安全设计：
+//  - 门序（关键）：快照自愈门 → 密度门。快照在密度门之前——「快照已落、页写成、
+//    源写败」的 crash 窗口后页已带标点，密度门会 early-return 挡住自愈；快照
+//    路径页+源双写天然自愈。快照命中先验与页内容一致性（同 slug 重转写/手编后
+//    陈旧 → 删快照重新标点，不把旧文写回）。--force 同时越过快照门与密度门。
 //  - 跳过门：正文标点密度已 >2%（如已处理过/个别原生带标点）→ skip，--force 可越过；
 //  - 校验门：src/punctuation verifyPunctuated（时间戳标记全保留且有序 + 剥空白标点后
 //    逐字符一致）——LLM 改字/丢行整文件回落，绝不盲写；
@@ -16,7 +20,7 @@
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/punctuate-backfill.ts --only 06ad7ef1 [--dry-run]
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/punctuate-backfill.ts --all [--limit 20] [--exclude a,b]
 // 凭证：ZAI_API_KEY env 或 ~/.hermes/.env（不打印）；SVC_PASSWORD 必填。
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync, rmSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ApiClient } from "../src/api-client"
@@ -118,18 +122,31 @@ async function processOne(line: { slug: string }): Promise<Outcome> {
   const density = punctDensity(content)
   if (MODE === "check") return { slug, status: density > 0.02 ? "skipped_already_punctuated" : "ok", densityBefore: density }
 
+  // 快照自愈门——必须在密度门**之前**（评审 round2 R1）：crash 在「快照已落、
+  // 页写成、源写败」窗口后，重跑时页已带标点 → 密度门 early-return，快照
+  // 永不被咨询，源永久机械滞后；快照路径页+源双写天然自愈。--force 越过
+  // 快照门全量重跑（覆盖快照）。
+  const snapshot = loadPunctMd(outDir, slug)
+  if (snapshot !== null && !flag("--force")) {
+    if (verifyPunctuated(content, snapshot)) {
+      // 重跑幂等/自愈：重写页+源为快照 bytes（对齐漂移），不调 LLM
+      if (!DRY) {
+        await api.upsertTranscriptPage(pagePath, snapshot)
+        await api.writeSource(sourcePath, snapshot)
+      }
+      return { slug, status: "skipped_snapshot", densityAfter: punctDensity(snapshot) }
+    }
+    // 快照陈旧（评审 round2 R2：同 slug 重转写/重切章后，旧快照覆盖新文 = I2
+    // 同款陈旧写回；含用户手编页——旧逻辑会把手编页覆写回快照）。删快照按
+    // miss 走重新标点；DRY 不动磁盘，如实报告实跑动作。
+    if (DRY) return { slug, status: "ok", densityBefore: density, reason: "快照陈旧：实跑将删快照并重新标点" }
+    rmSync(join(outDir, "punct", `${slug}.md`), { force: true })
+    console.warn(`[backfill] ${slug}: 快照与页内容不一致（重转写/手编后陈旧），删快照重新标点`)
+  }
+
   if (density > 0.02 && !flag("--force")) {
     // 已带标点（旧版仅标点未分段）→ 默认跳过；--force 重送 LLM 补语义分段
     return { slug, status: "skipped_already_punctuated", densityBefore: density, reason: `密度 ${(density * 100).toFixed(1)}% 已达标` }
-  }
-  const snapshot = loadPunctMd(outDir, slug)
-  if (snapshot !== null) {
-    // 快照存在：重跑幂等——直接重写页/源为快照 bytes（对齐漂移），不调 LLM
-    if (!DRY) {
-      await api.upsertTranscriptPage(pagePath, snapshot)
-      await api.writeSource(sourcePath, snapshot)
-    }
-    return { slug, status: "skipped_snapshot", densityAfter: punctDensity(snapshot) }
   }
 
   const punctuated = await punctuateMd(content, punctCfg, { apiKey: ZAI_KEY })
