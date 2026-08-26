@@ -6,6 +6,8 @@ use axum::http::StatusCode;
 use axum_test::TestServer;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use llm_wiki_server::utils::media_sign::{sign_media_with_fp, DEBUG_FP};
+
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn unique(tag: &str) -> String {
@@ -46,60 +48,60 @@ async fn media_signing_and_range() {
     .unwrap();
 
     let exp = chrono::Utc::now().timestamp() + 3600;
-    let good = llm_wiki_server::utils::media_sign::sign_media(key, &slug, exp);
+    let good = sign_media_with_fp(key, &slug, exp, DEBUG_FP);
 
     // 无参 → 403
     server.get(&format!("/media/{slug}")).await.assert_status(StatusCode::FORBIDDEN);
     // 错签 → 403
     server
-        .get(&format!("/media/{slug}?exp={exp}&sig=deadbeef"))
+        .get(&format!("/media/{slug}?exp={exp}&sig=deadbeef&fp={DEBUG_FP}"))
         .await
         .assert_status(StatusCode::FORBIDDEN);
     // 过期 → 403（exp 用过去时间 + 对应新签名，验证签名有效但已过期）
     let old_exp = chrono::Utc::now().timestamp() - 10;
-    let old_sig = llm_wiki_server::utils::media_sign::sign_media(key, &slug, old_exp);
+    let old_sig = sign_media_with_fp(key, &slug, old_exp, DEBUG_FP);
     server
-        .get(&format!("/media/{slug}?exp={old_exp}&sig={old_sig}"))
+        .get(&format!("/media/{slug}?exp={old_exp}&sig={old_sig}&fp={DEBUG_FP}"))
         .await
         .assert_status(StatusCode::FORBIDDEN);
     // 未知 slug → 404
-    let sig404 = llm_wiki_server::utils::media_sign::sign_media(key, "nope", exp);
+    let sig404 = sign_media_with_fp(key, "nope", exp, DEBUG_FP);
     server
-        .get(&format!("/media/nope?exp={exp}&sig={sig404}"))
+        .get(&format!("/media/nope?exp={exp}&sig={sig404}&fp={DEBUG_FP}"))
         .await
         .assert_status(StatusCode::NOT_FOUND);
     // 全量 → 200
     let r = server
-        .get(&format!("/media/{slug}?exp={exp}&sig={good}"))
+        .get(&format!("/media/{slug}?exp={exp}&sig={good}&fp={DEBUG_FP}"))
         .await;
     r.assert_status(StatusCode::OK);
     assert_eq!(r.as_bytes().len(), 4096);
     // Range 0-1023 → 206 + body 1024
     let rr = server
-        .get(&format!("/media/{slug}?exp={exp}&sig={good}"))
+        .get(&format!("/media/{slug}?exp={exp}&sig={good}&fp={DEBUG_FP}"))
         .add_header("range", "bytes=0-1023")
         .await;
     rr.assert_status(StatusCode::PARTIAL_CONTENT);
     assert_eq!(rr.as_bytes().len(), 1024);
     // 越界 start → 416
     let r416 = server
-        .get(&format!("/media/{slug}?exp={exp}&sig={good}"))
+        .get(&format!("/media/{slug}?exp={exp}&sig={good}&fp={DEBUG_FP}"))
         .add_header("range", "bytes=99999-")
         .await;
     r416.assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
 
     // Step 3 签名纵深：exp 距 now 超过 30 天 → 403（即使签名本身有效）
     let far = chrono::Utc::now().timestamp() + 30 * 86400 + 3600;
-    let far_sig = llm_wiki_server::utils::media_sign::sign_media(key, &slug, far);
+    let far_sig = sign_media_with_fp(key, &slug, far, DEBUG_FP);
     server
-        .get(&format!("/media/{slug}?exp={far}&sig={far_sig}"))
+        .get(&format!("/media/{slug}?exp={far}&sig={far_sig}&fp={DEBUG_FP}"))
         .await
         .assert_status(StatusCode::FORBIDDEN);
     // 30 天内（贴上限 -1h，防边界抖动）→ 200
     let near = chrono::Utc::now().timestamp() + 30 * 86400 - 3600;
-    let near_sig = llm_wiki_server::utils::media_sign::sign_media(key, &slug, near);
+    let near_sig = sign_media_with_fp(key, &slug, near, DEBUG_FP);
     let rn = server
-        .get(&format!("/media/{slug}?exp={near}&sig={near_sig}"))
+        .get(&format!("/media/{slug}?exp={near}&sig={near_sig}&fp={DEBUG_FP}"))
         .await;
     rn.assert_status(StatusCode::OK);
 
@@ -149,9 +151,9 @@ async fn media_serve_rejects_path_outside_allowed_roots() {
 
     let exp = chrono::Utc::now().timestamp() + 3600;
     for slug in [&slug_pb, &slug_ref] {
-        let sig = llm_wiki_server::utils::media_sign::sign_media(key, slug, exp);
+        let sig = sign_media_with_fp(key, slug, exp, DEBUG_FP);
         let r = server
-            .get(&format!("/media/{slug}?exp={exp}&sig={sig}"))
+            .get(&format!("/media/{slug}?exp={exp}&sig={sig}&fp={DEBUG_FP}"))
             .await;
         assert_eq!(
             r.status_code(),

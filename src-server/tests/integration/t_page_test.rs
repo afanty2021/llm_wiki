@@ -722,10 +722,10 @@ async fn t_page_complete_membership_and_idempotency() {
     crate::teardown_test_data(&state).await;
 }
 
-/// ============ 矩阵 6：/media fp 三段式签名 + 两段式兼容 ============
+/// ============ 矩阵 6：/media fp 三段式签名（严格态，两段式恒拒） ============
 
 #[tokio::test]
-async fn media_fp_signature_and_legacy_compat() {
+async fn media_fp_signature_strict() {
     let (server, state) = t_fixture("fp").await;
     let slug = unique("s");
     let path = seed_media_asset(&state, &slug, json!([]), None, None).await;
@@ -746,21 +746,31 @@ async fn media_fp_signature_and_legacy_compat() {
     assert_eq!(r.status_code(), StatusCode::PARTIAL_CONTENT, "fp-signed request must 206");
     assert_eq!(r.as_bytes().len(), 100);
 
-    // 旧两段式（无 fp）→ 206（M1 兼容期）
-    let sig2 = llm_wiki_server::utils::media_sign::sign_media(MEDIA_KEY, &slug, exp);
+    // 旧两段式（消息无 fp 段，M1 格式）→ 恒 403（回落已移除，回归钉——
+    // 与 utils/media_sign.rs verify_strict_three_part_matrix 镜像）
+    let sig2 = {
+        use hmac::{Hmac, Mac};
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(MEDIA_KEY.as_bytes()).unwrap();
+        mac.update(format!("{slug}:{exp}").as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    };
     let r = server
         .get(&format!("/media/{slug}?exp={exp}&sig={sig2}"))
         .add_header("range", "bytes=0-99")
         .await;
-    assert_eq!(r.status_code(), StatusCode::PARTIAL_CONTENT, "legacy two-part sig must stay accepted");
-    assert_eq!(r.as_bytes().len(), 100);
-
-    // dual-format try：带 fp 参数但两段式签名 → 回落通过
+    assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "legacy two-part sig must be rejected");
+    // 两段式签名带 fp 参数 → 同样 403
     let r = server
         .get(&format!("/media/{slug}?exp={exp}&sig={sig2}&fp={fp}"))
         .add_header("range", "bytes=0-99")
         .await;
-    assert_eq!(r.status_code(), StatusCode::PARTIAL_CONTENT, "legacy sig with fp param falls back");
+    assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "legacy sig with fp param must be rejected");
+    // 三段式签名缺 fp 参数 → 403
+    let r = server
+        .get(&format!("/media/{slug}?exp={exp}&sig={sig3}"))
+        .add_header("range", "bytes=0-99")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "3-part sig without fp param must be rejected");
 
     // 错 fp（三段式签名对不上）→ 403
     let r = server

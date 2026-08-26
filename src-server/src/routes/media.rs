@@ -1,7 +1,7 @@
 //! Task 7：GET /media/:media_id（顶级路由，HMAC 签名 + Range 流式）。
-//! 鉴权不落 JWT 体系：`?exp=<unix>&sig=<hex>`，sig = HMAC-SHA256(key, "{media_id}:{exp}")。
-//! Task 9：`?fp=<16 hex>`（/t/ 落地页签发的 link fingerprint）→ 三段式消息
-//! "{media_id}:{exp}:{fp}" 优先、两段式回落（M1 兼容期，见 utils/media_sign.rs）。
+//! 鉴权不落 JWT 体系：`?exp=<unix>&sig=<hex>&fp=<16hex>`，严格三段式
+//! sig = HMAC-SHA256(key, "{media_id}:{exp}:{fp}")（见 utils/media_sign.rs）；
+//! fp 缺失或签名不匹配恒 403（M1 两段式兼容回落已于 2026-08-25 移除）。
 
 use axum::{
     extract::{Path, Query, State},
@@ -19,8 +19,8 @@ use crate::{AppError, AppState};
 pub struct MediaQuery {
     pub exp: i64,
     pub sig: String,
-    /// Task 9 fingerprint（sha256(plan_link token) 前 16 hex）：带 fp → 优先三段式
-    /// 验签（"{media_id}:{exp}:{fp}"），失败回落两段式；缺省 → 两段式（M1 兼容期）。
+    /// Task 9 fingerprint（sha256(plan_link token) 前 16 hex）：严格参与三段式
+    /// 验签（"{media_id}:{exp}:{fp}"）；缺失 → 直接 403（无回落）。
     pub fp: Option<String>,
 }
 
@@ -67,8 +67,10 @@ async fn get_media(
     }
     let now = chrono::Utc::now().timestamp();
     let ok = match &q {
-        // 有效窗口：(now, now + 30d]——过期拒绝，且超远期（>30 天）同样拒绝（纵深）
-        Some(Query(q)) if q.exp > now && q.exp - now <= MEDIA_SIG_MAX_LEEWAY_SECS => {
+        // 有效窗口：(now, now + 30d]——过期拒绝，且超远期（>30 天）同样拒绝（纵深）。
+        // saturating_sub：畸形超大 exp 在 debug 构建下也不因减法溢出 panic
+        // （溢出值回绕后同样过不了签名校验，fail-closed 不变）。
+        Some(Query(q)) if q.exp > now && q.exp.saturating_sub(now) <= MEDIA_SIG_MAX_LEEWAY_SECS => {
             crate::utils::media_sign::verify_media_sig(key, &media_id, q.exp, &q.sig, q.fp.as_deref())
         }
         _ => false,
