@@ -21,7 +21,7 @@ export interface PunctuateConfig {
 export const DEFAULT_PUNCTUATE: Required<PunctuateConfig> = {
   enabled: false,
   baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4", // China Coding Plan（订阅计费通道）
-  model: "glm-5.1",
+  model: "glm-5.3-flash",
 }
 
 const CHUNK_MAX_CHARS = 4000   // 单次 LLM 调用正文上限（章内按窗口行边界切块）

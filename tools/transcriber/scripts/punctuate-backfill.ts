@@ -43,7 +43,7 @@ const opt = (n: string, d: string) => {
   const i = args.indexOf(n)
   return i >= 0 ? args[i + 1] : d
 }
-const MODEL = opt("--model", "glm-5.1")
+const MODEL = opt("--model", "glm-5.3-flash")
 // NaN/非数字并发（--concurrency abc）→ 回落默认，而非 0 worker 静默假跑（评审 M6）
 const concurrencyArg = Number(opt("--concurrency", "3"))
 const CONCURRENCY = Number.isFinite(concurrencyArg) && concurrencyArg >= 1

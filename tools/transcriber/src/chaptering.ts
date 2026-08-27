@@ -21,7 +21,7 @@ export interface ChapteringConfig {
 export const DEFAULT_CHAPTERING: Required<ChapteringConfig> = {
   enabled: false,
   baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4", // China Coding Plan（订阅计费通道）
-  model: "glm-5.1",
+  model: "glm-5.3-flash",
 }
 
 const TITLE_MAX = 30            // LLM 侧要求 ≤20 字，防御性放宽截断
