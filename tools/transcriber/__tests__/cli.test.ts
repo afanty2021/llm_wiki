@@ -14,11 +14,11 @@ import type { JobStatus } from "../src/api-client";
 
 describe("parseTranscribeArgs", () => {
   it("默认 window=23:00-08:00，无 limit/force/demoSlug/dirs", () => {
-    expect(parseTranscribeArgs([])).toEqual({ window: "23:00-08:00", limit: undefined, force: false, demoSlug: undefined, dirs: undefined });
+    expect(parseTranscribeArgs([])).toEqual({ window: "23:00-08:00", limit: undefined, force: false, demoSlug: undefined, dirs: undefined, concurrency: 1 });
   });
   it("白天直跑：--window 00:00-23:59 --limit 5 --force --demo-slug x", () => {
     expect(parseTranscribeArgs(["--window", "00:00-23:59", "--limit", "5", "--force", "--demo-slug", "x"]))
-      .toEqual({ window: "00:00-23:59", limit: 5, force: true, demoSlug: "x", dirs: undefined });
+      .toEqual({ window: "00:00-23:59", limit: 5, force: true, demoSlug: "x", dirs: undefined, concurrency: 1 });
   });
   it("非法窗口串在解析期即抛（fail fast，不等 48 个文件跑一半）", () => {
     expect(() => parseTranscribeArgs(["--window", "25:00-08:00"])).toThrow(/非法窗口串/);
@@ -65,7 +65,15 @@ describe("参数缺值校验（M2 前置：末位缺值报错退出，不再静�
   });
   it("合法传参不受影响：三个值型 flag 均有值时照常解析", () => {
     expect(parseTranscribeArgs(["--window", "00:00-23:59", "--limit", "3", "--demo-slug", "s1"]))
-      .toEqual({ window: "00:00-23:59", limit: 3, force: false, demoSlug: "s1" });
+      .toEqual({ window: "00:00-23:59", limit: 3, force: false, demoSlug: "s1", dirs: undefined, concurrency: 1 });
+  });
+  it("--concurrency 正常解析；非正整数报错退出", () => {
+    expect(parseTranscribeArgs(["--concurrency", "3"]).concurrency).toBe(3);
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("exit") }) as never);
+    try {
+      expect(() => parseTranscribeArgs(["--concurrency", "0"])).toThrow();
+      expect(() => parseTranscribeArgs(["--concurrency", "abc"])).toThrow();
+    } finally { exit.mockRestore(); }
   });
 });
 

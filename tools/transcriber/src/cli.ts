@@ -149,10 +149,11 @@ export function parseDiffPath(argv: string[]): string | undefined {
 
 export interface TranscribeArgs {
   window: string;        // 时间窗口（默认 23:00-08:00，白天直跑传 00:00-23:59）
-  limit?: number;        // 本次最多处理 N 个（断点续跑分段）
+  limit?: number;        // 本次最多处理 N 个（断点续跑分段；软限制——并发下在飞任务自然超出 ≤N_workers）
   force: boolean;        // 全部行重置 pending（重跑）
   demoSlug?: string;     // 仅该 slug 转一份 videotoolbox 副本（M4 按需转码缓存主案的验收演示）
   dirs?: string[];       // 目录子串白名单：给定则替代 firstBatch 语义，只摄入 relPath 命中任一子串的视频
+  concurrency: number;   // 并发转写数（默认 1 串行；whisper 走 Metal GPU 时间片，2-3 路实测收益 ~1.5-1.7x 非线性）
 }
 
 export function parseTranscribeArgs(argv: string[]): TranscribeArgs {
@@ -171,12 +172,17 @@ export function parseTranscribeArgs(argv: string[]): TranscribeArgs {
   if (limitStr !== undefined && (!/^\d+$/.test(limitStr) || +limitStr < 1)) {
     fail(`--limit 需为正整数（收到 ${limitStr}）`);
   }
+  const concStr = val("--concurrency");
+  if (concStr !== undefined && (!/^\d+$/.test(concStr) || +concStr < 1)) {
+    fail(`--concurrency 需为正整数（收到 ${concStr}）`);
+  }
   return {
     window,
     limit: limitStr !== undefined ? +limitStr : undefined,
     force: argv.includes("--force"),
     demoSlug: val("--demo-slug"),
     dirs: val("--dir")?.split(",").map(s => s.trim()).filter(Boolean),
+    concurrency: concStr !== undefined ? +concStr : 1,
   };
 }
 
@@ -519,18 +525,22 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
   /** tries 耗尽跳过清单（M1 评审 #4：累计尝试 ≥2 仍 failed/running 残留 → 跳过并列 report，--force 才重置） */
   const exhaustedRetries: Array<{ slug: string; relPath: string; tries: number; error?: string }> = [];
   let transcribed = 0, skipped = 0, failed = 0, transcribeMsTotal = 0, mediaS = 0, processed = 0;
+  // 并发转写（2026-08-27）：任务函数内共享计数/state 更新依赖 Node 事件循环串行回调，
+  // 无真竞态；窗口/limit 检查从循环头移入任务开头（软停：停止领新任务，在飞的跑完）。
+  let stopped = false;
+  const stopReason = (msg: string) => { if (!stopped) { stopped = true; console.log(msg); } };
 
-  for (let i = 0; i < targets.length; i++) {
-    const entry = targets[i];
+  const processVideo = async (entry: ManifestEntry, i: number): Promise<void> => {
     const base = pathBasename(entry.absPath);
     const title = titleOf(entry.absPath);
+    if (stopped) return;
     if (!withinWindow(new Date(), args.window)) {
-      console.log(`窗口结束，明日续跑（已完成 ${outcomes.length}/${targets.length}，state 已落盘）`);
-      process.exit(0);
+      stopReason(`窗口结束，停止领新任务（在飞任务跑完后退出，state 已随任务落盘）`);
+      return;
     }
     if (args.limit !== undefined && processed >= args.limit) {
-      console.log(`--limit ${args.limit} 已处理满（本轮 ${outcomes.length}/${targets.length}），续跑去掉 limit 即可`);
-      process.exit(0);
+      stopReason(`--limit ${args.limit} 已处理满，停止领新任务（在飞任务跑完后退出，续跑去掉 limit 即可）`);
+      return;
     }
 
     // 已 done 且 segments 落盘 → 复用（按原 title/duration 重建 md，hash 与写入时一致），不重转写
@@ -539,7 +549,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
     if (line && !lineEligible(line)) {
       exhaustedRetries.push({ slug: line.slug, relPath: entry.relPath, tries: line.tries, error: line.error });
       console.warn(`[${i + 1}/${targets.length}] ${entry.relPath} — 尝试已耗尽（tries=${line.tries}），本轮跳过（--force 可重置重跑）`);
-      continue;
+      return;
     }
     if (line && line.status === "done" && !args.force && existsSync(whisperJsonPath(line.slug))) {
       // 复用路径逐文件容错（M1 评审 #3；r2 收窄 catch 范域）：
@@ -587,7 +597,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
           outcomes.push({ slug: line.slug, relPath: entry.relPath, status: "skipped", durationS: entry.durationS, transcribeMs: 0 });
           skipped++;
           console.log(`[${i + 1}/${targets.length}] ${line.slug} — done 复用（断点续跑）`);
-          continue;
+          return;
         } catch (e) {
           // 写入类失败（演示转码/登记）：tries 不增（M1 review r2），下轮重试自愈；whisper json 保留不删
           Object.assign(line, applyWriteFailure(line, String(e)));
@@ -595,7 +605,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
           outcomes.push({ slug: line.slug, relPath: entry.relPath, status: "failed", durationS: entry.durationS, transcribeMs: 0, error: String(e).slice(0, 200) });
           failed++; processed++;
           console.error(`[${i + 1}/${targets.length}] ${line.slug} done 复用写入失败（转码/登记，可重跑自愈）：${String(e).slice(0, 300)}`);
-          continue;
+          return;
         }
       }
       // segments===null（json 已删）→ 落到下方主路径本轮重转写
@@ -611,7 +621,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       if (line) { Object.assign(line, applyTranscribeFailure(line, String(e))); saveState(statePath, lines); }
       outcomes.push({ slug: line?.slug ?? "", relPath: entry.relPath, status: "failed", durationS: entry.durationS, transcribeMs: 0, error: String(e).slice(0, 200) });
       failed++; processed++;
-      continue;
+      return;
     }
     const slug0 = slugFor(base, sha8);
     // 规则升级桥（2026-08-25 slug 中文化）：同一 wav 已有 state 行（旧规则 slug，含 39 个
@@ -690,7 +700,9 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       outcomes.push({ slug, relPath: entry.relPath, status: "failed", durationS: entry.durationS, transcribeMs: Date.now() - tFile, error: String(e).slice(0, 200) });
       console.error(`[${i + 1}/${targets.length}] ${slug} 失败${whisperDone ? "（写入类，tries 未扣）" : ""}：${String(e).slice(0, 300)}`);
     }
-  }
+  };
+
+  await mapLimit(targets.map((e, i) => ({ e, i })), args.concurrency, ({ e, i }) => processVideo(e, i));
 
   if (outcomes.length < targets.length) {
     console.log(`本轮结束：${outcomes.length}/${targets.length}（余量待续跑）`);
