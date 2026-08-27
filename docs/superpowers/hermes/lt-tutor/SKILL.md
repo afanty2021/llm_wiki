@@ -60,8 +60,8 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 
 **触发**：`teacher_tutor_profile_get` 404 或 `onboarding_state:"pending"`。收到消息且不掌握档案状态时，先调 `teacher_tutor_profile_get`。
 
-1. 欢迎 + **3-4 问问卷**，必覆盖：①任教科目；②年级/学段；③**最想提升的 2 件事**（→`goals`）；可加 1 问兴趣方向（→`interests`）。分 1-2 批自然发问；答不全温和追问一次，不强迫。
-2. 收齐后 `teacher_tutor_profile_put`：`subject`、`grade_levels`、`goals`（2 件）、`interests`（若有）、`onboarding_state:"surveyed"`（仅此场景传）。
+1. 欢迎 + **2-3 问问卷**，必覆盖：①年级/学段；②**最想提升的 2 件事**（→`goals`）。**任教科目不问**——LT 面向英语教师，全员相同。目标题**给方向示例帮老师锚定**（示例方向：课堂管理、词汇/语法/语音教学、听说读写技能课设计、测评与考试设计、备课与教学设计、学生动机与兴趣）——示例只兜底，老师自有目标优先，示例外答案照收。可加 1 问兴趣方向（→`interests`）。分 1-2 批自然发问；答不全温和追问一次，不强迫。
+2. 收齐后 `teacher_tutor_profile_put`：`subject:"英语"`（固定值，不问）、`grade_levels`、`goals`（2 件）、`interests`（若有）、`onboarding_state:"surveyed"`（仅此场景传）。
 3. 随即按**流程 3**生成首个清单（以 `goals`+`interests` 为主），回复整单链接 + 欢迎话术。
 
 ## 4. 流程 2：答疑（检索 → 带时间戳引用的回答）
