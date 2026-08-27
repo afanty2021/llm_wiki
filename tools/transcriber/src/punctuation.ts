@@ -186,18 +186,31 @@ async function zaiChatPunct(
 }
 
 /**
- * 核心：整份 md 标点恢复。逐章逐块调 LLM，块级校验；任何失败 → null（调用方回落原文）。
+ * 核心：整份 md 标点恢复。逐章逐块调 LLM，块级校验。
  * 章头/frontmatter 原样保留（不送 LLM，杜绝标题被改）。
+ * 失败分级（2026-08-27 A+B 部分接受语义）：
+ *  - null 仅限文件级中止（预算耗尽/传输错误/空文件）——调用方回落原文；
+ *  - { partial: true } = 存在保留原文的残留（碎片段 verify 终败回填原文 /
+ *    懒章 8 枪耗尽整章回原文），其余内容正常加工——调用方可用混合体但
+ *    **不应落快照**（保未来重试收敛通道：页面单调变好、永不锁死）。
  */
+export interface PunctuateResult {
+  text: string
+  /** true = 有章/碎片保留原文（部分接受）；false = 全部加工成功。 */
+  partial: boolean
+}
+
 export async function punctuateMd(
   md: string,
   cfg: Required<PunctuateConfig> = DEFAULT_PUNCTUATE,
   deps: LlmPunctDeps = {},
-): Promise<string | null> {
+): Promise<PunctuateResult | null> {
   const { frontmatter, chapters } = splitChapters(md)
   if (chapters.length === 0) return null
   const sleep = deps.sleepFn ?? defaultSleep
   let calls = 0
+  // 碎片段 verify 终败回填原文计数——与懒章同为部分接受信号（A 方案）
+  let residualChunks = 0
   const gate = () => {
     if (++calls > MAX_CALLS_PER_FILE) throw new PunctFileAbort(`调用预算耗尽（>${MAX_CALLS_PER_FILE}）`)
   }
@@ -295,7 +308,9 @@ export async function punctuateMd(
       return `${head}\n\n${tail}`
     }
     // 单行仍失败 → 字符级二分：whisper 文本以空格分词，取中点最近空格切半递归
-    // （只影响边界处断句质量，校验严格性不放松）；<200 字的碎片失败即放弃。
+    // （只影响边界处断句质量，校验严格性不放松）；二分到底的碎片（<200 字或无
+    // 空格可切）不再放弃整块——回填原文（A 方案：一个碎片的忠实性恶魔不应拖垮
+    // 整章整文件；典型=Whisper 误转写「低零段」，模型屡屡「好心」纠正而拒收）。
     const line = lines[0] ?? ""
     if (line.length >= 200) {
       const mid = Math.floor(line.length / 2)
@@ -312,11 +327,13 @@ export async function punctuateMd(
         return `${head} ${tail}`.replace(/\s*\n\s*/g, "\n")
       }
     }
-    console.warn(`[punctuate] 碎片（${line.length}ch）仍校验失败（${lastErr}）`)
-    return null
+    console.warn(`[punctuate] 碎片（${line.length}ch）仍校验失败（${lastErr}），碎片保留原文`)
+    residualChunks++
+    return line
   }
 
   const out: string[] = [frontmatter]
+  let partial = false
   try {
     for (const ch of chapters) {
       const done: string[] = []
@@ -327,8 +344,12 @@ export async function punctuateMd(
         done.push(got)
       }
       if (!ok) {
-        console.warn(`[punctuate] 章「${ch.header.slice(0, 30)}」标点失败，整文件回落原文`)
-        return null
+        // 懒章整章回原文（B 方案）：其余章照常加工，不再整文件回落——
+        // 好章的损失不应由坏章买单（day2a 实测 81 error 里 8 好 1 坏型文件多见）。
+        partial = true
+        console.warn(`[punctuate] 章「${ch.header.slice(0, 30)}」标点失败，本章保留原文（部分接受）`)
+        out.push(ch.header ? `${ch.header}\n${ch.body}` : ch.body)
+        continue
       }
       out.push(ch.header ? `${ch.header}\n${done.join("\n\n")}` : done.join("\n\n"))
     }
@@ -342,7 +363,10 @@ export async function punctuateMd(
   // 重组：保留 LLM 的语义空行分段。CommonMark 单换行渲染为空格——段内多个
   // 时间戳行渲染时流式连排成一段（时间戳内联可见），空行处成自然段，正是所要。
   // 仅做卫生归一：3+ 连续空行压成一个 + 补结尾换行（纯空白，骨架不受影响）。
-  return `${out.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`
+  return {
+    text: `${out.filter(Boolean).join("\n\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`,
+    partial: partial || residualChunks > 0,
+  }
 }
 
 // ── 快照（幂等：C1 教训同款）──
@@ -388,10 +412,16 @@ export async function maybePunctuate(input: {
     return input.md
   }
   try {
-    const punctuated = await punctuateMd(input.md, cfg, input.deps)
-    if (punctuated === null) return input.md
-    persistPunctMd(input.outDir, input.slug, punctuated)
-    return punctuated
+    const result = await punctuateMd(input.md, cfg, input.deps)
+    if (result === null) return input.md
+    if (result.partial) {
+      // 部分接受：返回混合体但不落快照——陈旧快照会把残留章锁死（未来重转写
+      // 重跑时还有全胜机会）。
+      console.warn(`[punctuate] ${input.slug}: 部分内容保留原文（见上方 warn），不落快照`)
+      return result.text
+    }
+    persistPunctMd(input.outDir, input.slug, result.text)
+    return result.text
   } catch (e) {
     console.warn(`[punctuate] ${input.slug}: ${String(e).slice(0, 140)}，正文保持原样`)
     return input.md

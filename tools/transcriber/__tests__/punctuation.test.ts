@@ -101,12 +101,12 @@ describe("punctuateMd（LLM mock）", () => {
     }) as unknown as typeof fetch
     const result = await punctuateMd(MD, DEFAULT_PUNCTUATE, { fetchImpl })
     expect(result).not.toBeNull()
-    expect(verifyPunctuated(MD, result!)).toBe(true)
-    expect(result).toContain("## [00:00] 第一章 开场")
-    expect(result).toContain('title: "测试"')
+    expect(verifyPunctuated(MD, result!.text)).toBe(true)
+    expect(result!.text).toContain("## [00:00] 第一章 开场")
+    expect(result!.text).toContain('title: "测试"')
     expect(sent.length).toBe(2)
   })
-  it("LLM 改字 → 重试+二分兜底全部失败后整文件 null（不盲写）", async () => {
+  it("LLM 改字 → 二分兜底到底后碎片回填原文（A：不拖垮整块，partial 标记）", async () => {
     let calls = 0
     const fetchImpl = (async () => {
       calls++
@@ -114,7 +114,11 @@ describe("punctuateMd（LLM mock）", () => {
     }) as unknown as typeof fetch
     const sleepFn = vi.fn(async () => {})
     const result = await punctuateMd(MD, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn })
-    expect(result).toBeNull()
+    expect(result).not.toBeNull()
+    expect(result!.partial).toBe(true)
+    expect(verifyPunctuated(MD, result!.text)).toBe(true)  // 骨架保真（原文回填）
+    expect(result!.text).toContain("大家好 我是Merry")       // 原文保留，非 LLM 幻觉
+    expect(result!.text).not.toContain("完全不同的内容")
     expect(calls).toBeGreaterThanOrEqual(2) // 重试 + 二分递归（次数是实现细节）
     expect(sleepFn).toHaveBeenCalled()
   })
@@ -129,8 +133,8 @@ describe("punctuateMd（LLM mock）", () => {
     }) as unknown as typeof fetch
     const result = await punctuateMd(single, DEFAULT_PUNCTUATE, { fetchImpl })
     expect(result).not.toBeNull()
-    expect(result).not.toContain("```")
-    expect(verifyPunctuated(single, result!)).toBe(true)
+    expect(result!.text).not.toContain("```")
+    expect(verifyPunctuated(single, result!.text)).toBe(true)
   })
   it("LLM 的语义分段（空行）原样保留：段内单换行不塌缩、不升级", async () => {
     const lines = Array.from({ length: 6 }, (_, i) => `[0${i}:00] 第${i}行 内容`)
@@ -145,9 +149,9 @@ describe("punctuateMd（LLM mock）", () => {
     }) as unknown as typeof fetch
     const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl })
     expect(result).not.toBeNull()
-    expect(verifyPunctuated(md, result!)).toBe(true)
-    expect(result).toContain("第2行 内容。\n\n[03:00]")  // 空行分段保留
-    expect(result).toContain("第0行 内容。\n[01:00]")   // 段内单换行保持（不升级为空行）
+    expect(verifyPunctuated(md, result!.text)).toBe(true)
+    expect(result!.text).toContain("第2行 内容。\n\n[03:00]")  // 空行分段保留
+    expect(result!.text).toContain("第0行 内容。\n[01:00]")   // 段内单换行保持（不升级为空行）
   })
   it("段落门：长块未分段 → 重试；两次都未分段但校验通过 → 接受不二分", async () => {
     const lines = Array.from({ length: 6 }, (_, i) => `[0${i}:00] 第${i}行 内容`)
@@ -161,12 +165,12 @@ describe("punctuateMd（LLM mock）", () => {
     }) as unknown as typeof fetch
     const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
     expect(result).not.toBeNull()
-    expect(verifyPunctuated(md, result!)).toBe(true)
+    expect(verifyPunctuated(md, result!.text)).toBe(true)
     expect(calls).toBe(2) // 两次尝试后接受（进入二分会产生更多调用）
     // 接受的就是未分段产物本身（正文内无空行）
-    expect(result!.split("## [00:00] 单章\n")[1] ?? "").not.toContain("\n\n")
+    expect(result!.text.split("## [00:00] 单章\n")[1] ?? "").not.toContain("\n\n")
   })
-  it("密度门：≥400 字块偷懒回显（骨架校验通过但零标点）→ 重试一次仍懒判失败，不进二分", async () => {
+  it("密度门：≥400 字块偷懒回显（骨架校验通过但零标点）→ 重试仍懒判失败，不进二分；整章回原文（B）", async () => {
     const lines = Array.from({ length: 8 }, (_, i) => `[0${i}:00] ${"语料".repeat(28)}`)
     const md = `---\ntitle: "偷懒"\n---\n\n## [00:00] 单章\n\n${lines.join("\n")}\n`
     let calls = 0
@@ -177,8 +181,33 @@ describe("punctuateMd（LLM mock）", () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: body.messages[1].content } }] }), { status: 200 })
     }) as unknown as typeof fetch
     const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
-    expect(result).toBeNull()
+    expect(result).not.toBeNull()
+    expect(result!.partial).toBe(true)          // 懒章部分接受
+    expect(verifyPunctuated(md, result!.text)).toBe(true)
     expect(calls).toBe(8) // 偷懒块预算 8 枪（后 7 枪带 nudge），耗尽判失败不进二分
+  })
+  it("懒章回原文 + 好章正常加工（B：混合体，好章不被坏章拖垮）", async () => {
+    const lazyLines = Array.from({ length: 8 }, (_, i) => `[0${i}:00] ${"语料".repeat(28)}`)
+    const md = `---\ntitle: "混合"\n---\n\n## [00:00] 偷懒章\n\n${lazyLines.join("\n")}\n\n## [50:00] 好章\n\n[50:00] 今天我们讲词汇教学\n`
+    let calls = 0
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      calls++
+      const body = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }
+      const user = body.messages[1].content
+      if (user.includes("语料")) {
+        // 偷懒章恒回显（含 nudge 尾巴也回显 → 骨架拒 → 8 枪耗尽）
+        return new Response(JSON.stringify({ choices: [{ message: { content: user } }] }), { status: 200 })
+      }
+      // 好章：尾加句号
+      return new Response(JSON.stringify({ choices: [{ message: { content: `${user}。` } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
+    expect(result).not.toBeNull()
+    expect(result!.partial).toBe(true)
+    expect(verifyPunctuated(md, result!.text)).toBe(true)
+    expect(result!.text).toContain("[50:00] 今天我们讲词汇教学。")  // 好章加工
+    expect(result!.text).toContain("语料语料")                      // 懒章原文保留
+    expect(calls).toBe(8 + 1) // 懒章 8 枪 + 好章 1 次
   })
   it("密度门：首答偷懒 → 重试带强化指令且采纳重答（不误杀整个文件）", async () => {
     const lines = Array.from({ length: 8 }, (_, i) => `[0${i}:00] ${"语料".repeat(28)}`)
@@ -204,7 +233,7 @@ describe("punctuateMd（LLM mock）", () => {
     expect(result).not.toBeNull()
     expect(calls).toBe(2)
     expect(nudged).toBe(true)
-    expect(result).toContain("，。")
+    expect(result!.text).toContain("，。")
   })
   it("传输错误（5xx）重试一次后文件级快速失败——不进二分", async () => {
     let calls = 0
@@ -231,25 +260,29 @@ describe("punctuateMd（LLM mock）", () => {
       sleepFn: async (ms) => { sleeps.push(ms) },
     })
     expect(result).not.toBeNull()
-    expect(verifyPunctuated(MD, result!)).toBe(true)
+    expect(verifyPunctuated(MD, result!.text)).toBe(true)
     expect(sleeps.slice(0, 2)).toEqual([5000, 10000])
     expect(calls).toBe(4) // 2×429 退避 + 两章各 1 次成功
   })
-  it("字符级二分：单行超长块 verify 恒败 → 递归切半，碎片 <200 字放弃 → 整文件 null", async () => {
+  it("字符级二分：单行超长块 verify 恒败 → 递归切半，碎片 <200 字回填原文（A）", async () => {
     const words = Array.from({ length: 60 }, (_, i) => `词组${i}`)
     const longLine = `[00:00] ${words.join(" ")}` // ~300 字（≥200 才走字符二分）
     const md = `---\ntitle: "x"\n---\n\n## [00:00] 单章\n\n${longLine}\n`
     let calls = 0
     const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
       calls++
-      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] }
+      const body = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }
       // 恒增字 → verify 必败（驱动二分树走到底）
       return new Response(JSON.stringify({ choices: [{ message: { content: `${body.messages[1].content}多余` } }] }), { status: 200 })
     }) as unknown as typeof fetch
     const result = await punctuateMd(md, DEFAULT_PUNCTUATE, { fetchImpl, sleepFn: async () => {} })
-    expect(result).toBeNull()
-    // 根块 2 次 + 左半块 2 次（<200 字碎片放弃）；右半因左半 null 短路不再调用
-    expect(calls).toBe(4)
+    expect(result).not.toBeNull()
+    expect(result!.partial).toBe(true)
+    expect(verifyPunctuated(md, result!.text)).toBe(true)
+    expect(result!.text).toContain("词组0")   // 原文回填
+    expect(result!.text).not.toContain("多余")
+    // 根块 2 次 + 左半 2 次 + 右半 2 次（碎片回填不短路右半）
+    expect(calls).toBe(6)
   })
 })
 
@@ -296,6 +329,25 @@ describe("快照幂等（maybePunctuate）", () => {
       expect(readFileSync(join(dir, "punct", "x.md"), "utf-8")).toBe("内容\n")
       expect(loadPunctMd(dir, "x")).toBe("内容\n")
       expect(loadPunctMd(dir, "missing")).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it("部分接受：返回混合体但不落快照（残留保未来重试通道）", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "punct-partial-"))
+    try {
+      const lazyLines = Array.from({ length: 8 }, (_, i) => `[0${i}:00] ${"语料".repeat(28)}`)
+      const md = `---\ntitle: "部分"\n---\n\n## [00:00] 偷懒章\n\n${lazyLines.join("\n")}\n\n## [50:00] 好章\n\n[50:00] 今天我们讲词汇教学\n`
+      const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }
+        const user = body.messages[1].content
+        if (user.includes("语料")) return new Response(JSON.stringify({ choices: [{ message: { content: user } }] }), { status: 200 })
+        return new Response(JSON.stringify({ choices: [{ message: { content: `${user}。` } }] }), { status: 200 })
+      }) as unknown as typeof fetch
+      const out = await maybePunctuate({ md, slug: "s9", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl, sleepFn: async () => {} } })
+      expect(verifyPunctuated(md, out)).toBe(true)
+      expect(out).toContain("[50:00] 今天我们讲词汇教学。")  // 混合体（好章加工）
+      expect(loadPunctMd(dir, "s9")).toBeNull()               // 不落快照
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

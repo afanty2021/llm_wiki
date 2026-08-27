@@ -5,13 +5,18 @@
 // 核心 import ../src/punctuation（与摄取链同源）。
 //
 // 安全设计：
-//  - 门序（关键）：快照自愈门 → 密度门。快照在密度门之前——「快照已落、页写成、
-//    源写败」的 crash 窗口后页已带标点，密度门会 early-return 挡住自愈；快照
-//    路径页+源双写天然自愈。快照命中先验与页内容一致性（同 slug 重转写/手编后
-//    陈旧 → 删快照重新标点，不把旧文写回）。--force 同时越过快照门与密度门。
+//  - 门序（关键）：快照自愈门 → partial 门 → 密度门。快照在最前——「快照已落、
+//    页写成、源写败」的 crash 窗口后页已带标点，密度门会 early-return 挡住自愈；
+//    快照路径页+源双写天然自愈。快照命中先验与页内容一致性（同 slug 重转写/手编
+//    后陈旧 → 删快照重新标点，不把旧文写回）。partial 门（2026-08-27 A+B）在密度
+//    门之前——部分接受文件的好章标点推高页密度会被误判达标锁死重试；有
+//    out/punct/<slug>.partial 标记即绕过密度门重跑残留章，全胜写快照时标记清除。
+//    --force 同时越过快照门、partial 门与密度门。
+//  - 部分接受（A+B）：碎片段 verify 终败回填原文、懒章整章回原文，其余照常加工
+//    ——页+源双写混合体，**不落快照**（残留保未来重试通道，页面单调变好）。
 //  - 跳过门：正文标点密度已 >2%（如已处理过/个别原生带标点）→ skip，--force 可越过；
 //  - 校验门：src/punctuation verifyPunctuated（时间戳标记全保留且有序 + 剥空白标点后
-//    逐字符一致）——LLM 改字/丢行整文件回落，绝不盲写；
+//    逐字符一致）——LLM 改字/丢章整文件回落，绝不盲写；
 //  - GET 限流退避：429/5xx 重试（rechapter 同款）；
 //  - 不动 frontmatter/章头/media.chapters/ingested_files——纯正文级改写，页与源同 bytes。
 //
@@ -20,7 +25,7 @@
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/punctuate-backfill.ts --only 06ad7ef1 [--dry-run]
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/punctuate-backfill.ts --all [--limit 20] [--exclude a,b]
 // 凭证：ZAI_API_KEY env 或 ~/.hermes/.env（不打印）；SVC_PASSWORD 必填。
-import { readFileSync, writeFileSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, rmSync, existsSync, mkdirSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ApiClient } from "../src/api-client"
@@ -104,13 +109,18 @@ function punctDensity(md: string): number {
 
 interface Outcome {
   slug: string
-  status: "ok" | "skipped_already_punctuated" | "skipped_snapshot" | "error"
+  status: "ok" | "ok_partial" | "skipped_already_punctuated" | "skipped_snapshot" | "error"
   chapters?: number
   densityBefore?: number
   densityAfter?: number
   reason?: string
 }
 const outcomes: Outcome[] = []
+
+/** 部分接受标记（out/punct/<slug>.partial）：页面=好章+残留章混合体，好章
+ *  标点会推高页密度，密度门会误判达标挡死重试（Language-systems 锁死实证）。
+ *  有标记 → 绕过密度门重跑残留章；全胜写快照时清除（自然升级）。 */
+const partialMarker = (slug: string) => join(outDir, "punct", `${slug}.partial`)
 
 async function processOne(line: { slug: string }): Promise<Outcome> {
   const { slug } = line
@@ -144,23 +154,41 @@ async function processOne(line: { slug: string }): Promise<Outcome> {
     console.warn(`[backfill] ${slug}: 快照与页内容不一致（重转写/手编后陈旧），删快照重新标点`)
   }
 
-  if (density > 0.02 && !flag("--force")) {
+  // partial 门（2026-08-27 A+B）：上轮部分接受的文件重跑——重跑输入=当前页，
+  // 已带标点的好章模型原样保留（回显密度高不判懒）→ 坏章再抽签，页面单调变好。
+  const hasPartial = existsSync(partialMarker(slug)) && !flag("--force")
+  if (hasPartial) {
+    console.warn(`[backfill] ${slug}: 部分接受标记在，绕过密度门重试残留章`)
+  }
+  if (density > 0.02 && !flag("--force") && !hasPartial) {
     // 已带标点（旧版仅标点未分段）→ 默认跳过；--force 重送 LLM 补语义分段
     return { slug, status: "skipped_already_punctuated", densityBefore: density, reason: `密度 ${(density * 100).toFixed(1)}% 已达标` }
   }
 
-  const punctuated = await punctuateMd(content, punctCfg, { apiKey: ZAI_KEY })
-  if (punctuated === null) return { slug, status: "error", reason: "LLM/校验失败（见上方 warn）" }
+  const result = await punctuateMd(content, punctCfg, { apiKey: ZAI_KEY })
+  if (result === null) return { slug, status: "error", reason: "LLM/校验失败（见上方 warn）" }
+  const punctuated = result.text
   if (punctuated === content) return { slug, status: "error", reason: "标点结果与原文相同（异常）" }
   // 双保险：入口外再验一次（punctuateMd 内部已逐块验过）
   if (!verifyPunctuated(content, punctuated)) return { slug, status: "error", reason: "终验失败（不应到达）" }
 
   if (DRY) {
-    return { slug, status: "ok", densityBefore: density, densityAfter: punctDensity(punctuated) }
+    return { slug, status: result.partial ? "ok_partial" : "ok", densityBefore: density, densityAfter: punctDensity(punctuated) }
   }
-  // 快照先于双写落盘（评审 I1）：页写成功/源写失败的 crash 窗口后，重跑走
-  // skipped_snapshot 路径（本就页+源双写自愈）——若快照后落，密度门会把
-  // punctuated 页判为已处理，源永久滞后且无自愈通道。
+  if (result.partial) {
+    // 部分接受：页+源双写混合体，不落快照（残留章保未来重试通道），标记先落
+    // （crash 在页写前 → 重跑仍走 partial 门自愈）。
+    mkdirSync(join(outDir, "punct"), { recursive: true })
+    writeFileSync(partialMarker(slug), `${JSON.stringify({ slug, updatedAt: new Date().toISOString() }, null, 2)}\n`)
+    await api.upsertTranscriptPage(pagePath, punctuated)
+    await api.writeSource(sourcePath, punctuated)
+    return { slug, status: "ok_partial", densityBefore: density, densityAfter: punctDensity(punctuated) }
+  }
+  // 全胜：清 partial 标记（从部分接受升级的文件在此收口）+ 快照先于双写落盘
+  // （评审 I1）：页写成功/源写失败的 crash 窗口后，重跑走 skipped_snapshot
+  // 路径（本就页+源双写自愈）——若快照后落，密度门会把 punctuated 页判为已
+  // 处理，源永久滞后且无自愈通道。
+  rmSync(partialMarker(slug), { force: true })
   persistPunctMd(outDir, slug, punctuated)
   await api.upsertTranscriptPage(pagePath, punctuated)
   await api.writeSource(sourcePath, punctuated)
@@ -184,10 +212,12 @@ const workers = Array.from({ length: MODE === "check" ? 4 : CONCURRENCY }, async
 await Promise.all(workers)
 
 const by = (s: string) => outcomes.filter((o) => o.status === s).length
-console.log(`完成：ok=${by("ok")} skipped_snapshot=${by("skipped_snapshot")} skipped_already=${by("skipped_already_punctuated")} error=${by("error")}`)
+console.log(`完成：ok=${by("ok")} ok_partial=${by("ok_partial")} skipped_snapshot=${by("skipped_snapshot")} skipped_already=${by("skipped_already_punctuated")} error=${by("error")}`)
 for (const o of outcomes) {
   if (o.status === "error") console.log(`  [error] ${o.slug}: ${o.reason}`)
-  else if (MODE !== "check" && o.status === "ok") {
+  else if (o.status === "ok_partial") {
+    console.log(`  [partial] ${o.slug}: 密度 ${((o.densityBefore ?? 0) * 100).toFixed(1)}% → ${((o.densityAfter ?? 0) * 100).toFixed(1)}%（残留章回原文，未落快照）`)
+  } else if (MODE !== "check" && o.status === "ok") {
     console.log(`  ${o.slug}: 密度 ${((o.densityBefore ?? 0) * 100).toFixed(1)}% → ${((o.densityAfter ?? 0) * 100).toFixed(1)}%`)
   }
 }
@@ -195,5 +225,6 @@ writeFileSync(join(outDir, "punctuate-backfill-report.json"), `${JSON.stringify(
 console.log(`报告：${join(outDir, "punctuate-backfill-report.json")}`)
 // 退出码：有 error 或（非 check 模式下）一条都没实际处理 → 1。check 模式的
 // skipped_already_punctuated 是「全部已达标」的合法终态，不算失败（评审 M5）。
-const meaningful = MODE === "check" ? by("ok") + by("skipped_already_punctuated") : by("ok") + by("skipped_snapshot")
+// ok_partial（部分接受）= 页面已写入改善，计入实际处理。
+const meaningful = MODE === "check" ? by("ok") + by("skipped_already_punctuated") : by("ok") + by("ok_partial") + by("skipped_snapshot")
 process.exit(by("error") > 0 || (meaningful === 0 && targets.length > 0) ? 1 : 0)
