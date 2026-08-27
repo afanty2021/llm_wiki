@@ -152,6 +152,7 @@ export interface TranscribeArgs {
   limit?: number;        // 本次最多处理 N 个（断点续跑分段）
   force: boolean;        // 全部行重置 pending（重跑）
   demoSlug?: string;     // 仅该 slug 转一份 videotoolbox 副本（M4 按需转码缓存主案的验收演示）
+  dirs?: string[];       // 目录子串白名单：给定则替代 firstBatch 语义，只摄入 relPath 命中任一子串的视频
 }
 
 export function parseTranscribeArgs(argv: string[]): TranscribeArgs {
@@ -175,6 +176,7 @@ export function parseTranscribeArgs(argv: string[]): TranscribeArgs {
     limit: limitStr !== undefined ? +limitStr : undefined,
     force: argv.includes("--force"),
     demoSlug: val("--demo-slug"),
+    dirs: val("--dir")?.split(",").map(s => s.trim()).filter(Boolean),
   };
 }
 
@@ -483,7 +485,12 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
     for (const e of probeFailures) console.warn(`    ${e.relPath}: ${e.error}`);
   }
 
-  const targets = selectFirstBatchVideos(entries);
+  // --dir 给定 → 目录子串白名单模式（任意非 error、非隐私视频，relPath 命中任一子串即选）；
+  // 否则维持首批语义（inFirstBatch）不变
+  const targets = args.dirs?.length
+    ? entries.filter(e => !e.error && e.category === "video" && !e.privacy && args.dirs!.some(d => e.relPath.includes(d)))
+        .sort((a, b) => a.relPath.localeCompare(b.relPath))
+    : selectFirstBatchVideos(entries);
   if (targets.length === 0) fail("重审计后首批视频为 0（firstBatchDir 配置或目录漂移？）");
   const totalMediaH = Math.round(targets.reduce((a, e) => a + e.durationS, 0) / 36) / 100;
   console.log(`首批目标 ${targets.length} 个 / ${totalMediaH}h（重审计 firstBatch: ${summary.firstBatch.files} 文件 ${summary.firstBatch.durationH}h）`);
@@ -744,7 +751,7 @@ async function main() {
   if (cmd === "audit") return cmdAudit(rest);
   if (cmd === "transcribe") return cmdTranscribe(rest);
   if (cmd === "sign-media") return cmdSignMedia(rest);
-  console.error("用法: tsx tools/transcriber/src/cli.ts audit [--concurrency N] [--diff <prev-manifest.json>] | transcribe [--window 23:00-08:00] [--limit N] [--force] [--demo-slug <slug>] | sign-media <slug> [--hours 12]");
+  console.error("用法: tsx tools/transcriber/src/cli.ts audit [--concurrency N] [--diff <prev-manifest.json>] | transcribe [--window 23:00-08:00] [--limit N] [--force] [--demo-slug <slug>] [--dir <子串[,子串2]>] | sign-media <slug> [--hours 12]");
   process.exit(1);
 }
 

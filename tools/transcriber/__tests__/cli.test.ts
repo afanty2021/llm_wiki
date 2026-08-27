@@ -13,16 +13,26 @@ import type { StateLine } from "../src/whisper";
 import type { JobStatus } from "../src/api-client";
 
 describe("parseTranscribeArgs", () => {
-  it("默认 window=23:00-08:00，无 limit/force/demoSlug", () => {
-    expect(parseTranscribeArgs([])).toEqual({ window: "23:00-08:00", limit: undefined, force: false, demoSlug: undefined });
+  it("默认 window=23:00-08:00，无 limit/force/demoSlug/dirs", () => {
+    expect(parseTranscribeArgs([])).toEqual({ window: "23:00-08:00", limit: undefined, force: false, demoSlug: undefined, dirs: undefined });
   });
   it("白天直跑：--window 00:00-23:59 --limit 5 --force --demo-slug x", () => {
     expect(parseTranscribeArgs(["--window", "00:00-23:59", "--limit", "5", "--force", "--demo-slug", "x"]))
-      .toEqual({ window: "00:00-23:59", limit: 5, force: true, demoSlug: "x" });
+      .toEqual({ window: "00:00-23:59", limit: 5, force: true, demoSlug: "x", dirs: undefined });
   });
   it("非法窗口串在解析期即抛（fail fast，不等 48 个文件跑一半）", () => {
     expect(() => parseTranscribeArgs(["--window", "25:00-08:00"])).toThrow(/非法窗口串/);
     expect(() => parseTranscribeArgs(["--window", "23:00"])).toThrow(/非法窗口串/);
+  });
+  it("--dir 单子串与逗号分隔多子串；空段剔除", () => {
+    expect(parseTranscribeArgs(["--dir", "幼儿英语启蒙"]).dirs).toEqual(["幼儿英语启蒙"]);
+    expect(parseTranscribeArgs(["--dir", "幼儿英语启蒙, 教材及教学素材解析,"]).dirs)
+      .toEqual(["幼儿英语启蒙", "教材及教学素材解析"]);
+    expect(parseTranscribeArgs(["--dir", ","]).dirs).toEqual([]);
+  });
+  it("--dir 结尾缺值 → 报错退出", () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("exit") }) as never);
+    try { expect(() => parseTranscribeArgs(["--force", "--dir"])).toThrow(); } finally { exit.mockRestore(); }
   });
 });
 
