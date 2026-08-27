@@ -193,6 +193,20 @@ export function selectFirstBatchVideos(entries: ManifestEntry[]): ManifestEntry[
     .sort((a, b) => a.relPath.localeCompare(b.relPath));
 }
 
+/** relPath 去重（并发转写评审 Important 2026-08-27）：relPath 相对各自扫描根，双根
+ *  镜像布局（mainRoot+hevcRoot 同子结构）会让同一文件产出两条同 relPath entry——
+ *  旧串行代码被 byRel 的 done 复用优雅消化，并发下两任务交错写同一 state 行=静默
+ *  损坏。单根时代该不变式"恰好成立"，此处升级为代码保证：保首见（调用方已排序，
+ *  字典序先者；镜像内容等价，保哪条仅影响 absPath 来源）。 */
+export function dedupeByRelPath(entries: ManifestEntry[]): ManifestEntry[] {
+  const seen = new Set<string>();
+  return entries.filter(e => {
+    if (seen.has(e.relPath)) return false;
+    seen.add(e.relPath);
+    return true;
+  });
+}
+
 /** bootstrap.sh 状态文件（KEY=VALUE 行）→ 记录；缺失/损坏返回空对象（调用方决定是否 fail）。行尾 " # 注释" 剥离（值域为 hex/数字，不含空格#）。 */
 export function parseBootstrapEnv(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -493,10 +507,13 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
 
   // --dir 给定 → 目录子串白名单模式（任意非 error、非隐私视频，relPath 命中任一子串即选）；
   // 否则维持首批语义（inFirstBatch）不变
-  const targets = args.dirs?.length
+  const targets = dedupeByRelPath(args.dirs?.length
     ? entries.filter(e => !e.error && e.category === "video" && !e.privacy && args.dirs!.some(d => e.relPath.includes(d)))
         .sort((a, b) => a.relPath.localeCompare(b.relPath))
-    : selectFirstBatchVideos(entries);
+    : selectFirstBatchVideos(entries));
+  if (args.concurrency > 4) {
+    console.warn(`⚠ --concurrency ${args.concurrency}：whisper 走 Metal GPU 时间片，>4 路收益趋平且放大 zai 5h 窗配额消耗（与教师服务共池）`);
+  }
   if (targets.length === 0) fail("重审计后首批视频为 0（firstBatchDir 配置或目录漂移？）");
   const totalMediaH = Math.round(targets.reduce((a, e) => a + e.durationS, 0) / 36) / 100;
   console.log(`首批目标 ${targets.length} 个 / ${totalMediaH}h（重审计 firstBatch: ${summary.firstBatch.files} 文件 ${summary.firstBatch.durationH}h）`);
@@ -673,8 +690,12 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       let playback: string | undefined;
       if (args.demoSlug === slug) {
         playback = playbackOutPath(outDir, slug, ".mp4");
-        console.log(`  演示件转码（videotoolbox）：${base} → ${playback}`);
-        await transcodePlayback(entry.absPath, playback);
+        if (existsSync(playback)) {
+          console.log(`  演示件已存在，跳过转码：${playback}`);
+        } else {
+          console.log(`  演示件转码（videotoolbox）：${base} → ${playback}`);
+          await transcodePlayback(entry.absPath, playback);
+        }
       }
 
       const item: MediaAssetItem = {

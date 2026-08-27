@@ -3,6 +3,7 @@
 // （主循环 IO 编排由 Task 15 真跑验收；模块顶部 invokedAsScript 守卫保证 import 无副作用）
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  dedupeByRelPath,
   parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv,
   parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible,
   applyWriteFailure, applyTranscribeFailure, runIngestPhase, transcribeExitCode,
@@ -113,6 +114,25 @@ describe("selectFirstBatchVideos", () => {
       mk({ relPath: "f/audio.m4a", category: "audio", inFirstBatch: true }),
     ];
     expect(selectFirstBatchVideos(entries).map(e => e.relPath)).toEqual(["b/1.mp4", "b/2.mp4"]);
+  });
+});
+
+describe("dedupeByRelPath（并发转写评审 Important：relPath 唯一性从配置事实升级为代码保证）", () => {
+  const mk = (relPath: string, source: "main" | "hevc" = "hevc") =>
+    ({ absPath: `/x/${relPath}`, relPath, source, category: "video" as const, ext: ".mp4",
+       container: null, videoCodec: null, audioCodec: null, durationS: 1, bucket: null,
+       privacy: false, inFirstBatch: true });
+  it("无重复透传（长度与顺序不变）", () => {
+    const es = [mk("a.mp4"), mk("b.mp4")];
+    expect(dedupeByRelPath(es)).toEqual(es);
+  });
+  it("双根镜像同 relPath → 保首见（main 根条目在先则保 main）", () => {
+    const out = dedupeByRelPath([mk("a.mp4", "main"), mk("a.mp4", "hevc"), mk("b.mp4", "hevc")]);
+    expect(out.map(e => e.source)).toEqual(["main", "hevc"]);
+  });
+  it("三重复杂序列：每个 relPath 只留第一个", () => {
+    const out = dedupeByRelPath([mk("a"), mk("b"), mk("a"), mk("c"), mk("b")]);
+    expect(out.map(e => e.relPath)).toEqual(["a", "b", "c"]);
   });
 });
 
