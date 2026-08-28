@@ -29,6 +29,32 @@ describe("parseWhisperJson", () => {
   it("空 transcription 容错", () => { expect(parseWhisperJson({ transcription: [] })).toEqual([]); });
   it("缺 transcription 字段容错（防 -oj 输出形态变化时抛错）", () => { expect(parseWhisperJson({})).toEqual([]); });
 });
+
+describe("stripHallucinationSegments（B 站搬运幻觉过滤，2026-08-29 全库 55 页波及后落地）", () => {
+  const seg = (text: string) => ({ startS: 1, endS: 2, text });
+  it("纯幻觉段剥词后为空 → 丢弃（含中文字幕志愿者完整署名形态）", () => {
+    expect(parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "字幕志愿者 李宗盛" },
+      { offsets: { from: 2000, to: 3000 }, text: "中文字幕志愿者 李宗盛" },
+      { offsets: { from: 3000, to: 4000 }, text: "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目" },
+    ] })).toEqual([]);
+  });
+  it("真段（幻觉词只是子串或无关内容）→ 保留零误杀", () => {
+    const out = parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "Hello 各位老师大家好，我是Mary" },
+      { offsets: { from: 2000, to: 3000 }, text: "今天讲词汇教学" },
+    ] });
+    expect(out).toHaveLength(2);
+    expect(out[0].text).toContain("Mary");
+  });
+  it("剥词后仍有内容的段保留（混合段不丢真字）", () => {
+    const out = parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "字幕志愿者 If you hear my voice, clap once" },
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].text).toContain("clap once");
+  });
+});
 describe("withinWindow", () => {
   it("跨午夜窗口", () => {
     expect(withinWindow(new Date("2026-08-18T23:30:00"), "23:00-08:00")).toBe(true);

@@ -14,11 +14,32 @@ export interface Segment {
 /** whisper.cpp `-oj` 输出 → Segment[]（offsets 毫秒 → 秒；text 去首尾空白）。容错：缺 transcription 字段返回 []。 */
 export function parseWhisperJson(raw: unknown): Segment[] {
   const j = raw as { transcription?: Array<{ offsets?: { from?: number; to?: number }; text?: string }> };
-  return (j.transcription ?? []).map(t => ({
+  return stripHallucinationSegments((j.transcription ?? []).map(t => ({
     startS: (t.offsets?.from ?? 0) / 1000,
     endS: (t.offsets?.to ?? 0) / 1000,
     text: (t.text ?? "").trim(),
-  }));
+  })));
+}
+
+// ── Whisper 幻觉过滤（2026-08-29 全库扫描 55/552 页波及后落地）──
+
+/** 已知幻觉词：B 站搬运视频的字幕组署名音轨/BGM 歌词被 Whisper 转成整段重复垃圾
+ *  （实测重度页「字幕志愿者 李宗盛」×1909）。剥词后整段为空才丢弃——幻觉实测
+ *  100% 是整段纯幻觉（混合段 0），真段剥词后仍有内容必保留，零误杀。 */
+export const HALLUCINATION_TOKENS = [
+  "中文字幕志愿者", "字幕志愿者", "李宗盛", "明镜与点点", "请不吝点赞", "打赏支持",
+  "订阅 转发", "打赏",
+] as const;
+
+/** 幻觉段过滤：含黑名单词的段，剥词后剩余 ≤2 字（「订阅 转发 栏目」级搬运
+ *  话术残渣）即丢弃；不含黑名单词的段无条件保留（零误杀入口）。 */
+export function stripHallucinationSegments(segments: Segment[]): Segment[] {
+  return segments.filter(seg => {
+    if (!HALLUCINATION_TOKENS.some(tok => seg.text.includes(tok))) return true
+    let core = seg.text
+    for (const tok of HALLUCINATION_TOKENS) core = core.split(tok).join("")
+    return core.replace(/\s/g, "").length > 2
+  })
 }
 
 /**
