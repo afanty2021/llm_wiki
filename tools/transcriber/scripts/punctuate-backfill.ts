@@ -44,6 +44,9 @@ const opt = (n: string, d: string) => {
   return i >= 0 ? args[i + 1] : d
 }
 const MODEL = opt("--model", "glm-5.3-flash")
+// --base-url：zai 内容审查拦截（HTTP 400 contentFilter code 1301）时的绕行通道——
+// 指向本地 omlx（http://127.0.0.1:8001/v1，chat 请求自动拉起已卸载模型 ~9s）
+const BASE_URL = opt("--base-url", DEFAULT_PUNCTUATE.baseUrl)
 // NaN/非数字并发（--concurrency abc）→ 回落默认，而非 0 worker 静默假跑（评审 M6）
 const concurrencyArg = Number(opt("--concurrency", "3"))
 const CONCURRENCY = Number.isFinite(concurrencyArg) && concurrencyArg >= 1
@@ -52,7 +55,7 @@ const CONCURRENCY = Number.isFinite(concurrencyArg) && concurrencyArg >= 1
 const DRY = flag("--dry-run")
 const LIMIT = Number(opt("--limit", "0"))
 const MODE = flag("--check") ? "check" : flag("--all") ? "all" : "only"
-const punctCfg = { ...DEFAULT_PUNCTUATE, enabled: true, model: MODEL }
+const punctCfg = { ...DEFAULT_PUNCTUATE, enabled: true, model: MODEL, baseUrl: BASE_URL }
 const ZAI_KEY = process.env.ZAI_API_KEY || loadZaiKey()
 if (!ZAI_KEY && MODE !== "check") {
   console.error("缺 ZAI_API_KEY（env 或 ~/.hermes/.env）")
