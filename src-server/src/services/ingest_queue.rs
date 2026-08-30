@@ -30,7 +30,9 @@ pub fn is_transient_job_err(e: &AppError) -> bool {
         // redis 命令错现映射为 InternalError（如 cache_step1_result），按 message 特判
         AppError::InternalError(msg) => {
             let m = msg.to_lowercase();
+            // r1 G-1：all-failed join 文本含 "Rate limited" → 瞬态（同上，"rate limit" 承重）
             m.contains("redis") || m.contains("connection refused") || m.contains("timeout") || m.contains("connect")
+                || m.contains("http 429") || m.contains("api error 429") || m.contains("rate limit")
         }
         AppError::Cancelled => false,
         _ => false,
@@ -40,7 +42,11 @@ pub fn is_transient_job_err(e: &AppError) -> bool {
 fn is_transient_msg(msg: &str) -> bool {
     let m = msg.to_lowercase();
     // 两种 5xx 报文格式：embedding.rs 用 "HTTP {status}"；LLM streaming（LlmError::ApiError Display）用 "API error {status}"
+    // r1 G-1：429/限流归瞬态——批量 429 经 all-failed 路径以 InternalError 到达
+    // worker（含 "Rate limited"，429 在 llm_stream.rs:207 前置映射，不走
+    // "API error 429"）；"rate limit" 是承重模式，不可精简（spec §7）。
     m.contains("http 5") || m.contains("api error 5") || m.contains("timeout") || m.contains("connect") || m.contains("connection")
+        || m.contains("http 429") || m.contains("api error 429") || m.contains("rate limit")
 }
 
 // ── 模型 ──
@@ -408,5 +414,17 @@ mod tests {
         assert!(!is_transient_job_err(&AppError::InternalError("DOCX parse error: bad format".into())));
         assert!(!is_transient_job_err(&AppError::LlmApiError("HTTP 400 content violation".into())));
         assert!(!is_transient_job_err(&AppError::Cancelled));
+
+        // —— r1 G-1：429/限流归入瞬态。承重链：批量 429 → 单源 Failed → warnings →
+        // all-failed InternalError，消息含 "Rate limited"（429 在 llm_stream.rs:207
+        // 前置映射为 RateLimited，Display "Rate limited"，不会以 "API error 429"
+        // 形态出现——"rate limit" 模式承重，不可精简掉）。
+        assert!(is_transient_job_err(&AppError::LlmApiError("step1: Rate limited".into())));
+        assert!(is_transient_job_err(&AppError::LlmApiError("embed HTTP 429: quota".into())));
+        assert!(is_transient_job_err(&AppError::InternalError(
+            "all 3 source(s) failed: process raw/a.md: step1: Rate limited".into()
+        )));
+        // 非瞬态面不受影响
+        assert!(!is_transient_job_err(&AppError::LlmApiError("HTTP 400 content violation".into())));
     }
 }
