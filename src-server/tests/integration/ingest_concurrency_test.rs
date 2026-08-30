@@ -302,6 +302,52 @@ pub(crate) async fn ic_fetch_item_states(env: &IcEnv, job_id: uuid::Uuid) -> Vec
         .unwrap_or_default()
 }
 
+// —— 取消语义 fixture（Task 6：spec 测 3/8/9）——
+
+/// INSERT 'running' + spawn run_ingest_job（不落终态——cancel 用例的终态由
+/// pipeline 自身 mark_job_cancelled / 尾段 check_cancel 落，测试只断言 DB）。
+pub(crate) async fn ic_spawn_run(
+    env: &IcEnv,
+    sources: Vec<String>,
+) -> (
+    tokio::task::JoinHandle<
+        Result<llm_wiki_server::services::ingest_queue::IngestJobResult, llm_wiki_server::AppError>,
+    >,
+    IngestJob,
+) {
+    let job = ic_insert_job(env, sources).await;
+    let state = env.state.clone();
+    let job_clone = job.clone();
+    let handle =
+        tokio::spawn(async move { ingest_pipeline::run_ingest_job(&state, &job_clone).await });
+    (handle, job)
+}
+
+/// 轮询 started 计数至 want（10ms 间隔、5s 上限）——"调用已开始"锚点
+/// （started 在 stub 进入时即计、delay 前，等待窗口 = route 的 delay_ms）。
+async fn wait_started(env: &IcEnv, marker: &str, want: usize) {
+    for _ in 0..500 {
+        let cur = *env.stub.started.lock().unwrap().get(marker).unwrap_or(&0);
+        if cur >= want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("等待 stub marker {} started 达 {} 超时", marker, want);
+}
+
+/// 轮询 calls 完成记录数至 want（同 wait_started 口径，查完成而非开始）。
+async fn wait_calls(env: &IcEnv, marker: &str, want: usize) {
+    for _ in 0..500 {
+        let cur = env.stub.calls.lock().unwrap().iter().filter(|c| c.contains(marker)).count();
+        if cur >= want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("等待 stub marker {} calls 达 {} 超时", marker, want);
+}
+
 // —— 用例（spec §测试与验收 1/2/6）——
 
 /// spec 测 1：3 源 N=2，stub 延迟乱序（za 慢 400ms、zb/zc 快 30ms）→ 全部落库、
@@ -339,6 +385,11 @@ async fn concurrent_sources_all_land_in_order() {
     let states = ic_fetch_item_states(&env, job.id).await;
     assert_eq!(states.len(), 3);
     assert!(states.iter().all(|(_, s, _)| s == "done"), "{:?}", states);
+    // 控制器补强 1（Task 6）：全 done 之上再锁路径集合——item_states 恰为三源
+    //（防错路径/重复条目凑满 len==3 的巧合漏检；doc 注释承诺"全部落库 + 全 done"）。
+    let mut paths: Vec<&str> = states.iter().map(|(p, _, _)| p.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(paths, vec!["raw/za.md", "raw/zb.md", "raw/zc.md"], "{:?}", states);
     // 乱序完成实证（stub 路由记录）：6 次 LLM 调用（3 源 × step1+step2）各命中恰
     // 一次。za/zb 的 step1 并发在飞（N=2）；za 的慢 step2（400ms）与 zb 的快
     // step2 同刻起步，zb 先完成——即"完成序 ≠ 起步序"的乱序完成本身。
@@ -389,6 +440,15 @@ async fn merge_order_is_source_order_despite_reversed_completion() {
     let (content, sources, _) = ic_fetch_page(&env, "concepts/shared.md").await;
     assert!(content.contains("ZA_FIRST"), "merge 的 existing 必须是 za 版（源序）：{}", content);
     assert!(sources.to_string().contains("raw/za.md") && sources.to_string().contains("raw/zb.md"));
+    // 控制器补强 2（Task 6）：锁定"反序完成"前提本身——stub 完成记录里 zb 快
+    // step2（30ms）必须先于 za 慢 step2（400ms）（同用例 1 的 pos() 模式）；
+    // 否则 ZA_FIRST 可能是同序完成下的侥幸，而非反序完成下的源序归并。
+    let calls = env.stub.calls.lock().unwrap().clone();
+    let pos = |m: &str| calls.iter().position(|c| c == m).unwrap_or_else(|| panic!("{m} 未命中: {calls:?}"));
+    assert!(
+        pos("MARKzb+<analysis>") < pos("MARKza+<analysis>"),
+        "zb 快 step2 应先于 za 慢 step2 完成（反序完成前提锁定）：{calls:?}"
+    );
     crate::teardown_test_data(&env.state).await;
 }
 
@@ -415,5 +475,207 @@ async fn n1_equivalence_lands_all() {
     ic_write_source(&env, "raw/zb.md", &format!("b MARKzb [run-{run}]")).await;
     let (_job, res) = ic_run_ok(&env, vec!["raw/za.md".into(), "raw/zb.md".into()]).await;
     assert_eq!(res.new_pages.len(), 2);
+    crate::teardown_test_data(&env.state).await;
+}
+
+// —— 取消语义用例（Task 6：spec §测试与验收 3/8/9）——
+
+/// spec 测 3：N=2、za/zb 两源 step2 均慢（500ms 窗口），两源 step2 均已开始
+/// （① 领任务关口已过 → 必在飞 cohort）后置 cancel → Err(Cancelled)；
+/// za/zb 页面全部落库 + item_states 全 done（drain 裁定：cancel 后已生成
+/// cohort 完整落库）；zc 零 LLM 调用（① 关口拦下新领任务）；status=cancelled；
+/// job_cancelled 事件恰一条（经 broadcast 无接收者不落库——以 mark 的 DB 效果
+/// + 单次性靠代码结构保证，此处断言 DB 终态即可）。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn cancel_drains_inflight_cohort_and_stops_new() {
+    let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
+    let s2 = |slug: &str| format!(
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
+    );
+    let routes = vec![
+        StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKza", "<analysis>"], delay_ms: 500, resp: RouteResp::Text(s2("za")) },
+        StubRoute { all: vec!["MARKzb", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKzb", "<analysis>"], delay_ms: 500, resp: RouteResp::Text(s2("zb")) },
+        // zc 的任何生成调用若发生都会命中（延迟 0）；断言其零调用
+        StubRoute { all: vec!["MARKzc"], delay_ms: 0, resp: RouteResp::Text("must-not-be-called".into()) },
+    ];
+    let env = ic_setup(routes, 2).await;
+    // 同 C-2：source 文本内嵌每次运行唯一 uuid 防 step1 缓存错位（跨 run 走缓存
+    // 会零 LLM 调用、打断 500ms 延迟编排与 started 锚点）。
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    ic_write_source(&env, "raw/za.md", &format!("a MARKza [run-{run}]")).await;
+    ic_write_source(&env, "raw/zb.md", &format!("b MARKzb [run-{run}]")).await;
+    ic_write_source(&env, "raw/zc.md", &format!("c MARKzc [run-{run}]")).await;
+    let (handle, job) =
+        ic_spawn_run(&env, vec!["raw/za.md".into(), "raw/zb.md".into(), "raw/zc.md".into()]).await;
+
+    // 等 za/zb 的 step2 都已开始（① 已过 → 必然 drain 落库）
+    wait_started(&env, "MARKza+<analysis>", 1).await;
+    wait_started(&env, "MARKzb+<analysis>", 1).await;
+
+    sqlx::query("UPDATE ingest_jobs SET cancel_requested=TRUE WHERE id=$1")
+        .bind(job.id)
+        .execute(&env.state.db)
+        .await
+        .unwrap();
+
+    let out = handle.await.unwrap();
+    assert!(
+        matches!(out, Err(llm_wiki_server::AppError::Cancelled)),
+        "{:?}",
+        out.map(|_| ())
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM ingest_jobs WHERE id=$1")
+        .bind(job.id)
+        .fetch_one(&env.state.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "cancelled");
+    // drain：za/zb 落库 + done；zc 不在 item_states（未开始即被 ① 拦下）
+    let (_, _, _) = ic_fetch_page(&env, "concepts/za.md").await;
+    let (_, _, _) = ic_fetch_page(&env, "concepts/zb.md").await;
+    let states = ic_fetch_item_states(&env, job.id).await;
+    assert!(states.iter().all(|(_, s, _)| s == "done"), "{:?}", states);
+    assert_eq!(states.len(), 2, "zc 不应出现：{:?}", states);
+    // zc 零 LLM 调用（生成段 ① 关口）
+    assert_eq!(
+        env.stub.started.lock().unwrap().get("MARKzc"),
+        None,
+        "cancel 后不得领新任务"
+    );
+    crate::teardown_test_data(&env.state).await;
+}
+
+/// spec 测 8：归并段被 merge 拖慢制造 channel 积压 + cancel → 积压 cohort 全
+/// 落库、变体后零新 LLM 调用。N=2：za/zb 碰撞 shared.md 且 merge 慢 600ms；
+/// 两源生成完成（step2 calls 记录齐）进积压后置 cancel。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn cancel_with_backlog_drains_buffered_items() {
+    let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
+    let page = |slug: &str| format!(
+        "---FILE: concepts/shared.md ---\n---\ntitle: Shared\ntype: concept\nsources: [raw/{slug}.md]\n---\n# Shared\n{slug} version.\n---END FILE---"
+    );
+    let routes = vec![
+        StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKza", "<analysis>"], delay_ms: 50, resp: RouteResp::Text(page("za")) },
+        StubRoute { all: vec!["MARKzb", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKzb", "<analysis>"], delay_ms: 50, resp: RouteResp::Text(page("zb")) },
+        StubRoute { all: vec!["za version", "<existing>"], delay_ms: 600, resp: RouteResp::Text("merged backlog".into()) },
+        StubRoute { all: vec!["MARKzz", "<document>"], delay_ms: 0, resp: RouteResp::Text("must-not".into()) },
+    ];
+    let env = ic_setup(routes, 2).await;
+    // 同 C-2：source 文本内嵌每次运行唯一 uuid 防 step1 缓存错位。
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    ic_write_source(&env, "raw/za.md", &format!("a MARKza [run-{run}]")).await;
+    ic_write_source(&env, "raw/zb.md", &format!("b MARKzb [run-{run}]")).await;
+    ic_write_source(&env, "raw/zz.md", &format!("z MARKzz [run-{run}]")).await;
+    let (handle, job) =
+        ic_spawn_run(&env, vec!["raw/za.md".into(), "raw/zb.md".into(), "raw/zz.md".into()]).await;
+    // 等 za/zb 生成完成（calls 记录齐）→ 必有一源进 merge（600ms 窗口）→ 置 cancel
+    wait_calls(&env, "MARKza+<analysis>", 1).await;
+    wait_calls(&env, "MARKzb+<analysis>", 1).await;
+    sqlx::query("UPDATE ingest_jobs SET cancel_requested=TRUE WHERE id=$1")
+        .bind(job.id)
+        .execute(&env.state.db)
+        .await
+        .unwrap();
+    let out = handle.await.unwrap();
+    // 两条终止路径（见下竞态论证）都以 Err(Cancelled) 收尾：变体路径（归并段收
+    // Cancelled 变体）/ 尾段兜底路径（zz 被领走走完 → 无变体 → 尾段 check_cancel）
+    assert!(matches!(out, Err(llm_wiki_server::AppError::Cancelled)));
+    let status: String = sqlx::query_scalar("SELECT status FROM ingest_jobs WHERE id=$1")
+        .bind(job.id)
+        .fetch_one(&env.state.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "cancelled");
+    // drain：积压的 zb 页经 merge 落库（za 先 upsert、zb 碰撞 merge）
+    let (content, _, _) = ic_fetch_page(&env, "concepts/shared.md").await;
+    assert!(content.contains("backlog"), "积压 cohort 的 merge 必须完成：{}", content);
+    // 竞态实况（评审 I-2）：za 完成瞬间 buffered eager refill zz，其 ① peek 的
+    // SELECT 快照大概率早于测试 UPDATE 提交 → 多数运行 zz 被领走：step1 返回
+    // "must-not"（非 JSON）→ 两轮解析失败 → Failed 非 done，此路径无 Cancelled
+    // 变体、终态经尾段兜底。少数运行 cancel 先落 → zz 未领走、item_states 无 zz。
+    // 断言按两分支兼容写：len ∈ 2..=3；za/zb 必 done；zz 若在必 failed；
+    // zz 的 step2 永不发生（step1 必败）；step1 解析失败重试一次 → ≤2 次。
+    let states = ic_fetch_item_states(&env, job.id).await;
+    assert!((2..=3).contains(&states.len()), "{:?}", states);
+    for (p, s, _) in &states {
+        if p == "raw/za.md" || p == "raw/zb.md" {
+            assert_eq!(s, "done", "{:?}", states);
+        } else {
+            assert_eq!((p.as_str(), s.as_str()), ("raw/zz.md", "failed"), "{:?}", states);
+        }
+    }
+    let calls = env.stub.calls.lock().unwrap().clone();
+    let zz_step2 = calls.iter().filter(|c| c.contains("MARKzz") && c.contains("<analysis>")).count();
+    let zz_step1 = calls.iter().filter(|c| c.contains("MARKzz") && c.contains("<document>")).count();
+    assert_eq!(zz_step2, 0, "zz step1 必败（非 JSON），step2 永不发生");
+    assert!(zz_step1 <= 2, "step1 解析失败重试一次 → 至多 2 次，got {}", zz_step1);
+    crate::teardown_test_data(&env.state).await;
+}
+
+/// spec 测 9：drain 落库的源在 retry 后不重烧（item_states done 过滤 + step1
+/// 缓存双保险）。第一轮：za 完整 done 后 cancel（za step2 慢 400ms，等 started
+/// 后置 cancel → drain）。第二轮：模拟 manual_retry（直 UPDATE 同列语义，
+/// 保 item_states）+ 重跑 → za 零 LLM 调用（dispatch prior-done 过滤即零调用；
+/// 即使过滤失效，同 run 同内容 step1 缓存命中兜底）、zc 正常跑完。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn cancelled_job_resume_skips_drained_sources() {
+    let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
+    let s2 = |slug: &str| format!(
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
+    );
+    let routes = vec![
+        StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKza", "<analysis>"], delay_ms: 400, resp: RouteResp::Text(s2("za")) },
+        StubRoute { all: vec!["MARKzc", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKzc", "<analysis>"], delay_ms: 10, resp: RouteResp::Text(s2("zc")) },
+    ];
+    let env = ic_setup(routes, 1).await;
+    // 同 C-2：source 文本内嵌每次运行唯一 uuid 防 step1 缓存错位（第二轮 za 走
+    // prior-done 过滤不重处理，无跨 run 缓存依赖）。
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    ic_write_source(&env, "raw/za.md", &format!("a MARKza [run-{run}]")).await;
+    ic_write_source(&env, "raw/zc.md", &format!("c MARKzc [run-{run}]")).await;
+    let (handle, job) = ic_spawn_run(&env, vec!["raw/za.md".into(), "raw/zc.md".into()]).await;
+    wait_started(&env, "MARKza+<analysis>", 1).await; // N=1：za 在飞、zc 未领
+    sqlx::query("UPDATE ingest_jobs SET cancel_requested=TRUE WHERE id=$1")
+        .bind(job.id)
+        .execute(&env.state.db)
+        .await
+        .unwrap();
+    assert!(matches!(handle.await.unwrap(), Err(llm_wiki_server::AppError::Cancelled)));
+    let za_step1_calls_before = env
+        .stub
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c.contains("MARKza") && c.contains("<document>"))
+        .count();
+
+    // 模拟 manual_retry（不调 manual_retry()——它 LPUSH 测试 redis 虽无害但引入
+    // 不必要耦合；直 UPDATE 同列语义）
+    sqlx::query(
+        "UPDATE ingest_jobs SET status='pending', cancel_requested=FALSE, progress=0, stage=NULL WHERE id=$1",
+    )
+    .bind(job.id)
+    .execute(&env.state.db)
+    .await
+    .unwrap();
+    let res = ic_run_existing(&env, job.id).await; // 回读 job + run + 落 succeeded
+    assert_eq!(res.new_pages.len(), 1, "只 zc 新页（za 已 drain 落库且 done 过滤跳过）");
+    // za 零重烧：step1 调用数不变（prior-done 过滤即零调用，step1 缓存命中为二
+    // 道保险）、step2 调用数不变（resume 跳过）
+    let calls = env.stub.calls.lock().unwrap().clone();
+    let za_step1_after = calls.iter().filter(|c| c.contains("MARKza") && c.contains("<document>")).count();
+    let za_step2_after = calls.iter().filter(|c| c.contains("MARKza") && c.contains("<analysis>")).count();
+    assert_eq!(za_step1_after, za_step1_calls_before, "resume 不重跑 step1（done 过滤 + 缓存命中）");
+    assert_eq!(za_step2_after, 1, "step2 只第一轮一次");
     crate::teardown_test_data(&env.state).await;
 }
