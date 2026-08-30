@@ -1,8 +1,10 @@
 # src-server ingest 并发化（job 内 source 级）设计方案
 
-- **日期**：2026-08-29（2026-08-30 设计评审 r1 修订版）
-- **状态**：r1 评审"需修"（4 Important + 5 Minor + 1 控制器补项）已全部并入本文；待用户复审
-- **评审记录**：.superpowers/ingest-concurrency-design-review-2026-08-30/report.md（16 条机制事实 15 真 1 伪已更正；四 Important 全部对码证实）
+- **日期**：2026-08-29（2026-08-30 设计评审 r1 修订版；round2 定稿）
+- **状态**：round2 **Approve——spec 定稿可进实现**；round2 唯一 Minor（G-1 论据句
+  Display 链更正）已并入
+- **评审记录**：r1 = .superpowers/ingest-concurrency-design-review-2026-08-30/report.md
+  （4I+5M+1 全收口）；round2 = 同目录 round2-report.md（Approve + G-1 论据句更正）
 - **范围**：src-server 摄取管线 `run_ingest_job` 执行模型改造——source 级生成并发 + 归并串行两段分离；worker 层 / 归并语义 / 尾段 / CLI 契约零变化
 - **分支**：`feat/ingest-concurrency`（充分评审 + 测试后才准合并）
 - **背景动机**：82-173 视频批单 job 墙钟数小时，每源 ≈3 次 LLM 调用（step1 + step2 + review）全串行；N=3 并发下生成段近似 3x 墙钟
@@ -231,7 +233,9 @@ code 1308（429）在本机有实证史（标点回填 final 轮 76 error 全是
 
 - **429 归入 transient 分类**——注意真正批量承重的是 **all-failed 路径**（源级
   失败全是 warning，只有 all-failed 才以 job 级 Err 到达 worker，错误文本经
-  warnings join 后包含 "API error 429" 字样）：
+  warnings join 后包含 "Rate limited" 字样——429 在 llm_stream.rs:207 前置映射
+  为 RateLimited，**不会以 "API error 429" 形态出现**；故三模式中承重的是
+  "rate limit"，两处匹配均先 lowercase，不可精简掉该模式）：
   - `is_transient_job_err` 的 InternalError 分支（all-failed 承重）：追加
     `"http 429"` / `"api error 429"` / `"rate limit"` 子串匹配
   - `is_transient_msg`（LlmApiError 分支，双保险 + 未来直传路径）：同步追加同
