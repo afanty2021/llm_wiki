@@ -1045,6 +1045,13 @@ fn fold_page_write_outcomes(outcomes: &[PageWriteOutcome]) -> (usize, bool) {
     (pages_written, all_upserted)
 }
 
+/// spec §4：ingest 并发度 clamp——1..=8；0 或异常值 → 1，超上限 → 8。
+/// config 侧只存原始值，消费点（run_ingest_job）读取时统一过本函数，
+/// 集成测试直接改 state.config.ingest.source_concurrency 后无需自行 clamp。
+pub(crate) fn clamp_source_concurrency(n: usize) -> usize {
+    n.clamp(1, 8)
+}
+
 /// W3：加载 project 行的 ingest 上下文（team_id + ingest_language，单查询）。
 /// ingest_language 语义（迁移 017）：NULL → 不注入语言指令（原英文中性行为）；
 /// 有值 → prompt 注入 LANGUAGE RULE + reserved 三模板语言分流。
@@ -2736,5 +2743,16 @@ mod tests {
         assert_eq!(zh[0].0, "wiki/index.md");
         assert_eq!(zh[1].0, "wiki/log.md");
         assert_eq!(zh[2].0, "wiki/overview.md");
+    }
+
+    // —— spec §4：并发度 clamp 1..=8（0/异常 → 1，超上限 → 8）——
+    #[test]
+    fn clamp_source_concurrency_bounds() {
+        assert_eq!(clamp_source_concurrency(0), 1);
+        assert_eq!(clamp_source_concurrency(1), 1);
+        assert_eq!(clamp_source_concurrency(3), 3);
+        assert_eq!(clamp_source_concurrency(8), 8);
+        assert_eq!(clamp_source_concurrency(9), 8);
+        assert_eq!(clamp_source_concurrency(usize::MAX), 8);
     }
 }
