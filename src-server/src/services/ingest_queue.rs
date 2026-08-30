@@ -309,6 +309,19 @@ pub async fn check_cancel(state: &AppState, job_id: Uuid) -> Result<(), AppError
     Ok(())
 }
 
+/// ① 领任务检查点（只读，spec §1/B-3）：cancel_requested=true → Ok(true)。
+/// 与 check_cancel 的区别：不 mark_job_cancelled、不发事件——并发领任务的
+/// N 路各自 peek 零副作用；唯一的 mark 由归并段收到 Cancelled 变体时执行
+/// （每 job 恰一次、job_cancelled 事件恰一条）。
+pub async fn peek_cancel(state: &AppState, job_id: Uuid) -> Result<bool, AppError> {
+    let cancel: bool = sqlx::query_scalar("SELECT cancel_requested FROM ingest_jobs WHERE id=$1")
+        .bind(job_id)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or(false);
+    Ok(cancel)
+}
+
 // ── 重试 ──
 
 /// 自动重试：status=pending, retry_count++（worker 在调此函数前已 sleep backoff）。不校验当前 status。重投 Redis。

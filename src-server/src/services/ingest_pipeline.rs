@@ -29,6 +29,7 @@ pub(crate) struct WikiPageInsert {
 /// process_source_path 的产出：解析出的 pages + 用于 mark_file_ingested 的元数据。
 /// 元数据上浮到 run_ingest_job，确保只在 wiki_pages 成功落库后才标记文件已摄入
 /// （避免 mark 成功但 upsert 失败 → 下次因 hash 命中被永久跳过的漏页问题）。
+#[derive(Debug)]
 struct ProcessedSource {
     pages: Vec<WikiPageInsert>,
     reviews: Vec<crate::services::review::ParsedReview>,
@@ -1050,6 +1051,63 @@ fn fold_page_write_outcomes(outcomes: &[PageWriteOutcome]) -> (usize, bool) {
 /// 集成测试直接改 state.config.ingest.source_concurrency 后无需自行 clamp。
 pub(crate) fn clamp_source_concurrency(n: usize) -> usize {
     n.clamp(1, 8)
+}
+
+/// 生成段 → 归并段的通道消息（spec §1）。Done 携带 process_source_path 产出
+/// （None = hash 未变跳过）；Failed = 单源生成失败（今日 1300-1305 源级隔离）；
+/// Cancelled = ①领任务 peek 命中（归并段负责唯一 mark，B-3 单事件）；
+/// JobError = ① peek 的 job 级异常原值透传（保 transient 分类，C-1）。
+#[derive(Debug)]
+enum Phase1Output {
+    Done { sp: String, processed: Option<ProcessedSource> },
+    Failed { sp: String, err: String },
+    Cancelled,
+    JobError(AppError),
+}
+
+/// ① 领任务 peek 的三分支判定（纯函数供单测钉死映射语义）。
+fn peek_outcome(r: Result<bool, AppError>) -> Option<Phase1Output> {
+    match r {
+        Ok(false) => None,
+        Ok(true) => Some(Phase1Output::Cancelled),
+        Err(e) => Some(Phase1Output::JobError(e)),
+    }
+}
+
+/// dispatch 保序去重（r1 控制器补项）：同 job 重复 source_path 首现保留——
+/// 消除"第二出现的生成段跑在第一出现 mark_file_ingested 之前 → hash 未命中
+/// 重跑"的角点。
+/// 隐含接受面（评审控制器补 2）：含重复 path 的 job 去重后 item 数 <
+/// source_paths.len() → 终态 progress <100、item_states 条目少于源数——
+/// spec 去重裁定的既定行为，勿误判为进度 bug。
+pub(crate) fn dedupe_targets(source_paths: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for sp in source_paths {
+        if seen.insert(sp.clone()) {
+            out.push(sp.clone());
+        }
+    }
+    out
+}
+
+/// 归并段进度（spec §2）：完成 item 数 → 百分比。total=0 恒 0（max(1) 守卫，
+/// 与今日 (i+1)*100/total.max(1) 分母口径一致）。
+pub(crate) fn item_progress(done: usize, total: usize) -> i32 {
+    (done * 100 / total.max(1)) as i32
+}
+
+/// spec §6 生成段计数不变量：归并段循环正常结束（channel 关闭）后调用，
+/// 已收数 < expected 且未见 Cancelled/JobError（二者在循环内提前 return）
+/// = generator panic 等异常终止 → Err 走 mark_job_failed（manual_retry 自愈）。
+pub(crate) fn verify_generator_completeness(received: usize, expected: usize) -> Result<(), AppError> {
+    if received < expected {
+        return Err(AppError::InternalError(format!(
+            "generator terminated early: received {} of {} items",
+            received, expected
+        )));
+    }
+    Ok(())
 }
 
 /// W3：加载 project 行的 ingest 上下文（team_id + ingest_language，单查询）。
@@ -2754,5 +2812,48 @@ mod tests {
         assert_eq!(clamp_source_concurrency(8), 8);
         assert_eq!(clamp_source_concurrency(9), 8);
         assert_eq!(clamp_source_concurrency(usize::MAX), 8);
+    }
+
+    // —— spec §1 dispatch 去重（r1 控制器补项）：同 path 首现保留、保序 ——
+    #[test]
+    fn dedupe_targets_keeps_first_occurrence_ordered() {
+        let paths = vec!["raw/a.md".to_string(), "raw/b.md".to_string(), "raw/a.md".to_string()];
+        assert_eq!(dedupe_targets(&paths), vec!["raw/a.md".to_string(), "raw/b.md".to_string()]);
+        assert_eq!(dedupe_targets(&[]), Vec::<String>::new());
+    }
+
+    // —— spec §2/D-2：进度 = 完成数*100/total.max(1)，total=0 恒 0 ——
+    #[test]
+    fn item_progress_formula_with_zero_total_guard() {
+        assert_eq!(item_progress(0, 10), 0);
+        assert_eq!(item_progress(3, 10), 30);
+        assert_eq!(item_progress(10, 10), 100);
+        assert_eq!(item_progress(0, 0), 0);
+        assert_eq!(item_progress(2, 3), 66);
+    }
+
+    // —— spec §6：生成段计数不变量——只防"提前死"（Cancelled/JobError 提前 return，
+    // 走到这里且短缺 = generator 异常终止，防残缺 job 静默 succeeded）
+    #[test]
+    fn verify_generator_completeness_flags_shortfall() {
+        assert!(verify_generator_completeness(3, 3).is_ok());
+        assert!(verify_generator_completeness(0, 0).is_ok());
+        let err = verify_generator_completeness(1, 3).unwrap_err();
+        assert!(err.to_string().contains("generator terminated early"));
+    }
+
+    // —— spec §1/C-1：① peek 三分支——Ok(false) 继续（None）、Ok(true) → Cancelled、
+    // Err 原值 → JobError（transient 分类零漂移，防误映射为 Failed）
+    #[test]
+    fn peek_outcome_preserves_job_error_variant() {
+        assert!(peek_outcome(Ok(false)).is_none());
+        assert!(matches!(peek_outcome(Ok(true)), Some(Phase1Output::Cancelled)));
+        let db_err = AppError::DatabaseError(sqlx::Error::ColumnNotFound("x".into()));
+        match peek_outcome(Err(db_err)) {
+            Some(Phase1Output::JobError(e)) => {
+                assert!(matches!(e, AppError::DatabaseError(_)));
+            }
+            other => panic!("Err 必须映射为 JobError 变体，got {:?}", other.map(|_| ())),
+        }
     }
 }
