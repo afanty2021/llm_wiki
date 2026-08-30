@@ -106,6 +106,7 @@ describe("WebIngestPanel", () => {
     triggerIngest.mockResolvedValue({ job_id: "job-3", status: "pending" })
     getIngestJob
       .mockResolvedValueOnce({ id: "job-3", status: "running", progress: 10, stage: "processing" })
+      .mockResolvedValueOnce({ id: "job-3", status: "running", progress: 60, stage: "weird" })
       .mockResolvedValueOnce({ id: "job-3", status: "succeeded", progress: 100, stage: "succeeded" })
 
     const { WebIngestPanel } = await import("./web-ingest-panel")
@@ -118,6 +119,9 @@ describe("WebIngestPanel", () => {
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(2000)
     await waitFor(() => expect(screen.getAllByText(/处理中… 处理中/)).toBeTruthy())
+    // 未知 stage 裸透传：STAGE_LABELS 无 "weird" 映射 → 原样拼进状态文本。
+    await vi.advanceTimersByTimeAsync(2000)
+    await waitFor(() => expect(screen.getAllByText(/处理中… weird/)).toBeTruthy())
     await vi.advanceTimersByTimeAsync(2000)
     await waitFor(() => expect(screen.getByText(/完成/)).toBeTruthy())
   })

@@ -1,5 +1,7 @@
 // ingest 并发化集成测（spec 2026-08-29 §测试与验收 1/2/6：并发正确性、确定性
 // 归并、N=1 等价）。需 PG(docker @5433) + Redis(@6380)；#[ignore] 门。
+// Redis 隔离（必守）：测试运行必须 REDIS_URL=redis://localhost:6380/1（DB0 是
+// live 队列，launchd worker 会抢跑测试 job）。
 // 铁律：直 INSERT ingest_jobs + 直调 run_ingest_job（不经 enqueue/HTTP——LPUSH
 // 会被共享 redis 侧 worker 抢走双跑，t8_insert_and_run 同款）。
 // 命名：t10_ 前缀族（mod.rs SWEEPS 已扩入）。
@@ -545,6 +547,11 @@ async fn cancel_drains_inflight_cohort_and_stops_new() {
         None,
         "cancel 后不得领新任务"
     );
+    // 精确总数钉住（spec 测 3 编排）：za/zb 各 step1+step2 恰一次 = 恰 4 次记录
+    // 调用，zc 零贡献；任何多出的命中（step1 解析重试/merge/review）都被捕获
+    //（review 在本 fixture 下本就不触发——<4 块且 <10000 字符，同用例 1 注）。
+    let calls = env.stub.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 4, "恰 4 次路由命中（za/zb 各 step1+step2）：{calls:?}");
     crate::teardown_test_data(&env.state).await;
 }
 

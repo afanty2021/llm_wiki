@@ -1078,8 +1078,10 @@ fn peek_outcome(r: Result<bool, AppError>) -> Option<Phase1Output> {
 /// 消除"第二出现的生成段跑在第一出现 mark_file_ingested 之前 → hash 未命中
 /// 重跑"的角点。
 /// 隐含接受面（评审控制器补 2）：含重复 path 的 job 去重后 item 数 <
-/// source_paths.len() → 终态 progress <100、item_states 条目少于源数——
-/// spec 去重裁定的既定行为，勿误判为进度 bug。
+/// source_paths.len() → processing 阶段的中途 progress 停在 <100（total 取
+/// 原始 source 数为分母，去重后 received 封顶不可及）、item_states 条目少于
+/// 源数——终态仍是尾段无条件 building_index+100；spec 去重裁定的既定行为，
+/// 勿误判为进度 bug。
 pub(crate) fn dedupe_targets(source_paths: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -1247,8 +1249,11 @@ pub async fn run_ingest_job(
         received += 1;
         match item {
             Phase1Output::Cancelled => {
-                // 唯一的 mark（B-3 单事件保证；spec §5 终止信号）
-                let _ = ingest_queue::mark_job_cancelled(state, job.id).await;
+                // 唯一的 mark（B-3 单事件保证；spec §5 终止信号）；失败不吞——
+                // job 会停留 running，须可见以便 recover_pending 重投。
+                if let Err(e) = ingest_queue::mark_job_cancelled(state, job.id).await {
+                    tracing::error!("mark_job_cancelled for {}: {}——job 停留 running，待 recover_pending 重投", job.id, e);
+                }
                 return Err(AppError::Cancelled);
             }
             Phase1Output::JobError(e) => return Err(e),
@@ -1269,7 +1274,9 @@ pub async fn run_ingest_job(
                     // cancel 后已生成 cohort 完整落库，F1 威胁由 ① 关口 + 有界
                     // cohort 结构性约束（spec §2）】
                     //
-                    // —— 以下今日 1155-1250 逐字保留（含 W2 注释）——
+                    // —— 以下今日 1155-1250 代码逐字保留、注释精简（transcripts
+                    // guard 理由 / 膨胀哨兵 / merge 回退等原注释未随迁，原文可溯
+                    // git show c7b93abc:src-server/src/services/ingest_pipeline.rs）——
                     if is_llm_generated_path(&page.path) {
                         tracing::warn!(path = %page.path, source = %sp, "skip LLM page into transcripts/ namespace");
                         outcomes.push(PageWriteOutcome::GuardSkipped);
