@@ -679,3 +679,155 @@ async fn cancelled_job_resume_skips_drained_sources() {
     assert_eq!(za_step2_after, 1, "step2 只第一轮一次");
     crate::teardown_test_data(&env.state).await;
 }
+
+// —— resume / 失败隔离 / 进度用例（Task 7：spec §测试与验收 4/5/10）——
+
+/// spec 测 4：item_states 预置 za done → 只处理 zb（za 零调用，精确断言）。
+/// 预置经直 UPDATE 后必须**回读再跑**（ic_run_existing）：dispatch 的 prior-done
+/// 过滤读的是 job.item_states 内存值——ic_insert_job 回读的行 item_states 还是
+/// 空，直传旧 job 会过滤失效。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn resume_processes_only_remaining_sources() {
+    let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
+    let s2 = |slug: &str| format!(
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
+    );
+    let routes = vec![
+        // za 哨兵路由：prior-done 过滤失效时任何 za 调用都会命中并被记录
+        StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 0, resp: RouteResp::Text("must-not".into()) },
+        StubRoute { all: vec!["MARKza", "<analysis>"], delay_ms: 0, resp: RouteResp::Text("must-not".into()) },
+        StubRoute { all: vec!["MARKzb", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKzb", "<analysis>"], delay_ms: 10, resp: RouteResp::Text(s2("zb")) },
+    ];
+    let env = ic_setup(routes, 2).await;
+    // 同 C-2：source 文本内嵌每次运行唯一 uuid——静态内容会命中 step1 持久缓存
+    //（TTL 7 天、跨 run 复用），za 若被错误处理走缓存零调用，"za 零调用"断言
+    // 被缓存遮蔽成假绿。
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    ic_write_source(&env, "raw/za.md", &format!("a MARKza [run-{run}]")).await;
+    ic_write_source(&env, "raw/zb.md", &format!("b MARKzb [run-{run}]")).await;
+    // 预置 za done（直 INSERT/UPDATE——不经 enqueue/HTTP，铁律）
+    let job = ic_insert_job(&env, vec!["raw/za.md".into(), "raw/zb.md".into()]).await;
+    sqlx::query("UPDATE ingest_jobs SET item_states=$2 WHERE id=$1")
+        .bind(job.id)
+        .bind(serde_json::json!([{"path": "raw/za.md", "status": "done", "error": null}]))
+        .execute(&env.state.db)
+        .await
+        .unwrap();
+    let res = ic_run_existing(&env, job.id).await; // 回读（含预置）+ run + 落 succeeded
+    // za 零调用（calls 完成序 + started 进入序双口径）；zb 走完两步
+    let calls = env.stub.calls.lock().unwrap().clone();
+    assert!(calls.iter().all(|c| !c.contains("MARKza")), "za 不得有任何调用：{:?}", calls);
+    let started = env.stub.started.lock().unwrap().clone();
+    assert!(started.keys().all(|k| !k.contains("MARKza")), "za 不得有任何进入：{:?}", started);
+    assert!(calls.iter().any(|c| c.contains("MARKzb") && c.contains("<analysis>")), "{:?}", calls);
+    // 前提锁：只 zb 产出新页；预置 za done 原样保留、zb 追加 done
+    assert_eq!(res.new_pages, vec!["concepts/zb.md".to_string()], "{:?}", res.new_pages);
+    let states = ic_fetch_item_states(&env, job.id).await;
+    assert_eq!(
+        states.iter().map(|(p, s, _)| (p.clone(), s.clone())).collect::<Vec<_>>(),
+        vec![
+            ("raw/za.md".to_string(), "done".to_string()),
+            ("raw/zb.md".to_string(), "done".to_string()),
+        ],
+        "{:?}", states
+    );
+    crate::teardown_test_data(&env.state).await;
+}
+
+/// spec 测 5：zb 的 step1 返 500 → zb failed、za done、run 返 Ok（部分失败由
+/// warnings 承载，不塌整个 job）。归并段按源序串行（buffered 保序）→ za 先于
+/// zb 收到，item_states 顺序确定，直接精确序断言。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn single_source_failure_isolated() {
+    let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
+    let s2 = "---FILE: concepts/za.md ---\n---\ntitle: za\ntype: concept\nsources: [raw/za.md]\n---\n# za\nza body.\n---END FILE---".to_string();
+    let routes = vec![
+        StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKza", "<analysis>"], delay_ms: 10, resp: RouteResp::Text(s2) },
+        // zb step1 注入 500（step1 传输错立即失败，无分析路由——step2 永不发生）
+        StubRoute { all: vec!["MARKzb", "<document>"], delay_ms: 10, resp: RouteResp::Error(500) },
+    ];
+    let env = ic_setup(routes, 2).await;
+    // 同 C-2：source 文本内嵌每次运行唯一 uuid 防 step1 缓存错位。
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    ic_write_source(&env, "raw/za.md", &format!("a MARKza [run-{run}]")).await;
+    ic_write_source(&env, "raw/zb.md", &format!("b MARKzb [run-{run}]")).await;
+    let (job, res) = ic_run_ok(&env, vec!["raw/za.md".into(), "raw/zb.md".into()]).await;
+    assert!(
+        res.warnings.iter().any(|w| w.contains("raw/zb.md")),
+        "zb 失败须由 warnings 承载：{:?}",
+        res.warnings
+    );
+    assert_eq!(res.new_pages.len(), 1, "{:?}", res.new_pages);
+    let states = ic_fetch_item_states(&env, job.id).await;
+    assert_eq!(
+        states.iter().map(|(p, s, _)| (p.clone(), s.clone())).collect::<Vec<_>>(),
+        vec![
+            ("raw/za.md".to_string(), "done".to_string()),
+            ("raw/zb.md".to_string(), "failed".to_string()),
+        ],
+        "{:?}", states
+    );
+    // 失败因锁定：zb 的 item error 是注入的 500（而非其他偶发错误）
+    assert!(
+        states[1].2.as_deref().unwrap_or_default().contains("500"),
+        "zb 失败原因应是 stub 500：{:?}",
+        states
+    );
+    crate::teardown_test_data(&env.state).await;
+}
+
+/// spec 测 10：za done 预置 + zb/zc 跑完 → progress=100、stage 不含 parsing/
+/// generating 残留（终态表示法：building_index 收口）。中途 progress 由 item
+/// 计数推进（1 done 预置 → 首个 stage 写 = item_progress(1,3) = 33，终值断言
+/// 覆盖单调收口）。za 预置 done → 零重烧（哨兵 catch-all 路由锁定——无哨兵时
+/// za 若被处理会 500 "no route" 且不留痕，前提静默失效）。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn progress_monotonic_with_prior_done_and_final_stage() {
+    let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
+    let s2 = |slug: &str| format!(
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
+    );
+    // mk 参数须 &'static str（StubRoute.all 是 Vec<&'static str>，字面量调用满足）
+    let mk = |m: &'static str, slug: &str| vec![
+        StubRoute { all: vec![m, "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec![m, "<analysis>"], delay_ms: 10, resp: RouteResp::Text(s2(slug)) },
+    ];
+    let mut routes = vec![];
+    routes.extend(mk("MARKzb", "zb")); routes.extend(mk("MARKzc", "zc"));
+    routes.push(StubRoute { all: vec!["MARKza"], delay_ms: 0, resp: RouteResp::Text("must-not".into()) });
+    let env = ic_setup(routes, 2).await;
+    // 同 C-2：source 文本内嵌每次运行唯一 uuid 防 step1 缓存错位（za 若被错误
+    // 处理走缓存零调用，零重烧断言被遮蔽）。
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    for (rel, c) in [
+        ("raw/za.md", format!("a MARKza [run-{run}]")),
+        ("raw/zb.md", format!("b MARKzb [run-{run}]")),
+        ("raw/zc.md", format!("c MARKzc [run-{run}]")),
+    ] {
+        ic_write_source(&env, rel, &c).await;
+    }
+    let job = ic_insert_job(&env, vec!["raw/za.md".into(), "raw/zb.md".into(), "raw/zc.md".into()]).await;
+    sqlx::query("UPDATE ingest_jobs SET item_states=$2 WHERE id=$1")
+        .bind(job.id)
+        .bind(serde_json::json!([{"path": "raw/za.md", "status": "done", "error": null}]))
+        .execute(&env.state.db)
+        .await
+        .unwrap();
+    let res = ic_run_existing(&env, job.id).await; // 回读（含预置）+ run + 落 succeeded
+    let (progress, stage): (i32, Option<String>) =
+        sqlx::query_as("SELECT progress, stage FROM ingest_jobs WHERE id=$1")
+            .bind(job.id).fetch_one(&env.state.db).await.unwrap();
+    assert_eq!(progress, 100);
+    assert_ne!(stage.as_deref(), Some("parsing"));
+    assert_ne!(stage.as_deref(), Some("generating"));
+    // 前提锁：za 预置 done 零重烧（哨兵零命中）；只有 zb/zc 产出
+    let calls = env.stub.calls.lock().unwrap().clone();
+    assert!(calls.iter().all(|c| !c.contains("MARKza")), "za 预置 done 不得重烧：{:?}", calls);
+    assert_eq!(res.new_pages.len(), 2, "{:?}", res.new_pages);
+    crate::teardown_test_data(&env.state).await;
+}
