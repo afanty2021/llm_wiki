@@ -14,6 +14,7 @@
 
 - cargo 一律在 `src-server/` 目录内跑（根目录是另一个 workspace）。
 - 集成测需 docker PG@5433 + Redis@6380；`#[ignore]` 门，显式 `cargo test --test integration -- --ignored` 跑（打爆 live DB 是既有红线）。
+- **Redis DB1 隔离（T4 执行裁定）**：docker redis@6380 **DB0 就是 live redis**（launchd `wiki.src-server` worker 在 BRPOP 同一队列，会抢跑测试 job 造成非确定性失败）——集成测一律加 `REDIS_URL=redis://localhost:6380/1`（T4 实证：共库 2 例随机挂，DB1 全绿）。live 进程不动。
 - 测试不经 enqueue/HTTP 触发 job（LPUSH 进共享 redis 会被 launchd worker 抢走双跑）——一律直接 INSERT `ingest_jobs` + 直调 `run_ingest_job`（t8_insert_and_run 既有模式）。
 - `git add` 只加本任务清单点名的文件，禁 `-A`（untracked 有 MEMORY/WORK、Plans/ 运维残留）。
 - 提交前必查 `git branch --show-current` = `feat/ingest-concurrency`（并行会话 checkout 冲突史）。
