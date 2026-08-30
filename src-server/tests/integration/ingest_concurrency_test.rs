@@ -831,3 +831,64 @@ async fn progress_monotonic_with_prior_done_and_final_stage() {
     assert_eq!(res.new_pages.len(), 2, "{:?}", res.new_pages);
     crate::teardown_test_data(&env.state).await;
 }
+
+// —— 429 瞬态 / 并发度注入用例（Task 8：spec §测试与验收 14/11 集成半）——
+
+/// spec 测 14：单源 step1 全 429 → all-failed → Err 为瞬态（retry 候选）。
+/// 断言 worker 侧判定函数 is_transient_job_err 对**实际返回的 Err** 判真 +
+/// 消息含 "rate limit"（429 在 llm_stream 前置映射 RateLimited，Display
+/// "Rate limited"，经 warnings join 后以 InternalError "all N source(s)
+/// failed: ..." 形态到达 worker）。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn all_failed_rate_limited_is_transient() {
+    let routes = vec![
+        StubRoute { all: vec!["MARKzq", "<document>"], delay_ms: 10, resp: RouteResp::Error(429) },
+    ];
+    let env = ic_setup(routes, 2).await;
+    // 同 C-2：source 文本内嵌每次运行唯一 uuid 防 step1 缓存错位——缓存命中会
+    // 直接走 step2 返回 Ok，all-failed 前提整体失效。
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    ic_write_source(&env, "raw/zq.md", &format!("q MARKzq [run-{run}]")).await;
+    let job = ic_insert_job(&env, vec!["raw/zq.md".into()]).await;
+    let err = ingest_pipeline::run_ingest_job(&env.state, &job)
+        .await
+        .expect_err("all failed 必须返回 Err");
+    // 家族约定：Err → 落 failed 终态（ic_run_ok Err 分支同款）
+    sqlx::query("UPDATE ingest_jobs SET status='failed', error=$1, finished_at=NOW() WHERE id=$2")
+        .bind(err.to_string())
+        .bind(job.id)
+        .execute(&env.state.db)
+        .await
+        .expect("落 failed 终态");
+    assert!(
+        llm_wiki_server::services::ingest_queue::is_transient_job_err(&err),
+        "429 all-failed 应判瞬态：{}",
+        err
+    );
+    assert!(err.to_string().to_lowercase().contains("rate limit"), "{}", err);
+    crate::teardown_test_data(&env.state).await;
+}
+
+/// spec 测 11 集成半：ic_setup 的并发度注入链冒烟——n=1 与 n=8 都能正常跑通
+/// （clamp 1..=8 边界已由 Task 1 单测钉住；这里只证注入生效不炸）。每次迭代
+/// 独立 env + 唯一 content：同 content 第二轮会命中 step1 持久缓存零 LLM 调用，
+/// n=8 迭代就不再实际锻炼 buffered(n)，冒烟失真。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn concurrency_config_injection_smoke() {
+    let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
+    let s2 = "---FILE: concepts/zs.md ---\n---\ntitle: zs\ntype: concept\nsources: [raw/zs.md]\n---\n# zs\nzs body.\n---END FILE---".to_string();
+    let routes = vec![
+        StubRoute { all: vec!["MARKzs", "<document>"], delay_ms: 5, resp: RouteResp::Text(s1.into()) },
+        StubRoute { all: vec!["MARKzs", "<analysis>"], delay_ms: 5, resp: RouteResp::Text(s2) },
+    ];
+    for n in [1usize, 8] {
+        let env = ic_setup(routes.clone(), n).await;
+        let run = uuid::Uuid::new_v4().simple().to_string();
+        ic_write_source(&env, "raw/zs.md", &format!("s MARKzs [run-{run}]")).await;
+        let (_job, res) = ic_run_ok(&env, vec!["raw/zs.md".into()]).await;
+        assert_eq!(res.new_pages, vec!["concepts/zs.md".to_string()], "n={n} 注入下正常跑通");
+        crate::teardown_test_data(&env.state).await;
+    }
+}
