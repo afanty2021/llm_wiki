@@ -19,6 +19,8 @@
 - 提交前必查 `git branch --show-current` = `feat/ingest-concurrency`（并行会话 checkout 冲突史）。
 - commit message 中文、一行主题。
 - vitest 从仓库 root 跑指定路径：`npx vitest run src/components/web/web-ingest-panel.test.tsx`。
+- 集成测 FILE 块 fixture 的 frontmatter **必须带 `sources: [raw/…​.md]` 行**（照 t8_file_block 模板，merge_ingest_test.rs:278-283）——parse_single_block 对缺失 sources 默认 `[]`，碰撞并集会丢源（评审 I-1）。
+- 集成测一律加 `--test-threads=1` 串行跑（评审 M-5，merge_ingest_test.rs:6 文档化先例；flake 首查此处）。
 - 前端改动部署需 `npm run build:web`（dist 运行时读盘）——本计划只改代码，部署是收官动作不在任务内。
 - `AppError` 无 Clone（error.rs:23）——`JobError(AppError)` 经 mpsc 只需 Send，move 语义，勿加 Clone。
 
@@ -250,6 +252,8 @@ Expected: FAIL（类型/函数不存在）
 
 - [ ] **Step 3: 实现**——ingest_pipeline.rs `PageWriteOutcome` 枚举附近加：
 
+**前置一行（评审 I-A 编译必修）**：给 `ProcessedSource`（ingest_pipeline.rs:32，现无任何 derive）加 `#[derive(Debug)]`——`Phase1Output` 的 derive(Debug) 需要 `Option<ProcessedSource>: Debug`；内层 `WikiPageInsert`（:18-19）与 `ParsedReview`（review.rs:17-18）均已 Debug，一行即过。
+
 ```rust
 /// 生成段 → 归并段的通道消息（spec §1）。Done 携带 process_source_path 产出
 /// （None = hash 未变跳过）；Failed = 单源生成失败（今日 1300-1305 源级隔离）；
@@ -275,6 +279,9 @@ fn peek_outcome(r: Result<bool, AppError>) -> Option<Phase1Output> {
 /// dispatch 保序去重（r1 控制器补项）：同 job 重复 source_path 首现保留——
 /// 消除"第二出现的生成段跑在第一出现 mark_file_ingested 之前 → hash 未命中
 /// 重跑"的角点。
+/// 隐含接受面（评审控制器补 2）：含重复 path 的 job 去重后 item 数 <
+/// source_paths.len() → 终态 progress <100、item_states 条目少于源数——
+/// spec 去重裁定的既定行为，勿误判为进度 bug。
 pub(crate) fn dedupe_targets(source_paths: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -381,12 +388,14 @@ pub async fn run_ingest_job(
             })
             .unwrap_or(false)
     };
-    // prior-done 计入 done_this_run（今日 1116-1121 语义：历史成功不算 all-failed）
+    // prior-done 计入 done_this_run（今日 1116-1121 语义：历史成功不算 all-failed）。
+    // 经 is_prior_done 逐 path 判定 = 与 source_paths 天然求交——item_states 理论上
+    // 可含非本 job 路径的条目，交集计数防 progress 初值虚高（评审控制器补 1）。
     let prior_done: usize = job
-        .item_states
-        .as_array()
-        .map(|arr| arr.iter().filter(|v| v.get("status").and_then(|s| s.as_str()) == Some("done")).count())
-        .unwrap_or(0);
+        .source_paths
+        .iter()
+        .filter(|sp| is_prior_done(sp.as_str()))
+        .count();
     let mut done_this_run = prior_done;
     let targets: Vec<String> = dedupe_targets(&job.source_paths)
         .into_iter()
@@ -407,7 +416,12 @@ pub async fn run_ingest_job(
     let _ = ingest_queue::update_job_stage(state, job.id, "processing", item_progress(prior_done, total)).await;
 
     // —— §1 生成段（独立 task：buffered(N) 保序 + channel(32) 解耦防饿死）——
-    let n = clamp_source_concurrency(state.config.ingest.source_concurrency);
+    let raw_concurrency = state.config.ingest.source_concurrency;
+    let n = clamp_source_concurrency(raw_concurrency);
+    // spec §4：超界 clamp 落 warn（观测性——评审 M-1）
+    if n != raw_concurrency {
+        tracing::warn!(raw = raw_concurrency, clamped = n, "INGEST__SOURCE_CONCURRENCY out of 1..=8, clamped");
+    }
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Phase1Output>(32);
     {
         let state = state.clone();
@@ -447,8 +461,14 @@ pub async fn run_ingest_job(
                 })
                 .buffered(n);
             while let Some(item) = stream.next().await {
+                // spec §6：变体（Cancelled/JobError）之后不再 send——后续 poll 只会
+                // 再产变体（零工作 peek），break 省一次空转（评审 M-7 对齐字面）
+                let terminal = matches!(item, Phase1Output::Cancelled | Phase1Output::JobError(_));
                 if tx.send(item).await.is_err() {
                     break; // 归并段提前 return（JobError/§6）→ rx drop；在飞 future abort（B-2，安全）
+                }
+                if terminal {
+                    break;
                 }
             }
         });
@@ -545,7 +565,7 @@ pub async fn run_ingest_job(
                             None => unreachable!("merge 分支必有 existing"),
                         },
                         Some(Err(warn)) => {
-                            result.warnings.push(warn.clone());
+                            result.warnings.push(warn);
                             match upsert_wiki_page(state, job.project_id, page).await {
                                 Ok(path) => {
                                     result.new_pages.push(path.clone());
@@ -669,7 +689,7 @@ pub async fn run_ingest_job(
 
 实现注意（对照今日源码逐条核对）：
 1. 生成段闭包捕获按值 clone（`AppState` 是 Arc 族 Clone）；`language_owned` 归并段继续用借用 `language`（merge_pages_via 需要）——两层各自持有。
-2. `Some(Err(warn))` 臂今日代码 `result.warnings.push(warn)` ——`warn: String` 被 clone 后原值仍需用于……今日直接 move；此处保持 move（删掉 `.clone()`，与今日一致）。
+2. `Some(Err(warn))` 臂 `result.warnings.push(warn)` 直接 move（与今日 1222 一致，评审 M-8：无 clone）。
 3. 删除点清单：今日 1100（for 头）、1102-1104（源级 check_cancel）、1105-1121（already_done 分支——逻辑上移 dispatch）、1123-1124（parsing stage 写）、1147-1153（页级 check_cancel）、1308-1314（generating stage 写）。
 4. `expected`/`received`/`prior_done`/`total` 命名与 Task 3 纯函数签名一致。
 
@@ -680,7 +700,7 @@ Expected: 全 PASS（40+ 既有用例零回归；`Phase1Output` 各变体已被�
 
 - [ ] **Step 3: 集成四件套回归**（docker PG/Redis 起着的前提下）
 
-Run: `cd src-server && cargo test --test integration -- --ignored ingest`
+Run: `cd src-server && cargo test --test integration -- --ignored ingest --test-threads=1`
 Expected: ingest_test / ingest_reliability_test / ingest_queue_test / merge_ingest_test 全 PASS（默认 N=3 走并发路径 = 天然回归网）
 
 - [ ] **Step 4: Commit**
@@ -892,7 +912,7 @@ pub(crate) async fn ic_setup(routes: Vec<StubRoute>, n: usize) -> IcEnv {
             // model/api_key 等其余字段照 merge_ingest_test.rs t8 的 JSON 原样补齐
         }))
         .await;
-    assert!(resp.status_code().is_success(), "team provider 创建失败: {}", resp.payload_string());
+    assert!(resp.status_code().is_success(), "team provider 创建失败: {}", resp.text());
     IcEnv { state, pid, team_id, stub }
 }
 
@@ -1035,7 +1055,7 @@ pub(crate) async fn ic_fetch_item_states(env: &IcEnv, job_id: uuid::Uuid) -> Vec
 async fn concurrent_sources_all_land_in_order() {
     let s1 = r#"{"entities":[{"name":"EA"}],"connections":[],"contradictions":[]}"#;
     let s2 = |slug: &str| format!(
-        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\n---\n# {slug}\n{slug} body MARK{slug}.\n---END FILE---"
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body MARK{slug}.\n---END FILE---"
     );
     let routes = vec![
         // za：step1 快、step2 慢（制造乱序完成）
@@ -1060,11 +1080,11 @@ async fn concurrent_sources_all_land_in_order() {
 }
 ```
 
-（`ic_fetch_page` 照 t8_fetch_page 移植。）**review 调用无路由命中 → 500 → tolerated warn（run_dedicated_review_stage Err 只 warn），不阻断**——断言不依赖 reviews。
+（`ic_fetch_page` 照 t8_fetch_page 移植。）**review 第三调在本 fixture 下根本不触发**（评审 M-9：`should_run_dedicated_review_stage` 对 <4 块且 <10000 字符的 step2 输出直接跳过）——无需为 review 调用配路由；若未来 fixture 变大触发第三调，未命中路由的 500 也只是 tolerated warn（run_dedicated_review_stage Err 仅 warn），不阻断断言。
 
 - [ ] **Step 6: 跑用例 1**
 
-Run: `cd src-server && cargo test --test integration -- --ignored concurrent_sources_all_land`
+Run: `cd src-server && cargo test --test integration -- --ignored concurrent_sources_all_land --test-threads=1`
 Expected: PASS（若 FAIL 先核对 stub 路由命中：`no route` 500 会在 warnings 里暴露——`ic_run_ok` 的 Err panic 全文可诊断）
 
 - [ ] **Step 7: 用例 2——确定性归并（后源先完成，merge 仍源序）**
@@ -1078,7 +1098,7 @@ Expected: PASS（若 FAIL 先核对 stub 路由命中：`no route` 500 会在 wa
 async fn merge_order_is_source_order_despite_reversed_completion() {
     let s1 = r#"{"entities":[{"name":"E"}],"connections":[],"contradictions":[]}"#;
     let page = |slug: &str| format!(
-        "---FILE: concepts/shared.md ---\n---\ntitle: Shared\ntype: concept\n---\n# Shared\n{slug} version.\n---END FILE---"
+        "---FILE: concepts/shared.md ---\n---\ntitle: Shared\ntype: concept\nsources: [raw/{slug}.md]\n---\n# Shared\n{slug} version.\n---END FILE---"
     );
     let routes = vec![
         StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 30, resp: RouteResp::Text(s1.into()) },
@@ -1102,7 +1122,7 @@ async fn merge_order_is_source_order_despite_reversed_completion() {
 
 - [ ] **Step 8: 跑用例 2**
 
-Run: `cd src-server && cargo test --test integration -- --ignored merge_order_is_source`
+Run: `cd src-server && cargo test --test integration -- --ignored merge_order_is_source --test-threads=1`
 Expected: PASS
 
 - [ ] **Step 9: 用例 3——N=1 等价性（结构回归保险）**
@@ -1115,7 +1135,7 @@ Expected: PASS
 async fn n1_equivalence_lands_all() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
     let s2 = |slug: &str| format!(
-        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\n---\n# {slug}\n{slug} body.\n---END FILE---"
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
     );
     let mk = |m: &str| vec![
         StubRoute { all: vec![m, "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
@@ -1133,7 +1153,7 @@ async fn n1_equivalence_lands_all() {
 
 - [ ] **Step 10: 跑用例 3 + 本任务全部**
 
-Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency`
+Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency --test-threads=1`
 Expected: 3 用例全 PASS
 
 - [ ] **Step 11: Commit**
@@ -1168,7 +1188,7 @@ git commit -m "test(ingest): 路由 stub 基建 + 并发正确性/确定性归�
 async fn cancel_drains_inflight_cohort_and_stops_new() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
     let s2 = |slug: &str| format!(
-        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\n---\n# {slug}\n{slug} body.\n---END FILE---"
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
     );
     let routes = vec![
         StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
@@ -1242,7 +1262,7 @@ pub(crate) async fn ic_spawn_run(
 
 - [ ] **Step 2: 跑用例 4**
 
-Run: `cd src-server && cargo test --test integration -- --ignored cancel_drains`
+Run: `cd src-server && cargo test --test integration -- --ignored cancel_drains --test-threads=1`
 Expected: PASS
 
 - [ ] **Step 3: 用例 5——cancel × channel 积压交织（spec 测 8）**
@@ -1256,7 +1276,7 @@ Expected: PASS
 async fn cancel_with_backlog_drains_buffered_items() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
     let page = |slug: &str| format!(
-        "---FILE: concepts/shared.md ---\n---\ntitle: Shared\ntype: concept\n---\n# Shared\n{slug} version.\n---END FILE---"
+        "---FILE: concepts/shared.md ---\n---\ntitle: Shared\ntype: concept\nsources: [raw/{slug}.md]\n---\n# Shared\n{slug} version.\n---END FILE---"
     );
     let routes = vec![
         StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
@@ -1277,22 +1297,43 @@ async fn cancel_with_backlog_drains_buffered_items() {
     sqlx::query("UPDATE ingest_jobs SET cancel_requested=TRUE WHERE id=$1")
         .bind(job.id).execute(&env.state.db).await.unwrap();
     let out = handle.await.unwrap();
+    // 两条终止路径（见下竞态论证）都以 Err(Cancelled) 收尾：变体路径（归并段收
+    // Cancelled 变体）/ 尾段兜底路径（zz 被领走走完 → 无变体 → 尾段 check_cancel）
     assert!(matches!(out, Err(llm_wiki_server::AppError::Cancelled)));
-    // drain：积压的 zb 页经 merge 落库；两源 done
+    let status: String = sqlx::query_scalar("SELECT status FROM ingest_jobs WHERE id=$1")
+        .bind(job.id).fetch_one(&env.state.db).await.unwrap();
+    assert_eq!(status, "cancelled");
+    // drain：积压的 zb 页经 merge 落库（za 先 upsert、zb 碰撞 merge）
     let (content, _, _) = ic_fetch_page(&env, "concepts/shared.md").await;
     assert!(content.contains("backlog"), "积压 cohort 的 merge 必须完成：{}", content);
+    // 竞态实况（评审 I-2）：za 完成瞬间 buffered eager refill zz，其 ① peek 的
+    // SELECT 快照大概率早于测试 UPDATE 提交 → 多数运行 zz 被领走：step1 返回
+    // "must-not"（非 JSON）→ 两轮解析失败 → Failed 非 done，此路径无 Cancelled
+    // 变体、终态经尾段兜底。少数运行 cancel 先落 → zz 未领走、item_states 无 zz。
+    // 断言按两分支兼容写：len ∈ 2..=3；za/zb 必 done；zz 若在必 failed；
+    // zz 的 step2 永不发生（step1 必败）；step1 解析失败重试一次 → ≤2 次。
     let states = ic_fetch_item_states(&env, job.id).await;
-    assert_eq!(states.len(), 2);
-    assert!(states.iter().all(|(_, s, _)| s == "done"));
-    assert_eq!(env.stub.started.lock().unwrap().get("MARKzz+<document>"), None, "变体后零新调用");
+    assert!((2..=3).contains(&states.len()), "{:?}", states);
+    for (p, s, _) in &states {
+        if p == "raw/za.md" || p == "raw/zb.md" {
+            assert_eq!(s, "done", "{:?}", states);
+        } else {
+            assert_eq!((p.as_str(), s.as_str()), ("raw/zz.md", "failed"), "{:?}", states);
+        }
+    }
+    let calls = env.stub.calls.lock().unwrap().clone();
+    let zz_step2 = calls.iter().filter(|c| c.contains("MARKzz") && c.contains("<analysis>")).count();
+    let zz_step1 = calls.iter().filter(|c| c.contains("MARKzz") && c.contains("<document>")).count();
+    assert_eq!(zz_step2, 0, "zz step1 必败（非 JSON），step2 永不发生");
+    assert!(zz_step1 <= 2, "step1 解析失败重试一次 → 至多 2 次，got {}", zz_step1);
 }
 ```
 
-（`wait_calls` 与 `wait_started` 同款，查 calls 计数。）**确定性论证**：za/zb step2 calls 都齐后，归并段必已开始处理 za（merge 600ms 进行中）；zb 的 Done 在 channel 里积压；zz 未开始（N=2 被 za/zb 占用，二者生成已完 → buffered 下一项 zz 会在槽位空出后被 poll——此时 cancel 已置位则 ① 秒退；若 zz 恰在 cancel 前被 poll（50ms 生成完成到 UPDATE 提交间的竞态），其①已过会完成生成但**仍会被 drain 落库**（变为 3 done）——为消除竞态：断言 `states.len()` 用 `2..=3` 区间 + zz 页面存在与否不检查、只断言 `MARKzz+<analysis>` 的 calls ≤ 1 且终态 cancelled。**
+（`wait_calls` 与 `wait_started` 同款，查 calls 计数。）
 
 - [ ] **Step 4: 跑用例 5**
 
-Run: `cd src-server && cargo test --test integration -- --ignored cancel_with_backlog`
+Run: `cd src-server && cargo test --test integration -- --ignored cancel_with_backlog --test-threads=1`
 Expected: PASS
 
 - [ ] **Step 5: 用例 6——cancel → manual retry 语义 → resume（spec 测 9）**
@@ -1307,7 +1348,7 @@ Expected: PASS
 async fn cancelled_job_resume_skips_drained_sources() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
     let s2 = |slug: &str| format!(
-        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\n---\n# {slug}\n{slug} body.\n---END FILE---"
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
     );
     let routes = vec![
         StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
@@ -1345,7 +1386,7 @@ async fn cancelled_job_resume_skips_drained_sources() {
 
 - [ ] **Step 6: 跑用例 6 + 本任务全部**
 
-Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency`
+Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency --test-threads=1`
 Expected: 6 用例全 PASS
 
 - [ ] **Step 7: Commit**
@@ -1375,7 +1416,7 @@ git commit -m "test(ingest): 取消 drain 三用例——在飞 cohort 落库/�
 async fn resume_processes_only_remaining_sources() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
     let s2 = |slug: &str| format!(
-        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\n---\n# {slug}\n{slug} body.\n---END FILE---"
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
     );
     let routes = vec![
         StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 0, resp: RouteResp::Text("must-not".into()) },
@@ -1408,7 +1449,7 @@ async fn resume_processes_only_remaining_sources() {
 #[ignore = "requires PG + Redis"]
 async fn single_source_failure_isolated() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
-    let s2 = "---FILE: concepts/za.md ---\n---\ntitle: za\ntype: concept\n---\n# za\nza body.\n---END FILE---".to_string();
+    let s2 = "---FILE: concepts/za.md ---\n---\ntitle: za\ntype: concept\nsources: [raw/za.md]\n---\n# za\nza body.\n---END FILE---".to_string();
     let routes = vec![
         StubRoute { all: vec!["MARKza", "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
         StubRoute { all: vec!["MARKza", "<analysis>"], delay_ms: 10, resp: RouteResp::Text(s2) },
@@ -1443,7 +1484,7 @@ async fn single_source_failure_isolated() {
 async fn progress_monotonic_with_prior_done_and_final_stage() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
     let s2 = |slug: &str| format!(
-        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\n---\n# {slug}\n{slug} body.\n---END FILE---"
+        "---FILE: concepts/{slug}.md ---\n---\ntitle: {slug}\ntype: concept\nsources: [raw/{slug}.md]\n---\n# {slug}\n{slug} body.\n---END FILE---"
     );
     let mk = |m: &str, slug: &str| vec![
         StubRoute { all: vec![m, "<document>"], delay_ms: 10, resp: RouteResp::Text(s1.into()) },
@@ -1472,7 +1513,7 @@ async fn progress_monotonic_with_prior_done_and_final_stage() {
 
 - [ ] **Step 4: 跑三用例**
 
-Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency`
+Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency --test-threads=1`
 Expected: 9 用例全 PASS
 
 - [ ] **Step 5: Commit**
@@ -1529,7 +1570,7 @@ async fn all_failed_rate_limited_is_transient() {
 #[ignore = "requires PG + Redis"]
 async fn concurrency_config_injection_smoke() {
     let s1 = r#"{"entities":[],"connections":[],"contradictions":[]}"#;
-    let s2 = "---FILE: concepts/zs.md ---\n---\ntitle: zs\ntype: concept\n---\n# zs\nzs body.\n---END FILE---".to_string();
+    let s2 = "---FILE: concepts/zs.md ---\n---\ntitle: zs\ntype: concept\nsources: [raw/zs.md]\n---\n# zs\nzs body.\n---END FILE---".to_string();
     let routes = vec![
         StubRoute { all: vec!["MARKzs", "<document>"], delay_ms: 5, resp: RouteResp::Text(s1.into()) },
         StubRoute { all: vec!["MARKzs", "<analysis>"], delay_ms: 5, resp: RouteResp::Text(s2) },
@@ -1547,7 +1588,7 @@ async fn concurrency_config_injection_smoke() {
 
 - [ ] **Step 3: 跑两用例**
 
-Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency`
+Run: `cd src-server && cargo test --test integration -- --ignored ingest_concurrency --test-threads=1`
 Expected: 11 用例全 PASS
 
 - [ ] **Step 4: Commit**
@@ -1651,6 +1692,15 @@ git commit -m "feat(web): 摄取面板 stage 中文映射（processing/building_
 Run: `cd src-server && cargo test --lib && cargo test --test integration -- --ignored`
 Expected: lib 全绿 + integration 全绿（含 ingest 四件套 + ingest_concurrency 11 用例 + 其余既有套件零回归）
 
+- [ ] **Step 1b: N=1 等价性四件套回归（评审 M-2 补）**
+
+Run: `cd src-server && INGEST__SOURCE_CONCURRENCY=1 cargo test --test integration -- --ignored ingest`
+Expected: 四件套在并发度 1 下全绿（buffered(1)+channel ≈ 今日串行——spec 测 6 的完整形态；env 经 AppConfig::from_env 全进程生效，无并行竞态）
+
+- [ ] **Step 1c: 测试残留说明（评审 M-6，记录勿改）**
+
+单跑过滤器（如只跑 ingest_concurrency）时 t10_ 行不被 SWEEPS 清（cutoff 机制靠全量跑收上一轮）——开发循环积累属已知取舍；Step 1 的全量跑即兜底清扫。
+
 - [ ] **Step 2: 前端全量**
 
 Run: `npx vitest run`
@@ -1672,6 +1722,6 @@ git commit -m "fix(ingest): 全量回归零星修复"
 
 ## Self-Review 记录
 
-1. **Spec coverage**：§1（Task 3/4）、§2（Task 4/9）、§3（Task 4 尾段原样）、§4（Task 1/8）、§5（Task 4/6）、§6（Task 3/4）、§7（Task 2/8）、测试 1-14（Task 5：1/2/6；Task 6：3/8/9；Task 7：4/5/10；Task 8：14/11；Task 9：13 前端半；Task 7 用例 9 含 13 server 半；测试 7 已由 Task 3 纯函数单测覆盖 + panic 注入按 spec"代价可控时"降级）。无缺口。
+1. **Spec coverage**：§1（Task 3/4）、§2（Task 4/9）、§3（Task 4 尾段原样）、§4（Task 1/8）、§5（Task 4/6）、§6（Task 3/4）、§7（Task 2/8）、测试 1-14（Task 5：1/2/6；Task 6：3/8/9；Task 7：4/5/10；Task 8：14/11；Task 9：13 前端半；Task 7 用例 9 含 13 server 半）。**两处如实降级（评审 I-3 更正，原"无缺口"声明不实）**：测 7（panic 注入）= Task 3 纯函数单测覆盖，实注入按 spec"代价可控时"降级；测 12（①JobError → 瞬态重试集成半）= peek 的 SELECT 故障注入无廉价机制，由 Task 3 `peek_outcome` 单测（Err→JobError 变体保 DatabaseError 原值）+ Task 2 transient 分类单测 + Task 4 代码结构（`JobError(e) => return Err(e)` 原值透传，三行直线代码）组合覆盖——集成注入留待实现后评审裁定是否值得测试钩子。
 2. **Placeholder scan**：全文无 TBD/unimplemented 残留（初稿 Task 5 的两段示意骨架与 Step 4 的 unimplemented! 已在定稿前清除，改为单一完整实现）；stub 双 extractor 有具名 fn 退路注记；ic_setup 的 provider JSON 字段锚定 t8 源码行号防凭记忆造字段。
 3. **Type consistency**：`Phase1Output` 四变体、`peek_outcome`/`dedupe_targets`/`item_progress`/`verify_generator_completeness`/`clamp_source_concurrency` 签名在 Task 3 定义、Task 4 消费逐字一致；测试侧 `ic_run_ok` 返回 `(IngestJob, IngestJobResult)`、`ic_fetch_item_states(env, job_id)` 带 job_id——Task 5 定义、Task 5/6/7/8 全部调用点已同步；`StubRoute` 已带 `#[derive(Clone)]`（Task 8 循环复用需要）。
