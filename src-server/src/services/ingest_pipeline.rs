@@ -1139,92 +1139,142 @@ pub async fn run_ingest_job(
         updated_reserved: vec![],
         warnings: vec![],
     };
-
-    // 收集所有成功落库页的 (path, content) 供批量嵌入（覆盖 source 页 + reserved 页）。
     let mut collected: Vec<(String, String)> = Vec::new();
-
     // merge provider 懒获取（评审 A-M6）：首次碰撞才取，失败并入整页回退（I1）
     let mut merge_provider: Option<Box<dyn StreamChatProvider>> = None;
 
-    // 本次 run 中成功（done）的 source 计数 —— 用于 all-failed 判定。
-    // 注意：不能用 job.item_states 快照（不含本次 run 的写入，会误判 all-failed）。
-    let mut done_this_run = 0usize;
+    // —— §1 dispatch：prior-done 过滤 + 保序去重 ——
+    let is_prior_done = |sp: &str| -> bool {
+        job.item_states
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|v| {
+                    v.get("path").and_then(|p| p.as_str()) == Some(sp)
+                        && v.get("status").and_then(|s| s.as_str()) == Some("done")
+                })
+            })
+            .unwrap_or(false)
+    };
+    // prior-done 计入 done_this_run（今日 1116-1121 语义：历史成功不算 all-failed）。
+    // 经 is_prior_done 逐 path 判定 = 与 source_paths 天然求交——item_states 理论上
+    // 可含非本 job 路径的条目，交集计数防 progress 初值虚高（评审控制器补 1）。
+    let prior_done: usize = job
+        .source_paths
+        .iter()
+        .filter(|sp| is_prior_done(sp.as_str()))
+        .count();
+    let mut done_this_run = prior_done;
+    let targets: Vec<String> = dedupe_targets(&job.source_paths)
+        .into_iter()
+        .filter(|sp| !is_prior_done(sp))
+        .collect();
+    let expected = targets.len();
+    let total = job.source_paths.len();
 
-    // §2 清单 + cap 联动（I-5）：context_size 与 process_source_path 内同源逻辑
-    // （LlmConfig.context_size 为 i32，负值兜底按 0 → cap 下限 1）
+    // §2 清单 + cap 联动（I-5，不变）
     let context_size = crate::services::llm::get_llm_config(&state.db, job.project_id)
         .await
         .map(|c| c.context_size.max(0) as u32)
         .unwrap_or(128_000);
-    // cap 一次算出、两处传参（终审 F5）：SQL LIMIT 与截断注明阈值必须同源，
-    // 否则 budget 派生的小 cap（如 32k→500）下真截断不注明。
     let paths_cap = existing_paths_cap(context_size);
     let existing_paths = fetch_concept_entity_paths(state, job.project_id, paths_cap).await;
 
-    let total = job.source_paths.len();
-    for (i, sp) in job.source_paths.iter().enumerate() {
-        // 取消检查点（每 source 前）
-        if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
-            return Err(e); // AppError::Cancelled，已 mark_cancelled
-        }
-        // 部分续传：item_states 中该 source 已 done → 跳过（省 LLM/embedding）
-        let already_done = job
-            .item_states
-            .as_array()
-            .map(|arr| {
-                arr.iter().any(|v| {
-                    v.get("path").and_then(|p| p.as_str()) == Some(sp.as_str())
-                        && v.get("status").and_then(|s| s.as_str()) == Some("done")
+    // stage 单一化（spec §2 唯一表示法变化）：processing + item 计数进度
+    let _ = ingest_queue::update_job_stage(state, job.id, "processing", item_progress(prior_done, total)).await;
+
+    // —— §1 生成段（独立 task：buffered(N) 保序 + channel(32) 解耦防饿死）——
+    let raw_concurrency = state.config.ingest.source_concurrency;
+    let n = clamp_source_concurrency(raw_concurrency);
+    // spec §4：超界 clamp 落 warn（观测性——评审 M-1）
+    if n != raw_concurrency {
+        tracing::warn!(raw = raw_concurrency, clamped = n, "INGEST__SOURCE_CONCURRENCY out of 1..=8, clamped");
+    }
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Phase1Output>(32);
+    {
+        let state = state.clone();
+        let job_id = job.id;
+        let project_id = job.project_id;
+        let language_owned = ingest_language.clone();
+        let existing_paths = existing_paths.clone();
+        let paths_cap_usize = paths_cap as usize;
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut stream = futures::stream::iter(targets)
+                .map(|sp| {
+                    let state = state.clone();
+                    let language = language_owned.clone();
+                    let existing_paths = existing_paths.clone();
+                    async move {
+                        // ① 领任务检查点（peek 只读——B-3：并发 peek 零副作用，
+                        // 唯一 mark 在归并段收变体时执行）
+                        if let Some(out) = peek_outcome(ingest_queue::peek_cancel(&state, job_id).await) {
+                            return out;
+                        }
+                        match process_source_path(
+                            &state,
+                            project_id,
+                            team_id,
+                            &sp,
+                            language.as_deref(),
+                            &existing_paths,
+                            paths_cap_usize,
+                        )
+                        .await
+                        {
+                            Ok(p) => Phase1Output::Done { sp, processed: p },
+                            Err(e) => Phase1Output::Failed { sp, err: e.to_string() },
+                        }
+                    }
                 })
-            })
-            .unwrap_or(false);
-        if already_done {
-            // 已完成的 source 计入 done_this_run——避免 resume 时「剩余 source 全失败」误判 all-failed
-            // （prior-done 代表历史成功，不应让本次剩余全失败把整个 job 标 failed；只停不清，数据已在）
-            done_this_run += 1;
-            continue;
-        }
+                .buffered(n);
+            while let Some(item) = stream.next().await {
+                // spec §6：变体（Cancelled/JobError）之后不再 send——后续 poll 只会
+                // 再产变体（零工作 peek），break 省一次空转（评审 M-7 对齐字面）
+                let terminal = matches!(item, Phase1Output::Cancelled | Phase1Output::JobError(_));
+                if tx.send(item).await.is_err() {
+                    break; // 归并段提前 return（JobError/§6）→ rx drop；在飞 future abort（B-2，安全）
+                }
+                if terminal {
+                    break;
+                }
+            }
+        });
+    }
 
-        let _ = ingest_queue::update_job_stage(state, job.id, "parsing", (i * 100 / total.max(1)) as i32)
-            .await;
-
-        match process_source_path(
-            state,
-            job.project_id,
-            team_id,
-            sp,
-            language,
-            &existing_paths,
-            paths_cap as usize,
-        )
-        .await
-        {
-            Ok(None) => {
-                // 内容未变，视为 done
-                let _ =
-                    ingest_queue::update_item_state(state, job.id, sp, "done", None).await;
+    // —— §2 归并段（按源序串行：竞争点全部在此消解）——
+    let mut received = 0usize;
+    while let Some(item) = rx.recv().await {
+        received += 1;
+        match item {
+            Phase1Output::Cancelled => {
+                // 唯一的 mark（B-3 单事件保证；spec §5 终止信号）
+                let _ = ingest_queue::mark_job_cancelled(state, job.id).await;
+                return Err(AppError::Cancelled);
+            }
+            Phase1Output::JobError(e) => return Err(e),
+            Phase1Output::Failed { sp, err } => {
+                // 今日 1300-1305 原样：源级隔离
+                result.warnings.push(format!("process {}: {}", sp, err));
+                let _ = ingest_queue::update_item_state(state, job.id, &sp, "failed", Some(&err)).await;
+            }
+            Phase1Output::Done { sp, processed: None } => {
+                let _ = ingest_queue::update_item_state(state, job.id, &sp, "done", None).await;
                 done_this_run += 1;
-            } // 内容未变，已跳过
-            Ok(Some(processed)) => {
+            }
+            Phase1Output::Done { sp, processed: Some(processed) } => {
                 let pages_to_write = processed.pages.len();
                 let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
                 for page in &processed.pages {
-                    // 取消检查点（每页前，终审 F1）：页内可能触发一次 merge LLM 调用
-                    // （8000 token 输出、本地模型数十秒），spec §4 部署约束/单 worker 串行
-                    // ——用户取消后若继续逐页 merge，会烧完全部剩余调用并阻塞后续所有
-                    // job 小时级。语义同 source 级检查点：Cancelled 时整 job 终止。
-                    if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
-                        return Err(e); // AppError::Cancelled，已 mark_cancelled
-                    }
-                    // transcripts/ 命名空间守卫（spec §3.2-⑤ 防御）：该前缀页由 transcriber
-                    // CLI 写入（创建即嵌入），LLM 生成页禁止覆写。跳过计入 pages_written
-                    // （计账联动，见 fold_page_write_outcomes）→ 唯一页撞前缀仍判 done。
+                    // 【删除今日 1147-1153 的页级 check_cancel 块——drain 裁定：
+                    // cancel 后已生成 cohort 完整落库，F1 威胁由 ① 关口 + 有界
+                    // cohort 结构性约束（spec §2）】
+                    //
+                    // —— 以下今日 1155-1250 逐字保留（含 W2 注释）——
                     if is_llm_generated_path(&page.path) {
                         tracing::warn!(path = %page.path, source = %sp, "skip LLM page into transcripts/ namespace");
                         outcomes.push(PageWriteOutcome::GuardSkipped);
                         continue;
                     }
-                    // —— 多源累积合并（spec §1）：碰撞检测 → Replace/Merge 分流 ——
                     let existing = match fetch_existing_page(state, job.project_id, &page.path).await {
                         Ok(e) => e,
                         Err(err) => {
@@ -1235,7 +1285,7 @@ pub async fn run_ingest_job(
                     };
                     let mode = existing
                         .as_ref()
-                        .map_or(CollisionMode::Replace, |e| collision_mode(&e.sources, &page.sources, sp));
+                        .map_or(CollisionMode::Replace, |e| collision_mode(&e.sources, &page.sources, &sp));
                     let merged_write: Option<Result<(String, serde_json::Value), String>> = match (&mode, existing.as_ref()) {
                         (CollisionMode::Merge, Some(e)) => {
                             if merge_provider.is_none() {
@@ -1245,23 +1295,22 @@ pub async fn run_ingest_job(
                                 }
                             }
                             match merge_provider.as_ref() {
-                                Some(p) => match merge_pages_via(&**p, language, sp, &e.content, &page.content).await {
+                                Some(p) => match merge_pages_via(&**p, language, &sp, &e.content, &page.content).await {
                                     Ok(merged_content) => {
-                                        // 收敛观测（评审 I-4）：超两版之和 80% 记 warning
                                         if merged_content.len() > (e.content.len() + page.content.len()) * 4 / 5 {
                                             result.warnings.push(format!(
                                                 "merge {}: output longer than 80% of combined inputs (inflation watch)",
                                                 page.path
                                             ));
                                         }
-                                        Some(Ok((merged_content, union_sources(&e.sources, &page.sources, sp))))
+                                        Some(Ok((merged_content, union_sources(&e.sources, &page.sources, &sp))))
                                     }
                                     Err(err) => Some(Err(format!("merge {}: {} — fallback replace", page.path, err))),
-                                },
+                                }
                                 None => Some(Err(format!("merge {}: no provider — fallback replace", page.path))),
                             }
                         }
-                        _ => None, // Replace 或无既有行 → 原路径
+                        _ => None,
                     };
                     match merged_write {
                         Some(Ok((merged_content, merged_sources))) => match existing.as_ref() {
@@ -1283,7 +1332,6 @@ pub async fn run_ingest_job(
                             None => unreachable!("merge 分支必有 existing"),
                         },
                         Some(Err(warn)) => {
-                            // 整页回退（评审 I1 写死）：content/sources/frontmatter 均 incoming，走既有 upsert
                             result.warnings.push(warn);
                             match upsert_wiki_page(state, job.project_id, page).await {
                                 Ok(path) => {
@@ -1314,14 +1362,13 @@ pub async fn run_ingest_job(
                         },
                     }
                 }
+                // —— 今日 1252-1298 逐字保留（fold 计账 + deferred-write + item_state）——
                 let (pages_written, all_upserted) = fold_page_write_outcomes(&outcomes);
-                // 仅在 wiki_pages 全部成功落库后才 mark_file_ingested（修复漏页问题：
-                // 若先 mark 后 upsert 失败，下次因 hash 命中会跳过，造成永久漏页）。
                 if all_upserted {
                     if let Err(e) = mark_file_ingested(
                         state,
                         job.project_id,
-                        sp,
+                        &sp,
                         &processed.content_hash,
                         processed.file_size,
                         &processed.file_type,
@@ -1330,7 +1377,6 @@ pub async fn run_ingest_job(
                     {
                         result.warnings.push(format!("mark ingested {}: {}", sp, e));
                     }
-                    // Phase B: 页落库 + mark 成功后才插 review（守 deferred-write 不变量）
                     if !processed.reviews.is_empty() {
                         if let Err(e) = crate::services::review::insert_review_items(
                             state,
@@ -1343,43 +1389,31 @@ pub async fn run_ingest_job(
                         }
                     }
                 }
-                // #1 修正（code-review all-failed 回归）：仅当本次写了页面（或本就无页面可写）才计 done。
-                // 所有 upsert 失败（pages_to_write>0 但 pages_written==0）→ 标 failed、不计 done_this_run，
-                // 让 all-failed 守卫（done_this_run==0）正确触发 + resume 重试该 source（避免静默 succeeded_with_warnings）。
-                // Task 2 计账联动：transcripts/ 守卫跳过已计入 pages_written（fold_page_write_outcomes），
-                // "唯一生成页撞前缀"的源判 done 非 failed（跳过即已处理，非失败）。
                 if pages_written > 0 || pages_to_write == 0 {
-                    let _ = ingest_queue::update_item_state(state, job.id, sp, "done", None).await;
+                    let _ = ingest_queue::update_item_state(state, job.id, &sp, "done", None).await;
                     done_this_run += 1;
                 } else {
                     let _ = ingest_queue::update_item_state(
                         state,
                         job.id,
-                        sp,
+                        &sp,
                         "failed",
                         Some("all page upserts failed"),
                     )
                     .await;
                 }
             }
-            Err(e) => {
-                result.warnings.push(format!("process {}: {}", sp, e));
-                let _ =
-                    ingest_queue::update_item_state(state, job.id, sp, "failed", Some(&e.to_string()))
-                        .await;
-            }
         }
-
-        let _ = ingest_queue::update_job_stage(
-            state,
-            job.id,
-            "generating",
-            ((i + 1) * 100 / total.max(1)) as i32,
-        )
-        .await;
+        // 每 item 完成推进进度（含 Failed 与 hash 跳过——spec §2）
+        let _ = ingest_queue::update_job_stage(state, job.id, "processing", item_progress(prior_done + received, total)).await;
     }
 
-    // reserved 重建
+    // §6 计数不变量：循环正常结束但收数短缺 = generator 异常终止（Cancelled/
+    // JobError 已在循环内提前 return，不会到达此处）
+    verify_generator_completeness(received, expected)?;
+
+    // —— 尾段（今日 1317-1360 逐字保留：check_cancel 兜底 + building_index +
+    // reserved 重建 + all-failed 判定 + 批量 embed）——
     if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
         return Err(e);
     }
@@ -1387,14 +1421,10 @@ pub async fn run_ingest_job(
     match rebuild_reserved_pages(state, job.project_id, language).await {
         Ok(reserved) => {
             result.updated_reserved = reserved.iter().map(|(p, _)| p.clone()).collect();
-            collected.extend(reserved);  // reserved 页也纳入嵌入
+            collected.extend(reserved);
         }
         Err(e) => result.warnings.push(format!("reserved pages: {}", e)),
     }
-
-    // all-failed 判定（修正既存 bug：现行 updated_reserved.is_empty() 恒假）
-    // 本次 run 中所有 source 都失败（done_this_run==0）且有 warnings → Err（落入 worker 的 mark_job_failed）
-    // CRITICAL: 用 LOCAL done_this_run，不用 job.item_states 快照（不含本次 run 写入，会误判）。
     let total_sources = job.source_paths.len();
     if total_sources > 0 && done_this_run == 0 && !result.warnings.is_empty() {
         return Err(AppError::InternalError(format!(
@@ -1403,8 +1433,6 @@ pub async fn run_ingest_job(
             result.warnings.join("; ")
         )));
     }
-
-    // 批量嵌入（rebuild 之后，覆盖 source + reserved）
     if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
         return Err(e);
     }
