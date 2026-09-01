@@ -463,7 +463,11 @@ pub async fn provider_for_project(
     // 解密 key（&state.config 经 deref coercion 转为 &AppConfig）
     let api_key = crate::services::llm::decrypt_api_key(&config.api_key, &state.config)?;
 
-    let timeout = config.timeout_secs;            // 来自 get_llm_config，当前恒 None（DB 无列）
+    // DB 无 timeout 列（恒 None）→ 兜底 900s 总超时（2026-09-01 热修：直播回放批
+    // 首次实战中 step2 远端挂死无超时，job 卡 running 48min+、CPU 0%、连接僵死——
+    // spec C-3 已知盲区应验。900s 覆盖 step2 最长合法生成（16k token 输出）余量充足；
+    // 超时 → LlmError::Timeout → 源级 Failed（item_state 留痕，可重试），不再挂死 job。
+    let timeout = config.timeout_secs.or(Some(900));
     let base = config.base_url.as_deref().unwrap_or("");
 
     match config.provider_type.as_str() {
