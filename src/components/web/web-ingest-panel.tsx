@@ -11,6 +11,16 @@ interface Props {
 const POLL_INTERVAL_MS = 2000
 // 轮询上限,防 worker 卡死导致前端死循环(150 次 × 2s = 5min)。
 const POLL_MAX = 150
+// server ingest stage → 中文标签（spec 2026-08-29 §2 表示法变更）。旧枚举
+// parsing/generating 保留映射（部署切换期在飞旧 job 兼容）；未知值裸透传。
+const STAGE_LABELS: Record<string, string> = {
+  processing: "处理中",
+  building_index: "构建索引",
+  parsing: "解析中",
+  generating: "生成中",
+}
+const stageLabel = (stage?: string | null) =>
+  (stage && STAGE_LABELS[stage]) || stage
 
 /**
  * web 摄取面板:upload → triggerIngest → 轮询 getIngestJob。
@@ -69,7 +79,7 @@ export function WebIngestPanel({ projectId, onDone }: Props) {
         job = await apiClient.getIngestJob(job_id)
         if (!alive()) return
         if (job.status === "succeeded" || job.status === "failed") break
-        setStatus(`处理中… ${job.stage ?? job.status}`)
+        setStatus(`处理中… ${stageLabel(job.stage) ?? job.status}`)
       }
       if (!job || (job.status !== "succeeded" && job.status !== "failed")) {
         setError("摄取超时(5min 无终态)")

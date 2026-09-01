@@ -30,7 +30,9 @@ pub fn is_transient_job_err(e: &AppError) -> bool {
         // redis 命令错现映射为 InternalError（如 cache_step1_result），按 message 特判
         AppError::InternalError(msg) => {
             let m = msg.to_lowercase();
+            // r1 G-1：all-failed join 文本含 "Rate limited" → 瞬态（同上，"rate limit" 承重）
             m.contains("redis") || m.contains("connection refused") || m.contains("timeout") || m.contains("connect")
+                || m.contains("http 429") || m.contains("api error 429") || m.contains("rate limit")
         }
         AppError::Cancelled => false,
         _ => false,
@@ -40,7 +42,11 @@ pub fn is_transient_job_err(e: &AppError) -> bool {
 fn is_transient_msg(msg: &str) -> bool {
     let m = msg.to_lowercase();
     // 两种 5xx 报文格式：embedding.rs 用 "HTTP {status}"；LLM streaming（LlmError::ApiError Display）用 "API error {status}"
+    // r1 G-1：429/限流归瞬态——批量 429 经 all-failed 路径以 InternalError 到达
+    // worker（含 "Rate limited"，429 在 llm_stream.rs:207 前置映射，不走
+    // "API error 429"）；"rate limit" 是承重模式，不可精简（spec §7）。
     m.contains("http 5") || m.contains("api error 5") || m.contains("timeout") || m.contains("connect") || m.contains("connection")
+        || m.contains("http 429") || m.contains("api error 429") || m.contains("rate limit")
 }
 
 // ── 模型 ──
@@ -303,6 +309,19 @@ pub async fn check_cancel(state: &AppState, job_id: Uuid) -> Result<(), AppError
     Ok(())
 }
 
+/// ① 领任务检查点（只读，spec §1/B-3）：cancel_requested=true → Ok(true)。
+/// 与 check_cancel 的区别：不 mark_job_cancelled、不发事件——并发领任务的
+/// N 路各自 peek 零副作用；唯一的 mark 由归并段收到 Cancelled 变体时执行
+/// （每 job 恰一次、job_cancelled 事件恰一条）。
+pub async fn peek_cancel(state: &AppState, job_id: Uuid) -> Result<bool, AppError> {
+    let cancel: bool = sqlx::query_scalar("SELECT cancel_requested FROM ingest_jobs WHERE id=$1")
+        .bind(job_id)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or(false);
+    Ok(cancel)
+}
+
 // ── 重试 ──
 
 /// 自动重试：status=pending, retry_count++（worker 在调此函数前已 sleep backoff）。不校验当前 status。重投 Redis。
@@ -408,5 +427,17 @@ mod tests {
         assert!(!is_transient_job_err(&AppError::InternalError("DOCX parse error: bad format".into())));
         assert!(!is_transient_job_err(&AppError::LlmApiError("HTTP 400 content violation".into())));
         assert!(!is_transient_job_err(&AppError::Cancelled));
+
+        // —— r1 G-1：429/限流归入瞬态。承重链：批量 429 → 单源 Failed → warnings →
+        // all-failed InternalError，消息含 "Rate limited"（429 在 llm_stream.rs:207
+        // 前置映射为 RateLimited，Display "Rate limited"，不会以 "API error 429"
+        // 形态出现——"rate limit" 模式承重，不可精简掉）。
+        assert!(is_transient_job_err(&AppError::LlmApiError("step1: Rate limited".into())));
+        assert!(is_transient_job_err(&AppError::LlmApiError("embed HTTP 429: quota".into())));
+        assert!(is_transient_job_err(&AppError::InternalError(
+            "all 3 source(s) failed: process raw/a.md: step1: Rate limited".into()
+        )));
+        // 非瞬态面不受影响
+        assert!(!is_transient_job_err(&AppError::LlmApiError("HTTP 400 content violation".into())));
     }
 }

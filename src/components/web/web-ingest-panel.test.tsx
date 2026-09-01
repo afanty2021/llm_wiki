@@ -95,4 +95,34 @@ describe("WebIngestPanel", () => {
     await waitFor(() => expect(screen.getByText(/摄取失败/)).toBeTruthy())
     await waitFor(() => expect(screen.getByText(/boom/)).toBeTruthy())
   })
+
+  it("stage 中文映射：processing → 处理中（新枚举）且未知 stage 裸透传", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    uploadFile.mockImplementation(async (_pid: number, file: File) => ({
+      name: file.name,
+      path: `raw/sources/${file.name}`,
+      size: file.size,
+    }))
+    triggerIngest.mockResolvedValue({ job_id: "job-3", status: "pending" })
+    getIngestJob
+      .mockResolvedValueOnce({ id: "job-3", status: "running", progress: 10, stage: "processing" })
+      .mockResolvedValueOnce({ id: "job-3", status: "running", progress: 60, stage: "weird" })
+      .mockResolvedValueOnce({ id: "job-3", status: "succeeded", progress: 100, stage: "succeeded" })
+
+    const { WebIngestPanel } = await import("./web-ingest-panel")
+    render(<WebIngestPanel projectId={1} onDone={() => {}} />)
+    fireEvent.change(screen.getByLabelText(/upload/i), {
+      target: { files: [new File(["x"], "d.md")] },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /ingest|摄取/i }))
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    await waitFor(() => expect(screen.getAllByText(/处理中… 处理中/)).toBeTruthy())
+    // 未知 stage 裸透传：STAGE_LABELS 无 "weird" 映射 → 原样拼进状态文本。
+    await vi.advanceTimersByTimeAsync(2000)
+    await waitFor(() => expect(screen.getAllByText(/处理中… weird/)).toBeTruthy())
+    await vi.advanceTimersByTimeAsync(2000)
+    await waitFor(() => expect(screen.getByText(/完成/)).toBeTruthy())
+  })
 })

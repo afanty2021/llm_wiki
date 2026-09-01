@@ -174,6 +174,28 @@ fn default_log_dir() -> String { "./logs".to_string() }
 fn default_log_max_size_bytes() -> u64 { 10 * 1024 * 1024 }
 fn default_log_max_files() -> usize { 5 }
 fn default_log_level() -> String { "INFO".to_string() }
+
+/// ingest 并发配置（spec 2026-08-29 §4）：source 级生成并发度，默认 3（对齐
+/// transcriber 侧裁定），env INGEST__SOURCE_CONCURRENCY 覆盖；消费侧经
+/// ingest_pipeline::clamp_source_concurrency 收敛到 1..=8。
+#[derive(Debug, Clone, Deserialize)]
+pub struct IngestConfig {
+    #[serde(default = "default_source_concurrency")]
+    pub source_concurrency: usize,
+}
+
+fn default_source_concurrency() -> usize {
+    3
+}
+
+impl Default for IngestConfig {
+    fn default() -> Self {
+        Self {
+            source_concurrency: default_source_concurrency(),
+        }
+    }
+}
+
 fn default_admin_usernames() -> String { String::new() }
 
 /// 解析逗号分隔的 admin 用户名（空白名单 → 空 Vec）
@@ -302,6 +324,8 @@ pub struct AppConfig {
     pub frontend: FrontendConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub ingest: IngestConfig,
     #[serde(default = "default_admin_usernames")]
     pub admin_usernames: String,
 }
