@@ -1542,6 +1542,17 @@ async fn process_source_path(
     )
     .await?;
     let blocks = parse_file_blocks(&llm_output);
+    // 静默零页观测防线（2026-09-02 直播回放批 4aadfd65 教训）：LLM 输出非空但解析
+    // 零块 = 结构性异常（如 thinking 烧爆预算后正文残缺），比"零块零页"的既定
+    // done 语义更危险——留 warn 痕（不 fail，保持零门槛 done 兼容），复盘可查。
+    if blocks.is_empty() && !llm_output.trim().is_empty() {
+        let head: String = llm_output.chars().take(120).collect();
+        tracing::warn!(
+            len = llm_output.len(),
+            head = %head,
+            "step2 output non-empty but zero FILE blocks parsed——suspicious (thinking bleed / format drift?)"
+        );
+    }
     let pages: Vec<WikiPageInsert> = blocks
         .into_iter()
         .map(|b| WikiPageInsert {

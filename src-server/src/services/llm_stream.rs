@@ -173,7 +173,7 @@ impl StreamChatProvider for OpenAiProvider {
             msgs.push(serde_json::json!({"role":m.role,"content":m.content}));
         }
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": opts.model,
             "messages": msgs,
             "temperature": opts.temperature,
@@ -184,6 +184,16 @@ impl StreamChatProvider for OpenAiProvider {
             // 解析失败。通过 chat_template_kwargs 关闭。OpenAI 官方 API 会忽略此字段。
             "chat_template_kwargs": {"enable_thinking": false}
         });
+        // bigmodel（zai）不认 chat_template_kwargs——其 GLM 模型会进 thinking 模式把
+        // max_tokens 预算烧在 reasoning_tokens 上（实测：49.7k prompt 的 step2，
+        // 16000 预算烧掉 15968 reasoning、正文 0 字符被截断 → 零 FILE 块 → "零门槛
+        // done" 静默零页）。bigmodel 的关闭姿势是 thinking.type="disabled"（2026-09-02
+        // 直播回放批 4aadfd65 源实锤 + 同请求重放验证：reasoning 15968→980、正文
+        // 18668 字符 31 个 FILE 块）。OpenAI 官方对未知顶层字段报 400，故按 endpoint
+        // 条件加——vLLM/omlx 通道保持现状（chat_template_kwargs 生效）。
+        if self.endpoint.contains("bigmodel") {
+            body["thinking"] = serde_json::json!({"type": "disabled"});
+        }
 
         let resp = self.client
             .post(&self.endpoint)
