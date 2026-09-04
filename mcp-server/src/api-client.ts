@@ -395,10 +395,11 @@ export class LlmWikiApiClient {
     return raw as ApiHealth
   }
 
-  /** GET /api/v1/search?project_id=&query=&limit=（响应 camelCase：mode/results/tokenHits/vectorHits）。 */
-  async searchSrc(projectId: number, query: string, options: { limit?: number; token?: string } = {}): Promise<ApiSearchResponse> {
+  /** GET /api/v1/search?project_id=&query=&limit=&rerank=（响应 camelCase：mode/results/tokenHits/vectorHits）。 */
+  async searchSrc(projectId: number, query: string, options: { limit?: number; rerank?: boolean; token?: string } = {}): Promise<ApiSearchResponse> {
     const params = new URLSearchParams({ project_id: String(projectId), query })
     if (options.limit !== undefined) params.set("limit", String(options.limit))
+    if (options.rerank !== undefined) params.set("rerank", String(options.rerank))
     const json = await this.requestObject(`/api/v1/search?${params.toString()}`, { token: options.token })
     return {
       results: Array.isArray(json.results) ? json.results.map(parseSearchResult) : [],

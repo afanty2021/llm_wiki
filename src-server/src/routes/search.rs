@@ -12,13 +12,17 @@ pub struct SearchQueryParams {
     pub project_id: i32,
     pub query: String,
     pub limit: Option<usize>,
+    /// 显式关 LLM 精排（`rerank=false`）→ 直接 RRF 序。延迟敏感调用方
+    /// （教师 MCP llm_wiki_search，每回合 3-5 次 × ~6s LLM 往返）用；
+    /// 不带时行为不变（web UI / deep research 保持精排）。
+    pub rerank: Option<bool>,
 }
 
 pub fn search_routes() -> axum::Router<AppState> {
     axum::Router::new().route("/", axum::routing::get(search_handler))
 }
 
-/// GET /api/v1/search?project_id=&query=&limit=  → 统一 hybrid 搜索（自动 keyword/vector/hybrid）
+/// GET /api/v1/search?project_id=&query=&limit=&rerank=  → 统一 hybrid 搜索（自动 keyword/vector/hybrid）
 pub async fn search_handler(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -29,10 +33,16 @@ pub async fn search_handler(
         return Err(AppError::ValidationError("query is required".into()));
     }
     let limit = params.limit.unwrap_or(DEFAULT_RESULTS).min(MAX_RESULTS);
-    // 解析 LLM provider；失败 → None（hybrid_search 走 RRF fallback，不阻断）
-    let provider_box = crate::services::llm_stream::provider_for_project(&state, params.project_id)
-        .await
-        .ok();
+    // 解析 LLM provider；失败 → None（hybrid_search 走 RRF fallback，不阻断）。
+    // rerank=false 的显式 opt-out 同样置 None——下游 `if let Some(provider)`
+    // 天然跳过精排，复用既有 fallback 路径（亚秒级）。
+    let provider_box = if params.rerank == Some(false) {
+        None
+    } else {
+        crate::services::llm_stream::provider_for_project(&state, params.project_id)
+            .await
+            .ok()
+    };
     let provider_ref: Option<&dyn crate::services::llm_stream::StreamChatProvider> =
         provider_box.as_deref();
     let resp = search::hybrid_search(

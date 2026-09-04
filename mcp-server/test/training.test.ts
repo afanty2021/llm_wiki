@@ -323,7 +323,7 @@ test("authRefresh: expires_in 有效 → 正常返回（回归护栏，1800 秒�
   assert.equal(auth.expires_in, 1800)
 })
 
-test("llm_wiki_search（src-server 形态）: GET /api/v1/search?project_id&query&limit + Bearer", async () => {
+test("llm_wiki_search（src-server 形态）: GET /api/v1/search?project_id&query&limit&rerank=false + Bearer", async () => {
   const calls: RecordedCall[] = []
   const searchBody = {
     mode: "hybrid",
@@ -340,7 +340,8 @@ test("llm_wiki_search（src-server 形态）: GET /api/v1/search?project_id&quer
   const handlers = makeHandlers(fetchImpl)
   const result = await handlers.get("llm_wiki_search")!({ wecom_userid: "t1", query: "attention 机制", limit: 5 })
 
-  const expectedQuery = new URLSearchParams({ project_id: "42", query: "attention 机制", limit: "5" }).toString()
+  // rerank=false 固定 opt-out：教师回合延迟税（LLM 精排 ~6s/次）换 RRF 序
+  const expectedQuery = new URLSearchParams({ project_id: "42", query: "attention 机制", limit: "5", rerank: "false" }).toString()
   assert.equal(calls[0]?.url, `${BASE}/api/v1/search?${expectedQuery}`)
   assert.equal(calls[0]?.method, "GET")
   assert.equal(calls[0]?.headers.Authorization, "Bearer acc-tool")

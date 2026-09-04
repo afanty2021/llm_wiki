@@ -23,6 +23,7 @@ mod media_test;
 mod t_page_test;
 pub mod merge_ingest_test;
 pub mod ingest_concurrency_test;
+mod search_rerank_optout_test;
 
 use axum::Router;
 use llm_wiki_server::AppState;
