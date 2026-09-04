@@ -446,8 +446,10 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const query = stringArg(args.query, "query")
     const limit = optionalNumberArg(args.limit, "limit")
+    // rerank=false：教师会话每回合 3-5 次搜索，LLM 精排 ~6s/次的延迟税不可接受，
+    // 固定 opt-out 回落 RRF 序（web UI / deep research 不受影响）。恢复质量删此行。
     const search = await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.searchSrc(deps.getProjectId(), query, { limit, token }))
+      deps.client.searchSrc(deps.getProjectId(), query, { limit, rerank: false, token }))
     return withIdentitySource(textResult(formatSearchResults(query, search)), ident.mode)
   })
 
