@@ -443,6 +443,8 @@ test("工具 401 后失效重试一次（invalidate + 新 token）", async (t) =
   assert.equal(searchCalls.length, 2)
   assert.equal(searchCalls[1]?.headers.Authorization, "Bearer acc-2")
   assert.ok(toolText(result).includes("No results"), "second attempt must succeed")
+  // 无显式 limit 时钉死 5（对齐旧精排路径 rerank_final_k=5，评审 M1）
+  assert.ok(searchCalls.every((c) => c.url.includes("limit=5") && c.url.includes("rerank=false")), "no-limit searches must send limit=5&rerank=false")
 })
 
 // ── teacher_tutor 工具透传形状 ──

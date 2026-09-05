@@ -36,11 +36,17 @@ pub async fn search_handler(
     // 解析 LLM provider；失败 → None（hybrid_search 走 RRF fallback，不阻断）。
     // rerank=false 的显式 opt-out 同样置 None——下游 `if let Some(provider)`
     // 天然跳过精排，复用既有 fallback 路径（亚秒级）。
+    // debug 日志区分三种 None：显式 opt-out / provider 解析失败 / 未配置（评审 M2）。
     let provider_box = if params.rerank == Some(false) {
+        tracing::debug!("search rerank skipped: explicit opt-out (rerank=false), project={}", params.project_id);
         None
     } else {
         crate::services::llm_stream::provider_for_project(&state, params.project_id)
             .await
+            .map_err(|e| {
+                tracing::debug!("search rerank skipped: provider resolution failed, project={}: {}", params.project_id, e);
+                e
+            })
             .ok()
     };
     let provider_ref: Option<&dyn crate::services::llm_stream::StreamChatProvider> =

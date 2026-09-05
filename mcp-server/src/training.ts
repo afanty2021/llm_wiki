@@ -448,8 +448,10 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const limit = optionalNumberArg(args.limit, "limit")
     // rerank=false：教师会话每回合 3-5 次搜索，LLM 精排 ~6s/次的延迟税不可接受，
     // 固定 opt-out 回落 RRF 序（web UI / deep research 不受影响）。恢复质量删此行。
+    // limit 缺省 5：对齐旧精排路径的 rerank_final_k=5——不钉死则 opt-out 返回
+    // DEFAULT_RESULTS=20，上下文膨胀 ~4 倍部分抵消延迟收益（评审 M1）。
     const search = await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.searchSrc(deps.getProjectId(), query, { limit, rerank: false, token }))
+      deps.client.searchSrc(deps.getProjectId(), query, { limit: limit ?? 5, rerank: false, token }))
     return withIdentitySource(textResult(formatSearchResults(query, search)), ident.mode)
   })
 
