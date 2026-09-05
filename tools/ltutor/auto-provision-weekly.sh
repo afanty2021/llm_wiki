@@ -7,6 +7,9 @@
 # 过滤（关键——cargo 集成测试打 live PG 会持续再造测试用户）：
 #   - 用户名匹配测试形态（tN_ 前缀/test/smoke/ctrl/restore/纯重复字符）
 #   - 机器人主人 HuangZhengBo
+# 停发名单（管理员长期停发，2026-09-05 用户裁定——教师侧不提供自行停发路径）：
+#   paused-weekly.txt 一行一个企微 userid；名单内教师缺任务不自动开办，
+#   名单内但任务仍在则告警。停发 = hermes cron remove + 名单加行。
 # pending 教师不开办（未完成问卷的教师周日只会收到"暂无周报"打扰，问卷完成
 # 后下一个巡检周期自动开通）。
 #
@@ -43,12 +46,27 @@ for j in jobs:
         print('wecom_' + n.split(':',1)[1])
 " 2>/dev/null || true)"
 
+# 停发名单（同目录 paused-weekly.txt；精确整行匹配防子串误伤）
+PAUSED_FILE="$(cd "$(dirname "$0")" && pwd)/paused-weekly.txt"
+PAUSED=""
+if [ -f "$PAUSED_FILE" ]; then
+  PAUSED="$(grep -vE '^[[:space:]]*($|#)' "$PAUSED_FILE" || true)"
+fi
+
 echo "候选（surveyed、非测试、非主人）：$(echo $TEACHERS | tr '\n' ' ')"
 
 provisioned=0
 while IFS= read -r u; do
   [ -z "$u" ] && continue
   id="${u#wecom_}"
+  if [ -n "$PAUSED" ] && echo "$PAUSED" | grep -qx "$id"; then
+    if echo "$EXISTING" | grep -qx "$u"; then
+      echo "  [停发-告警] 名单内但任务仍在跑：$id —— 长期停发请 hermes cron remove（runbook §6.2）"
+    else
+      echo "  [停发] $id 不自动开办（恢复=名单删行，次日巡检重建）"
+    fi
+    continue
+  fi
   if echo "$EXISTING" | grep -qx "$u"; then
     echo "  已有任务：$id"
   else

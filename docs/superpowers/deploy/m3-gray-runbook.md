@@ -124,14 +124,19 @@ diff /Users/berton/Github/kb-obsidian/llm_wiki/docs/superpowers/hermes/lt-tutor/
 
 SKILL 是 prompt 层，**替换即生效**（新会话），无需重启任何服务。版本锚点：当前 live = 990eac2b 版（含 read_file path 纪律）；39e42b69 = 视频优先硬规则版。
 
-### 6.2 停某教师的周报 job
+### 6.2 停某教师的周报 job（管理员操作）
+
+> 运营裁定（2026-09-05）：教师侧不提供自行停止周报的路径——教师提出停发时由管理员执行本节两步。
 
 ```bash
+# ① 停现有任务
 HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list    # 找 lt-tutor-weekly:<uid> 的 job id
 HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron remove <job_id>
+# ② 进停发名单（防巡检每日 03:17 自动重建）
+echo "<企微userid>" >> tools/ltutor/paused-weekly.txt
 ```
 
-（恢复用 `tools/ltutor/provision-teacher-weekly.sh <企微id>` 幂等重建。⚠️ 巡检 `auto-provision-weekly.sh` 每日 03:17 会把 surveyed 缺任务教师自动重开——需长期停发时把该教师加入巡检过滤器，否则次日会被重建。）
+（恢复 = 名单删对应行，次日巡检自动重建；`provision-teacher-weekly.sh <企微id>` 可立即手工重建。只 remove 不进名单会被巡检重建；只进名单不 remove 任务仍在跑——巡检对后者会打 ⚠ 告警。）
 
 ### 6.3 服务级回滚
 
