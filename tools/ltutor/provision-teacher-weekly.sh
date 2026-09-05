@@ -107,11 +107,11 @@ else:
 - 教师未建档（档案 404）时不建清单，只输出一句"该教师尚未完成入门问卷，本期暂无周报"。
 周报短文由系统送达该教师本人。"""
     if dry_run:
-        print(f"[3/3] 将创建周报任务 {job_name}（周五 09:09，deliver wecom:{userid}，钉 5.3-flash）")
+        print(f"[3/3] 将创建周报任务 {job_name}（周日 19:00，deliver wecom:{userid}，钉 5.3-flash）")
     else:
         job = cron_jobs.create_job(
             prompt=prompt,
-            schedule="9 9 * * 5",
+            schedule="0 19 * * 0",
             name=job_name,
             deliver=f"wecom:{userid}",
             skills=["teacher-tutor"],
