@@ -149,7 +149,7 @@ graph TD
 - **/media 签名**：落地页媒体经 `slug + exp + sig + fp` 签名 URL 播放（fp = sha256(token) 前 16 hex，票据 TTL 12h）；
 - **MCP（M3 身份硬闸）**：`mcp-server` teacher-tutor 工具组（档案/建单/进度等，per-teacher 凭证持有 + single-flight 自愈）；Hermes 每次 `tools/call` 注入会话身份 `_meta`（agent 线程捕获、strict 读取），`resolveIdentity` 三态判定——wecom 会话用户模式（参数身份省略，给出且不等即 IdentityMismatch 硬拒）/ wecom 空身份 IdentityUnavailable fail-closed / cron·cli 系统模式（显式 wecom_userid，`identity_source:"system"`），prompt 注入冒用身份被结构性封死；
 - **Hermes**：lt-tutor profile 企微接入（SKILL 五流程编排 + 工具白名单 + 身份硬规则）；
-- **overview 与周报（M3）**：`GET /api/v1/training/overview` 管理总览（require_training_admin，三预聚合子查询）；周五 09:00-09:14 逐教师周报 cron（分钟 cksum(uid)%15 散列错峰，`period_key` ISO 周服务端自算 + ON CONFLICT 幂等，deliver wecom 单聊直推；停机错过的触发 gateway 起后自动补跑单次，手动 fire 兜底）；
+- **overview 与周报（M3）**：`GET /api/v1/training/overview` 管理总览（require_training_admin，三预聚合子查询）；周日 19:00 逐教师周报 cron（`period_key` ISO 周服务端自算 + ON CONFLICT 幂等，deliver wecom 单聊直推、failure_deliver=local；开办自动化=launchd 每日 03:17 `tools/ltutor/auto-provision-weekly.sh` 巡检，停机错过的触发 gateway 起后自动补跑单次，一次性 job 手动兜底）；
 - **部署拓扑实证（M3 T9 重启演练）**：multiplex gateway 单实例持有 MCP 子进程（多实例并发 = 凭证 bind 乒乓，部署纪律）；launchd 自愈链 reboot 后全绿（容器 47s healthy → src-server/gateway/MCP/cloudflared/omlx/iogpu 逐起）。
 
 详见 `docs/superpowers/specs/2026-08-17-teacher-training-design.md` 与 [features.md §10](features.md)。

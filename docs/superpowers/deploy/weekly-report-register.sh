@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# ⚠️ 已废弃（2026-09-05：周报排程改周日 19:00，开办三合一+自动巡检上线）——勿用 ⚠️
+# 本脚本的 schedule（周五 09:00-09:14 分钟散列）与 prompt 模板（无称呼规则）均已
+# 过时，且与 tools/ltutor/provision-teacher-weekly.sh 共用 lt-tutor-weekly:<uid>
+# 任务命名空间——对它执行 add 会造出「周五 + 旧 prompt」任务（评审 M1）。
+#   开办/幂等重建 → tools/ltutor/provision-teacher-weekly.sh <企微id>（launchd 每日
+#                    03:17 auto-provision-weekly.sh 已自动化，详见脚本头）
+#   list / remove → HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list
+#                   （找 id）→ hermes cron remove <id>
+#   fire 兜底     → hermes cron create '+2m' '<prompt>' --name lt-tutor-weekly-oneshot:<uid> \
+#                   --deliver wecom:<uid> --skill teacher-tutor
+#                   （prompt 取 provision-teacher-weekly.sh 的模板段，勿用本脚本旧模板）
+# 下方保留原实现仅供考古；确认要跑：WRR_ALLOW_DEPRECATED=1
+if [[ "${WRR_ALLOW_DEPRECATED:-0}" != "1" ]]; then
+  echo "✗ weekly-report-register.sh 已废弃（周五排程 + 旧 prompt）。开办用 tools/ltutor/provision-teacher-weekly.sh；list/remove/fire 见 hermes cron CLI（注释有现成命令）。考古运行：WRR_ALLOW_DEPRECATED=1" >&2
+  exit 1
+fi
 # =============================================================================
 # weekly-report-register.sh — LT 师训周报 per-teacher cron 注册/列出/删除/手动触发
 # （M3 Task 5）

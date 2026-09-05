@@ -7,7 +7,7 @@
 # 过滤（关键——cargo 集成测试打 live PG 会持续再造测试用户）：
 #   - 用户名匹配测试形态（tN_ 前缀/test/smoke/ctrl/restore/纯重复字符）
 #   - 机器人主人 HuangZhengBo
-# pending 教师不开办（未完成问卷的教师周五只会收到"暂无周报"打扰，问卷完成
+# pending 教师不开办（未完成问卷的教师周日只会收到"暂无周报"打扰，问卷完成
 # 后下一个巡检周期自动开通）。
 #
 # 兼容 macOS bash 3.2（无 mapfile/关联数组），一律 while-read。

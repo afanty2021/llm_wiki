@@ -14,9 +14,9 @@
 | 意愿 | 知情同意：一周内会收到 1 次首单清单 + 1-2 次周报推送，愿意反馈 | 灰度核心产出是反馈，不是用量 |
 | 机型分散 | 尽量覆盖不同手机品牌/系统版本（iOS 企微已验；安卓 HEVC 观察项依赖多机型样本） | HEVC 播放反馈是 M4 转码退役决策的最后确认面（§5.5） |
 | 使用频率 | 每周至少打开 1 次清单、有真实学习意图 | overview 打开率/完成率基线需要有效样本 |
-| 规模上限 | ≤5 人 | 周报 cron 分钟散列按 15 人容量设计，灰度期刻意留观察余量 |
+| 规模上限 | ≤5 人 | 灰度期刻意留观察余量（周报 cron 固定周日 19:00 同刻，教师量放大后再看并发面） |
 
-现 live 已有 2 名教师（`TuoMaSiXueXiGuanGuangGuLanGuangX` 正式 + `test` 测试小号），灰度即在此基础上扩到 3-5 真实教师。
+现 live 已有 2 名真实教师（TuoMaSi、wendy；测试残渣用户/任务已于 2026-09-05 清除），灰度即在此基础上扩到 3-5 真实教师。
 
 ## 2. 加白步骤（每名新教师约 5 分钟）
 
@@ -25,20 +25,20 @@
 1. **企微可见范围**：企业微信管理后台 → 自建应用（lt-tutor 所用 wecom 应用）→ 可见范围 → 添加该教师。教师侧即可在企微里搜到应用并发消息。
 2. **首触自然建档**：教师向应用发第一条消息（引导话术见 §3）→ gateway `profile_routing` 路由到 lt-tutor profile → SKILL 流程① 问卷（3-4 问）→ `upsert_profile` 建档（`onboarding_state: pending → surveyed`）→ 首个清单自动生成。凭证（`~/.llm-wiki-mcp/teachers.json`）由 MCP bind 自愈首次自动创建——**无需任何手工录入**。
    - 验证建档成功：§4 的 overview 扫一眼，新教师应出现在 `teachers[]` 且 `onboarding_state` 离开 `pending`。
-3. **周报 job 注册**（脚本内置 profile home 默认值，直接跑）：
+3. **周报 job 注册（已自动化）**：launchd `wiki.ltutor-weekly-audit` 每日 03:17 巡检（`tools/ltutor/auto-provision-weekly.sh`），surveyed 教师缺任务即自动开办（精确路由 + platforms 块 + 任务三合一，幂等）——**常规无需手工**。手工开办/重建兜底：
    ```bash
-   ./docs/superpowers/deploy/weekly-report-register.sh add <教师企微userid>
+   ./tools/ltutor/provision-teacher-weekly.sh <教师企微userid>   # --dry-run 可预演
    ```
-   分钟按 `cksum(uid) % 15` 确定性散列（同 uid 重跑恒同分钟），落在周五 09:00-09:14。现 live job：TuoMaSi → `9 9 * * 5`（09:09）、test → `13 9 * * 5`（09:13），下次发火均为周五。
+   排程 `0 19 * * 0`（周日 19:00；工作周周日 18:00 截止，2026-09-05 裁定）。现 live job：TuoMaSi、wendy 均 `0 19 * * 0`，下次发火均为周日 19:00。（旧脚本 `docs/superpowers/deploy/weekly-report-register.sh` 已废弃——周五排程 + 旧 prompt，执行即被拦截。）
    - 列表核对：`HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list`（CLI 尾部「Gateway is not running」告警为 multiplex 模式误报——gateway 由主 config 以 multiplex_profiles 运行，`launchctl list | grep ai.hermes.gateway` 有输出即正常）。
 
-**注意**：注册脚本只写 lt-tutor profile 的 cron store，不另起任何服务进程（MCP 单实例约束见 §5.1）。
+**注意**：开办脚本只写 lt-tutor profile 的 config/cron store，不另起任何服务进程（MCP 单实例约束见 §5.1）。
 
 ## 3. 引导话术（首次接触模板，操作者企微私发）
 
-> 【学习助手开通】X 老师好，给您开通了咱们英语教研组的学习助手。直接在企微里给我发消息就能用：它会先问您几个教学上的问题（2 分钟），然后给您推一份专属的短视频学习清单，手机点开就能看、能标记"已完成"。以后每周五上午会汇总一份本周推荐。有任何不好用的地方直接跟我说就行，本周是试运行，您的反馈会直接改进它。
+> 【学习助手开通】X 老师好，给您开通了咱们英语教研组的学习助手。直接在企微里给我发消息就能用：它会先问您几个教学上的问题（2 分钟），然后给您推一份专属的短视频学习清单，手机点开就能看、能标记"已完成"。以后每周日晚上会汇总一份本周推荐。有任何不好用的地方直接跟我说就行，本周是试运行，您的反馈会直接改进它。
 
-要点：不提"AI/测试/灰度"等内部词；明示"给我发消息"（首触是建档触发器）；预告周五推送（避免周报被当垃圾消息）；留反馈钩子（§4.3 通道）。
+要点：不提"AI/测试/灰度"等内部词；明示"给我发消息"（首触是建档触发器）；预告周日推送（避免周报被当垃圾消息）；留反馈钩子（§4.3 通道）。
 
 ## 4. 每日 5 分钟观察项（固定三项）
 
@@ -51,7 +51,7 @@ curl -s -H "x-training-admin-token: $TOKEN" \
   http://127.0.0.1:8080/api/v1/training/overview | python3 -m json.tool
 ```
 
-看四件事：① 每位灰度教师都在 `teachers[]` 里（缺人 = 建档/绑定失败）；② `onboarding_state` 在推进（新加白 2 天内应离开 pending）；③ `items.viewed/completed` 相对昨日有增量（有人真在用）；④ `items_7d` 与周报语义一致（周五后应出现本周新单）。admin token 读自 launchd plist（live 注入源），勿写进脚本仓库或聊天记录。
+看四件事：① 每位灰度教师都在 `teachers[]` 里（缺人 = 建档/绑定失败）；② `onboarding_state` 在推进（新加白 2 天内应离开 pending）；③ `items.viewed/completed` 相对昨日有增量（有人真在用）；④ `items_7d` 与周报语义一致（周日 19:00 后应出现本周新单）。admin token 读自 launchd plist（live 注入源），勿写进脚本仓库或聊天记录。
 
 ### 4.2 gateway 错误日志
 
@@ -84,11 +84,12 @@ launchctl list | grep ai.hermes.gateway     # 应恰 1 行（exit code 0 列）
 
 T8 已修 read_file 404 误计熔断（990eac2b：应用级未找到改正常返回，不进 Hermes 熔断计数）；服务级故障（5xx/网络）仍会熔断 ~60s 属预期自保护。灰度期若日志再现 `unreachable after 3 consecutive failures`：记录触发前的工具名与错误原文 → 若为新 4xx 误计类，按 990eac2b 同法分流；若是真 5xx，查 src-server 健康（`curl -s localhost:8080/health`）。
 
-### 5.3 周报周五 09:00-09:14 到达情况
+### 5.3 周报周日 19:00 到达情况
 
-- 到达核对（周五 09:20 前后）：① 教师/测试小号企微收到推送；② overview `items_7d` 出现本周单；③ `learning_plans` 该教师 `origin='weekly'` 且 `period_key` = 当周（幂等：重复 fire 不新建，话术自动改口"本周清单已生成"）。
-- 分钟散列核对：`echo -n "<uid>" | cksum | awk '{print $1 % 15}'` 应等于 job schedule 的分钟数（现役：TuoMaSi=9、test=13）。
-- 未到达处置：先 `hermes cron list` 看 job 是否 active → `weekly-report-register.sh fire <uid>` 手动兜底（一次性 job 走与正式触发完全相同的 gateway ticker + live 投递路径）→ 仍失败按 §4.2 日志定位。
+- 到达核对（周日 19:20 前后）：① 教师企微收到推送（无系统包装头尾、带「<名>老师好」称呼）；② overview `items_7d` 出现本周单；③ `learning_plans` 该教师 `origin='weekly'` 且 `period_key` = 当周（幂等：重复 fire 不新建，话术自动改口"本周清单已生成"）。
+- 排程核对：`HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list` 应见每教师 `0 19 * * 0`、enabled、next=周日 19:00（旧分钟散列机制已随排程变更退役）。
+- 未到达处置：先 `hermes cron list` 看 job 是否 active → 手动兜底走一次性 job（与正式触发完全相同的 gateway ticker + live 投递路径）：`HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron create '+2m' '<prompt>' --name lt-tutor-weekly-oneshot:<uid> --deliver wecom:<uid> --skill teacher-tutor`，prompt 取 `tools/ltutor/provision-teacher-weekly.sh` 的模板段（勿用已废弃旧脚本的旧模板）→ 仍失败按 §4.2 日志定位。
+- 失败告警去向（2026-09-05 起）：任务 failure_deliver=local，失败摘要不再裸进教师企微，运维侧看 `hermes cron runs` 与 gateway 日志。
 - 补跑语义（T9 实测锚定）：gateway 停机盖过触发时刻时，起动后自动补跑**单次**（错过的当期拾起，非累计队列）；手动 fire 是另一条兜底通道，二者并集覆盖（spec §5.3 已回写）。
 
 ### 5.4 /s/ 链接过期投诉
@@ -126,10 +127,11 @@ SKILL 是 prompt 层，**替换即生效**（新会话），无需重启任何�
 ### 6.2 停某教师的周报 job
 
 ```bash
-./docs/superpowers/deploy/weekly-report-register.sh remove <教师企微userid>
+HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list    # 找 lt-tutor-weekly:<uid> 的 job id
+HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron remove <job_id>
 ```
 
-（add 可确定性重建，同 uid 同分钟，无需备份。）
+（恢复用 `tools/ltutor/provision-teacher-weekly.sh <企微id>` 幂等重建。⚠️ 巡检 `auto-provision-weekly.sh` 每日 03:17 会把 surveyed 缺任务教师自动重开——需长期停发时把该教师加入巡检过滤器，否则次日会被重建。）
 
 ### 6.3 服务级回滚
 
@@ -142,12 +144,12 @@ SKILL 是 prompt 层，**替换即生效**（新会话），无需重启任何�
 | 判据 | 达标线 | 数据源 |
 |---|---|---|
 | 身份类告警 | **零**（`[identity] rejected` 成串、IdentityMismatch/Unavailable 服务端 warn 突增、任何冒名成功案例） | §4.2 日志周汇总 |
-| 周报到达 | **5/5**（全部灰度教师当周五收到；补跑/手动 fire 达到不算失败但要记原因） | §5.3 周五核对 + 教师确认 |
+| 周报到达 | **5/5**（全部灰度教师当周日 19:00 后收到；补跑/手动 fire 达到不算失败但要记原因） | §5.3 周日核对 + 教师确认 |
 | 清单打开率 | 建立基线：≥60% 灰度教师在周内至少 viewed 1 条目（overview `items.viewed>0` 人数占比） | §4.1 overview 每日快照 |
 | 完成率 | 建立基线：周完成条目/周条目数，无固定门槛（首周任何正值即有效信号） | overview `items_7d.completed/items_7d.total` |
 | 重大缺陷 | 无阻断级（播放全败/链接全失效/身份事故）；热修 ≤2 次且已复盘归档 | 本 runbook §4-§6 记录 |
 
-全部达标 → 按 spec §9 M4 行放量至 15 人；任一不达标 → 延长一周并针对短板修补；出现身份事故或连续两周五/5 不到 → 回退（§6.2 全员停 job + SKILL 回滚到 M2 版），重新评估后再启动。
+全部达标 → 按 spec §9 M4 行放量至 15 人；任一不达标 → 延长一周并针对短板修补；出现身份事故或连续两周 5/5 不到 → 回退（§6.2 全员停 job + SKILL 回滚到 M2 版），重新评估后再启动。
 
 ## 8. 升级/迁移（schema 变更与新环境部署）
 
@@ -170,4 +172,4 @@ SKILL 是 prompt 层，**替换即生效**（新会话），无需重启任何�
 
 ## 9. 灰度期记录
 
-每日观察结果（三项 + 异常）记入本文件同目录运营日志或 SDD 账本；周五周报核对结果与周一退出判据评估各留一次快照（overview JSON 原文存档）。
+每日观察结果（三项 + 异常）记入本文件同目录运营日志或 SDD 账本；周日周报核对结果与周一退出判据评估各留一次快照（overview JSON 原文存档）。

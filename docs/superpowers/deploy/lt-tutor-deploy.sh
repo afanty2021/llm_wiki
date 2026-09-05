@@ -142,7 +142,7 @@ cfg = {
     "platforms": {
         # Hermes multiplex 模式下 cron deliver 预检/投递读 profile config 的 platforms；
         # bot_id-only 块不建第二条 ws、不入凭证指纹，投递走主 config 的 live 适配器
-        # （与 live 手工修补逐字一致——不吸收则每次 apply 静默抹掉、周五周报投递失效）。
+        # （与 live 手工修补逐字一致——不吸收则每次 apply 静默抹掉、周报投递失效）。
         "wecom": {
             "enabled": True,
             "extra": {"bot_id": bot_id},   # bot_id 非机密；脚本变量（env LT_TUTOR_WECOM_BOT_ID 可覆盖，F7）

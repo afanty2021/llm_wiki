@@ -446,6 +446,31 @@ async fn bind_lifecycle() {
         .json(&json!({"refresh_token": refresh2}))
         .await;
     assert_eq!(fresh.status_code(), StatusCode::OK);
+
+    // 重绑不覆盖真名（评审 N2 钉）：existing 路径只轮换凭证/ healed membership，
+    // 不得回写 display_name——无名重绑若把已设真名重置为 wecom_userid 回落值，此断言捕获
+    let r3 = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": wid}))
+        .await;
+    assert_eq!(r3.status_code(), StatusCode::OK, "{}", r3.text());
+    let dn: String = sqlx::query_scalar(
+        "SELECT display_name FROM teacher_profiles WHERE wecom_userid = $1",
+    )
+    .bind(&wid)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(dn, "王老师", "re-bind without display_name must not reset the stored name");
+    let full: Option<String> = sqlx::query_scalar(
+        "SELECT u.full_name FROM users u JOIN teacher_profiles tp ON u.id = tp.user_id WHERE tp.wecom_userid = $1",
+    )
+    .bind(&wid)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(full.as_deref(), Some("王老师"), "users.full_name likewise untouched");
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
