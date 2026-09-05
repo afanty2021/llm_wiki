@@ -497,6 +497,14 @@ export class LlmWikiApiClient {
     return this.requestObject(`/api/v1/training/items/${itemId}/complete`, { method: "POST", token })
   }
 
+  /** GET /api/v1/training/overview（header x-training-admin-token；管理总览逐教师聚合，
+   * 消费方 = llm-wiki-admin MCP server 的 training_overview 工具）。 */
+  async trainingOverview(adminToken: string): Promise<Record<string, unknown>> {
+    const token = adminToken.trim()
+    if (!token) throw new Error("TRAINING__ADMIN_TOKEN is required for training overview")
+    return this.requestObject("/api/v1/training/overview", { adminToken: token, auth: false })
+  }
+
   private async requestObject(path: string, options: RequestOptions = {}): Promise<Record<string, unknown>> {
     return requireObject(await this.doFetch(path, options), "LLM Wiki API response")
   }
