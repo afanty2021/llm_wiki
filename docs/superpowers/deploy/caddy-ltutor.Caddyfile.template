@@ -1,0 +1,24 @@
+# caddy-ltutor.Caddyfile — 校内直连 TLS 终止 + 白名单反代（spec 2026-09-05 §3.2）
+# 安装位：/opt/homebrew/etc/caddy/ltutor-lan.Caddyfile（launchd wiki.caddy-lan
+#   以 --config 指向）。白名单逐字照抄隧道 SEC-5（~/.cloudflared/config.yml）
+#   ——LAN 暴露面 = 公网暴露面，改动任一侧必须同步另一侧。
+# 证书：LE DNS-01（token 只在 launchd plist 环境变量，不入本文件）。
+# 回滚：launchctl bootout gui/$(id -u)/wiki.caddy-lan（DNS 仍指向本机期间
+#   校内打不开链接，关 Wi-Fi 走蜂窝即隧道）。
+
+https://api.xiaoluedu.top {
+	bind 192.168.2.88
+	tls {
+		dns cloudflare {env.CF_DNS_TOKEN}
+	}
+	@allowed path_regexp ^/(t|s|media)/.*$|^/health$
+	handle @allowed {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		respond 404
+	}
+	log {
+		output file /Users/berton/Library/Logs/caddy-lan.log
+	}
+}

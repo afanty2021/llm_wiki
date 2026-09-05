@@ -100,6 +100,8 @@ T8 已修 read_file 404 误计熔断（990eac2b：应用级未找到改正常返
 
 ### 5.5 HEVC 播放反馈（多机型收集，M4 决策最后确认面）
 
+
+
 已验证：iPhone 8 Plus（M2，playsinline 修复后）与 OPPO PHJ110/Android 13（M3 T8）均 HEVC 原件直播成功——M4「按需转码缓存」的退役依据已具备，但样本仅两款机型。灰度周每拿到一款新机型反馈就记一行：
 
 | 日期 | 教师 | 机型/系统 | HEVC 能否播/能拖 | H.264 | 备注 |
@@ -108,6 +110,25 @@ T8 已修 read_file 404 误计熔断（990eac2b：应用级未找到改正常返
 | （M2 已验） | — | iPhone 8 Plus / iOS WKWebView | ✅（playsinline 修复后） | ✅ | 原判定"不支持 HEVC"被推翻 |
 
 任一机型 HEVC 播放失败 → 记录机型与现象（黑屏/转圈/报错），并启用 **per-slug 手动兜底**（零代码应急：CLI 手转该集为 H.264 → `UPDATE media_assets SET playback_path='<副本绝对路径>' WHERE slug='<slug>'`——/media 的 COALESCE 会优先放副本，只影响该视频）；**注意（终审 round2）：应急副本所在目录必须已在 `MEDIA__ALLOWED_ROOTS` 内，否则签名 URL 会 404——症状与"转码失败"易混淆，排查时先查 roots 再查转码产物；**连续 3+ 机型全绿 → M4 转码缓存退役终判（2026-08-22 已执行退役清理：12 行 playback_path 置空 + 2.8G h264-cache 删除，全库原件直出）。
+
+### 5.6 媒体分发双路径（校内直连 / 校外隧道，2026-09-06 起）
+
+spec：`docs/superpowers/specs/2026-09-05-lan-direct-media-split-routing-design.md`（三轮评审通过）。同一 URL `api.xiaoluedu.top`：校内 Wi-Fi 经 dnsmasq（192.168.2.88）+ Caddy（内网 443，LE 证书）直连本机；校外走 Cloudflare 隧道。教师零感知。
+
+组件与运维：
+
+| 组件 | 位置 | 运维 |
+|---|---|---|
+| dnsmasq | `/opt/homebrew/etc/dnsmasq-ltutor.conf` + 系统级 LaunchDaemon `wiki.dnsmasq`（root 绑 UDP53 后自降权；53 是特权端口，LaunchAgent 不行） | 重载：`sudo launchctl bootout system/wiki.dnsmasq && sudo launchctl bootstrap system /Library/LaunchDaemons/wiki.dnsmasq.plist`；错误日志 `/var/log/dnsmasq-ltutor.err.log` |
+| Caddy | `/opt/homebrew/bin/caddy`（v2.11.4 custom build 带 cloudflare DNS 插件，sha512 8f6611c1…d0e2f）+ `wiki.caddy-lan` LaunchAgent + Caddyfile `/opt/homebrew/etc/caddy/ltutor-lan.Caddyfile` | 重载：bootout+bootstrap（gui 域）；证书自动续期（LE DNS-01）；访问日志 `~/Library/Logs/caddy-lan.log` |
+| CF token | launchd plist 环境变量 `CF_DNS_TOKEN`（plist 600，模板 `wiki.caddy-lan.plist.template` 不含真值） | 权限=Zone:DNS:Edit 单 zone xiaoluedu.top；泄漏即在 CF dashboard 撤销重建 |
+| 路由器 | XVR1800 → 基本设置 → LAN 设置 → DHCP 服务：首选 DNS `192.168.2.88`、备用 `114.114.114.114` | 回滚=两字段改回 114 / 119（全网随租约 ≤180min 回隧道） |
+
+- **白名单铁律**：Caddy `path_regexp` 与 `~/.cloudflared/config.yml` SEC-5 逐字一致，改任一侧必须同步另一侧。
+- **故障口径**：校内链接打不开（Caddy/证书/直连路径故障）→ 教师关 Wi-Fi 走蜂窝即隧道；全网断解析（dnsmasq 挂且未回退）→ 查 `wiki.dnsmasq` KeepAlive 与副 DNS 是否在位。
+- **降级语义**：dnsmasq 挂 → 客户端超时（首查询 ~2-5s）自动用副 DNS → 回隧道，非断网。
+- **将来开 IPv6 前必须重审**（RDNSS 旁路 DHCPv4 覆盖，spec §4）。
+- 部署工件模板：`docs/superpowers/deploy/{dnsmasq-ltutor.conf.template, wiki.dnsmasq.plist.template, caddy-ltutor.Caddyfile.template, wiki.caddy-lan.plist.template}`。
 
 ## 6. 异常处置路径（快捷回滚）
 

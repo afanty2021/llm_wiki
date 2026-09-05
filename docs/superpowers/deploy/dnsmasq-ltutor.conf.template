@@ -1,0 +1,17 @@
+# dnsmasq-ltutor.conf — 校内直连/校外隧道双路径（spec 2026-09-05 §3.1）
+# 职责：唯一覆盖 api.xiaoluedu.top → 本机内网 IP；其余全部转发上游。
+# 安装位：/opt/homebrew/etc/dnsmasq-ltutor.conf（launchd wiki.dnsmasq 以
+#   --conf-file 显式指向，不用 brew 的 dnsmasq.conf，避免 brew 升级互踩）。
+# 回滚：launchctl bootout gui/$(id -u)/wiki.dnsmasq（DHCP 副 DNS 兜底回隧道）。
+
+# 只监听内网接口，不碰 lo0（避免与 mDNSResponder 纠缠）
+listen-address=192.168.2.88
+bind-interfaces
+no-resolv
+# 上游 = 现网已用的公共解析（主备）；行为与路由器现状一致
+server=114.114.114.114
+server=223.5.5.5
+# 唯一覆盖条目：本方案全部意义所在
+address=/api.xiaoluedu.top/192.168.2.88
+cache-size=1000
+# 不开 log-queries（隐私）；启动/错误日志走 launchd stderr

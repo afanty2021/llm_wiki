@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>wiki.dnsmasq</string>
+	<!-- 系统级 LaunchDaemon（非 LaunchAgent）：UDP 53 是特权端口，须 root 绑定；
+	     dnsmasq 以 root 起后自降权 nobody（dnsmasq 默认行为）。
+	     安装：/Library/LaunchDaemons/wiki.dnsmasq.plist，root:wheel 644，
+	     launchctl bootstrap system（安装动作见 runbook 双路径一节）。 -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/opt/dnsmasq/sbin/dnsmasq</string>
+		<string>--keep-in-foreground</string>
+		<string>--conf-file=/opt/homebrew/etc/dnsmasq-ltutor.conf</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/var/log/dnsmasq-ltutor.err.log</string>
+</dict>
+</plist>
