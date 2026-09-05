@@ -365,6 +365,19 @@ export function trainingToolDefinitions(): ToolDefinition[] {
   ]
 }
 
+/** record_ask 最小形状检查（2026-09-05）：payload 必须含至少一个 ≥2 字符的字符串
+ * 值（任意层级）。真实提问的 payload 形状多样——{"question"} / {"q"} /
+ * {"queries":[...]} / {"context":{...}}——共通点是总有一段提问文本；而测试/噪声
+ * 形态（{} / {"n": 24}）全是数字或空。递归扫，命中即真。 */
+function payloadHasQuestionText(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length >= 2
+  if (Array.isArray(value)) return value.some(payloadHasQuestionText)
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(payloadHasQuestionText)
+  }
+  return false
+}
+
 /** /t/ 链接拼装：PUBLIC_T_BASE（去尾斜杠）+ API 返回的相对 link；绝对 link 直通。 */
 export function joinTLink(base: string, link: string): string {
   if (/^https?:\/\//i.test(link)) return link
@@ -519,6 +532,12 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
   handlers.set("teacher_tutor_record_ask", async (args, meta) => {
     const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const payload = args.payload !== undefined ? args.payload : {}
+    if (!payloadHasQuestionText(payload)) {
+      throw new ToolArgumentError(
+        "payload must contain the teacher's question text (any string field >=2 chars, "
+        + "e.g. {question: '...'}); empty or counter-only payloads are not recorded",
+      )
+    }
     return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.trainingEventAsk(token, payload))), ident.mode)
   })

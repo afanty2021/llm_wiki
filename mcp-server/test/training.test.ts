@@ -492,6 +492,26 @@ test("teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、it
   assert.equal(askCall.method, "POST")
   assert.deepEqual(JSON.parse(askCall.body!), { event_type: "ask", payload: { question: "如何讲注意力" } })
 
+  // record_ask 最小形状检查（2026-09-05）：真实形状（queries 数组/嵌套 context）过，噪声（空/纯数字）拒且不发请求
+  for (const good of [
+    { queries: ["分层作业 单元 教学设计"], question: "按单元出分层" },
+    { context: { detail: "教师追问资料书推荐" } },
+    { q: "分数怎么讲" },
+  ]) {
+    const ok = await handlers.get("teacher_tutor_record_ask")!({ wecom_userid: "t1", payload: good })
+    assert.ok(JSON.parse(toolText(ok)), `payload ${JSON.stringify(good)} 应通过`)
+  }
+  const askCallsBefore = calls.filter((c) => c.url === `${BASE}/api/v1/training/events`).length
+  for (const junk of [{}, { n: 24 }, { ctx: {} }]) {
+    await assert.rejects(
+      () => handlers.get("teacher_tutor_record_ask")!({ wecom_userid: "t1", payload: junk }),
+      /payload must contain the teacher's question text/,
+      `payload ${JSON.stringify(junk)} 应被拒`,
+    )
+  }
+  const askCallsAfter = calls.filter((c) => c.url === `${BASE}/api/v1/training/events`).length
+  assert.equal(askCallsAfter, askCallsBefore, "被拒的 payload 不得发请求")
+
   const list = await handlers.get("teacher_tutor_plan_list")!({ wecom_userid: "t1", status: "active" })
   assert.deepEqual(JSON.parse(toolText(list)), [])
   const listCall = calls.find((c) => c.url === `${BASE}/api/v1/training/plans?status=active`)!
