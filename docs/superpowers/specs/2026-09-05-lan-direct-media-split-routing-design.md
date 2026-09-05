@@ -101,6 +101,8 @@ https://api.xiaoluedu.top {
 | Mac 整机 down | 教师服务全灭（src-server/隧道/网关都在它上） | 与现状同构，非新增 |
 | Caddy 挂/证书续期失败 | **校内**打开链接失败（DNS 已指向本机，不会自动回落）；校外正常 | KeepAlive + LE 自动续期（提前 30 天）；runbook 口径：校内打不开→关 Wi-Fi 走蜂窝即隧道 |
 | 路由器 DHCP 改动被回退 | 全员回隧道 | 无害 |
+| 办公设备（DNS 视角） | Mac down 后首个 DNS 查询付 ~2-5s 超时再回退副 DNS；resolver 记住死服务器后恢复常速 | 过渡期一至数次查询变慢，非教师服务单点（评审 ③ 补：仅教师服务视角「与现状同构」，DNS 视角不同构） |
+| **将来开启 IPv6** | RDNSS/RA 下发的 v6 DNS 将**旁路** DHCPv4 的 DNS 覆盖 | 实测 en0 当前零 inet6，本 LAN 无 v6，风险不成立；**开 v6 前须重审本方案**（评审 ③） |
 | iPhone Private Relay | 该教师解析走 Apple 中继 → 直接走隧道 | 自动回落=现状，无害 |
 | 租约未续的设备（新旧 DNS 并存窗口） | 部分走隧道部分直连 | 双路径同时有效，无害 |
 
@@ -108,7 +110,7 @@ https://api.xiaoluedu.top {
 
 ## §5 安全面
 
-- LAN 暴露面 = 公网面（同一条 path 白名单）：`/api/v1/*`（login/bind/overview/logs）与管理面在 LAN 同样不可达；媒体 HMAC+fp、`/s/`/`/t/` 限流全部继承（同一 src-server 进程）。
+- LAN 暴露面 = 公网面（同一条 path 白名单）：`/api/v1/*`（login/bind/overview/logs）与管理面在 LAN 同样不可达。LAN 暴露面的实际防护 = **媒体 HMAC（三段签名 + fp 绑定 + 30d 窗）+ 短码不可猜 + `/t/` 公开设计**——与公网面完全同一组防线。（评审 ① 修正：`/s/`/`/t/` 的既有限流按短码/plan 身份计桶、非 per-IP，不构成来源侧防线，不在此引为防护依据。）
 - dnsmasq 暴露 = 内网任意设备可查询（纯转发 + 一条覆盖，无敏感数据）；不监听公网/WAN。
 - 新增密钥资产：CF_DNS_TOKEN（单 zone DNS:Edit）。
 - 非教师办公设备影响：DNS 路径从 114 直连变为经 Mac 转发至 114（延迟 +≈1ms，Mac down 时回退）。
@@ -126,6 +128,7 @@ https://api.xiaoluedu.top {
 3. 回滚：bootout wiki.caddy-lan。
 
 **Phase C — 路由器 DHCP 主/副 DNS（生效点）**
+0. **step 0 前置闸门（评审 ②）**：核路由器可同时下发主+副两条 DNS——**已双证据闭环**（2026-09-05 路由器 DHCP 服务页实测两字段并存有值；Mac `scutil --dns` 实收 nameserver[0]=114.114.114.114 / nameserver[1]=119.29.29.29 两跳均来自 DHCP 下发）。若固件升级后只剩单条 DNS 字段，方案**止步 Phase B**（直连仅手动配置设备可用，不推全网）。
 1. XVR1800 改 DHCP DNS = 主 .88 副 114。
 2. 真机校内 Wi-Fi：打开一条真实 `/s/` 短链全链（303→落地→播放→完成 beacon）；`tail caddy-lan.log` 见记录 = 直连实锺；同一码流拖动 seek 正常。
 3. 蜂窝网络真机同一链接 → 隧道全链 + cloudflared 无异常（回归）。
