@@ -267,16 +267,25 @@ test("集成·system 模式缺 wecom_userid：无 meta 且省略 → ToolArgumen
   assert.deepEqual(seen, [])
 })
 
-// ── schema：10 工具不暴露 wecom_userid（2026-08-24 事故加固，运行时仍接受）──
+// ── schema：wecom_userid 可选声明（2026-09-05 修订 2026-08-24 加固）──
+// 旧设计（schema 完全隐藏 + prompt 指示 cron 回合传未声明参数）在 glm-5.3-flash
+// 上失效：模型严格遵循 schema，不 emit 未声明字段 → cron 系统回合全链 -32602
+// （周报任务 ca270c3a5a58 2026-09-05 实锺）。新契约：可选声明（系统/cron 通道
+// 显式化）；用户会话防冒名不变——identity 锁对不匹配参数照常硬拒。
 
-test("schema：全部 10 个 src-server 工具不暴露 wecom_userid，其余 required 保留", () => {
+test("schema：全部 10 个 src-server 工具可选声明 wecom_userid，不进 required", () => {
   const tools = [...srcServerToolDefinitions(), ...trainingToolDefinitions()]
   assert.equal(tools.length, 10)
   for (const tool of tools) {
+    const props = (tool.inputSchema.properties ?? {}) as Record<string, unknown>
+    assert.ok(
+      typeof props.wecom_userid === "object" && props.wecom_userid !== null,
+      `${tool.name}: wecom_userid must be declared (cron system turns pass it explicitly)`,
+    )
     assert.equal(
-      "wecom_userid" in (tool.inputSchema.properties ?? {}),
+      (tool.inputSchema.required ?? []).includes("wecom_userid"),
       false,
-      `${tool.name}: wecom_userid must NOT be exposed in inputSchema (weak-fallback models copy example values into it; identity lock refusals then trip client breakers)`,
+      `${tool.name}: wecom_userid must stay optional (wecom user sessions never pass it; identity comes from _meta)`,
     )
   }
   // 其余必填位不受牵连

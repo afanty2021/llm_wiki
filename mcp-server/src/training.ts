@@ -213,6 +213,7 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           query: { type: "string", description: "Search query." },
           limit: { type: "number", description: "Maximum results (server clamps 1..50, default 20)." },
         },
@@ -226,6 +227,7 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           path: { type: "string", description: "Project-relative file path, for example wiki/index.md." },
         },
         required: ["path"],
@@ -243,7 +245,9 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       description: "读取教师档案（subject / grade_levels / goals / interests / onboarding_state）。",
       inputSchema: {
         type: "object",
-        properties: {},
+        properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+        },
         additionalProperties: false,
       },
     },
@@ -253,6 +257,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           display_name: { type: "string", description: "显示名（≤100 chars）" },
           subject: { type: "string", description: "任教科目（≤100 chars）" },
           grade_levels: { type: "array", items: { type: "string" }, description: "任教年级" },
@@ -269,6 +274,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           payload: { type: "object", description: "提问上下文（缺省 {}）" },
         },
         additionalProperties: false,
@@ -280,6 +286,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           title: { type: "string", description: "计划标题（非空，≤200 chars）" },
           reason: { type: "string", description: "创建理由" },
           origin: { type: "string", enum: ["chat", "weekly"] },
@@ -290,6 +297,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
             items: {
               type: "object",
               properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
                 kind: { type: "string", enum: ["wiki_page", "media"] },
                 target_ref: { type: "string", description: "wiki 页相对路径或 media slug" },
                 timecode_start_s: { type: "number" },
@@ -311,6 +319,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           status: { type: "string", enum: ["active", "archived"] },
         },
         additionalProperties: false,
@@ -322,6 +331,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           item_id: { type: "number", description: "learning_items.id" },
         },
         required: ["item_id"],
@@ -334,6 +344,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           plan_id: { type: "number", description: "learning_plans.id" },
         },
         required: ["plan_id"],
@@ -345,7 +356,9 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       description: "学习进度总览：全部计划（含 items 计数）+ 最近 20 条学习事件。",
       inputSchema: {
         type: "object",
-        properties: {},
+        properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+        },
         additionalProperties: false,
       },
     },
