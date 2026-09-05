@@ -197,6 +197,9 @@ async fn bind(
     if req.display_name.as_ref().is_some_and(|n| n.chars().count() > 100) {
         return Err(AppError::BadRequest("display_name exceeds 100 characters".into()));
     }
+    // display_name 缺省回落 wecom_userid（2026-09-05）：周报称呼等消费方需要非空
+    // 名字；企微回调只有账号 userid，显式名由后续对话中 profile_put 自然纠正。
+    let display_name = req.display_name.clone().unwrap_or_else(|| req.wecom_userid.clone());
     let project_id = state
         .config
         .training
@@ -281,7 +284,7 @@ async fn bind(
         .bind(&username)
         .bind(&email)
         .bind(&password_hash)
-        .bind(&req.display_name)
+        .bind(&display_name)
         .fetch_one(&mut *tx)
         .await;
         let row: i32 = match row {
@@ -306,7 +309,7 @@ async fn bind(
         )
         .bind(row)
         .bind(&req.wecom_userid)
-        .bind(&req.display_name)
+        .bind(&display_name)
         .execute(&mut *tx)
         .await;
         match profile {

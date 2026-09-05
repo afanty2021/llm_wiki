@@ -327,6 +327,30 @@ async fn media_assets_playback_path_boundary() {
     crate::teardown_test_data(&state).await;
 }
 
+// ============ bind display_name 缺省回落（2026-09-05）============
+#[tokio::test]
+async fn bind_defaults_display_name_to_wecom_userid() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("binddef").await;
+    let wid = unique("tdef");
+    // 不传 display_name → users.full_name 与 teacher_profiles.display_name 均回落 wecom_userid
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": wid}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK, "{}", r.text());
+    let v = r.json::<serde_json::Value>();
+    assert_eq!(v["user"]["full_name"].as_str().unwrap(), wid);
+    let dn: Option<String> = sqlx::query_scalar(
+        "SELECT tp.display_name FROM teacher_profiles tp JOIN users u ON u.id=tp.user_id WHERE u.username = $1",
+    )
+    .bind(format!("wecom_{wid}"))
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(dn.as_deref(), Some(wid.as_str()));
+}
+
 // ============ Task 8：POST /api/v1/training/bind ============
 #[tokio::test]
 async fn bind_lifecycle() {
