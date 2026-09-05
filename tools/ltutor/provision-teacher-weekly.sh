@@ -105,6 +105,8 @@ else:
 - 本回合为系统模式：每次工具调用都必须显式携带 wecom_userid: {userid}（prompt 未提供的身份一律不得使用）。
 - teacher_tutor_plan_create 的 origin 固定 "weekly"；不传 period_key（服务端自算当周并按周幂等，禁止自行推算 ISO 周串）。
 - 教师未建档（档案 404）时不建清单，只输出一句"该教师尚未完成入门问卷，本期暂无周报"。
+- 开头称呼："<display_name>老师好"（display_name 取自 teacher_tutor_profile_get；为空时退"老师好"，勿编造名字）。
+- 正文直达教师本人：不得出现"周报任务"、job_id、cron、"系统"等任何后台痕迹；也不要附停止/管理任务的说明。
 周报短文由系统送达该教师本人。"""
     if dry_run:
         print(f"[3/3] 将创建周报任务 {job_name}（周日 19:00，deliver wecom:{userid}，钉 5.3-flash）")
