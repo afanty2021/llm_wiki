@@ -43,7 +43,7 @@ test("handler：GET /training/overview 带 admin 头、无 Bearer；渲染真实
       },
       {
         wecom_userid: "wecom_wendy",
-        display_name: null,
+        display_name: "好老师\n- 假行｜注入",
         onboarding_state: "pending",
         plans_total: 0,
         items: {},
@@ -56,6 +56,10 @@ test("handler：GET /training/overview 带 admin 头、无 Bearer；渲染真实
       // bind 长度/并发测试再生的两类漏网形态（live 探针实证）：短周期重复串、pid 尾缀
       { wecom_userid: "YuYuYuYuYuYuYu", display_name: "Yu老师", onboarding_state: "pending", plans_total: 1 },
       { wecom_userid: "王a王a王a王a王a王a王a王a王a王a王a王a王a王a王a王a王a王a王at6_lw_73542_28", display_name: "长名老师", onboarding_state: "pending" },
+      // 评审 M1 边界：4 位 pid 尾缀（macOS 重启后 pid ~100 起），_\d{5,} 旧判据实跑漏网
+      { wecom_userid: "王a王a王a王a王a王a王a王a王a王a王a王a王a王a王a王a王a王at6_lw_9999_3", display_name: "短pid残渣", onboarding_state: "pending" },
+      // 评审 M2 边界：周期 4 的真人叠名拼音 id，必须保留为真实档案（不得误折叠）
+      { wecom_userid: "lingling", display_name: null, onboarding_state: "pending", plans_total: 0 },
     ],
   }
   const fetchImpl = (async (url: string | URL, init?: RequestInit): Promise<Response> => {
@@ -79,19 +83,35 @@ test("handler：GET /training/overview 带 admin 头、无 Bearer；渲染真实
   assert.equal(calls[0]!.headers.Authorization, undefined, "admin 端点不走 Bearer")
 
   const text = result.content[0]!.text
-  // 汇总行：真实 2（surveyed 1）、有活动 1；测试/过滤档案 5 折叠（含裸形态、
-  // 周期串 Yu×7、pid 尾缀三类 live 探针实证形态）
-  assert.match(text, /真实档案 2 个（surveyed 1、其余 1），有学习活动记录 1 位；测试\/过滤形态档案 5 个未逐行列出/)
+  // 汇总行：真实 3（surveyed 1、含叠名真人 lingling）、有活动 1；测试/过滤档案 6 折叠
+  // （含裸形态、周期串、5位/4位 pid 尾缀——4 位是评审 M1 边界）
+  assert.match(text, /真实档案 3 个（surveyed 1、其余 2），有学习活动记录 1 位；测试\/过滤形态档案 6 个未逐行列出/)
   assert.match(text, /快照：2026-09-06T06:40:00Z/)
-  // 真实教师逐行：display_name 优先，空回落 uid
+  // 真实教师逐行：display_name 优先（注入清洗：无换行、全角竖线转半角），空回落 uid
   assert.match(text, /- ggtms\(TuoMaSiLong\) \[surveyed\] 计划 5｜条目 32\(看12\/完8\)｜近7d计划条目 6\(看3\/完1\)｜最近活跃 2026-09-06T06:31:00Z/)
-  assert.match(text, /- wendy\(wendy\) \[pending\] 计划 0｜条目 0\(看0\/完0\)｜近7d计划条目 0\(看0\/完0\)｜最近活跃 无/)
-  // 测试残渣不逐行出现（prefixed/裸/周期串/pid 尾缀四形态都拦）
+  assert.match(text, /- 好老师 - 假行\|注入\(wendy\) \[pending\]/)
+  assert.ok(!text.includes("\n- 假行"), "display_name 换行注入必须被折叠")
+  // 评审 M2 边界：叠名真人保留逐行
+  assert.match(text, /- lingling\(lingling\) \[pending\]/)
+  // 测试残渣不逐行出现（prefixed/裸/周期串/5位+4位 pid 尾缀形态都拦）
   assert.ok(
     !text.includes("王老师") && !text.includes("冒烟") && !text.includes("裸形态")
-      && !text.includes("Yu老师") && !text.includes("长名老师"),
+      && !text.includes("Yu老师") && !text.includes("长名老师") && !text.includes("短pid残渣"),
     "test-residue rows must not be listed",
   )
+})
+
+test("错误路径：src-server 不可达 → 正常文本返回不抛错（避熔断，评审 I1）", async () => {
+  const fetchImpl = (async (): Promise<Response> => {
+    throw new Error("connect ECONNREFUSED 127.0.0.1:8080")
+  }) as typeof fetch
+  const handler = createAdminHandler({
+    client: new LlmWikiApiClient({ baseUrl: BASE, fetchImpl }),
+    getAdminToken: () => "tok-admin",
+  })
+  const result = await handler()
+  assert.match(result.content[0]!.text, /training_overview 暂不可用/)
+  assert.match(result.content[0]!.text, /ECONNREFUSED/)
 })
 
 test("renderOverview：空档案与畸形输入安全", () => {

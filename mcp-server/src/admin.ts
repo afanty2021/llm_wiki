@@ -76,18 +76,22 @@ export interface OverviewPayload {
 
 // 测试残渣过滤：与 tools/ltutor/auto-provision-weekly.sh 同源（tN_ 前缀/纯重复
 // 字符），另加两条 admin 面专用判据（总览直接进管理问答，噪声即错误答案）：
-//   ① 短周期重复整串（"Yu"×7、"名"×100 等 unique() 长度/并发测试产物）——
-//      整串长度 ≥8 且周期 ≤4 才判，防误伤 "LiLi" 型真人短名；
-//   ② unique() 的 `_{pid}_{n}` 大数字尾缀（pid≥5 位，真人企微 id 不含）。
+//   ① 短周期重复整串（"Yu"×7、"名"×100、"王a"×22 等 unique() 长度/并发测试产物）
+//      ——重复单元 ≤2 字符且整串 ≥8 才判：残渣生成器单元均 ≤2；lingling/fangfang
+//      类真人叠名拼音单元 ≥3，必须放行（评审 M2：周期≤4 旧判据实跑误折叠真人）。
+//      单字符任意长度重复由 REPEATED_CHAR_RE 常开兜底。
+//   ② unique() 的 `_{pid}_{n}` 大数字尾缀——pid 至少 2 位起（评审 M1：macOS 重启
+//      后 pid 从 ~100 起，3-4 位常见，_\d{5,} 旧判据漏 t6_lw_9999_3 实锤）；
+//      真人企微 id 双数字尾缀形态罕见。
 // 注意：teacher_profiles.wecom_userid 存裸 id（wecom_ 前缀在 users.username），
 // 匹配前统一归一到 prefixed 形态（live 探针实证）。
 const TEST_USERID_RE = /^wecom_(t[0-9]+_|test|smoke|ctrl|restore)/
 const REPEATED_CHAR_RE = /^wecom_(.)\1+_/
-const PID_SUFFIX_RE = /_\d{5,}_\d+$/
+const PID_SUFFIX_RE = /_\d{2,}_\d+$/
 
 function isPeriodicRepetition(uid: string): boolean {
   if (uid.length < 8) return false
-  for (let period = 1; period <= 4; period++) {
+  for (const period of [1, 2]) {
     if (uid.length % period !== 0) continue
     const unit = uid.slice(0, period)
     if (unit.repeat(uid.length / period) === uid) return true
@@ -97,6 +101,13 @@ function isPeriodicRepetition(uid: string): boolean {
 
 function fmtCounts(c: OverviewItemCounts | undefined): string {
   return `${c?.total ?? 0}(看${c?.viewed ?? 0}/完${c?.completed ?? 0})`
+}
+
+/** 展示字段清洗（评审 I2）：display_name 教师可自设（PUT /profile 不拦换行），
+ * 原样拼接可注 `\n- ` 伪造总览行；折叠一切空白 + 全角竖线转半角（竖线是本渲染
+ * 的字段分隔符）。uid 同洗（bind 侧仅校验长度）。 */
+function sanitizeDisplay(value: string): string {
+  return value.replace(/\s+/g, " ").replace(/｜/g, "|")
 }
 
 /** overview JSON → 紧凑中文摘要。真实档案逐行；测试/过滤档案折叠为计数。 */
@@ -135,9 +146,9 @@ export function renderOverview(data: OverviewPayload): string {
     "",
   )
   for (const r of real) {
-    // 展示 uid 同样兼容裸/prefixed 两形态
-    const uid = (r.wecom_userid ?? "").replace(/^wecom_/, "")
-    const name = (r.display_name ?? "").trim() || uid || "?"
+    // 展示 uid 同样兼容裸/prefixed 两形态，展示字段过清洗
+    const uid = sanitizeDisplay((r.wecom_userid ?? "").replace(/^wecom_/, ""))
+    const name = sanitizeDisplay((r.display_name ?? "").trim()) || uid || "?"
     lines.push(
       `- ${name}(${uid}) [${r.onboarding_state ?? "?"}] 计划 ${r.plans_total ?? 0}`
       + `｜条目 ${fmtCounts(r.items)}｜近7d计划条目 ${fmtCounts(r.items_7d)}`
@@ -156,7 +167,21 @@ export interface AdminHandlerDeps {
 
 export function createAdminHandler(deps: AdminHandlerDeps): () => Promise<ToolOutput> {
   return async () => {
-    const data = await deps.client.trainingOverview(deps.getAdminToken())
+    let data: Record<string, unknown>
+    try {
+      data = await deps.client.trainingOverview(deps.getAdminToken())
+    } catch (err) {
+      // 错误走正常返回而非抛 MCP 错误（评审 I1，镜像 read_file 404 / record_ask
+      // 拒绝前例）：src-server 未起/token 错/5xx 是服务级问题，抛错会被 Hermes
+      // 熔断器计入（3 次熔断 ~60s），把管理问答卡成假故障。
+      const reason = err instanceof Error ? err.message : String(err)
+      return {
+        content: [{
+          type: "text",
+          text: `training_overview 暂不可用：src-server 请求失败（${reason}）。请稍后重试；持续失败请检查 src-server 服务（launchctl wiki.src-server）与 TRAINING__ADMIN_TOKEN 配置。`,
+        }],
+      }
+    }
     return {
       content: [{ type: "text", text: renderOverview(data as OverviewPayload) }],
     }
@@ -196,7 +221,10 @@ function main(): void {
     return overview()
   })
 
-  void server.connect(new StdioServerTransport())
+  void server.connect(new StdioServerTransport()).catch((err) => {
+    console.error("llm-wiki-admin: failed to start:", err)
+    process.exit(1)
+  })
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
