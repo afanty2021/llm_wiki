@@ -502,13 +502,14 @@ test("teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、it
     assert.ok(JSON.parse(toolText(ok)), `payload ${JSON.stringify(good)} 应通过`)
   }
   const askCallsBefore = calls.filter((c) => c.url === `${BASE}/api/v1/training/events`).length
+  // 拒绝改正常文本返回（跟进修 A：镜像 fileNotFoundText，-32602 会进 Hermes 熔断器）
   for (const junk of [{}, { n: 24 }, { ctx: {} }]) {
-    await assert.rejects(
-      () => handlers.get("teacher_tutor_record_ask")!({ wecom_userid: "t1", payload: junk }),
-      /payload must contain the teacher's question text/,
-      `payload ${JSON.stringify(junk)} 应被拒`,
-    )
+    const rejected = await handlers.get("teacher_tutor_record_ask")!({ wecom_userid: "t1", payload: junk })
+    assert.match(toolText(rejected), /未记录该提问事件/, `payload ${JSON.stringify(junk)} 应被拒`)
   }
+  // 完全省略 payload（缺省 {}）同样被拒（评审 B：补覆盖）
+  const omitted = await handlers.get("teacher_tutor_record_ask")!({ wecom_userid: "t1" })
+  assert.match(toolText(omitted), /未记录该提问事件/)
   const askCallsAfter = calls.filter((c) => c.url === `${BASE}/api/v1/training/events`).length
   assert.equal(askCallsAfter, askCallsBefore, "被拒的 payload 不得发请求")
 

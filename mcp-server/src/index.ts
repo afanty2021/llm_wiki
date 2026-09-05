@@ -273,10 +273,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }))
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  // asObject 透传不经 schema 校验是刻意设计：inputSchema 不暴露 wecom_userid
-  // （2026-08-24 加固），但 cron 系统调用经 SDK 管线传的该参数必须原样到达
-  // handler（identity.test.ts 管线透传测试钉住）。迁移校验型分发前先读
-  // training.ts 的 ⚠️ 前提依赖注释。
+  // asObject 透传不经 schema 校验是刻意设计：wecom_userid 已可选声明进 schema
+  // （2026-09-05，cron 系统回合显式传参），但 _meta 等非 arguments 字段与任何
+  // 未声明参数仍须原样到达 handler——迁移校验型分发前先读 training.ts 的
+  // wecom_userid 注释块（identity.test.ts 管线透传测试钉住）。
   const args = asObject(request.params.arguments ?? {})
   // Hermes（T1 补丁）随 tools/call 注入的会话身份 _meta：低层 setRequestHandler 的
   // request.params._meta 直接可取（SDK CallToolRequestSchema 的 _meta 为 $loose zod

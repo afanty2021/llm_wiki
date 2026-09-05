@@ -191,18 +191,15 @@ export interface SrcServerHandlerDeps {
   getPublicTBase: () => string
 }
 
-// wecom_userid 不进 inputSchema（2026-08-24 事故）：wecom 会话身份由 Hermes
-// `_meta` 注入、服务端 identity.ts 锁定，模型不需要也不应传该参数——弱回退模型
-// 曾照抄示例值硬传（-32602 身份拒绝 ×4），配合客户端熔断器误判整出「服务器还在
-// 恢复中」假故障。运行时仍接受该参数（handler 直读 args，不经 schema 校验）：
-// 系统模式调用（cron/运维，prompt 明确指示传参）不受影响；wecom 会话若模型仍
-// 幻觉传参，identity 锁照常拒绝（纵深防御保留）。
-//
-// ⚠️ 前提依赖：schema 对外宣告该参数「不存在」（additionalProperties:false），
-// 运行时接受完全依赖 index.ts 低层 setRequestHandler + asObject 透传、SDK 客户端
-// 不校验未声明参数（identity.test.ts 管线透传测试钉住此前提）。若未来迁移
-// registerTool/校验型分发，必须保留对 wecom_userid 的显式接受，否则 cron 系统
-// 调用会静默断裂。
+// wecom_userid 在 schema 可选声明、不进 required（2026-09-05 修订 08-24 加固）：
+// wecom 教师会话身份由 Hermes `_meta` 注入、identity.ts 锁定，勿传（描述明示；
+// 模型仍硬传且与会话不符时 identity 锁照常拒绝，纵深防御保留）；cron/运维系统
+// 回合必传——glm-5.3-flash 严格遵循 schema，不声明就不会 emit，08-24 的
+// 「完全不暴露」形态曾致周报 cron -32602 通道断裂（422b42f2 根修）。08-24
+// 不暴露的缘由是弱回退模型照抄示例值硬传（-32602 ×4 触发熔断假故障），现描述
+// 文本无示例值且身份锁兜底，风险窗口收窄为「弱模型顶班 + 从上下文抄他人 id」。
+// 契约由 identity.test.ts 可选声明测试钉住；handler 直读 args 的透传前提见
+// index.ts CallToolRequestSchema 处注释。
 
 /** src-server 形态下重写的 2 个通用工具（project_id 来自 env，token 经 store 注入）。 */
 export function srcServerToolDefinitions(): ToolDefinition[] {
@@ -215,7 +212,7 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
         properties: {
           wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           query: { type: "string", description: "Search query." },
-          limit: { type: "number", description: "Maximum results (server clamps 1..50, default 20)." },
+          limit: { type: "number", description: "Maximum results (server clamps 1..50; omitted → 5)." },
         },
         required: ["query"],
         additionalProperties: false,
@@ -275,7 +272,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
         type: "object",
         properties: {
           wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
-          payload: { type: "object", description: "提问上下文（缺省 {}）" },
+          payload: { type: "object", description: "提问上下文，必含提问文本（任一字符串值 ≥2 字符，如 {question: \"…\"}）；空对象/纯数字/省略均会被拒不计。" },
         },
         additionalProperties: false,
       },
@@ -297,7 +294,6 @@ export function trainingToolDefinitions(): ToolDefinition[] {
             items: {
               type: "object",
               properties: {
-          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
                 kind: { type: "string", enum: ["wiki_page", "media"] },
                 target_ref: { type: "string", description: "wiki 页相对路径或 media slug" },
                 timecode_start_s: { type: "number" },
@@ -395,6 +391,16 @@ function textResult(text: string): ToolOutput {
  */
 export function fileNotFoundText(relPath: string): string {
   return `未找到文件：${relPath}（本工具只接受 search 返回的确切 path；请核对后重试或换一个来源）`
+}
+
+/**
+ * record_ask 拒绝的正常返回文案（isError=false）：空/无意义 payload 是应用级
+ * 输入问题不是服务故障——抛 ToolArgumentError（-32602）会被 Hermes 熔断器计入，
+ * 3 次即熔断 ~60s（同 read_file 404 前例，见上），弱模型连续传空 payload 会把
+ * 整个服务器熔断成假故障。
+ */
+export function invalidAskPayloadText(): string {
+  return `未记录该提问事件：payload 未含提问文本（需任一字符串值 ≥2 字符，如 {question: "…"}）。请补全 payload 后重试，或跳过记录继续当前任务。`
 }
 
 function jsonResult(value: unknown): ToolOutput {
@@ -533,10 +539,8 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const payload = args.payload !== undefined ? args.payload : {}
     if (!payloadHasQuestionText(payload)) {
-      throw new ToolArgumentError(
-        "payload must contain the teacher's question text (any string field >=2 chars, "
-        + "e.g. {question: '...'}); empty or counter-only payloads are not recorded",
-      )
+      // 拒绝走正常返回而非 -32602（跟进修 A）：应用级输入问题不进熔断器
+      return withIdentitySource(textResult(invalidAskPayloadText()), ident.mode)
     }
     return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.trainingEventAsk(token, payload))), ident.mode)
