@@ -76,13 +76,14 @@ https://api.xiaoluedu.top {
         respond 404
     }
     log {
-        output file /Users/berton/Library/Logs/caddy-lan.log { roll }
+        output file /var/log/caddy-lan.log
         # 直连流量的唯一可观测来源（axum 侧两路径都是 127.0.0.1，无法区分）
+        # 实施态勘误：v2.11 file 输出默认滚动（roll 子指令已不存在）；路径由 ~/Library/Logs 迁 /var/log（评审 M1）
     }
 }
 ```
 
-- launchd `wiki.caddy-lan`：KeepAlive；env 只放 `CF_DNS_TOKEN`；plist 600，模板入仓。
+- launchd `wiki.caddy-lan`：**系统级 LaunchDaemon**（TCP443 特权端口须 root 绑定，实施期发现，见 §10）；KeepAlive；env 只放 `CF_DNS_TOKEN`；plist 600，模板入仓。
 
 ### 3.3 Cloudflare API Token
 - 权限：**Zone → DNS → Edit，Zone resources 限定 xiaoluedu.top 单 zone**。
@@ -105,6 +106,7 @@ https://api.xiaoluedu.top {
 | **将来开启 IPv6** | RDNSS/RA 下发的 v6 DNS 将**旁路** DHCPv4 的 DNS 覆盖 | 实测 en0 当前零 inet6，本 LAN 无 v6，风险不成立；**开 v6 前须重审本方案**（评审 ③） |
 | iPhone Private Relay | 该教师解析走 Apple 中继 → 直接走隧道 | 自动回落=现状，无害 |
 | 租约未续的设备（新旧 DNS 并存窗口） | 部分走隧道部分直连 | 双路径同时有效，无害 |
+| **手动写死 DNS 的设备**（不走 DHCP） | 不吃路由器 DNS 变更——继续公网解析走隧道 | 可用但不直连；存量设备边界（C.4 随察 ③；2026-09-06 跟进修 Minor 补录，兑现 §10 台账承诺）；改直连须手动改其 DNS 或恢复自动获取 |
 
 唯一新增不可用面 = Caddy 行（直连路径自身故障时校内无自动兜底）——这是 DNS 覆盖式方案换零客户端的固有代价。
 
@@ -137,7 +139,7 @@ https://api.xiaoluedu.top {
 
 ## §7 观测与运维
 
-- 直连流量：caddy-lan.log（含 roll）；隧道流量：cloudflared/现有日志不变。
+- 直连流量：caddy-lan.log（file 输出默认滚动）；隧道流量：cloudflared/现有日志不变。
 - runbook（m3-gray-runbook.md）增补"媒体分发双路径"一节：架构一句话、故障口径（校内打不开→切蜂窝）、回滚三步、证书/token 资产位置。
 - 上线后观察一周：双路径 206/429 比例、caddy 进程存续、dnsmasq 存续（KeepAlive 计数）。
 
