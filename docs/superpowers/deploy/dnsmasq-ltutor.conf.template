@@ -16,5 +16,8 @@ server=223.5.5.5
 # 唯一覆盖条目：本方案全部意义所在
 address=/api.xiaoluedu.top/192.168.2.88
 cache-size=1000
+# 私网反向查询（PTR）本地即时 NXDOMAIN 不转发上游——公网解析不了私网 PTR，
+# 转发只会让 nslookup/服务发现空等 2s 超时（C.4 实测 Windows nslookup 首查超时根因）
+bogus-priv
 # 日志落 launchd stderr（见头部说明）；不开 log-queries（隐私）
 log-facility=-

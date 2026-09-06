@@ -178,7 +178,7 @@ https://api.xiaoluedu.top {
 | §9.2 降级实测 | ✅ | root 停 dnsmasq 30s：系统解析全部回退 CF 边缘 IP 仅 +1s（副 DNS 兜底=走隧道不断网）；拉回即恢复直连 |
 | C.3 蜂窝回归（隧道侧） | ✅ | 未改任何 LAN 外设施 + 强制走 CF 边缘 IP 的 /health 200；**用户蜂窝真机照常可用**（2026-09-06 实测） |
 | C.2 真机 | ✅ | **用户真机实测（2026-09-06 10:14）**：ggtms 教师手机重连 Wi-Fi → /s/ 7pIDzDQhKL 全链可用、播放正常、拖动明显变快；caddy 日志实锺：来源 192.168.2.68（iPhone UA），303→200（57.7ms）→beacon×2→三路视频 Range 预载 + 多次 seek 跳转（41MB/65MB/3MB）全部 206，小段 62-130ms |
-| C.4 办公设备抽查 | ⏳ 用户侧 | 任一办公电脑 `nslookup api.xiaoluedu.top` 应答 .88 |
+| C.4 办公设备抽查 | ✅ | 用户实测（静态 IP+DNS 自动获取形态的办公电脑）：`nslookup api.xiaoluedu.top` 经 .88 应答。**三个随察**：① 首查"DNS request timed out"=nslookup 对 DNS 服务器做 PTR 反查被转发公网空等——已加 `bogus-priv`（私网 PTR 本地即时 NXDOMAIN，实测 14ms）；② 应答含 CF 的 AAAA（`address=` 只覆盖 A）——本网无 v6 路由，设备实际用 A 直连（Happy Eyeballs 兜底），无害且坐实"开 v6 前须重审"；③ **手动写死 DNS 的设备不吃 DHCP 变更**（继续走隧道，可用但不直连）——存量设备边界，纳入 §4 风险行 |
 | 双路径延迟 A/B（Mac 实测，2026-09-06） | ✅ | /health TTFB：直连 13-17ms vs 隧道 0.83-1.24s（~80×）；1MB 媒体段：直连 12-15ms/17-19ms vs 隧道 0.88-1.16s/2.9-5.1s（TTFB ~80×、吞吐 ~180×，隧道 ≈2.7Mbps 与媒体审计口径吻合）——用户"蜂窝明显慢于直连"的体感有数据支撑 |
 
 运维口径：两 daemon 重载/日志/回滚命令见 runbook §5.6（Phase A/B 回滚=各自 `sudo launchctl bootout system/<label>`，DHCP 副 DNS 兜底）。
