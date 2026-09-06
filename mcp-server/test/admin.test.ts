@@ -86,9 +86,10 @@ test("handler：GET /training/overview 带 admin 头、无 Bearer；渲染真实
   // 汇总行：真实 3（surveyed 1、含叠名真人 lingling）、有活动 1；测试/过滤档案 6 折叠
   // （含裸形态、周期串、5位/4位 pid 尾缀——4 位是评审 M1 边界）
   assert.match(text, /真实档案 3 个（surveyed 1、其余 2），有学习活动记录 1 位；测试\/过滤形态档案 6 个未逐行列出/)
-  assert.match(text, /快照：2026-09-06T06:40:00Z/)
-  // 真实教师逐行：display_name 优先（注入清洗：无换行、全角竖线转半角），空回落 uid
-  assert.match(text, /- ggtms\(TuoMaSiLong\) \[surveyed\] 计划 5｜条目 32\(看12\/完8\)｜近7d计划条目 6\(看3\/完1\)｜最近活跃 2026-09-06T06:31:00Z/)
+  assert.match(text, /快照：2026-09-06 14:40（UTC\+8）/)
+  // 真实教师逐行：display_name 优先（注入清洗：无换行、全角竖线转半角），空回落 uid；
+  // 时间戳转上海本地（06:31Z=14:31），不再原样透传 UTC 串（2026-09-07 时区实锺）
+  assert.match(text, /- ggtms\(TuoMaSiLong\) \[surveyed\] 计划 5｜条目 32\(看12\/完8\)｜近7d计划条目 6\(看3\/完1\)｜最近活跃 2026-09-06 14:31｜最近提问 2026-09-06 14:28/)
   assert.match(text, /- 好老师 - 假行\|注入\(wendy\) \[pending\]/)
   assert.ok(!text.includes("\n- 假行"), "display_name 换行注入必须被折叠")
   // 评审 M2 边界：叠名真人保留逐行
@@ -124,4 +125,45 @@ test("renderOverview：管理员（非测试形态）档案保留逐行——不
     teachers: [{ wecom_userid: "wecom_HuangZhengBo", onboarding_state: "pending", plans_total: 1 }],
   })
   assert.match(text, /- HuangZhengBo\(HuangZhengBo\) \[pending\] 计划 1/)
+})
+
+// ── 时间戳本地化（2026-09-07：00:35 管理问答实锺——UTC 串被模型当本地时间渲染）──
+
+test("renderOverview：时间戳统一转 Asia/Shanghai；null/畸形回落安全", () => {
+  const text = renderOverview({
+    generated_at: "2026-09-06T16:36:24.538038Z",
+    teachers: [
+      {
+        wecom_userid: "wecom_ggtms",
+        display_name: "ggtms",
+        onboarding_state: "surveyed",
+        plans_total: 6,
+        // 00:35 事件原值：16:23:13Z 实为 09-07 00:23 上海
+        last_active_at: "2026-09-06T16:23:13.773231Z",
+        last_ask_at: null,
+      },
+      {
+        wecom_userid: "wecom_kathy",
+        display_name: "Kathy",
+        onboarding_state: "pending",
+        plans_total: 0,
+        last_active_at: null,
+        last_ask_at: null,
+      },
+      {
+        wecom_userid: "wecom_marina",
+        display_name: "Marina",
+        onboarding_state: "pending",
+        plans_total: 1,
+        // 畸形/无法解析 → 原样透传（不渲染 null、不瞎转）
+        last_active_at: "not-a-date",
+        last_ask_at: null,
+      },
+    ],
+  })
+  assert.match(text, /快照：2026-09-07 00:36（UTC\+8）/)
+  assert.match(text, /最近活跃 2026-09-07 00:23/)
+  assert.match(text, /最近提问 无/)
+  assert.match(text, /最近活跃 not-a-date/)
+  assert.ok(!text.includes("T16:"), "不得残留 UTC 原串")
 })

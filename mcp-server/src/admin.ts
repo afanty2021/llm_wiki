@@ -103,6 +103,28 @@ function fmtCounts(c: OverviewItemCounts | undefined): string {
   return `${c?.total ?? 0}(看${c?.viewed ?? 0}/完${c?.completed ?? 0})`
 }
 
+const LOCAL_TZ = "Asia/Shanghai"
+
+/** UTC/带偏移 ISO → 上海本地 `YYYY-MM-DD HH:mm`；空返回 null、无法解析返回 null
+ * （调用方回落原文，防上游格式漂移把时间渲染成 null）。总览的消费方是管理问答，
+ * 原样透传 UTC 串会被模型当本地时间拼进回复（2026-09-07 00:35 实锺：last_active
+ * `…T16:23Z` 被渲染成"今天 16:23"，实为昨晚 00:23——差 8 小时且日期错）。 */
+function fmtLocalTime(raw: string | null | undefined): string | null {
+  const iso = (raw ?? "").trim()
+  if (iso === "") return null
+  const normalized = iso.includes(" ") && !iso.includes("T") ? iso.replace(" ", "T") : iso
+  const d = new Date(normalized)
+  if (Number.isNaN(d.getTime())) return null
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: LOCAL_TZ,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(d).map((p) => [p.type, p.value]),
+  )
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`
+}
+
 /** 展示字段清洗（评审 I2）：display_name 教师可自设（PUT /profile 不拦换行），
  * 原样拼接可注 `\n- ` 伪造总览行；折叠一切空白 + 全角竖线转半角（竖线是本渲染
  * 的字段分隔符）。uid 同洗（bind 侧仅校验长度）。 */
@@ -136,7 +158,8 @@ export function renderOverview(data: OverviewPayload): string {
 
   const lines: string[] = ["# LT 师训总览"]
   if (typeof data.generated_at === "string" && data.generated_at !== "") {
-    lines.push(`快照：${data.generated_at}`)
+    const snap = fmtLocalTime(data.generated_at)
+    lines.push(snap !== null ? `快照：${snap}（UTC+8）` : `快照：${data.generated_at}`)
   }
   lines.push(
     `真实档案 ${real.length} 个（surveyed ${surveyed.length}、其余 ${real.length - surveyed.length}），`
@@ -152,7 +175,8 @@ export function renderOverview(data: OverviewPayload): string {
     lines.push(
       `- ${name}(${uid}) [${r.onboarding_state ?? "?"}] 计划 ${r.plans_total ?? 0}`
       + `｜条目 ${fmtCounts(r.items)}｜近7d计划条目 ${fmtCounts(r.items_7d)}`
-      + `｜最近活跃 ${r.last_active_at ?? "无"}｜最近提问 ${r.last_ask_at ?? "无"}`,
+      + `｜最近活跃 ${fmtLocalTime(r.last_active_at) ?? r.last_active_at ?? "无"}`
+      + `｜最近提问 ${fmtLocalTime(r.last_ask_at) ?? r.last_ask_at ?? "无"}`,
     )
   }
   if (real.length === 0) lines.push("（无真实教师档案）")
