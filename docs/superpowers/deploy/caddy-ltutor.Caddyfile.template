@@ -3,8 +3,14 @@
 #   以 --config 指向）。白名单逐字照抄隧道 SEC-5（~/.cloudflared/config.yml）
 #   ——LAN 暴露面 = 公网暴露面，改动任一侧必须同步另一侧。
 # 证书：LE DNS-01（token 只在 launchd plist 环境变量，不入本文件）。
-# 回滚：launchctl bootout gui/$(id -u)/wiki.caddy-lan（DNS 仍指向本机期间
+# 回滚：sudo launchctl bootout system/wiki.caddy-lan（DNS 仍指向本机期间
 #   校内打不开链接，关 Wi-Fi 走蜂窝即隧道）。
+
+{
+	# 关闭 admin endpoint（127.0.0.1:2019）——root 上下文监听且运维流从不
+	# caddy reload（runbook=bootout+bootstrap），评审 M2。
+	admin off
+}
 
 https://api.xiaoluedu.top {
 	bind 192.168.2.88
@@ -19,6 +25,8 @@ https://api.xiaoluedu.top {
 		respond 404
 	}
 	log {
-		output file /Users/berton/Library/Logs/caddy-lan.log
+		# /var/log 与 err 同域（root 进程写用户家目录会在轮转边界把文件变
+		# root 属主、用户侧 tail 断裂——评审 M1）
+		output file /var/log/caddy-lan.log
 	}
 }
