@@ -5,7 +5,8 @@
  *   {wecom_userid: {refreshToken, userId}}；内存 access 缓存提前 60s 过期；
  *   miss → POST /api/v1/auth/refresh（single-flight：并发同 userid 只发一次）；
  *   refresh 失败 → POST /api/v1/training/bind（TRAINING__ADMIN_TOKEN）重建/轮换。
- * - 10 个 src-server 工具：8 个 teacher_tutor_* + 重写的 llm_wiki_search /
+ * - 11 个 src-server 工具：9 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
+ *   为本地 TTS 合成，不经 src-server API）+ 重写的 llm_wiki_search /
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
  *   project_id 取 env TRAINING__PROJECT_ID；token 全部由 store 注入，绝不进工具返回值。
  * - 身份硬闸（M3 T2）：10 工具统一入口先 resolveIdentity(meta, args.wecom_userid)——
@@ -28,6 +29,11 @@ import {
   resolveIdentity,
   ToolArgumentError,
 } from "./identity.js"
+import {
+  synthesizeListeningAudio,
+  type DialogueLine,
+  type ListeningSynthResult,
+} from "./listening-audio.js"
 
 // ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
 // 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
@@ -37,6 +43,12 @@ export const DEFAULT_TEACHER_STORE_PATH = path.join(homedir(), ".llm-wiki-mcp", 
 export const DEFAULT_PUBLIC_T_BASE = "http://127.0.0.1:8080"
 export const MAX_TEXT_BYTES = 120_000
 const ACCESS_EARLY_EXPIRY_MS = 60_000
+
+// 听力音频量级闸（计划 3.3 / 评审 M3）：超限走正常文本引导（应用级输入问题
+// 不进熔断器，同 record_ask 前例），模型可分段或与教师确认精简。
+export const LISTENING_MAX_LINES = 60
+export const LISTENING_MAX_TOTAL_CHARS = 3000
+export const LISTENING_MAX_LINE_CHARS = 600
 
 // ── TeacherCredentialStore ──
 
@@ -189,6 +201,8 @@ export interface SrcServerHandlerDeps {
   getProjectId: () => number
   /** env PUBLIC_T_BASE（默认 http://127.0.0.1:8080）。 */
   getPublicTBase: () => string
+  /** 听力音频合成（本地 TTS 管线；可注入 mock 供测试）。 */
+  synthesize?: (dialogue: DialogueLine[], options: { speed?: number; title?: string }) => Promise<ListeningSynthResult>
 }
 
 // wecom_userid 在 schema 可选声明、不进 required（2026-09-05 修订 08-24 加固）：
@@ -355,6 +369,33 @@ export function trainingToolDefinitions(): ToolDefinition[] {
         properties: {
           wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
         },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "teacher_tutor_listening_audio",
+      description: "把英文对话/朗读材料合成为听力教学音频 mp3（双人声：A=女声 B=男声，行间留白 0.7s；可慢速）。返回含 MEDIA: 行——最终回复必须原样回显该行，音频才会送达教师。用于教师发图片或文字要求生成听力音频的场景。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+          dialogue: {
+            type: "array",
+            description: "按朗读顺序的对话行；speaker=\"A\"|\"B\" 为双人对话，省略/null=旁白（女声读）。总量 ≤60 行且 ≤3000 字符，单行 ≤600 字符。",
+            items: {
+              type: "object",
+              properties: {
+                speaker: { type: "string", enum: ["A", "B"], description: "说话人（省略=旁白）" },
+                text: { type: "string", description: "该行英文原文" },
+              },
+              required: ["text"],
+              additionalProperties: false,
+            },
+          },
+          speed: { type: "number", description: "语速倍率 0.5-1.5，默认 1.0；慢速听力版用 0.85" },
+          title: { type: "string", description: "音频文件名主题（自动清洗，如 Unit3-对话）" },
+        },
+        required: ["dialogue"],
         additionalProperties: false,
       },
     },
@@ -617,6 +658,56 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.trainingProgress(token))), ident.mode)
+  })
+
+  handlers.set("teacher_tutor_listening_audio", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const rawDialogue = requiredArrayArg(args.dialogue, "dialogue")
+    const lines: DialogueLine[] = rawDialogue.map((item, i) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new ToolArgumentError(`dialogue[${i}] must be an object`)
+      }
+      const entry = item as Record<string, unknown>
+      const text = stringArg(entry.text, `dialogue[${i}].text`)
+      const speaker = entry.speaker
+      if (speaker !== undefined && speaker !== null && speaker !== "A" && speaker !== "B") {
+        throw new ToolArgumentError(`dialogue[${i}].speaker must be "A", "B" or omitted`)
+      }
+      return { speaker: (speaker as "A" | "B") ?? null, text }
+    })
+    // 量级超限走正常文本引导（应用级输入问题不进熔断器，同 record_ask 前例）。
+    if (lines.length > LISTENING_MAX_LINES) {
+      return withIdentitySource(textResult(
+        `未生成音频：对话 ${lines.length} 行超过上限 ${LISTENING_MAX_LINES} 行。请分段生成（每段 ≤${LISTENING_MAX_LINES} 行），或与教师确认精简后再合成。`), ident.mode)
+    }
+    const totalChars = lines.reduce((n, line) => n + line.text.length, 0)
+    if (totalChars > LISTENING_MAX_TOTAL_CHARS) {
+      return withIdentitySource(textResult(
+        `未生成音频：对话总字符 ${totalChars} 超过上限 ${LISTENING_MAX_TOTAL_CHARS}。请分段生成，或与教师确认精简后再合成。`), ident.mode)
+    }
+    const overlongIndex = lines.findIndex((line) => line.text.length > LISTENING_MAX_LINE_CHARS)
+    if (overlongIndex >= 0) {
+      return withIdentitySource(textResult(
+        `未生成音频：第 ${overlongIndex + 1} 行超过单行上限 ${LISTENING_MAX_LINE_CHARS} 字符。请把该行拆成多行（同一说话人可连续多行）后再合成。`), ident.mode)
+    }
+    const speed = optionalNumberArg(args.speed, "speed") ?? 1.0
+    if (speed < 0.5 || speed > 1.5) {
+      return withIdentitySource(textResult(
+        `未生成音频：speed ${speed} 超出范围 0.5-1.5（慢速听力版用 0.85）。请调整后重试。`), ident.mode)
+    }
+    const title = optionalStringArg(args.title, "title")
+
+    const synth = deps.synthesize ?? synthesizeListeningAudio
+    const result = await synth(lines, { speed, title })
+    if (!result.ok || !result.path) {
+      return withIdentitySource(textResult(
+        `听力音频生成失败：${result.error ?? "未知错误"}。请向教师说明并稍后重试，或先以文字材料继续答疑。`), ident.mode)
+    }
+    return withIdentitySource(textResult([
+      `听力音频已生成（引擎 ${result.engine}；${result.note ?? ""}；共 ${lines.length} 行；语速 ${speed}）。`,
+      `MEDIA:${result.path}`,
+      `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，音频才能送达。`,
+    ].join("\n")), ident.mode)
   })
 
   return handlers

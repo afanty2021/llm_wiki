@@ -82,13 +82,17 @@ function stubStore(): TeacherCredentialStore {
   } as unknown as TeacherCredentialStore
 }
 
-function makeHandlers(fetchImpl: typeof fetch, opts: { tbase?: string } = {}) {
+function makeHandlers(
+  fetchImpl: typeof fetch,
+  opts: { tbase?: string; synthesize?: Parameters<typeof createSrcServerHandlers>[0]["synthesize"] } = {},
+) {
   const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
   return createSrcServerHandlers({
     client,
     store: stubStore(),
     getProjectId: () => 42,
     getPublicTBase: () => opts.tbase ?? BASE,
+    synthesize: opts.synthesize,
   })
 }
 
@@ -607,6 +611,7 @@ test("src-server 形态：只注册 10 工具，9 个桌面工具不在 ListTool
     "llm_wiki_read_file",
     "llm_wiki_search",
     "teacher_tutor_item_complete",
+    "teacher_tutor_listening_audio",
     "teacher_tutor_plan_create",
     "teacher_tutor_plan_link",
     "teacher_tutor_plan_list",
@@ -661,4 +666,98 @@ test("src-server 形态缺失 LLM_WIKI_API_BASE_URL → 启动 fail-fast；显�
     assertSrcServerEnv({ LLM_WIKI_API_FORM: "src-server", LLM_WIKI_API_BASE_URL: "http://127.0.0.1:8080" }))
   assert.doesNotThrow(() => assertSrcServerEnv({}))
   assert.doesNotThrow(() => assertSrcServerEnv({ LLM_WIKI_API_BASE_URL: undefined }))
+})
+
+// ── teacher_tutor_listening_audio（2026-09-06 图片→听力音频计划 3.3）──
+
+test("listening_audio: 合成成功 → MEDIA 行 + 引擎摘要 + identity_source（C1 回显约定）", async () => {
+  const neverFetch = async () => {
+    throw new Error("listening_audio 不应访问 src-server API")
+  }
+  const handlers = makeHandlers(neverFetch, {
+    synthesize: async (dialogue, options) => {
+      assert.equal(options.speed, 0.85)
+      assert.equal(options.title, "Unit3")
+      assert.deepEqual(dialogue.map((l) => l.speaker), ["A", "B", null])
+      assert.deepEqual(dialogue.map((l) => l.text), ["Hello.", "Hi.", "Narration."])
+      return { ok: true, path: "/cache/20260906-x.mp3", engine: "edge-tts", note: "双人声：A=Aria（女）B=Guy（男）" }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_listening_audio")!({
+    wecom_userid: "t1",
+    dialogue: [
+      { speaker: "A", text: "Hello." },
+      { speaker: "B", text: "Hi." },
+      { text: "Narration." },
+    ],
+    speed: 0.85,
+    title: "Unit3",
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("\nMEDIA:/cache/20260906-x.mp3\n"), "MEDIA 行必须独立成行")
+  assert.ok(text.includes("edge-tts"))
+  assert.ok(text.includes("原样保留"))
+  assert.ok(result.content.some((c) => c.text.includes('identity_source: "system"')))
+})
+
+test("listening_audio: 行数超限 → 正常文本引导、不调引擎", async () => {
+  let synthCalled = false
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    synthesize: async () => {
+      synthCalled = true
+      return { ok: true, path: "/x.mp3", engine: "edge-tts" }
+    },
+  })
+  const dialogue = Array.from({ length: 61 }, () => ({ text: "x" }))
+  const result = await handlers.get("teacher_tutor_listening_audio")!({ wecom_userid: "t1", dialogue })
+  const text = toolText(result)
+  assert.ok(text.includes("61 行"))
+  assert.ok(text.includes("分段"))
+  assert.equal(synthCalled, false)
+})
+
+test("listening_audio: 总字符超限 → 正常文本引导", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    synthesize: async () => ({ ok: true, path: "/x.mp3", engine: "edge-tts" }),
+  })
+  const dialogue = [{ text: "a".repeat(3001) }]
+  const result = await handlers.get("teacher_tutor_listening_audio")!({ wecom_userid: "t1", dialogue })
+  const text = toolText(result)
+  assert.ok(text.includes("3001"))
+  assert.ok(text.includes("精简"))
+})
+
+test("listening_audio: 单行超长 → 指明行号", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    synthesize: async () => ({ ok: true, path: "/x.mp3", engine: "edge-tts" }),
+  })
+  const dialogue = [{ text: "ok" }, { text: "a".repeat(601) }]
+  const result = await handlers.get("teacher_tutor_listening_audio")!({ wecom_userid: "t1", dialogue })
+  const text = toolText(result)
+  assert.ok(text.includes("第 2 行"))
+})
+
+test("listening_audio: 非法 speaker / 缺 text → ToolArgumentError", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") })
+  await assert.rejects(
+    handlers.get("teacher_tutor_listening_audio")!({ wecom_userid: "t1", dialogue: [{ speaker: "C", text: "x" }] }),
+    /speaker/,
+  )
+  await assert.rejects(
+    handlers.get("teacher_tutor_listening_audio")!({ wecom_userid: "t1", dialogue: [{ text: "" }] }),
+    /text/,
+  )
+})
+
+test("listening_audio: 引擎双败 → 失败文案（不抛错）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    synthesize: async () => ({ ok: false, error: "edge-tts 失败（X）；say 备用也失败（Y）" }),
+  })
+  const result = await handlers.get("teacher_tutor_listening_audio")!({
+    wecom_userid: "t1",
+    dialogue: [{ speaker: "A", text: "Hi." }],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("生成失败"))
+  assert.ok(text.includes("稍后重试"))
 })
