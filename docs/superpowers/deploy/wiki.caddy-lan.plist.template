@@ -4,6 +4,12 @@
 <dict>
 	<key>Label</key>
 	<string>wiki.caddy-lan</string>
+	<!-- 系统级 LaunchDaemon（非 LaunchAgent）：TCP443 是特权端口须 root 绑定
+	    （与 dnsmasq 的 UDP53 同因，2026-09-06 实测 EPERM）。Caddy 无自降权能力，
+	     接受 root 常驻（仅 bind 内网 IP，白名单反代 127.0.0.1:8080）。
+	     证书/数据目录钉在 /opt/homebrew/var/caddy（root 下 HOME=/var/root 会散落）。
+	     安装：/Library/LaunchDaemons/wiki.caddy-lan.plist，root:wheel 600
+	     （含 CF_DNS_TOKEN 真值），launchctl bootstrap system。 -->
 	<key>ProgramArguments</key>
 	<array>
 		<string>/opt/homebrew/bin/caddy</string>
@@ -13,21 +19,20 @@
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
-		<!-- CF API token：Zone→DNS→Edit，Zone resources 限定 xiaoluedu.top 单 zone。
-		     实装文件 chmod 600；本模板不入真值。 -->
 		<key>CF_DNS_TOKEN</key>
 		<string>REPLACE_ME_CF_DNS_TOKEN</string>
+		<key>XDG_DATA_HOME</key>
+		<string>/opt/homebrew/var/caddy</string>
+		<key>XDG_CONFIG_HOME</key>
+		<string>/opt/homebrew/var/caddy</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardErrorPath</key>
-	<string>/Users/berton/Library/Logs/caddy-lan.err.log</string>
-	<key>LimitLoadToSessionType</key>
-	<array>
-		<string>Aqua</string>
-		<string>Background</string>
-	</array>
+	<string>/var/log/caddy-lan.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/var/log/caddy-lan.out.log</string>
 </dict>
 </plist>
