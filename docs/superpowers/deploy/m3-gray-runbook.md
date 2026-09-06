@@ -120,7 +120,7 @@ spec：`docs/superpowers/specs/2026-09-05-lan-direct-media-split-routing-design.
 | 组件 | 位置 | 运维 |
 |---|---|---|
 | dnsmasq | `/opt/homebrew/etc/dnsmasq-ltutor.conf` + 系统级 LaunchDaemon `wiki.dnsmasq`（root 绑 UDP53 后自降权；53 是特权端口，LaunchAgent 不行） | 重载：`sudo launchctl bootout system/wiki.dnsmasq && sudo launchctl bootstrap system /Library/LaunchDaemons/wiki.dnsmasq.plist`；错误日志 `/var/log/dnsmasq-ltutor.err.log` |
-| Caddy | `/opt/homebrew/bin/caddy`（v2.11.4 custom build 带 cloudflare DNS 插件，sha512 8f6611c1…d0e2f）+ `wiki.caddy-lan` LaunchAgent + Caddyfile `/opt/homebrew/etc/caddy/ltutor-lan.Caddyfile` | 重载：bootout+bootstrap（gui 域）；证书自动续期（LE DNS-01）；访问日志 `~/Library/Logs/caddy-lan.log` |
+| Caddy | `/opt/homebrew/bin/caddy`（v2.11.4 custom build 带 cloudflare DNS 插件，sha512 8f6611c1…d0e2f）+ 系统级 LaunchDaemon `wiki.caddy-lan`（**TCP443 特权端口须 root 绑定，与 dnsmasq 的 UDP53 同因**；仅 bind 内网 IP；证书/数据钉 `/opt/homebrew/var/caddy`）+ Caddyfile `/opt/homebrew/etc/caddy/ltutor-lan.Caddyfile` | 重载：`sudo launchctl bootout system/wiki.caddy-lan && sudo launchctl bootstrap system /Library/LaunchDaemons/wiki.caddy-lan.plist`；证书自动续期（LE DNS-01，已验签发）；访问日志 `~/Library/Logs/caddy-lan.log`、错误日志 `/var/log/caddy-lan.err.log` |
 | CF token | launchd plist 环境变量 `CF_DNS_TOKEN`（plist 600，模板 `wiki.caddy-lan.plist.template` 不含真值） | 权限=Zone:DNS:Edit 单 zone xiaoluedu.top；泄漏即在 CF dashboard 撤销重建 |
 | 路由器 | XVR1800 → 基本设置 → LAN 设置 → DHCP 服务：首选 DNS `192.168.2.88`、备用 `114.114.114.114` | 回滚=两字段改回 114 / 119（全网随租约 ≤180min 回隧道） |
 
