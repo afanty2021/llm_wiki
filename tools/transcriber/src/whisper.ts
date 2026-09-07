@@ -33,7 +33,7 @@ export function parseWhisperJson(raw: unknown, opts: { strip?: boolean } = {}): 
  *  仍有内容必保留，零误杀。 */
 export const HALLUCINATION_TOKENS = [
   "中文字幕志愿者", "字幕志愿者", "李宗盛", "明镜与点点", "请不吝点赞", "打赏支持",
-  "订阅 转发", "打赏", "优优独播剧场", "优独播剧场", "YoYo Television Series Exclusive",
+  "订阅 转发", "打赏", "优优独播剧场", "优独播剧场", "YoYo Television Series Exclusive", "YoYo Television",
 ] as const;
 
 /** 幻觉段过滤：含黑名单词的段，剥词后剩余 ≤2 字（「订阅 转发 栏目」级搬运
