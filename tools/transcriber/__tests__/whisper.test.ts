@@ -119,6 +119,21 @@ describe("窗级退化守门（2026-09-07 刘飞雪试点 04/06 双例后落地�
     const short = "看，看，看，".repeat(60); // 360 字符 < 500 门槛
     expect(runDegenerationGate("s-short", [seg(0, short)])).toHaveLength(1);
   });
+  it("人工复核出口：TRANSCRIBER_GATE_ALLOW 精确 slug 命中才放行，近似 slug 仍拒（防同名 lesson 误扫）", () => {
+    const unit = "优优独播剧场——YoYo Television Series Exclusive";
+    const spam = Array.from({ length: 8 }, (_, w) => ({ startS: w * 300, endS: w * 300 + 5, text: unit.repeat(295) }));
+    process.env.TRANSCRIBER_GATE_ALLOW = "儿歌分享-What-s-your-favourite-color-f30ce801,what-s-your-favourite-color-3a6e19e5";
+    try {
+      const out = runDegenerationGate("儿歌分享-What-s-your-favourite-color-f30ce801", spam);
+      expect(out).toHaveLength(8);
+      const out2 = runDegenerationGate("what-s-your-favourite-color-3a6e19e5", spam);
+      expect(out2).toHaveLength(8);
+    } finally {
+      delete process.env.TRANSCRIBER_GATE_ALLOW;
+    }
+    // 未列入 allow 的近似 slug（同名 lesson 不同转写）照拒
+    expect(() => runDegenerationGate("what-s-your-favourite-color-9zzzzzzz", spam)).toThrow(DegenerationRejectError);
+  });
   it("analyzeWindowDegeneration 直测：<500 字返回 null，纯循环窗返回签名与 freq", () => {
     expect(analyzeWindowDegeneration("太短")).toBeNull();
     const unit = "优优独播剧场——YoYo Television Series Exclusive";

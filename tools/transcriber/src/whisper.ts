@@ -156,10 +156,18 @@ export class DegenerationRejectError extends Error {
   }
 }
 
-/** 守门入口：拒页线以上抛 DegenerationRejectError；以下有退化窗则告警放行（清扫交 purge 脚本）。 */
+/** 守门入口：拒页线以上抛 DegenerationRejectError；以下有退化窗则告警放行（清扫交 purge 脚本）。
+ *  人工复核出口（2026-09-08 儿歌案）：TRANSCRIBER_GATE_ALLOW=<精确 slug>[,<slug>…] 时，命中的
+ *  拒页降级为放行并留痕——用于"歌词本征重复"等复核人确认有效的形态（阈值无法区分本征
+ *  重复与退化循环，复核裁决权在人）。精确匹配：子串会误扫同名 lesson 的其他转写（实战踩过）。 */
 export function runDegenerationGate(slug: string, segments: Segment[]): Segment[] {
   const report = analyzeDegeneration(segments);
   if (report.windows.length === 0) return segments;
+  const allow = process.env.TRANSCRIBER_GATE_ALLOW?.split(",").map(s => s.trim()).filter(Boolean) ?? [];
+  if (allow.includes(slug)) {
+    console.warn(`⚠ ${slug} 退化守门人工复核放行（TRANSCRIBER_GATE_ALLOW 精确命中）：窗字占 ${(report.coverage * 100).toFixed(0)}%——复核人已确认重复为内容本征`);
+    return segments;
+  }
   if (report.coverage >= GATE_REJECT_COVERAGE) throw new DegenerationRejectError(report);
   const sigs = report.windows.map(w => `[${fmtMMSS(w.startS)}]「${w.signature}」×${w.maxFreq}`).join("；");
   console.warn(`⚠ ${slug} 退化循环低于拒页线（窗字占 ${(report.coverage * 100).toFixed(0)}%）：${sigs} ——放行，存量清扫按同签名处理`);
