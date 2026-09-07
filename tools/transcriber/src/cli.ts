@@ -13,7 +13,7 @@ import {
 } from "./manifest";
 import { extractAudio, transcodePlayback, sha256File, sha8Of, audioOutPath, playbackOutPath } from "./audio";
 import { slugFor } from "./slug";
-import { withinWindow, runTranscribe, parseWhisperJson, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
+import { withinWindow, runTranscribe, parseWhisperJson, runDegenerationGate, stripHallucinationSegments, loadState, saveState, initLine, nextPending, type StateLine, type Segment } from "./whisper";
 import { buildTranscriptMd, type TranscriptInput } from "./transcript";
 import {
   DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor, persistCuts, loadCuts,
@@ -576,10 +576,15 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       //    （applyWriteFailure，写步骤幂等、下轮重试自愈），不冲出循环。
       let segments: Segment[] | null = null;
       try {
-        segments = parseWhisperJson(JSON.parse(readFileSync(whisperJsonPath(line.slug), "utf-8")));
+        // done 复用同样过退化守门（2026-09-07）：判窗用剥前原文（同主路径），旧 run
+        // 缓存若含退化循环，删缓存降级重转写（-mc 0 下大概率自愈；仍退化则主路径守门拒页）
+        segments = stripHallucinationSegments(runDegenerationGate(
+          line.slug,
+          parseWhisperJson(JSON.parse(readFileSync(whisperJsonPath(line.slug), "utf-8")), { strip: false }),
+        ));
       } catch (e) {
         rmSync(whisperJsonPath(line.slug), { force: true });
-        console.warn(`⚠ ${line.slug} done 复用读转写 json 失败（${String(e).slice(0, 160)}）——已删缓存 json，本轮重转写`);
+        console.warn(`⚠ ${line.slug} done 复用读转写 json 失败/未过退化守门（${String(e).slice(0, 160)}）——已删缓存 json，本轮重转写`);
       }
       if (segments !== null) {
         try {
@@ -672,10 +677,17 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       if (!existsSync(jsonPath)) {
         await runTranscribe({
           wavPath: audioOutPath(outDir, sha8), modelPath, outJsonPath: jsonPath,
-          prompt: "LT英语师训 课堂教学 班级管理 自然拼读 独立教师 双减 师训",
+          // 双语锚（2026-09-07 评审）：纯中文 prompt 是英文段扭曲成因之一；只条件解码器不影响 -l auto 检测
+          prompt: "LT英语师训 课堂教学 班级管理 自然拼读 双减 师训 primary school English class lesson",
         });
       }
-      const segments = parseWhisperJson(JSON.parse(readFileSync(jsonPath, "utf-8")));
+      // 窗级退化守门（拒页 ≥40% 退化窗字占）：判窗用剥前原文（06 型主签名是黑名单
+      // 词，先剥再判会漏拒）；抛错发生在 whisperDone 置位前，按「转写类失败」记账——
+      // tries 走尽后 failed+原因留存=人工复核出口
+      const segments = stripHallucinationSegments(runDegenerationGate(
+        slug,
+        parseWhisperJson(JSON.parse(readFileSync(jsonPath, "utf-8")), { strip: false }),
+      ));
       whisperDone = true;
       const sourcePath = `sources/transcripts/${slug}.md`;
       const pagePath = `transcripts/${slug}.md`;

@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseWhisperJson, withinWindow, whisperArgs, loadState, saveState, nextPending, initLine } from "../src/whisper";
+import { parseWhisperJson, withinWindow, whisperArgs, loadState, saveState, nextPending, initLine, runDegenerationGate, analyzeWindowDegeneration, DegenerationRejectError } from "../src/whisper";
 
 // saveState 原子写断言需要观测 renameSync（ESM namespace 不可 spy，改 partial mock 记录调用）
 const h = vi.hoisted(() => ({ renameCalls: [] as Array<[string, string]> }));
@@ -54,6 +54,79 @@ describe("stripHallucinationSegments（B 站搬运幻觉过滤，2026-08-29 全�
     expect(out).toHaveLength(1);
     expect(out[0].text).toContain("clap once");
   });
+  it("2026-09-07 扩容：优独播剧场/YoYo Television 纯幻觉段丢弃（优优独播剧场为优独播剧场子串一网打尽）", () => {
+    expect(parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "优优独播剧场——YoYo Television Series Exclusive" },
+      { offsets: { from: 2000, to: 3000 }, text: "优独播剧场——YoYo Television Series Exclusive" },
+    ] })).toEqual([]);
+  });
+});
+
+describe("窗级退化守门（2026-09-07 刘飞雪试点 04/06 双例后落地）", () => {
+  const seg = (startS: number, text: string) => ({ startS, endS: startS + 5, text });
+
+  // 合成正常窗：多样文本 ~700 字（>500 字门槛），无循环
+  const normalText = Array.from({ length: 50 }, (_, i) =>
+    `第${i}个教学环节老师引导学生讨论问题${i}并给出不同的示例与反馈`).join("");
+
+  it("健康窗零误杀：多样文本 + 真实课堂复读（02 甜甜×103 规模）不触发", () => {
+    // 甜甜×103：8-gram freq≈199 <250，链覆盖 ~206 字 / 大窗远 <0.5
+    expect(runDegenerationGate("s-ok", [seg(0, normalText + "甜甜".repeat(103) + "课堂继续")])).toEqual(
+      [seg(0, normalText + "甜甜".repeat(103) + "课堂继续")]);
+  });
+  it("低于拒页线的局部循环告警放行（03 BGM 循环×124 规模，签名单元 9 字）", () => {
+    const loopUnit = "我能不能再唱歌吗";
+    const out = runDegenerationGate("s-warn", [seg(0, normalText + loopUnit.repeat(124))]);
+    expect(out).toHaveLength(1);
+  });
+  it("06 型拒页：长单元 ×295/窗、退化窗字占 ≥40% → 抛 DegenerationRejectError 带签名与占比", () => {
+    const unit = "优优独播剧场——YoYo Television Series Exclusive"; // 25 字符
+    const spamSegs = Array.from({ length: 8 }, (_, w) => seg(w * 300, unit.repeat(295))); // 8 个全退化窗
+    try {
+      runDegenerationGate("s-reject", spamSegs);
+      expect.unreachable("应当拒页");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DegenerationRejectError);
+      expect((e as Error).message).toContain("须重转或人工复核");
+      expect((e as Error).message).toContain("≥40%");
+      expect((e as Error).message).toContain("优优独播剧场");
+    }
+  });
+  it("04 型拒页：12 字单元 ×1005 内联在 300s 窗（freq 臂），真实内容窗并存时按字占比判", () => {
+    const unit = "与他配合肥16玫瑰院学校"; // 12 字符
+    const spam = unit.repeat(1005);
+    const goodSegs = Array.from({ length: 3 }, (_, w) => seg(w * 300, normalText));
+    try {
+      runDegenerationGate("s-04", [seg(0, spam), ...goodSegs]);
+      expect.unreachable("spam 字占 7/10 应当拒页");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DegenerationRejectError);
+      expect((e as Error).message).toContain("与他配合肥16玫瑰院学校".slice(0, 8));
+    }
+  });
+  it("链覆盖臂：短周期高占比（5410328e 型 cov≈0.99）在 freq<250 时仍拒页", () => {
+    // 单元 40 字重复 120 次 = 4800 字符纯循环（每 8-gram freq = 120 <250），窗内占比 100%
+    const unit = "这是一个用于测试短周期高占比循环链覆盖臂的合成单元文本嗯";
+    const out40 = unit.repeat(120);
+    try {
+      runDegenerationGate("s-cov", [seg(0, out40)]);
+      expect.unreachable("覆盖臂应当拒页");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DegenerationRejectError);
+    }
+  });
+  it("短于 500 字的窗不参与判定（段碎片不误杀）", () => {
+    const short = "看，看，看，".repeat(60); // 360 字符 < 500 门槛
+    expect(runDegenerationGate("s-short", [seg(0, short)])).toHaveLength(1);
+  });
+  it("analyzeWindowDegeneration 直测：<500 字返回 null，纯循环窗返回签名与 freq", () => {
+    expect(analyzeWindowDegeneration("太短")).toBeNull();
+    const unit = "优优独播剧场——YoYo Television Series Exclusive";
+    const info = analyzeWindowDegeneration(unit.repeat(295));
+    expect(info).not.toBeNull();
+    expect(info!.maxFreq).toBeGreaterThanOrEqual(250);
+    expect(info!.signature).toBe(unit.slice(0, 8));
+  });
 });
 describe("withinWindow", () => {
   it("跨午夜窗口", () => {
@@ -90,15 +163,15 @@ describe("withinWindow", () => {
     expect(() => withinWindow(new Date(), "23:00-08:60")).toThrow(/非法窗口串/); // 分越界
   });
 });
-describe("whisperArgs（命令构造，Task 10 已验证的调用形态）", () => {
-  it("-l zh -oj -of（of 剥 .json 后缀）+ 模型/音频/prompt", () => {
+describe("whisperArgs（命令构造）", () => {
+  it("-l auto -mc 0 -oj -of（of 剥 .json 后缀）+ 模型/音频/prompt（2026-09-07：-mc 0 禁跨段上下文防退化滚雪球，-l auto 适配中英混讲）", () => {
     expect(whisperArgs({ wavPath: "/a/x.wav", modelPath: "/m/ggml.bin", prompt: "LT英语师训", outJsonPath: "/o/x.json" })).toEqual(
-      ["-m", "/m/ggml.bin", "-f", "/a/x.wav", "-l", "zh", "--prompt", "LT英语师训", "-oj", "-of", "/o/x"]);
+      ["-m", "/m/ggml.bin", "-f", "/a/x.wav", "-l", "auto", "-mc", "0", "--prompt", "LT英语师训", "-oj", "-of", "/o/x"]);
   });
   it("无 prompt 则省略 --prompt 对", () => {
     const args = whisperArgs({ wavPath: "/a/x.wav", modelPath: "/m/ggml.bin", prompt: undefined, outJsonPath: "/o/x.json" });
     expect(args).not.toContain("--prompt");
-    expect(args).toEqual(["-m", "/m/ggml.bin", "-f", "/a/x.wav", "-l", "zh", "-oj", "-of", "/o/x"]);
+    expect(args).toEqual(["-m", "/m/ggml.bin", "-f", "/a/x.wav", "-l", "auto", "-mc", "0", "-oj", "-of", "/o/x"]);
   });
 });
 

@@ -1,16 +1,16 @@
 {
-  "generatedAt": "2026-08-23T08:36:42.717Z",
-  "elapsedS": 7.5,
-  "totalFiles": 1861,
-  "totalDurationH": 404.51,
+  "generatedAt": "2026-09-07T14:30:19.860Z",
+  "elapsedS": 16.6,
+  "totalFiles": 2075,
+  "totalDurationH": 558.33,
   "byBucket": {
     "A_playable": {
-      "files": 703,
-      "durationH": 88.1
+      "files": 764,
+      "durationH": 139.55
     },
     "B_transcode": {
-      "files": 807,
-      "durationH": 316.42
+      "files": 922,
+      "durationH": 418.78
     }
   },
   "bySource": {
@@ -19,26 +19,26 @@
       "durationH": 0
     },
     "hevc": {
-      "files": 1861,
-      "durationH": 404.51
+      "files": 2075,
+      "durationH": 558.33
     }
   },
-  "docFiles": 351,
-  "privacyFiles": 252,
+  "docFiles": 389,
+  "privacyFiles": 0,
   "ignoredFiles": 33,
   "probeFailures": 0,
   "overlap": {
     "matchedPairs": 0,
     "mainOnly": 0,
-    "hevcOnly": 1387
+    "hevcOnly": 1557
   },
   "firstBatch": {
-    "dir": "LT教学法系统知识库（高阶版）",
-    "files": 48,
-    "durationH": 25.98,
+    "dir": "英语教师语言学习专栏",
+    "files": 64,
+    "durationH": 27.68,
     "bySource": {
       "main": 0,
-      "hevc": 48
+      "hevc": 64
     }
   }
 }
