@@ -19,6 +19,7 @@ import {
   DEFAULT_CHAPTERING, trySemanticChapters, buildSemanticMd, chaptersFor, persistCuts, loadCuts,
   type ChapteringConfig,
 } from "./chaptering";
+import { maybeAbstract, type AbstractConfig } from "./abstract";
 import { DEFAULT_PUNCTUATE, maybePunctuate, type PunctuateConfig } from "./punctuation";
 import { ApiClient, sha256Hex, type MediaAssetItem, type JobStatus } from "./api-client";
 
@@ -43,6 +44,9 @@ interface Config {
   /** 标点恢复（2026-08-26 起）：开启后转写正文经 LLM 补中文标点+自然分段（三重校验
    *  门保逐字保留，见 src/punctuation.ts），失败回落原文。密钥同 chaptering。 */
   punctuate?: PunctuateConfig;
+  /** 课例摘要（2026-09-08 门槛④）：中文检索锚（英文课堂实录页跨语言召回实测
+   *  前 30 全空）。缺省 enabled=true 继承 chaptering 端点；失败回落无摘要。 */
+  abstract?: AbstractConfig;
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -602,10 +606,12 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
           });
           // 标点恢复（快照优先）：旧 run 的机械 md 在续跑时补标点，快照保证字节稳定
           const md = await maybePunctuate({ md: reused.md, slug: line.slug, outDir, cfg: cfg.punctuate });
+          // 课例摘要（快照优先）：同 maybePunctuate 字节稳定哲学，重跑不重调 LLM
+          const finalMd = await maybeAbstract({ md, slug: line.slug, outDir, cfg: cfg.abstract });
           // 标点改变了字节 → 源文件同步重写（评审 I3）：否则 ingest reconcile 只
           // 改页，页/源 bytes 分叉；且回填密度门读页判已处理，源侧滞后永不修复
-          if (md !== reused.md) {
-            await api.writeSource(`sources/transcripts/${line.slug}.md`, md);
+          if (finalMd !== reused.md) {
+            await api.writeSource(`sources/transcripts/${line.slug}.md`, finalMd);
           }
           const { chapters } = reused;
           // 复用路径同样刷 media_assets（幂等 upsert，与主路径同一 items 构造）：
@@ -615,7 +621,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
             duration_s: entry.durationS, codec: entry.videoCodec, kind: "video",
             chapters, transcript_page_path: `transcripts/${line.slug}.md`, source_path: `sources/transcripts/${line.slug}.md`,
           }]);
-          records.push({ slug: line.slug, pagePath: `transcripts/${line.slug}.md`, sourcePath: `sources/transcripts/${line.slug}.md`, expectedHash: sha256Hex(md), md });
+          records.push({ slug: line.slug, pagePath: `transcripts/${line.slug}.md`, sourcePath: `sources/transcripts/${line.slug}.md`, expectedHash: sha256Hex(finalMd), md: finalMd });
           outcomes.push({ slug: line.slug, relPath: entry.relPath, status: "skipped", durationS: entry.durationS, transcribeMs: 0 });
           skipped++;
           console.log(`[${i + 1}/${targets.length}] ${line.slug} — done 复用（断点续跑）`);
@@ -694,10 +700,12 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       const built = await buildTranscriptWithChapters(cfg, { title, segments, slug, durationS: entry.durationS });
       // 标点恢复（2026-08-26）：正文 LLM 补标点+分段（三重校验/快照幂等，失败回落原文）
       const md = await maybePunctuate({ md: built.md, slug, outDir, cfg: cfg.punctuate });
+      // 课例摘要（2026-09-08 门槛④）：中文检索锚，快照幂等，失败回落无摘要
+      const finalMd = await maybeAbstract({ md, slug, outDir, cfg: cfg.abstract });
       const { chapters } = built;
 
-      await api.writeSource(sourcePath, md);
-      const upsert = await api.upsertTranscriptPage(pagePath, md);
+      await api.writeSource(sourcePath, finalMd);
+      const upsert = await api.upsertTranscriptPage(pagePath, finalMd);
 
       let playback: string | undefined;
       if (args.demoSlug === slug) {
@@ -721,7 +729,7 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
       saveState(statePath, lines);
       const ms = Date.now() - tFile;
       transcribed++; processed++; transcribeMsTotal += ms; mediaS += entry.durationS;
-      records.push({ slug, pagePath, sourcePath, expectedHash: sha256Hex(md), md });
+      records.push({ slug, pagePath, sourcePath, expectedHash: sha256Hex(finalMd), md: finalMd });
       outcomes.push({ slug, relPath: entry.relPath, status: "done", durationS: entry.durationS, transcribeMs: ms, upsert });
       console.log(`[${i + 1}/${targets.length}] ${slug} — done（${(entry.durationS / 60).toFixed(1)}min 音频 / ${(ms / 60000).toFixed(1)}min 转写，upsert=${upsert}）`);
     } catch (e) {

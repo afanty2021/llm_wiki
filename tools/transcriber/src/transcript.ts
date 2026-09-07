@@ -71,3 +71,24 @@ export function transcriptFrontmatter(input: TranscriptInput): string {
     "---",
   ].join("\n");
 }
+
+export const ABSTRACT_HEADING = "课例摘要";
+
+/** 中文课例摘要块插入（2026-09-08 门槛④）：置于 frontmatter 之后、首个章节之前
+ *  ——检索锚放页首权重最高，观摩者最先读到。幂等：已有摘要块则原位替换
+ *  （重生成/回填重跑不叠块）。frontmatter 缺失（空页形态）时置顶。
+ *  纯字符串切片实现：replace 的 `$` 特殊符号与 multiline `$` 提前截断都是坑。 */
+export function insertAbstract(md: string, abstract: string): string {
+  const block = `## ${ABSTRACT_HEADING}\n\n${abstract.trim()}`;
+  const head = `\n## ${ABSTRACT_HEADING}\n`;
+  const start = md.indexOf(head);
+  if (start !== -1) {
+    const next = md.indexOf("\n## ", start + 1);
+    const end = next === -1 ? md.length : next;
+    return md.slice(0, start) + "\n" + block + (end === md.length ? "\n" : md.slice(end));
+  }
+  const fmEnd = md.indexOf("\n---\n", 1);
+  if (fmEnd === -1) return `${block}\n\n${md}`;
+  const after = fmEnd + "\n---\n".length;
+  return `${md.slice(0, after)}\n\n${block}\n${md.slice(after).replace(/^\n+/, "")}`;
+}
