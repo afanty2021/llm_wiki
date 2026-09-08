@@ -69,7 +69,7 @@ r1"删除宽恕句"作废——宽恕句的 title 解析真实救回 1076 条。
 
 ## 3. 测量工具与验收
 
-- **测量脚本版本化入仓**（建议 `tools/redlink-audit.py` + golden 单测）——双解析语义（服务端/桌面）复刻、label 三分支、碰撞排除全部固化；**不入仓则 <3% 验收线不可复现**（r1 执行会话与专科脚本均在 /tmp，已吃亏）。
+- **测量脚本版本化入仓 ✅（r2 已落地）**：`tools/redlink-audit.py`（`--golden` 内嵌用例自测全过；评审 8724 页快照复现 server 悬空 3333/9.4%、分类表七类与迷你页/白名单口径逐项一致）——双解析语义、label 三分支、碰撞排除全部固化。
 - 单测：白名单分组格式与 TOKENS_PER_ENTRY cap 公式（改造 `existing_paths_cap_links_budget`）、零 API 选摘合并去重、E 的现查双索引降级逻辑（含 title 碰撞排除同语义）。
 - 集成：stub prompt 结构锚同步新模板段（`--test-threads=1`、直调 run_ingest_job 惯例不变）。
 - 验收流程：试点重 ingest ≤10 源 → 双表面红链率 <3%（口径：新摄取源、链接实例分母）。
