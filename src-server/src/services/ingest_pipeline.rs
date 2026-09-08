@@ -328,10 +328,11 @@ fn parse_file_blocks(text: &str) -> (Vec<ParsedBlock>, usize) {
 }
 
 /// END 分隔符宽容匹配：`---END FILE---` 规范形，及模型偶发畸形（多余空格/破折号
-/// 数量偏差/大小写）。fence 内行不经过本判定（parse_file_blocks 的 fence 轨道先行）。
+/// 数量偏差/无尾连字符 `---END FILE`/大小写）。fence 内行不经过本判定
+/// （parse_file_blocks 的 fence 轨道先行）。复验 #2 观察项：无尾连字符形态曾漏匹配。
 fn is_end_file_delimiter(trimmed: &str) -> bool {
     static END_FILE_RE: std::sync::LazyLock<regex_lite::Regex> = std::sync::LazyLock::new(|| {
-        regex_lite::Regex::new(r"(?i)^\s*-{2,}\s*END\s+FILE\s*-{2,}\s*$").expect("end-file re")
+        regex_lite::Regex::new(r"(?i)^\s*-{2,}\s*END\s+FILE\s*(?:-{2,})?\s*$").expect("end-file re")
     });
     END_FILE_RE.is_match(trimmed)
 }
@@ -2329,12 +2330,14 @@ mod tests {
     fn parse_file_blocks_lenient_end_delimiter() {
         // FILE 块加固（2026-09-08 试点发现）：畸形 END（多余空格）必须照样闭块，
         // 否则其后的 ---REVIEW: 脚手架整段吸进正文（实证 table-retelling-strategy 事故）。
-        let text = "---FILE: concepts/a.md ---\n# A\n正文。\n---END FILE ---\n\n---REVIEW: missing-page | 校核\nOPTIONS: Skip\n---END REVIEW---\n---FILE: concepts/b.md ---\n# B\nBody B\n---END FILE---";
+        // 复验 #2 观察项随批：无尾连字符 `---END FILE` 形态同样闭块（b.md 的 END）。
+        let text = "---FILE: concepts/a.md ---\n# A\n正文。\n---END FILE ---\n\n---REVIEW: missing-page | 校核\nOPTIONS: Skip\n---END REVIEW---\n---FILE: concepts/b.md ---\n# B\nBody B\n---END FILE";
         let (blocks, strips) = parse_file_blocks(text);
         assert_eq!(blocks.len(), 2, "malformed END must close the block");
         assert!(blocks[0].content.contains("正文。"));
         assert!(!blocks[0].content.contains("END FILE"), "{}", blocks[0].content);
         assert!(!blocks[0].content.contains("REVIEW"), "{}", blocks[0].content);
+        assert!(blocks[1].content.contains("Body B"));
         assert_eq!(strips, 0, "END 由解析器闭块处理；块外 REVIEW 自然丢弃");
     }
 

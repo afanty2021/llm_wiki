@@ -74,7 +74,9 @@ def api(token, method, path, body=None, if_match=None):
 def put_page(token, path, content, frontmatter, skip_if_same=True):
     """乐观锁 PUT：GET→sha 同跳过→PUT if-match；409 重试一轮。
     skip_if_same=False 时内容即使未变也写（用于 sources 并集等纯 frontmatter 变更
-    ——复验 Minor：内容 sha 相同而只并 sources 时，整页 skip 会漏掉元数据）。"""
+    ——复验 Minor：内容 sha 相同而只并 sources 时，整页 skip 会漏掉元数据）。
+    I1（复验 #2 实锺）：body 的 frontmatter 必须用形参（合并后含并集 sources），
+    形参 None 才回落服务端现值——此前写死 cur.get() 使并集从未落库。"""
     q = f"/page?path={urllib.request.quote(path, safe='')}"
     for _ in range(2):
         st, cur = api(token, "GET", q)
@@ -83,8 +85,9 @@ def put_page(token, path, content, frontmatter, skip_if_same=True):
         new_hash = hashlib.sha256(content.encode()).hexdigest()
         if skip_if_same and hashlib.sha256((cur.get("content") or "").encode()).hexdigest() == new_hash:
             return "skipped"
+        fm = frontmatter if frontmatter is not None else cur.get("frontmatter")
         st, resp = api(token, "PUT", q,
-                       {"path": path, "content": content, "frontmatter": cur.get("frontmatter")},
+                       {"path": path, "content": content, "frontmatter": fm},
                        if_match=cur.get("updated_at"))
         if st == 200:
             return "updated"
