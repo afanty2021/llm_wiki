@@ -298,11 +298,32 @@ def cmd_merge(args):
     plan = json.load(open(args.plan))
     fresh_dump()
     pages = {p["path"]: p for p in load_pages()}
-    # loser 各种可解析形式 → canonical 裸 stem
+    # 删除后宇宙里 keep 的 stem 歧义检查：同 stem 多页（如 concepts/x + entities/x）
+    # 时裸 stem 会 first-wins 指错页——改写 token 降级用 keep 的唯一 title 形。
+    from collections import Counter
+    all_losers = {lp for g in plan["groups"] for lp in g["losers"]}
+    post = [p for p in pages.values() if p["path"] not in all_losers]
+    _, titles_post, _ = build_index(post)
+    stem_count = Counter(rla.norm_server(rla.stem_of(p["path"])) for p in post)
+    keep_token = {}
+    for g in plan["groups"]:
+        kp = g["keep_path"]
+        if kp not in pages:
+            continue
+        s = rla.norm_server(rla.stem_of(kp))
+        if stem_count.get(s, 0) > 1:
+            t = (pages[kp]["title"] or "").strip()
+            if t and rla.norm_server(t) in titles_post:
+                keep_token[kp] = t  # title 形可经 title 索引解析到本页
+                continue
+        keep_token[kp] = rla.stem_of(kp)  # 裸 stem
+    # loser 各种可解析形式 → keep 的改写 token
     loser_forms = {}
     for g in plan["groups"]:
         kp = g["keep_path"]
-        keep_stem = rla.stem_of(kp)
+        token = keep_token.get(kp)
+        if not token:
+            continue
         for lp in g["losers"]:
             lp_page = pages.get(lp)
             forms = {rla.norm_server(rla.stem_of(lp))}
@@ -311,7 +332,7 @@ def cmd_merge(args):
                 if lt:
                     forms.add(rla.norm_server(lt))
             for f in forms:
-                loser_forms[f] = keep_stem
+                loser_forms[f] = token
     # 1) 全库入链改写：[[loser 形|...]] / [[loser 形]] → [[canonical-stem|原文]]
     rewrites = []
     for p in pages.values():
