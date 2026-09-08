@@ -105,12 +105,25 @@ pub fn ensure_test_jwt_secret() {
     }
 }
 
+/// 同理把测试存储根钉到一次性目录（default.json storage.path 已改指 ~/kb-storage
+/// 真实根——2026-09-08 根除 /tmp 存储雷）。不钉会让每轮集成测试经 create-project
+/// 在真实存储根下留空项目目录脚手架。
+pub fn ensure_test_storage_root() {
+    if std::env::var("STORAGE__PATH").unwrap_or_default().is_empty() {
+        std::env::set_var(
+            "STORAGE__PATH",
+            std::env::temp_dir().join("llmwiki-test-storage"),
+        );
+    }
+}
+
 /// 构建测试 app（连 live DB 5433 + Redis 6380，配置来自 config/default.json）。
 /// default.json 已翻 registration_enabled=false（Task 6 r3 fail-closed；测试二进制
 /// 不读 .env——from_env 无 dotenv），故 from_env 后显式注入 true 再 create_app，
 /// 否则本文件 27 处 register_user 调用全 403。
 pub async fn setup_test_app() -> (Router, AppState) {
     ensure_test_jwt_secret();
+    ensure_test_storage_root();
     let mut config = llm_wiki_server::AppConfig::from_env().expect("Failed to load test config");
     config.auth.registration_enabled = true;
     llm_wiki_server::create_app(config)

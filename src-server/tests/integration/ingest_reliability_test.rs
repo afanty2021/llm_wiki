@@ -187,7 +187,12 @@ async fn partial_resume_skips_done_source_and_avoids_all_failed() {
             .fetch_one(&state.db)
             .await
             .unwrap();
-    let base = format!("/tmp/llmwiki_storage/teams/{}/projects/{}", team_id, pid);
+    let base = format!(
+        "{}/teams/{}/projects/{}",
+        state.config.storage_path().trim_end_matches('/'),
+        team_id,
+        pid
+    );
     let _ = std::fs::create_dir_all(format!("{}/raw", base));
 
     // 构造 job：source_paths=[done 的 + 缺失的]，item_states 已标记 done

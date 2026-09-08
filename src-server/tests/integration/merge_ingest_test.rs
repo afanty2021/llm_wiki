@@ -180,8 +180,9 @@ where
     }
 }
 
-/// 经 storage 后端写 fixture source（LocalStorage 落 /tmp/llmwiki_storage，
-/// 与 run_ingest_job 的 read_bytes 同一后端，无视图漂移）。dyn Trait 接收者上
+/// 经 storage 后端写 fixture source（LocalStorage 落 STORAGE__PATH 下的
+/// teams/{tid}/projects/{pid}，与 run_ingest_job 的 read_bytes 同一后端，无视图漂移）。
+/// dyn Trait 接收者上
 /// 调 trait 方法无需 use 引入（类型即作用域），故无内部 use 行。
 async fn t8_write_source(env: &T8Env, rel: &str, content: &str) {
     env.state

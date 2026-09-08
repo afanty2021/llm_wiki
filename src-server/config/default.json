@@ -14,7 +14,7 @@
     "refresh_token_ttl": 604800
   },
   "storage": {
-    "path": "/tmp/llmwiki_storage"
+    "path": "/Users/berton/kb-storage"
   },
   "cors": {
     "allowed_origins": [

@@ -6,7 +6,6 @@ use axum::{
     Router,
 };
 use sqlx::Row;
-use uuid::Uuid;
 use crate::{
     middleware::require_auth, AppError, AppState,
     models::{
@@ -81,8 +80,9 @@ async fn check_team_membership(
 
 /// POST /projects — Create a new project
 ///
-/// Requires `team_id` in the request body. Generates a storage_path from
-/// `{config_storage_path}/{team_id}/{uuid}`, creates the directory on disk,
+/// Requires `team_id` in the request body. Records storage_path in the
+/// `{config_storage_path}/teams/{team_id}/projects/{id}` layout (same shape as
+/// storage::project_base), creates the directory on disk,
 /// and returns a ProjectResponse with file_count = 0.
 async fn create_project(
     State(state): State<AppState>,
@@ -103,38 +103,41 @@ async fn create_project(
     // Verify user is a member of the team
     check_team_membership(&state, team_id, user_id).await?;
 
-    // Generate storage path: {config_storage_path}/{team_id}/{uuid}
-    let project_uuid = Uuid::new_v4();
-    let storage_path = format!(
-        "{}/{}/{}",
-        state.config.storage_path().trim_end_matches('/'),
-        team_id,
-        project_uuid
-    );
-
-    // Create directory on disk
-    std::fs::create_dir_all(&storage_path).map_err(|e| {
-        AppError::InternalError(format!("Failed to create project directory: {}", e))
-    })?;
-
-    // Insert project into database
+    // storage_path 与 storage::project_base 同形（{root}/teams/{tid}/projects/{pid}）：
+    // 文件 I/O 统一走 project_base，此列只是元数据记录，但两者必须同形——否则误导
+    // 运维（2026-09-08：614 行残留旧布局 /tmp 路径，排查被带偏数轮）。id 由 INSERT
+    // 生成，故先插行占位、再按真实 id 建目录并回写。
     let row = sqlx::query(
         "INSERT INTO projects (team_id, name, storage_path, created_by) \
-         VALUES ($1, $2, $3, $4) \
+         VALUES ($1, $2, '', $3) \
          RETURNING id, team_id, name, storage_path, created_by, created_at",
     )
     .bind(team_id)
     .bind(req.name.trim())
-    .bind(&storage_path)
     .bind(user_id)
     .fetch_one(&state.db)
     .await?;
+
+    let new_project_id: i32 = row.get("id");
+    let storage_path = crate::services::storage::project_base(
+        state.config.storage_path().trim_end_matches('/'),
+        team_id,
+        new_project_id,
+    );
+    std::fs::create_dir_all(&storage_path).map_err(|e| {
+        AppError::InternalError(format!("Failed to create project directory: {}", e))
+    })?;
+    sqlx::query("UPDATE projects SET storage_path = $2 WHERE id = $1")
+        .bind(new_project_id)
+        .bind(storage_path.to_string_lossy().as_ref())
+        .execute(&state.db)
+        .await?;
 
     let project_response = ProjectResponse {
         id: row.get("id"),
         team_id: row.get("team_id"),
         name: row.get("name"),
-        storage_path: row.get("storage_path"),
+        storage_path: storage_path.to_string_lossy().to_string(),
         created_by: row.get("created_by"),
         created_at: row.get("created_at"),
         file_count: 0,
