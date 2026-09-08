@@ -219,46 +219,50 @@ static LINK_RE: std::sync::LazyLock<regex_lite::Regex> =
 /// 不可解析链接降级纯文本（[[t|label]] → label；[[t]] → t），返回降级数。
 /// 只降级不改写可解析链接；计数上浮 job warnings（观测不 fail）。
 fn downgrade_unresolvable_links(pages: &mut [WikiPageInsert], idx: &LinkIndex) -> usize {
-    let re = &*LINK_RE;
     let mut total = 0usize;
     for page in pages {
-        if !page.content.contains("[[") {
-            continue;
-        }
-        // M1（实现评审）：code fence 内的链接是示例/转义展示，不参与降级——逐行扫描
-        // 以 ``` 翻转围栏态（围栏内行原样保留）。
-        let mut downgraded = 0usize;
-        let mut in_fence = false;
-        let mut out_lines: Vec<String> = Vec::new();
-        for line in page.content.split('\n') {
-            if line.trim_start().starts_with("```") {
-                in_fence = !in_fence;
-                out_lines.push(line.to_string());
-                continue;
-            }
-            if in_fence {
-                out_lines.push(line.to_string());
-                continue;
-            }
-            let new = re.replace_all(line, |caps: &regex_lite::Captures| {
-                let target = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-                if link_resolves(idx, target) {
-                    caps[0].to_string()
-                } else {
-                    downgraded += 1;
-                    caps.get(2)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_else(|| target.to_string())
-                }
-            });
-            out_lines.push(new.into_owned());
-        }
-        if downgraded > 0 {
-            page.content = out_lines.join("\n");
-            total += downgraded;
-        }
+        total += downgrade_links_in_str(&mut page.content, idx);
     }
     total
+}
+
+/// 字符串级降级核心（生成路径与 merge 路径共用）。M1（实现评审）：code fence 内的
+/// 链接是示例/转义展示，不参与降级——逐行扫描以 ``` 翻转围栏态（围栏内行原样保留）。
+fn downgrade_links_in_str(content: &mut String, idx: &LinkIndex) -> usize {
+    if !content.contains("[[") {
+        return 0;
+    }
+    let re = &*LINK_RE;
+    let mut downgraded = 0usize;
+    let mut in_fence = false;
+    let mut out_lines: Vec<String> = Vec::new();
+    for line in content.split('\n') {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            out_lines.push(line.to_string());
+            continue;
+        }
+        if in_fence {
+            out_lines.push(line.to_string());
+            continue;
+        }
+        let new = re.replace_all(line, |caps: &regex_lite::Captures| {
+            let target = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+            if link_resolves(idx, target) {
+                caps[0].to_string()
+            } else {
+                downgraded += 1;
+                caps.get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| target.to_string())
+            }
+        });
+        out_lines.push(new.into_owned());
+    }
+    if downgraded > 0 {
+        *content = out_lines.join("\n");
+    }
+    downgraded
 }
 
 /// FILE block 解析。移植桌面 parseFileBlocks，含 CommonMark code fence 感知。
@@ -1548,12 +1552,56 @@ pub async fn run_ingest_job(
                             }
                             match merge_provider.as_ref() {
                                 Some(p) => match merge_pages_via(&**p, language, &sp, &e.content, &page.content).await {
-                                    Ok(merged_content) => {
+                                    Ok(mut merged_content) => {
                                         if merged_content.len() > (e.content.len() + page.content.len()) * 4 / 5 {
                                             result.warnings.push(format!(
                                                 "merge {}: output longer than 80% of combined inputs (inflation watch)",
                                                 page.path
                                             ));
+                                        }
+                                        // 处方 E·merge 口（试点 2026-09-08 补）：merge 输入含旧版
+                                        // 正文，存量红链会借合并还魂（our-dreams-lesson ×4 实证）
+                                        // ——落库前跑同一降级；现查 DB + 本响应块 pairs 与生成口
+                                        // 同语义，查库失败 fail-open（C1 同款，宁漏降不误降）。
+                                        if merged_content.contains("[[") {
+                                            match sqlx::query_as::<_, (String, String)>(
+                                                "SELECT path, COALESCE(title, '') FROM wiki_pages WHERE project_id = $1",
+                                            )
+                                            .bind(job.project_id)
+                                            .fetch_all(&state.db)
+                                            .await
+                                            {
+                                                Ok(db_pairs) => {
+                                                    let current_pairs: Vec<(String, String)> = processed
+                                                        .pages
+                                                        .iter()
+                                                        .map(|p| {
+                                                            (p.path.clone(), p.title.clone().unwrap_or_default())
+                                                        })
+                                                        .collect();
+                                                    let idx = build_link_index(&db_pairs, &current_pairs);
+                                                    let n =
+                                                        downgrade_links_in_str(&mut merged_content, &idx);
+                                                    if n > 0 {
+                                                        tracing::warn!(
+                                                            path = %page.path,
+                                                            downgraded = n,
+                                                            "redlink: merge 输出降级存量红链（处方 E·merge 口）"
+                                                        );
+                                                        result.warnings.push(format!(
+                                                            "redlink: downgraded {} legacy wikilinks in merged {}",
+                                                            n, page.path
+                                                        ));
+                                                    }
+                                                }
+                                                Err(err) => {
+                                                    tracing::warn!(
+                                                        path = %page.path,
+                                                        error = %err,
+                                                        "redlink: merge 口查库失败，跳过降级（fail-open，防批量误降级）"
+                                                    );
+                                                }
+                                            }
                                         }
                                         Some(Ok((merged_content, union_sources(&e.sources, &page.sources, &sp))))
                                     }
@@ -3114,6 +3162,22 @@ mod tests {
         assert!(c.contains("[[Mary]]") && c.contains("[[pre-class-preview-strategy|预习]]") && c.contains("[[self-abc]]"), "{c}");
         assert!(c.contains("ghost-link") && !c.contains("[[ghost-link]]"), "{c}");
         assert!(c.contains("幽灵") && !c.contains("[[ghost|幽灵]]"), "{c}");
+    }
+
+    #[test]
+    fn downgrade_links_in_str_merge_path_fences_and_bare_targets() {
+        let pairs = vec![("concepts/tpr.md".into(), "全身反应法".into())];
+        let idx = build_link_index(&pairs, &[]);
+        let mut s = "见 [[TPR|全身反应]] 与 [[ghost-x.md|幽灵]]；裸 [[ghost-y]]。\n\n```md\n[[ghost-x.md|围栏内示例保留]]\n```\n".into();
+        let n = downgrade_links_in_str(&mut s, &idx);
+        assert_eq!(n, 2, "{s}");
+        assert!(s.contains("[[TPR|全身反应]]"), "{s}");
+        assert!(s.contains("与 幽灵；裸 ghost-y。"), "{s}");
+        assert!(s.contains("[[ghost-x.md|围栏内示例保留]]"), "{s}");
+        // 无 [[ 的正文零改动直返
+        let mut plain = "没有链接的正文".into();
+        assert_eq!(downgrade_links_in_str(&mut plain, &idx), 0);
+        assert_eq!(plain, "没有链接的正文");
     }
 
     #[tokio::test]
