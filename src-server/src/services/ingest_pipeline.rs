@@ -182,8 +182,8 @@ struct LinkIndex {
     titles: std::collections::HashMap<String, String>,
 }
 
-/// pairs = (path, title)。current_paths（本响应 FILE block paths）一并入索引——
-/// 自源生成的页按定义必然落库。
+/// pairs = (path, title)。current_pairs（本响应 FILE blocks 的真实 (path, title)）一并
+/// 入索引——否则同响应内 [[新页标题]] 落库后本可经 title 表解析，却被假阳性降级（I3）。
 fn build_link_index(pairs: &[(String, String)], current_pairs: &[(String, String)]) -> LinkIndex {
     let mut stems = std::collections::HashMap::new();
     // I3：本响应块以真实 (path, title) 入索引（空 title 会让 [[新页标题]] 假阳性降级）
@@ -912,7 +912,8 @@ fn repair_json_text(s: &str) -> Option<String> {
 /// 25 字符 ≈ 6-7 token/条（评审 F3 token 实测：旧行式 2000 条 ≈19.5k token、压缩
 /// ≈12.5k——同预算 2000→约 4300，×2 非 ×3）。clamp 上限改绑 concepts+entities 页面
 /// 总数（r1 硬编码 2000 在 7831 页时覆盖率仅 25.5%、a-e 字母序头部偏置 1873 页）；
-/// 页面总数由 fetch_concept_entity_paths 内部 count 后再 clamp（本函数只管预算）。
+/// 页面总数封顶由 fetch_concept_entity_pairs 全量拉取后 take(cap) 自然完成
+/// （本函数只管预算；M4 的 count 查询已随 I1 全量拉取废除）。
 const TOKENS_PER_ENTRY_COMPRESSED: u32 = 7;
 
 fn existing_paths_cap(context_size: u32) -> i64 {
