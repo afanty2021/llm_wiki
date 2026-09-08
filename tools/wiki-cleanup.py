@@ -71,15 +71,17 @@ def api(token, method, path, body=None, if_match=None):
         return e.code, (e.read()[:200].decode("utf-8", "replace"))
 
 
-def put_page(token, path, content, frontmatter):
-    """乐观锁 PUT：GET→sha 同跳过→PUT if-match；409 重试一轮。"""
+def put_page(token, path, content, frontmatter, skip_if_same=True):
+    """乐观锁 PUT：GET→sha 同跳过→PUT if-match；409 重试一轮。
+    skip_if_same=False 时内容即使未变也写（用于 sources 并集等纯 frontmatter 变更
+    ——复验 Minor：内容 sha 相同而只并 sources 时，整页 skip 会漏掉元数据）。"""
     q = f"/page?path={urllib.request.quote(path, safe='')}"
     for _ in range(2):
         st, cur = api(token, "GET", q)
         if st != 200:
             raise RuntimeError(f"GET {path} -> {st}")
         new_hash = hashlib.sha256(content.encode()).hexdigest()
-        if hashlib.sha256((cur.get("content") or "").encode()).hexdigest() == new_hash:
+        if skip_if_same and hashlib.sha256((cur.get("content") or "").encode()).hexdigest() == new_hash:
             return "skipped"
         st, resp = api(token, "PUT", q,
                        {"path": path, "content": content, "frontmatter": cur.get("frontmatter")},
@@ -366,15 +368,18 @@ def cmd_merge(args):
            [pages[lp] for lp in losers_all if lp in pages]
            + [p for p, _, _ in rewrites] + [m[0] for m in merges],
            "losers 删除前原文 + 改写/合并页改前原文")
-    token = args.token or login_default()
+    # 复验 Minor：token 不走命令行（ps/历史泄漏面），改环境变量 WIKI_TOKEN
+    token = os.environ.get("WIKI_TOKEN") or login_default()
     for i, (p, new, _) in enumerate(rewrites):
         put_page(token, p["path"], new, json.loads(p["frontmatter"]) if p["frontmatter"] else None)
         if (i + 1) % 50 == 0:
             print(f"  改写进度 {i+1}/{len(rewrites)}")
     for kp, new_content, fm_sources, _ in merges:
         fm = json.loads(kp["frontmatter"]) if kp["frontmatter"] else {}
+        # 复验 Minor：sources 并集变了就必须写，即使内容未变
+        fm_changed = sorted(fm.get("sources") or []) != sorted(fm_sources)
         fm["sources"] = fm_sources
-        put_page(token, kp["path"], new_content, fm)
+        put_page(token, kp["path"], new_content, fm, skip_if_same=not fm_changed)
     ok = fail = 0
     for lp in losers_all:
         try:
@@ -427,7 +432,7 @@ def cmd_purge(args):
             print(f"  {p['path']} | {p['content'][:60].replace(chr(10), ' / ')}")
         return
     backup("mini-purge", rows, "删除前原文；误删可依 frontmatter+content 经 API 重建")
-    token = args.token or login_default()
+    token = os.environ.get("WIKI_TOKEN") or login_default()
     ok = fail = 0
     for p in rows:
         try:
@@ -441,7 +446,6 @@ def cmd_purge(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--token", help="显式 token（DELETE 需 admin 角色账号时用）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("backfill-links"); b.add_argument("--execute", action="store_true")
     sub.add_parser("plan-merge")
