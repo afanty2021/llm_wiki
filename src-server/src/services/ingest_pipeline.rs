@@ -39,6 +39,9 @@ struct ProcessedSource {
     /// r2 处方 E：本源被降级为纯文本的不可解析链接数（0 = 无降级）。
     /// 归并段据此往 job result.warnings 追加一条计数（计划 §1.E：观测不 fail）。
     link_downgrades: usize,
+    /// FILE 块加固（2026-09-08 试点批裁定）：落块前剥离的管线脚手架工件数
+    /// （畸形 END 分隔符行 / 混入正文的 ---REVIEW: 段）。归并段据此上浮 warnings。
+    scaffold_strips: usize,
 }
 
 // ── 纯函数 ──
@@ -266,9 +269,13 @@ fn downgrade_links_in_str(content: &mut String, idx: &LinkIndex) -> usize {
 }
 
 /// FILE block 解析。移植桌面 parseFileBlocks，含 CommonMark code fence 感知。
-fn parse_file_blocks(text: &str) -> Vec<ParsedBlock> {
+/// 返回 (blocks, 剥离的管线脚手架工件数——畸形 END 分隔符行/混入的 REVIEW 段，
+/// FILE 块加固 2026-09-08：模型偶发畸形分隔符（如 `---END FILE ---`）曾把
+/// ---REVIEW: 脚手架整段吸进正文污染落库页，实证 concepts/table-retelling-strategy）。
+fn parse_file_blocks(text: &str) -> (Vec<ParsedBlock>, usize) {
     let text = text.replace("\r\n", "\n");
     let mut blocks = vec![];
+    let mut scaffold_strips = 0usize;
     let mut in_block = false;
     let mut cur_path = String::new();
     let mut cur_content = String::new();
@@ -294,15 +301,15 @@ fn parse_file_blocks(text: &str) -> Vec<ParsedBlock> {
                 .and_then(|s| s.strip_suffix(" ---"))
             {
                 if in_block && !cur_content.is_empty() {
-                    push_validated_block(&mut blocks, &cur_path, &cur_content);
+                    flush_block(&mut blocks, &cur_path, &cur_content, &mut scaffold_strips);
                 }
                 cur_path = path.trim().to_string();
                 cur_content.clear();
                 in_block = true;
                 continue;
             }
-            if trimmed == "---END FILE---" && in_block {
-                push_validated_block(&mut blocks, &cur_path, &cur_content);
+            if is_end_file_delimiter(trimmed) && in_block {
+                flush_block(&mut blocks, &cur_path, &cur_content, &mut scaffold_strips);
                 in_block = false;
                 cur_content.clear();
                 continue;
@@ -315,9 +322,66 @@ fn parse_file_blocks(text: &str) -> Vec<ParsedBlock> {
         }
     }
     if in_block && !cur_content.is_empty() {
-        push_validated_block(&mut blocks, &cur_path, &cur_content);
+        flush_block(&mut blocks, &cur_path, &cur_content, &mut scaffold_strips);
     }
-    blocks
+    (blocks, scaffold_strips)
+}
+
+/// END 分隔符宽容匹配：`---END FILE---` 规范形，及模型偶发畸形（多余空格/破折号
+/// 数量偏差/大小写）。fence 内行不经过本判定（parse_file_blocks 的 fence 轨道先行）。
+fn is_end_file_delimiter(trimmed: &str) -> bool {
+    static END_FILE_RE: std::sync::LazyLock<regex_lite::Regex> = std::sync::LazyLock::new(|| {
+        regex_lite::Regex::new(r"(?i)^\s*-{2,}\s*END\s+FILE\s*-{2,}\s*$").expect("end-file re")
+    });
+    END_FILE_RE.is_match(trimmed)
+}
+
+/// 落块前剥管线脚手架（防御纵深）：块内残留的 END 分隔符行与 ---REVIEW: …
+/// ---END REVIEW--- 段（step2 偶发把 review 块写进 FILE 正文）一律剥离并计数。
+/// fence 感知（M1 同理：围栏内是示例/转义展示，不参与剥离）。
+fn flush_block(blocks: &mut Vec<ParsedBlock>, path: &str, content: &str, strips: &mut usize) {
+    let mut n = 0usize;
+    let mut out_lines: Vec<&str> = Vec::new();
+    let mut in_review = false;
+    let mut in_fence = false;
+    for line in content.split('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            out_lines.push(line);
+            continue;
+        }
+        if in_fence {
+            out_lines.push(line);
+            continue;
+        }
+        if in_review {
+            if trimmed.eq_ignore_ascii_case("---END REVIEW---") {
+                in_review = false;
+                n += 1;
+            }
+            continue;
+        }
+        if trimmed.starts_with("---REVIEW:") {
+            in_review = true;
+            continue;
+        }
+        if is_end_file_delimiter(trimmed) {
+            n += 1;
+            continue;
+        }
+        out_lines.push(line);
+    }
+    if in_review {
+        n += 1; // 未闭合 REVIEW 段也计一次
+    }
+    let text: String = if n > 0 {
+        out_lines.join("\n").trim_matches('\n').to_string()
+    } else {
+        content.to_string()
+    };
+    *strips += n;
+    push_validated_block(blocks, path, &text);
 }
 
 fn parse_single_block(path: &str, content: &str) -> ParsedBlock {
@@ -1516,6 +1580,12 @@ pub async fn run_ingest_job(
                         processed.link_downgrades, sp
                     ));
                 }
+                if processed.scaffold_strips > 0 {
+                    result.warnings.push(format!(
+                        "step2: stripped {} pipeline scaffolding artifact(s) from FILE blocks of {}",
+                        processed.scaffold_strips, sp
+                    ));
+                }
                 let pages_to_write = processed.pages.len();
                 let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
                 for page in &processed.pages {
@@ -1844,7 +1914,11 @@ async fn process_source_path(
         source_path,
     )
     .await?;
-    let blocks = parse_file_blocks(&llm_output);
+    let (blocks, scaffold_strips) = parse_file_blocks(&llm_output);
+    if scaffold_strips > 0 {
+        tracing::warn!(source = %source_path, stripped = scaffold_strips,
+            "step2 FILE blocks contained pipeline scaffolding (malformed END / REVIEW segment)——stripped");
+    }
     // 静默零页观测防线（2026-09-02 直播回放批 4aadfd65 教训）：LLM 输出非空但解析
     // 零块 = 结构性异常（如 thinking 烧爆预算后正文残缺），比"零块零页"的既定
     // done 语义更危险——留 warn 痕（不 fail，保持零门槛 done 兼容），复盘可查。
@@ -1941,7 +2015,7 @@ async fn process_source_path(
     // 不在此 mark_file_ingested / insert reviews：元数据 + reviews 上浮给 run_ingest_job，
     // 待 wiki_pages 成功落库后再 mark + insert（守 deferred-write 不变量：upsert 失败 →
     // 不 mark → 下次重处理；不插 review → 无孤儿/重复）。
-    Ok(Some(ProcessedSource { pages, reviews, content_hash, file_size, file_type, link_downgrades }))
+    Ok(Some(ProcessedSource { pages, reviews, content_hash, file_size, file_type, link_downgrades, scaffold_strips }))
 }
 
 /// 取页面用于嵌入的文本（content 非空时）；None 表示不适合嵌入。
@@ -2220,7 +2294,7 @@ mod tests {
     #[test]
     fn parse_file_blocks_single_block() {
         let text = "---FILE: concepts/test.md ---\n---\ntitle: Test\ntype: concept\n---\n# Test\nBody text.\n---END FILE---";
-        let blocks = parse_file_blocks(text);
+        let (blocks, _) = parse_file_blocks(text);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].path, "concepts/test.md");
         assert_eq!(blocks[0].title.as_deref(), Some("Test"));
@@ -2231,7 +2305,7 @@ mod tests {
     #[test]
     fn parse_file_blocks_multiple_blocks() {
         let text = "---FILE: a.md ---\n---\ntitle: A\n---\nBody A\n---END FILE---\n\n---FILE: b.md ---\n---\ntitle: B\n---\nBody B\n---END FILE---";
-        let blocks = parse_file_blocks(text);
+        let (blocks, _) = parse_file_blocks(text);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].path, "a.md");
         assert_eq!(blocks[1].path, "b.md");
@@ -2239,16 +2313,40 @@ mod tests {
 
     #[test]
     fn parse_file_blocks_no_blocks() {
-        assert!(parse_file_blocks("Just some text.").is_empty());
+        assert!(parse_file_blocks("Just some text.").0.is_empty());
     }
 
     #[test]
     fn parse_file_blocks_code_fence_aware() {
         let text = "---FILE: code.md ---\n---\ntitle: Code\n---\n```\n---END FILE---\n```\nReal end here.\n---END FILE---";
-        let blocks = parse_file_blocks(text);
+        let (blocks, _) = parse_file_blocks(text);
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].content.contains("---END FILE---"), "fence content preserved");
         assert!(blocks[0].content.contains("Real end here."));
+    }
+
+    #[test]
+    fn parse_file_blocks_lenient_end_delimiter() {
+        // FILE 块加固（2026-09-08 试点发现）：畸形 END（多余空格）必须照样闭块，
+        // 否则其后的 ---REVIEW: 脚手架整段吸进正文（实证 table-retelling-strategy 事故）。
+        let text = "---FILE: concepts/a.md ---\n# A\n正文。\n---END FILE ---\n\n---REVIEW: missing-page | 校核\nOPTIONS: Skip\n---END REVIEW---\n---FILE: concepts/b.md ---\n# B\nBody B\n---END FILE---";
+        let (blocks, strips) = parse_file_blocks(text);
+        assert_eq!(blocks.len(), 2, "malformed END must close the block");
+        assert!(blocks[0].content.contains("正文。"));
+        assert!(!blocks[0].content.contains("END FILE"), "{}", blocks[0].content);
+        assert!(!blocks[0].content.contains("REVIEW"), "{}", blocks[0].content);
+        assert_eq!(strips, 0, "END 由解析器闭块处理；块外 REVIEW 自然丢弃");
+    }
+
+    #[test]
+    fn parse_file_blocks_strips_review_segment_inside_block() {
+        // REVIEW 段写在块内（规范 END 之前）→ 落块前剥离并计数
+        let text = "---FILE: concepts/a.md ---\n# A\n正文第一段。\n---REVIEW: missing-page | 校核\nOPTIONS: Skip\n---END REVIEW---\n---END FILE---";
+        let (blocks, strips) = parse_file_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].content.contains("正文第一段。"));
+        assert!(!blocks[0].content.contains("REVIEW"), "{}", blocks[0].content);
+        assert_eq!(strips, 1);
     }
 
     // ── W2：step2 FILE block path 确定性校验（m3-impl-review 次级收编）──
@@ -2258,7 +2356,7 @@ mod tests {
         // 中文 / 空格 / 大写 → 该页按解析失败处理（不入 blocks）
         let text = "---FILE: 概念/机器学习.md ---\n# A\nBody\n---END FILE---\n\
                     ---FILE: concepts/My Page.md ---\n# B\nBody\n---END FILE---";
-        let blocks = parse_file_blocks(text);
+        let (blocks, _) = parse_file_blocks(text);
         assert!(
             blocks.is_empty(),
             "non-slug paths must be dropped, got {:?}",
@@ -2272,7 +2370,7 @@ mod tests {
         // 照常通过——run_ingest_job 的 transcripts/ 对账守卫（is_llm_generated_path）不受影响
         let text = "---FILE: concepts/my-page_v2.0.md ---\n# A\nBody\n---END FILE---\n\
                     ---FILE: transcripts/t9-sess-1.md ---\n# T\nBody\n---END FILE---";
-        let blocks = parse_file_blocks(text);
+        let (blocks, _) = parse_file_blocks(text);
         let paths: Vec<&str> = blocks.iter().map(|b| b.path.as_str()).collect();
         assert_eq!(paths, vec!["concepts/my-page_v2.0.md", "transcripts/t9-sess-1.md"]);
     }
@@ -2283,7 +2381,7 @@ mod tests {
         let text = "---FILE: a.md ---\n# A\nBody\n---END FILE---\n\
                     ---FILE: 概念/B页.md ---\n# B\nBody\n---END FILE---\n\
                     ---FILE: c.md ---\n# C\nBody\n---END FILE---";
-        let blocks = parse_file_blocks(text);
+        let (blocks, _) = parse_file_blocks(text);
         let paths: Vec<&str> = blocks.iter().map(|b| b.path.as_str()).collect();
         assert_eq!(paths, vec!["a.md", "c.md"]);
     }
