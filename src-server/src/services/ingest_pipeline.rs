@@ -36,6 +36,9 @@ struct ProcessedSource {
     content_hash: String,
     file_size: i64,
     file_type: String,
+    /// r2 处方 E：本源被降级为纯文本的不可解析链接数（0 = 无降级）。
+    /// 归并段据此往 job result.warnings 追加一条计数（计划 §1.E：观测不 fail）。
+    link_downgrades: usize,
 }
 
 // ── 纯函数 ──
@@ -151,6 +154,93 @@ fn push_validated_block(blocks: &mut Vec<ParsedBlock>, path: &str, content: &str
             "step2 FILE block path is not an ASCII slug (W2), treating page as parse failure"
         );
     }
+}
+
+// ── r2 处方 E：生成后链接校验兜底（落块口、embed 批 :1447 之前——process_source_path
+// 内天然满足时序；未来任何 job 末端 pass 也必须在嵌批前）────────────────────────
+
+/// graph.rs normalize_stem 同语义：lowercase + ASCII 空格 → '-'（不折叠多空格）。
+fn norm_server(s: &str) -> String {
+    s.to_lowercase().replace(' ', "-")
+}
+
+/// graph.rs path_stem 同语义：最后一个 '/' 之后、".md" 之前。
+fn stem_of(path: &str) -> &str {
+    let last = path.rsplit('/').next().unwrap_or(path);
+    last.trim_end_matches(".md")
+}
+
+/// 剥命名空间前缀（concepts/ entities/）——模块级 fn 避免闭包两处借用的生命周期纠缠。
+fn strip_ns(p: &str) -> &str {
+    p.trim_start_matches("concepts/").trim_start_matches("entities/")
+}
+
+/// 双索引（语义对齐 graph.rs）：stem 表重复取首个（path 人写重名常见，宁取首）；
+/// title 表碰撞组整组排除（宁缺毋错——指向错页比红链更糟，graph.rs build_title_to_path 同款）。
+struct LinkIndex {
+    stems: std::collections::HashMap<String, String>,
+    titles: std::collections::HashMap<String, String>,
+}
+
+/// pairs = (path, title)。current_paths（本响应 FILE block paths）一并入索引——
+/// 自源生成的页按定义必然落库。
+fn build_link_index(pairs: &[(String, String)], current_paths: &[String]) -> LinkIndex {
+    let mut stems = std::collections::HashMap::new();
+    let mut all: Vec<(String, String)> = pairs.to_vec();
+    for p in current_paths {
+        all.push((p.clone(), String::new()));
+    }
+    for (path, _) in &all {
+        stems.entry(norm_server(stem_of(path))).or_insert_with(|| path.clone());
+    }
+    let mut groups: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (path, title) in &all {
+        if !title.trim().is_empty() {
+            groups.entry(norm_server(title.trim())).or_default().push(path.clone());
+        }
+    }
+    let titles = groups
+        .into_iter()
+        .filter(|(_, v)| v.len() == 1)
+        .map(|(k, v)| (k, v[0].clone()))
+        .collect();
+    LinkIndex { stems, titles }
+}
+
+fn link_resolves(idx: &LinkIndex, target: &str) -> bool {
+    let k = norm_server(target);
+    idx.stems.contains_key(&k) || idx.titles.contains_key(&k)
+}
+
+const LINK_RE_STR: &str = r"\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]";
+
+/// 不可解析链接降级纯文本（[[t|label]] → label；[[t]] → t），返回降级数。
+/// 只降级不改写可解析链接；计数上浮 job warnings（观测不 fail）。
+fn downgrade_unresolvable_links(pages: &mut [WikiPageInsert], idx: &LinkIndex) -> usize {
+    let re = regex_lite::Regex::new(LINK_RE_STR).expect("redlink downgrade regex");
+    let mut total = 0usize;
+    for page in pages {
+        if !page.content.contains("[[") {
+            continue;
+        }
+        let mut downgraded = 0usize;
+        let new = re.replace_all(&page.content, |caps: &regex_lite::Captures| {
+            let target = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+            if link_resolves(idx, target) {
+                caps[0].to_string()
+            } else {
+                downgraded += 1;
+                caps.get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| target.to_string())
+            }
+        });
+        if downgraded > 0 {
+            page.content = new.into_owned();
+            total += downgraded;
+        }
+    }
+    total
 }
 
 /// FILE block 解析。移植桌面 parseFileBlocks，含 CommonMark code fence 感知。
@@ -800,16 +890,30 @@ fn repair_json_text(s: &str) -> Option<String> {
     }
 }
 
-/// §2 清单 cap 与 context 预算联动（评审 I3/I-5）：合算式
-/// 清单 ≤ (context_size - 8000) / 4 / 12（path 实测 8-12 token/行），clamp 到 [1, 2000]。
-/// 128k → 2500 → 取 2000；32k → 500。
+/// §2 清单 cap 与 context 预算联动（r2 处方 A 修订）：压缩分组格式实测 slug 均长
+/// 25 字符 ≈ 6-7 token/条（评审 F3 token 实测：旧行式 2000 条 ≈19.5k token、压缩
+/// ≈12.5k——同预算 2000→约 4300，×2 非 ×3）。clamp 上限改绑 concepts+entities 页面
+/// 总数（r1 硬编码 2000 在 7831 页时覆盖率仅 25.5%、a-e 字母序头部偏置 1873 页）；
+/// 页面总数由 fetch_concept_entity_paths 内部 count 后再 clamp（本函数只管预算）。
+const TOKENS_PER_ENTRY_COMPRESSED: u32 = 7;
+
 fn existing_paths_cap(context_size: u32) -> i64 {
-    (((context_size.saturating_sub(8000)) / 4 / 12) as i64).clamp(1, 2000)
+    (((context_size.saturating_sub(8000)) / 4 / TOKENS_PER_ENTRY_COMPRESSED) as i64).max(1)
 }
 
 /// §2 slug 对齐：既有 concepts/entities 页清单（前缀即白名单，评审 A-M7——
-/// 手动建页的任意脏 path 不匹配前缀不入清单）。每 job 查一次；LIMIT 与 budget 联动。
-async fn fetch_concept_entity_paths(state: &AppState, project_id: i32, cap: i64) -> Vec<String> {
+/// 手动建页的任意脏 path 不匹配前缀不入清单）。每 job 查一次；count-clamp 后
+/// LIMIT 与预算联动（r2 处方 A：上限改绑页面总数）。
+async fn fetch_concept_entity_paths(state: &AppState, project_id: i32, budget_cap: i64) -> Vec<String> {
+    let total: (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM wiki_pages WHERE project_id = $1 \
+         AND (path LIKE 'concepts/%' OR path LIKE 'entities/%')",
+    )
+    .bind(project_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or((0,));
+    let cap = budget_cap.clamp(1, total.0.max(1));
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT path FROM wiki_pages WHERE project_id = $1 \
          AND (path LIKE 'concepts/%' OR path LIKE 'entities/%') ORDER BY path LIMIT $2",
@@ -822,27 +926,117 @@ async fn fetch_concept_entity_paths(state: &AppState, project_id: i32, cap: i64)
     rows.into_iter().map(|r| r.0).collect()
 }
 
-/// step2 清单注入段（纯函数供单测；空清单 → 空串；触顶 cap → 注明截断，评审 I3）。
-/// `cap` 必须与 fetch_concept_entity_paths 的 SQL LIMIT 同源（run_ingest_job 一次算出
-/// 两处传参）——终审 F5：此前硬编码 2000 与 budget 派生 cap（32k context→500）脱钩，
-/// 小 cap 下真截断不注明。语义：cap < 2000 时清单至多 cap 条，恰在 cap 处触发注明。
+/// step2 清单注入段（r2 处方 A：命名空间分组逗号拼接——裸 slug 有 155 个
+/// concepts/entities 共享 stem（accuracy、achievement-test…），无命名空间注入会让
+/// 模型链错归属；分组格式比裸拼接仅多 ~24 字符）。空清单 → 空串；触顶 → 注明截断
+/// （评审 I3 语义不变：cap 与 SQL LIMIT 同源）。
 fn existing_paths_section(paths: &[String], cap: usize) -> String {
     if paths.is_empty() {
         return String::new();
     }
+    let concepts: Vec<&str> = paths.iter().filter(|p| p.starts_with("concepts/")).map(|p| strip_ns(p)).collect();
+    let entities: Vec<&str> = paths.iter().filter(|p| p.starts_with("entities/")).map(|p| strip_ns(p)).collect();
     let note = if paths.len() >= cap {
         "\n(list truncated — only the first entries are shown)"
     } else {
         ""
     };
-    let list = paths.iter().map(|p| format!("- {}", p)).collect::<Vec<_>>().join("\n");
+    let mut list = String::new();
+    if !concepts.is_empty() {
+        list.push_str("\nconcepts: ");
+        list.push_str(&concepts.join(", "));
+    }
+    if !entities.is_empty() {
+        list.push_str("\nentities: ");
+        list.push_str(&entities.join(", "));
+    }
     format!(
         "\n\n## Existing concept/entity pages\n\
-         The following wiki pages already exist. When a page you generate describes the \
-         same concept as one of them, REUSE its exact path so knowledge accumulates on \
-         one page. Only create a new path for genuinely new concepts.\n{}\n{}",
+         The following wiki pages already exist (namespace: slug). When a page you generate \
+         describes the same concept as one of them, REUSE its exact path (namespace + slug) so \
+         knowledge accumulates on one page. Only create a new path for genuinely new concepts.\n{}\n{}",
         list, note
     )
+}
+
+/// r2 处方 C：lesson transcript 页路径注入段（content-hashed 路径模型不可知——
+/// 悬空分类里 lesson 形 225 实例全部源于此）。cap 防超大 job 撑爆预算；当前源恒列首位。
+fn transcript_paths_section(source_paths: &[String], current: &str, cap: usize) -> String {
+    let mut list: Vec<&str> = source_paths
+        .iter()
+        .filter(|p| p.starts_with("transcripts/") && p.as_str() != current)
+        .map(|p| p.as_str())
+        .take(cap.saturating_sub(1))
+        .collect();
+    if list.is_empty() || list.len() >= cap {
+        return String::new(); // 无兄弟源（或兄弟过多挤占预算）→ 不注入，宁缺毋滥
+    }
+    list.insert(0, current);
+    format!(
+        "\n\n## Known lesson transcript pages (exact paths — link these ONLY via the full path shown, e.g. [[儿歌分享-What-s-your-favourite-color-f30ce801|儿歌分享]])\n{}",
+        list.iter().map(|p| format!("- {}", p)).collect::<Vec<_>>().join("\n")
+    )
+}
+
+/// r2 处方 A（零 API 相关性选摘）：从 step1 分析 JSON 取概念/实体名，对白名单做
+/// 精确 stem / 子串匹配选出「相关既有页」；与 job 级基础表合并去重后截到 cap。
+/// 名字白名单化清洗（防 LIKE 注入：仅保留 slug 字符，空格转连字符），逐名限长。
+fn related_existing_paths(step1_json: &serde_json::Value, base: &[String], cap: usize) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for key in ["concepts", "entities"] {
+        if let Some(list) = step1_json.get(key).and_then(|v| v.as_array()) {
+            for item in list {
+                if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                    let cleaned: String = name
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == ' ')
+                        .collect();
+                    let cleaned = cleaned.trim().to_lowercase();
+                    if cleaned.len() >= 3 {
+                        names.push(cleaned.replace(' ', "-"));
+                    }
+                }
+                if names.len() >= 40 {
+                    break;
+                }
+            }
+        }
+    }
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let stems: Vec<String> = base
+        .iter()
+        .map(|p| p.trim_start_matches("concepts/").trim_start_matches("entities/").to_lowercase())
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // 精确 stem 匹配优先（相关概念大概率已在库中以同名/近名 slug 存在）
+    for (i, s) in stems.iter().enumerate() {
+        if names.iter().any(|n| s == n || s.contains(n.as_str())) && seen.insert(base[i].clone()) {
+            out.push(base[i].clone());
+            if out.len() >= cap {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// base（字母序预算表）+ neighbors（本源相关页）合并去重，neighbors 优先、base 补位，
+/// 截到 cap（预算不因合并膨胀）。
+fn merge_paths(base: &[String], neighbors: &[String], cap: usize) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(cap);
+    for p in neighbors.iter().chain(base.iter()) {
+        if seen.insert(p.clone()) {
+            out.push(p.clone());
+            if out.len() >= cap {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Step 2：基于 step1 分析 JSON + 原文，生成 FILE blocks 形式的 wiki 页面。
@@ -856,6 +1050,8 @@ async fn step2_generate(
     language: Option<&str>,
     existing_paths: &[String],
     existing_paths_cap: usize,
+    transcript_paths: &[String],
+    source_path: &str,
 ) -> Result<String, AppError> {
     let provider = llm_stream::provider_for_project(state, project_id).await?;
     let prompt = step2_prompt(language);
@@ -868,12 +1064,16 @@ async fn step2_generate(
         step1_json,
         existing_paths,
         existing_paths_cap,
+        transcript_paths,
+        source_path,
     )
     .await
 }
 
 /// step2 的 LLM 调用（provider 注入，与 step1_analyze_via 同模式——prompt 注入单测
-/// 用 ScriptedProvider 捕获实际收到的 prompt 文本）。
+/// 用 ScriptedProvider 捕获实际收到的 prompt 文本）。r2：增 transcript_paths 注入段
+/// （处方 C——lesson 路径结构上不可知，sha8 悬空形态的结构性解）。
+#[allow(clippy::too_many_arguments)]
 async fn step2_generate_via(
     provider: &dyn llm_stream::StreamChatProvider,
     system: &str,
@@ -882,20 +1082,25 @@ async fn step2_generate_via(
     step1_json: &serde_json::Value,
     existing_paths: &[String],
     existing_paths_cap: usize,
+    transcript_paths: &[String],
+    source_path: &str,
 ) -> Result<String, AppError> {
     // 【编译陷阱】AppError 无 From<serde_json::Error>，必须 map_err。
     let analysis = serde_json::to_string_pretty(step1_json)
         .map_err(|e| AppError::InternalError(format!("serialize step1: {}", e)))?;
-    let messages = vec![ChatMessage {
-        role: "user".into(),
-        content: format!(
-            "{}{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
-            prompt,
-            existing_paths_section(existing_paths, existing_paths_cap),
-            analysis,
-            original_text
-        ),
-    }];
+    let mut content = format!(
+        "{}{}\n\n<analysis>\n{}\n</analysis>\n\n<source>\n{}\n</source>",
+        prompt,
+        existing_paths_section(existing_paths, existing_paths_cap),
+        analysis,
+        original_text
+    );
+    // 处方 C 注入段独立追加（transcript_paths_section 空清单 → 无附加），不侵入
+    // existing_paths_section 纯函数单测的既有断言面。
+    if !transcript_paths.is_empty() {
+        content.push_str(&transcript_paths_section(transcript_paths, source_path, 300));
+    }
+    let messages = vec![ChatMessage { role: "user".into(), content }];
     let opts = ChatOpts {
         model: provider.model_name().into(),
         temperature: 0.5,
@@ -1199,6 +1404,7 @@ pub async fn run_ingest_job(
         let language_owned = ingest_language.clone();
         let existing_paths = existing_paths.clone();
         let paths_cap_usize = paths_cap as usize;
+        let source_paths_owned = job.source_paths.clone();
         tokio::spawn(async move {
             use futures::StreamExt;
             let mut stream = futures::stream::iter(targets)
@@ -1206,6 +1412,7 @@ pub async fn run_ingest_job(
                     let state = state.clone();
                     let language = language_owned.clone();
                     let existing_paths = existing_paths.clone();
+                    let source_paths = source_paths_owned.clone();
                     async move {
                         // ① 领任务检查点（peek 只读——B-3：并发 peek 零副作用，
                         // 唯一 mark 在归并段收变体时执行）
@@ -1220,6 +1427,7 @@ pub async fn run_ingest_job(
                             language.as_deref(),
                             &existing_paths,
                             paths_cap_usize,
+                            &source_paths,
                         )
                         .await
                         {
@@ -1267,6 +1475,12 @@ pub async fn run_ingest_job(
                 done_this_run += 1;
             }
             Phase1Output::Done { sp, processed: Some(processed) } => {
+                if processed.link_downgrades > 0 {
+                    result.warnings.push(format!(
+                        "redlink: downgraded {} unresolvable wikilinks to plain text from {}",
+                        processed.link_downgrades, sp
+                    ));
+                }
                 let pages_to_write = processed.pages.len();
                 let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
                 for page in &processed.pages {
@@ -1474,6 +1688,7 @@ async fn process_source_path(
     language: Option<&str>,
     existing_paths: &[String],
     existing_paths_cap: usize,
+    source_paths: &[String],
 ) -> Result<Option<ProcessedSource>, AppError> {
     // 经 StorageBackend trait 读字节（Phase 1 抽象收敛：与 files.rs docx/xlsx 分支一致，S3 就绪）
     let bytes = state.storage.read_bytes(team_id, project_id, source_path).await?;
@@ -1531,14 +1746,22 @@ async fn process_source_path(
         merged
     };
 
+    // r2 处方 A（零 API 相关性选摘）：step1 概念/实体名 → 白名单精确/子串匹配选摘，
+    // neighbors 优先与基础表合并去重（相关概念不再被 a-e 字母序截断挤掉）。
+    let merged_paths = {
+        let neighbors = related_existing_paths(&step1_result, existing_paths, existing_paths_cap);
+        merge_paths(existing_paths, &neighbors, existing_paths_cap)
+    };
     let llm_output = step2_generate(
         state,
         project_id,
         &text,
         &step1_result,
         language,
-        existing_paths,
+        &merged_paths,
         existing_paths_cap,
+        source_paths,
+        source_path,
     )
     .await?;
     let blocks = parse_file_blocks(&llm_output);
@@ -1553,7 +1776,7 @@ async fn process_source_path(
             "step2 output non-empty but zero FILE blocks parsed——suspicious (thinking bleed / format drift?)"
         );
     }
-    let pages: Vec<WikiPageInsert> = blocks
+    let mut pages: Vec<WikiPageInsert> = blocks
         .into_iter()
         .map(|b| WikiPageInsert {
             path: b.path,
@@ -1565,6 +1788,30 @@ async fn process_source_path(
             images: b.images,
         })
         .collect();
+
+    // r2 处方 E：链接校验兜底——现查 DB 双索引（path+title 全 project），加上本响应
+    // 自身块路径（按定义必然落库），不可解析链接降级纯文本。落块口位置天然在 embed
+    // 批（:1447）之前；≤7 在途并发兄弟盲区按计划记 warning 承认（不在此查在途源）。
+    let link_downgrades = {
+        let db_pairs: Vec<(String, String)> = sqlx::query_as(
+            "SELECT path, COALESCE(title, '') FROM wiki_pages WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        let current_paths: Vec<String> = pages.iter().map(|p| p.path.clone()).collect();
+        let idx = build_link_index(&db_pairs, &current_paths);
+        let n = downgrade_unresolvable_links(&mut pages, &idx);
+        if n > 0 {
+            tracing::warn!(
+                source = %source_path,
+                downgraded = n,
+                "redlink: unresolvable [[wikilinks]] downgraded to plain text (处方 E)"
+            );
+        }
+        n
+    };
 
     // Phase B: 计算 review（compute-only，无 DB 写）= step2 解析 + 3rd-call dedicated stage。
     let mut reviews = crate::services::review::parse_review_blocks(&llm_output, source_path);
@@ -1595,7 +1842,7 @@ async fn process_source_path(
     // 不在此 mark_file_ingested / insert reviews：元数据 + reviews 上浮给 run_ingest_job，
     // 待 wiki_pages 成功落库后再 mark + insert（守 deferred-write 不变量：upsert 失败 →
     // 不 mark → 下次重处理；不插 review → 无孤儿/重复）。
-    Ok(Some(ProcessedSource { pages, reviews, content_hash, file_size, file_type }))
+    Ok(Some(ProcessedSource { pages, reviews, content_hash, file_size, file_type, link_downgrades }))
 }
 
 /// 取页面用于嵌入的文本（content 非空时）；None 表示不适合嵌入。
@@ -2662,6 +2909,8 @@ mod tests {
             &serde_json::json!({"entities":[]}),
             &[],
             2000,
+            &[],
+            "src",
         )
         .await
         .unwrap();
@@ -2693,6 +2942,8 @@ mod tests {
             &serde_json::json!({"entities":[]}),
             &[],
             2000,
+            &[],
+            "src",
         )
         .await
         .unwrap();
@@ -2705,12 +2956,15 @@ mod tests {
     // ── Task 4：§2 slug 对齐清单注入 ──
 
     #[test]
-    fn existing_paths_section_lists_and_notes_truncation() {
-        // cap 显式传参（终审 F5）：2000 与 clamp 上限一致；小 cap（如 500）时清单
-        // 至多 500 条，恰在 500 处触发注明——同一语义，此处取 2000 保持原断言规模。
-        let one = existing_paths_section(&["concepts/a.md".into()], 2000);
+    fn existing_paths_section_groups_by_namespace_and_notes_truncation() {
+        // r2 处方 A：命名空间分组逗号拼接（155 共享 stem 必须带归属）+ 截断注明
+        let one = existing_paths_section(
+            &["concepts/a.md".into(), "entities/e1.md".into(), "entities/e2.md".into()],
+            2000,
+        );
         assert!(one.contains("## Existing concept/entity pages"), "{one}");
-        assert!(one.contains("- concepts/a.md"), "{one}");
+        assert!(one.contains("concepts: a.md"), "{one}");
+        assert!(one.contains("entities: e1.md, e2.md"), "{one}");
         assert!(!one.contains("truncated"), "{one}");
 
         let many: Vec<String> = (0..2000).map(|i| format!("concepts/p{}.md", i)).collect();
@@ -2721,7 +2975,7 @@ mod tests {
         let capped: Vec<String> = (0..500).map(|i| format!("concepts/c{}.md", i)).collect();
         assert!(
             existing_paths_section(&capped, 500).contains("list truncated"),
-            "cap=500 且清单满 500 条时必须注明截断（旧实现硬编码 2000 漏注明的场景）"
+            "cap=500 且清单满 500 条时必须注明截断（硬编码漏注明的场景）"
         );
 
         assert_eq!(existing_paths_section(&[], 2000), "");
@@ -2729,10 +2983,78 @@ mod tests {
 
     #[test]
     fn existing_paths_cap_links_budget() {
-        // 128k → 2500 → clamp 2000；32k → 500；8000 → 0 → clamp 1
-        assert_eq!(existing_paths_cap(128_000), 2000);
-        assert_eq!(existing_paths_cap(32_000), 500);
+        // r2 处方 A：压缩格式 7 token/条、无 2000 硬上限（clamp 上限改绑页面总数，
+        // 由 fetch 内部 count-clamp 承担）；8000 → saturating 0 → max(1)
+        assert_eq!(existing_paths_cap(128_000), (120_000 / 4 / 7));
+        assert_eq!(existing_paths_cap(32_000), 24_000 / 4 / 7);
         assert_eq!(existing_paths_cap(8_000), 1);
+    }
+
+    #[test]
+    fn transcript_paths_section_lists_siblings_with_current_first() {
+        let paths = vec![
+            "transcripts/a-aaa.md".into(),
+            "transcripts/b-bbb.md".into(),
+            "raw/sources/bk.md".into(), // 非 transcripts 命名空间不入
+        ];
+        let sec = transcript_paths_section(&paths, "transcripts/a-aaa.md", 300);
+        assert!(sec.contains("- transcripts/a-aaa.md"), "{sec}");
+        assert!(sec.contains("- transcripts/b-bbb.md"), "{sec}");
+        assert!(!sec.contains("raw/sources"), "{sec}");
+        // 空清单 → 空串
+        assert_eq!(transcript_paths_section(&[], "transcripts/x.md", 300), "");
+        // cap=1：兄弟被整体放弃（宁缺毋滥）
+        assert_eq!(transcript_paths_section(&paths, "transcripts/a-aaa.md", 1), "");
+    }
+
+    #[test]
+    fn related_existing_paths_matches_and_merges_with_dedup() {
+        let base = vec![
+            "concepts/pre-class-preview-strategy.md".into(),
+            "concepts/accuracy.md".into(),
+            "entities/mary.md".into(),
+            "concepts/zebra.md".into(),
+        ];
+        let step1 = serde_json::json!({
+            "concepts": [{"name": "Pre Class Preview Strategy"}, {"name": "Accuracy"}],
+            "entities": []
+        });
+        let nb = related_existing_paths(&step1, &base, 100);
+        assert_eq!(nb, vec![
+            "concepts/pre-class-preview-strategy.md".to_string(),
+            "concepts/accuracy.md".to_string(),
+        ]);
+        // 合并去重：neighbors 优先、base 补位、截到 cap
+        let merged = merge_paths(&base, &nb, 3);
+        assert_eq!(merged, vec![
+            "concepts/pre-class-preview-strategy.md".to_string(),
+            "concepts/accuracy.md".to_string(),
+            "entities/mary.md".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn downgrade_unresolvable_links_keeps_resolvable_and_downtexts_rest() {
+        let pairs = vec![
+            ("concepts/pre-class-preview-strategy.md".into(), "课前预习策略".into()),
+            ("entities/mary.md".into(), "Mary".into()),
+        ];
+        let idx = build_link_index(&pairs, &["transcripts/self-abc.md".into()]);
+        let mut pages = vec![WikiPageInsert {
+            path: "concepts/demo.md".into(),
+            title: Some("Demo".into()),
+            content: "可留 [[Mary]] [[pre-class-preview-strategy|预习]] [[self-abc]]；降级 [[ghost-link]] 与 [[ghost|幽灵]]。".into(),
+            frontmatter: Default::default(),
+            page_type: "concept".into(),
+            sources: serde_json::json!([]),
+            images: serde_json::json!([]),
+        }];
+        let n = downgrade_unresolvable_links(&mut pages, &idx);
+        assert_eq!(n, 2, "{:?}", pages[0].content);
+        let c = &pages[0].content;
+        assert!(c.contains("[[Mary]]") && c.contains("[[pre-class-preview-strategy|预习]]") && c.contains("[[self-abc]]"), "{c}");
+        assert!(c.contains("ghost-link") && !c.contains("[[ghost-link]]"), "{c}");
+        assert!(c.contains("幽灵") && !c.contains("[[ghost|幽灵]]"), "{c}");
     }
 
     #[tokio::test]
@@ -2749,12 +3071,15 @@ mod tests {
             &serde_json::json!({"entities": []}),
             &["concepts/a.md".to_string()],
             2000,
+            &[],
+            "src",
         )
         .await
         .unwrap();
         let content = provider.user_message_content(0);
         assert!(content.contains("REUSE its exact path"), "{content}");
-        assert!(content.contains("- concepts/a.md"), "{content}");
+        // r2 处方 A：命名空间分组格式
+        assert!(content.contains("concepts: a.md"), "{content}");
     }
 
     // ── Task 2：step4 merge prompt + merge_pages_via ──
