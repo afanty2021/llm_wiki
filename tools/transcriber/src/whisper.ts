@@ -55,6 +55,9 @@ export function stripHallucinationSegments(segments: Segment[]): Segment[] {
 // 拒绝（调用方按转写类失败记账，tries 走尽留 failed+原因=人工复核出口）；不足
 // 40% → 告警放行（段级不做跨段链手术——聚合行级清扫归 scripts/purge-hallucinations.ts
 // 按同签名做）。真实课堂复读上界（02「甜甜」×103、05 链覆盖 0.378）验证零误杀。
+// 链臂循环证据下限（2026-09-09 Unlock 误报修正）：众数间距计数 ≥3 才参与链覆盖——
+// 教材伴学视频脚本自然复现主题词（×2-17、众数间距 1-2）曾把干净转写推出 0.76-1.00
+// 链覆盖整批误拒（80 件拒 11），真实循环该计数为百级。
 
 export interface DegenerateWindowInfo {
   startS: number;
@@ -113,6 +116,10 @@ function chainCoverageOf(t: string, g: string): number {
   let period = 0, best = 0;
   for (const [d, c] of gapCount) if (c > best || (c === best && d < period)) { best = c; period = d; }
   if (period <= 0) period = g.length;
+  // 众数间距计数 <3（不足 4 次等差连现）不构成循环证据：教材脚本自然复现主题词
+  // （Unlock 批实测 ×2-17、众数间距计数 1-2）曾把干净文本推出链覆盖 0.76-1.00 误拒；
+  // 真实退化循环的众数间距计数为百级（5410328e ≈119、BGM ×124 ≈122），两类间隔巨大。
+  if (best < 3) return 0;
   let covered = 0, runStart = idx[0], prev = idx[0];
   for (let i = 1; i <= idx.length; i++) {
     const cur = i < idx.length ? idx[i] : Number.NaN;

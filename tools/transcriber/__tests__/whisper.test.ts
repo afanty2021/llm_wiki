@@ -119,6 +119,19 @@ describe("窗级退化守门（2026-09-07 刘飞雪试点 04/06 双例后落地�
     const short = "看，看，看，".repeat(60); // 360 字符 < 500 门槛
     expect(runDegenerationGate("s-short", [seg(0, short)])).toHaveLength(1);
   });
+  it("Unlock 误报修正：干净文本主题词少量不规则复现（×3、众数间距计数 1）不触发链臂（2026-09-09）", () => {
+    // 教材伴学视频形态：脚本自然复现主题词（orangutan/France is 等 ×2-17），
+    // 修复前众数间距被当成循环周期，链覆盖 0.76-1.00 整批误拒（80 件拒 11）。
+    // filler 用词表错步取词 + 数字后缀：所有 8-gram 跨数字即唯一，整体无循环结构
+    const words = ["课堂", "提问", "讨论", "演示", "反馈", "语法", "词汇", "阅读", "写作", "听力", "口语", "发音", "游戏", "歌曲", "故事", "任务", "评价", "作业", "复习", "拓展"];
+    const filler = (tag: string, n: number) =>
+      Array.from({ length: n }, (_, i) =>
+        words[(i * 7 + tag.charCodeAt(0)) % 20] + words[(i * 11 + 3) % 20] + words[(i * 13 + 5) % 20] + ((i * 17 + 11) % 97)).join("");
+    const text = "orangutan" + filler("A", 40) + "orangutan" + filler("B", 43) + "orangutan" + filler("C", 8);
+    expect(text.length).toBeGreaterThan(500);
+    expect(runDegenerationGate("s-unlock", [seg(0, text)])).toEqual([seg(0, text)]);
+    expect(analyzeWindowDegeneration(text)).toBeNull();
+  });
   it("人工复核出口：TRANSCRIBER_GATE_ALLOW 精确 slug 命中才放行，近似 slug 仍拒（防同名 lesson 误扫）", () => {
     const unit = "优优独播剧场——YoYo Television Series Exclusive";
     const spam = Array.from({ length: 8 }, (_, w) => ({ startS: w * 300, endS: w * 300 + 5, text: unit.repeat(295) }));
