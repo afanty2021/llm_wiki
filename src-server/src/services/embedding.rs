@@ -106,53 +106,144 @@ pub async fn embed_batch(
     Err(last_err.unwrap_or_else(|| AppError::LlmApiError("embed retries exhausted".into())))
 }
 
+/// 单请求批量上限（P1 评审②，2026-09-09）：整 job 拍平单请求曾把 ~6700 chunk 塞进
+/// 一次 HTTP（响应 ~700 万浮点），解码失败即整 job 无向量且无隔离——一颗坏 chunk
+/// 连坐全批（Unlock 批 611 页沉淀 + 170 批同款实证）。页保持原子（同页 chunk 不跨请求），
+/// 页数/chunk 数双帽；单页超帽独占一组。
+const EMBED_REQ_MAX_PAGES: usize = 16;
+const EMBED_REQ_MAX_CHUNKS: usize = 96;
+
+/// 嵌入结果：stored=成功 upsert 的页数；failures=逐页回落仍失败的页
+/// （毒性页隔离，不拖垮其余；DB upsert 错误仍走 Result::Err=系统性故障）。
+#[derive(Debug, Default)]
+pub struct EmbedOutcome {
+    pub stored: usize,
+    pub failures: Vec<(String, String)>,
+}
+
+/// 按页原子分组（纯函数，单测钉边界）：累计 chunk ≤ max_chunks 且页数 ≤ max_pages；
+/// 单页超 max_chunks 独占一组。零 chunk 页（空白内容）不占 chunk 预算、随组走
+/// （upsert=清空语义，行为与旧实现一致）。
+fn group_pages_for_embed(chunk_counts: &[usize], max_pages: usize, max_chunks: usize) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut cur: Vec<usize> = Vec::new();
+    let mut cur_chunks = 0usize;
+    for (i, &c) in chunk_counts.iter().enumerate() {
+        let alone = c > max_chunks;
+        if !cur.is_empty() && (alone || cur.len() >= max_pages || cur_chunks + c > max_chunks) {
+            groups.push(std::mem::take(&mut cur));
+            cur_chunks = 0;
+        }
+        cur.push(i);
+        cur_chunks += c;
+        if alone {
+            groups.push(std::mem::take(&mut cur));
+            cur_chunks = 0;
+        }
+    }
+    if !cur.is_empty() {
+        groups.push(cur);
+    }
+    groups
+}
+
 /// 批量嵌入 + chunk 级 upsert（ingest 用）。pages: (wiki_page_path, text)。
-/// cfg=None 或空 pages → no-op。**所有 page 的 chunk 拍平到一次 embed_batch 调用**（bge-m3 接受数组），
-/// 再按 page 切回逐页 upsert_page_chunks（DELETE+INSERT）。保持「bulk ingest 单 HTTP 请求」语义。
+/// cfg=None 或空 pages → no-op。分批嵌入（EMBED_REQ_MAX_PAGES/CHUNKS 双帽），
+/// 批失败回落逐页嵌入（毒性页隔离进 failures，不拖垮其余批次）；
+/// 逐页 upsert_page_chunks（DELETE+INSERT）。
 pub async fn embed_and_store(
     store: &dyn VectorStore,
     cfg: Option<&EmbeddingConfig>,
     client: &reqwest::Client,
     project_id: i32,
     pages: &[(String, String)],
-) -> Result<usize, AppError> {
+) -> Result<EmbedOutcome, AppError> {
+    let mut outcome = EmbedOutcome::default();
     let cfg = match cfg {
         Some(c) => c,
-        None => return Ok(0),
+        None => return Ok(outcome),
     };
     if pages.is_empty() {
-        return Ok(0);
+        return Ok(outcome);
     }
-    // 1. 切分所有 page → all_texts；记录每 page 的 chunk 范围 (path, start, count)
-    let mut all_texts: Vec<String> = Vec::new();
-    let mut page_spans: Vec<(String, usize, usize)> = Vec::new();
-    for (path, text) in pages {
-        let pieces = chunk_for_embedding(text, cfg.chunk_size, cfg.overlap);
-        let start = all_texts.len();
-        all_texts.extend(pieces);
-        page_spans.push((path.clone(), start, all_texts.len() - start));
+    // 1. 每页先行 chunk（页原子），按 chunk 数分组
+    let page_pieces: Vec<Vec<String>> = pages
+        .iter()
+        .map(|(_, text)| chunk_for_embedding(text, cfg.chunk_size, cfg.overlap))
+        .collect();
+    let chunk_counts: Vec<usize> = page_pieces.iter().map(|p| p.len()).collect();
+    // 2. 分批：批内一次 embed_batch → 逐页切回 upsert；批失败 → 逐页回落
+    for group in group_pages_for_embed(&chunk_counts, EMBED_REQ_MAX_PAGES, EMBED_REQ_MAX_CHUNKS) {
+        let mut all_texts: Vec<String> = Vec::new();
+        let mut spans: Vec<(usize, usize, usize)> = Vec::new(); // (组内页序, start, count)
+        for (seq, &pi) in group.iter().enumerate() {
+            let start = all_texts.len();
+            all_texts.extend(page_pieces[pi].iter().cloned());
+            spans.push((seq, start, page_pieces[pi].len()));
+        }
+        let all_vecs = if all_texts.is_empty() {
+            Ok(Vec::new())
+        } else {
+            embed_batch(cfg, client, &all_texts).await
+        };
+        let all_vecs = match all_vecs {
+            Ok(v) => v,
+            Err(batch_err) => {
+                tracing::warn!(
+                    "embed batch ({} pages, {} chunks) failed: {} — falling back to per-page isolation",
+                    group.len(), all_texts.len(), batch_err
+                );
+                for &pi in &group {
+                    match embed_page_pieces(store, cfg, client, project_id, &pages[pi].0, &page_pieces[pi]).await {
+                        Ok(()) => outcome.stored += 1,
+                        Err(e) => outcome.failures.push((pages[pi].0.clone(), e.to_string())),
+                    }
+                }
+                continue;
+            }
+        };
+        for (seq, start, count) in spans {
+            let path = &pages[group[seq]].0;
+            let chunks: Vec<PageChunk> = (0..count)
+                .map(|i| PageChunk {
+                    chunk_index: i as i32,
+                    chunk_text: all_texts[start + i].clone(),
+                    heading_path: None, // Phase 2 不做 markdown heading 抽取；列已建，留 NULL
+                    vector: all_vecs[start + i].clone(),
+                })
+                .collect();
+            store.upsert_page_chunks(project_id, path, chunks).await?;
+            outcome.stored += 1;
+        }
     }
-    // 2. 一次性嵌入全部 chunk（单 HTTP 请求）
-    let all_vecs = if all_texts.is_empty() {
+    Ok(outcome)
+}
+
+/// 单页嵌入（已有 chunk 切片，批失败回落用——不重切）：embed + upsert。
+async fn embed_page_pieces(
+    store: &dyn VectorStore,
+    cfg: &EmbeddingConfig,
+    client: &reqwest::Client,
+    project_id: i32,
+    path: &str,
+    pieces: &[String],
+) -> Result<(), AppError> {
+    let all_vecs = if pieces.is_empty() {
         Vec::new()
     } else {
-        embed_batch(cfg, client, &all_texts).await?
+        embed_batch(cfg, client, pieces).await?
     };
-    // 3. 按 page_span 切回，逐页 upsert_page_chunks（空 chunk → 仅 DELETE，清空该页）
-    let mut page_count = 0usize;
-    for (path, start, count) in page_spans {
-        let chunks: Vec<PageChunk> = (0..count)
-            .map(|i| PageChunk {
-                chunk_index: i as i32,
-                chunk_text: all_texts[start + i].clone(),
-                heading_path: None, // Phase 2 不做 markdown heading 抽取；列已建，留 NULL
-                vector: all_vecs[start + i].clone(),
-            })
-            .collect();
-        store.upsert_page_chunks(project_id, &path, chunks).await?;
-        page_count += 1;
-    }
-    Ok(page_count)
+    let chunks: Vec<PageChunk> = pieces
+        .iter()
+        .enumerate()
+        .map(|(i, text)| PageChunk {
+            chunk_index: i as i32,
+            chunk_text: text.clone(),
+            heading_path: None,
+            vector: all_vecs[i].clone(),
+        })
+        .collect();
+    store.upsert_page_chunks(project_id, path, chunks).await
 }
 
 /// 单页嵌入（pages CRUD create/update 用，content 非空时）。
@@ -164,9 +255,12 @@ pub async fn embed_page(
     path: &str,
     text: &str,
 ) -> Result<(), AppError> {
-    embed_and_store(store, cfg, client, project_id, &[(path.to_string(), text.to_string())])
-        .await
-        .map(|_| ())
+    let outcome = embed_and_store(store, cfg, client, project_id, &[(path.to_string(), text.to_string())])
+        .await?;
+    match outcome.failures.into_iter().next() {
+        Some((p, e)) => Err(AppError::LlmApiError(format!("embed page {} failed: {}", p, e))),
+        None => Ok(()),
+    }
 }
 
 /// 单条文本嵌入（hybrid_search 查询侧用）。返回 dim 维向量。
@@ -268,5 +362,46 @@ mod tests {
         assert_eq!(backoff_delay(1), Duration::from_secs(2));
         assert_eq!(backoff_delay(2), Duration::from_secs(4));
         assert!(backoff_delay(10) <= Duration::from_secs(30), "上限 30s");
+    }
+
+    use super::group_pages_for_embed;
+
+    #[test]
+    fn group_empty_input() {
+        assert!(group_pages_for_embed(&[], 16, 96).is_empty());
+    }
+
+    #[test]
+    fn group_accumulates_within_caps() {
+        // 5 页 × 2 chunk 远低于双帽 → 一组
+        assert_eq!(group_pages_for_embed(&[2, 2, 2, 2, 2], 16, 96), vec![vec![0, 1, 2, 3, 4]]);
+    }
+
+    #[test]
+    fn group_respects_page_cap() {
+        // 20 页 × 1 chunk，页帽 16 → [16 页, 4 页]
+        let counts = [1usize; 20];
+        let groups = group_pages_for_embed(&counts, 16, 96);
+        assert_eq!(groups, vec![vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], vec![16, 17, 18, 19]]);
+    }
+
+    #[test]
+    fn group_respects_chunk_cap() {
+        // 3 页 × 50 chunk，chunk 帽 96：50+50=100 超帽 → 每页一组
+        assert_eq!(group_pages_for_embed(&[50, 50, 50], 16, 96), vec![vec![0], vec![1], vec![2]]);
+        // 帽 110：50+50=100 ≤110 → [0,1] 一组，页帽 16 未触
+        assert_eq!(group_pages_for_embed(&[50, 50, 50], 16, 110), vec![vec![0, 1], vec![2]]);
+    }
+
+    #[test]
+    fn group_oversized_page_alone() {
+        // 单页 150 chunk 超帽 → 独占一组，且不与邻居合并
+        assert_eq!(group_pages_for_embed(&[2, 150, 2], 16, 96), vec![vec![0], vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn group_zero_chunk_pages_ride_along() {
+        // 零 chunk 页不占预算，随组走（upsert=清空语义）
+        assert_eq!(group_pages_for_embed(&[0, 2, 0, 2], 16, 96), vec![vec![0, 1, 2, 3]]);
     }
 }

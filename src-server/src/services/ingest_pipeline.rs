@@ -1808,7 +1808,7 @@ pub async fn run_ingest_job(
         return Err(e);
     }
     if !collected.is_empty() {
-        if let Err(e) = crate::services::embedding::embed_and_store(
+        match crate::services::embedding::embed_and_store(
             &*state.vector_store,
             state.config.embedding.as_ref(),
             &state.http,
@@ -1817,7 +1817,34 @@ pub async fn run_ingest_job(
         )
         .await
         {
-            result.warnings.push(format!("embed batch: {}", e));
+            Ok(outcome) => {
+                // P1 评审③：逐页回落仍失败的页（毒性页已隔离，不阻断 job）
+                for (path, e) in &outcome.failures {
+                    result.warnings.push(format!("embed page {} failed (isolated): {}", path, e));
+                }
+                // P1 评审④收官对账：embed 声称成功也要对库——旧实现单请求失败整 job
+                // 静默无向量（全库 3835 页积压教训），失败即沉淀无感知
+                let paths: Vec<String> = collected.iter().map(|(p, _)| p.clone()).collect();
+                match sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM unnest($1::text[]) AS p(path) \
+                     WHERE NOT EXISTS (SELECT 1 FROM embeddings e \
+                       WHERE e.project_id = $2 AND e.wiki_page_id = p.path)",
+                )
+                .bind(&paths)
+                .bind(job.project_id)
+                .fetch_one(&state.db)
+                .await
+                {
+                    Ok(missing) if missing > 0 => result.warnings.push(format!(
+                        "embed 对账：{}/{} collected 页缺向量（沉淀检测，须补嵌）",
+                        missing,
+                        paths.len()
+                    )),
+                    Ok(_) => {}
+                    Err(e) => result.warnings.push(format!("embed 对账查询失败: {}", e)),
+                }
+            }
+            Err(e) => result.warnings.push(format!("embed batch: {}", e)),
         }
     }
 
