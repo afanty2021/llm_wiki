@@ -38,11 +38,11 @@ import {
 import {
   normalizeOutline,
   outlineCapsError,
-  renderMindmap,
   OutlineFormatError,
   type MindmapOutline,
   type MindmapRenderResult,
 } from "./mindmap.js"
+import { renderMindmapAuto } from "./mindmap-markmap.js"
 
 // ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
 // 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
@@ -769,14 +769,16 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       return withIdentitySource(textResult(
         `未生成导图：${capError}。请拆成多张（按章节），或与教师确认精简后再生成。`), ident.mode)
     }
-    const render = deps.renderMindmap ?? renderMindmap
+    // v2 自动链：markmap（Chrome 截图）首选，失败回落 graphviz；deps.renderMindmap
+    // 仍为测试注入点（注入则完全绕过自动链，既有测试语义不变）。
+    const render = deps.renderMindmap ?? ((outline: MindmapOutline) => renderMindmapAuto(outline))
     const result = await render(outline)
     if (!result.ok || !result.path) {
       return withIdentitySource(textResult(
         `思维导图生成失败：${result.error ?? "未知错误"}。可先给教师文字版大纲（层级列表），或稍后重试。`), ident.mode)
     }
     return withIdentitySource(textResult([
-      `思维导图已生成（${result.nodes} 个节点 / ${result.depth} 层）。`,
+      `思维导图已生成（${result.engine ? `引擎 ${result.engine}；` : ""}${result.nodes} 个节点 / ${result.depth} 层）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
     ].join("\n")), ident.mode)

@@ -44,6 +44,8 @@ export interface MindmapRenderResult {
   path?: string
   nodes?: number
   depth?: number
+  /** 渲染引擎（"graphviz" | "markmap"），成功时返回并进教师可见摘要。 */
+  engine?: "graphviz" | "markmap"
   error?: string
 }
 
@@ -190,6 +192,7 @@ export async function renderMindmap(
     return {
       ok: true,
       path: finalPath,
+      engine: "graphviz",
       nodes: countNodes(outline.root),
       depth: maxDepth(outline.root) + 1,
     }
