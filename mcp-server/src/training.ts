@@ -5,8 +5,9 @@
  *   {wecom_userid: {refreshToken, userId}}；内存 access 缓存提前 60s 过期；
  *   miss → POST /api/v1/auth/refresh（single-flight：并发同 userid 只发一次）；
  *   refresh 失败 → POST /api/v1/training/bind（TRAINING__ADMIN_TOKEN）重建/轮换。
- * - 11 个 src-server 工具：9 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
- *   为本地 TTS 合成，不经 src-server API）+ 重写的 llm_wiki_search /
+ * - 12 个 src-server 工具：10 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
+ *   为本地 TTS 合成、teacher_tutor_mindmap 为本地 graphviz 渲染，均不经 src-server API）
+ *   + 重写的 llm_wiki_search /
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
  *   project_id 取 env TRAINING__PROJECT_ID；token 全部由 store 注入，绝不进工具返回值。
  * - 身份硬闸（M3 T2）：10 工具统一入口先 resolveIdentity(meta, args.wecom_userid)——
@@ -34,6 +35,14 @@ import {
   type DialogueLine,
   type ListeningSynthResult,
 } from "./listening-audio.js"
+import {
+  normalizeOutline,
+  outlineCapsError,
+  renderMindmap,
+  OutlineFormatError,
+  type MindmapOutline,
+  type MindmapRenderResult,
+} from "./mindmap.js"
 
 // ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
 // 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
@@ -203,6 +212,8 @@ export interface SrcServerHandlerDeps {
   getPublicTBase: () => string
   /** 听力音频合成（本地 TTS 管线；可注入 mock 供测试）。 */
   synthesize?: (dialogue: DialogueLine[], options: { speed?: number; title?: string }) => Promise<ListeningSynthResult>
+  /** 思维导图渲染（本地 graphviz 管线；可注入 mock 供测试）。 */
+  renderMindmap?: (outline: MindmapOutline) => Promise<MindmapRenderResult>
 }
 
 // wecom_userid 在 schema 可选声明、不进 required（2026-09-05 修订 08-24 加固）：
@@ -396,6 +407,38 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           title: { type: "string", description: "音频文件名主题（自动清洗，如 Unit3-对话）" },
         },
         required: ["dialogue"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "teacher_tutor_mindmap",
+      description: "把知识点结构渲染成思维导图 PNG 图片（本地 graphviz 渲染，中文完好）。返回含 MEDIA: 行——最终回复必须原样回显该行，图片才会送达教师。outline 必须基于 search/read_file 取到的真实课文内容构造，勿编造课文外内容。用于教师要求生成思维导图/知识结构图的场景。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+          title: { type: "string", description: "中心主题（1-60 字符），同时作为导图根节点标签" },
+          root: {
+            type: "object",
+            description: "分支树（递归结构）：root.children 为一级分支数组，每个分支 {label: string(1-40字符), children?: [同结构]}。整图 ≤5 层（含主题）且 ≤60 个节点，超限会被拒并要求拆分。",
+            properties: {
+              children: {
+                type: "array",
+                description: "一级分支列表；元素为 {label, children?} 递归结构",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string", description: "分支标签（1-40 字符）" },
+                  },
+                  required: ["label"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        required: ["title", "root"],
         additionalProperties: false,
       },
     },
@@ -707,6 +750,35 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       `听力音频已生成（引擎 ${result.engine}；${result.note ?? ""}；共 ${lines.length} 行；语速 ${speed}）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，音频才能送达。`,
+    ].join("\n")), ident.mode)
+  })
+
+  handlers.set("teacher_tutor_mindmap", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    let outline: MindmapOutline
+    try {
+      outline = normalizeOutline({ title: args.title, root: args.root })
+    } catch (err) {
+      // 形状错误对齐 listening 先例走 ToolArgumentError（模型可自纠；schema 已约束、罕见）。
+      if (err instanceof OutlineFormatError) throw new ToolArgumentError(err.message)
+      throw err
+    }
+    // 量级超限走正常文本引导（应用级输入问题不进熔断器，同 listening 前例）。
+    const capError = outlineCapsError(outline)
+    if (capError) {
+      return withIdentitySource(textResult(
+        `未生成导图：${capError}。请拆成多张（按章节），或与教师确认精简后再生成。`), ident.mode)
+    }
+    const render = deps.renderMindmap ?? renderMindmap
+    const result = await render(outline)
+    if (!result.ok || !result.path) {
+      return withIdentitySource(textResult(
+        `思维导图生成失败：${result.error ?? "未知错误"}。可先给教师文字版大纲（层级列表），或稍后重试。`), ident.mode)
+    }
+    return withIdentitySource(textResult([
+      `思维导图已生成（${result.nodes} 个节点 / ${result.depth} 层）。`,
+      `MEDIA:${result.path}`,
+      `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
     ].join("\n")), ident.mode)
   })
 

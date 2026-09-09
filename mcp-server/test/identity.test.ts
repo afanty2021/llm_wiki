@@ -273,9 +273,9 @@ test("集成·system 模式缺 wecom_userid：无 meta 且省略 → ToolArgumen
 // （周报任务 ca270c3a5a58 2026-09-05 实锺）。新契约：可选声明（系统/cron 通道
 // 显式化）；用户会话防冒名不变——identity 锁对不匹配参数照常硬拒。
 
-test("schema：全部 11 个 src-server 工具可选声明 wecom_userid，不进 required", () => {
+test("schema：全部 12 个 src-server 工具可选声明 wecom_userid，不进 required", () => {
   const tools = [...srcServerToolDefinitions(), ...trainingToolDefinitions()]
-  assert.equal(tools.length, 11)
+  assert.equal(tools.length, 12)
   for (const tool of tools) {
     const props = (tool.inputSchema.properties ?? {}) as Record<string, unknown>
     assert.ok(
@@ -301,6 +301,8 @@ test("schema：全部 11 个 src-server 工具可选声明 wecom_userid，不进
   assert.deepEqual(planLink.inputSchema.required, ["plan_id"])
   const listeningAudio = tools.find((t) => t.name === "teacher_tutor_listening_audio")!
   assert.deepEqual(listeningAudio.inputSchema.required, ["dialogue"])
+  const mindmap = tools.find((t) => t.name === "teacher_tutor_mindmap")!
+  assert.deepEqual(mindmap.inputSchema.required, ["title", "root"])
 })
 
 // ── _meta 链路（T1 → MCP SDK → 低层 setRequestHandler handler）──

@@ -84,7 +84,11 @@ function stubStore(): TeacherCredentialStore {
 
 function makeHandlers(
   fetchImpl: typeof fetch,
-  opts: { tbase?: string; synthesize?: Parameters<typeof createSrcServerHandlers>[0]["synthesize"] } = {},
+  opts: {
+    tbase?: string
+    synthesize?: Parameters<typeof createSrcServerHandlers>[0]["synthesize"]
+    renderMindmap?: Parameters<typeof createSrcServerHandlers>[0]["renderMindmap"]
+  } = {},
 ) {
   const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
   return createSrcServerHandlers({
@@ -93,6 +97,7 @@ function makeHandlers(
     getProjectId: () => 42,
     getPublicTBase: () => opts.tbase ?? BASE,
     synthesize: opts.synthesize,
+    renderMindmap: opts.renderMindmap,
   })
 }
 
@@ -605,13 +610,14 @@ test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {
 
 // ── 形态注册过滤 ──
 
-test("src-server 形态：只注册 10 工具，9 个桌面工具不在 ListTools", () => {
+test("src-server 形态：只注册 11 工具，9 个桌面工具不在 ListTools", () => {
   const names = buildTools("src-server").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
     "llm_wiki_read_file",
     "llm_wiki_search",
     "teacher_tutor_item_complete",
     "teacher_tutor_listening_audio",
+    "teacher_tutor_mindmap",
     "teacher_tutor_plan_create",
     "teacher_tutor_plan_link",
     "teacher_tutor_plan_list",
@@ -760,4 +766,74 @@ test("listening_audio: 引擎双败 → 失败文案（不抛错）", async () =
   const text = toolText(result)
   assert.ok(text.includes("生成失败"))
   assert.ok(text.includes("稍后重试"))
+})
+
+// ── teacher_tutor_mindmap（2026-09-09 思维导图工具，方案 plans/2026-09-09-teacher-mindmap-tool.md）──
+
+test("mindmap: 渲染成功 → MEDIA 行 + 节点/层数摘要 + identity_source", async () => {
+  let received: unknown
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderMindmap: async (outline) => {
+      received = outline
+      assert.equal(outline.title, "一般过去时")
+      assert.equal(outline.root.label, "一般过去时", "根节点标签即 title")
+      assert.equal(outline.root.children[0]!.label, "构成规则")
+      return { ok: true, path: "/cache/mindmap-abc123.png", nodes: 5, depth: 3 }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_mindmap")!({
+    wecom_userid: "t1",
+    title: "一般过去时",
+    root: { children: [{ label: "构成规则", children: [{ label: "动词 +ed" }] }] },
+  })
+  const text = toolText(result)
+  assert.ok(received, "render 必须被调用")
+  assert.ok(text.includes("\nMEDIA:/cache/mindmap-abc123.png\n"), "MEDIA 行必须独立成行")
+  assert.ok(text.includes("5 个节点 / 3 层"))
+  assert.ok(text.includes("原样保留"))
+  assert.ok(result.content.some((c) => c.text.includes('identity_source: "system"')))
+})
+
+test("mindmap: 节点超限 → 正常文本引导、不调渲染", async () => {
+  let renderCalled = false
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderMindmap: async () => {
+      renderCalled = true
+      return { ok: true, path: "/x.png", nodes: 99, depth: 2 }
+    },
+  })
+  const root = { children: Array.from({ length: 60 }, (_, i) => ({ label: `分支${i}` })) }
+  const result = await handlers.get("teacher_tutor_mindmap")!({ wecom_userid: "t1", title: "t", root })
+  const text = toolText(result)
+  assert.ok(text.includes("未生成导图"))
+  assert.ok(text.includes("61 个超过上限 60"))
+  assert.ok(text.includes("拆成多张"))
+  assert.equal(renderCalled, false)
+})
+
+test("mindmap: 形状非法 → ToolArgumentError（缺 label / root 非对象）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") })
+  await assert.rejects(
+    handlers.get("teacher_tutor_mindmap")!({ wecom_userid: "t1", title: "t", root: { children: [{}] } }),
+    /label/,
+  )
+  await assert.rejects(
+    handlers.get("teacher_tutor_mindmap")!({ wecom_userid: "t1", title: "t", root: "x" }),
+    /root/,
+  )
+})
+
+test("mindmap: 渲染失败 → 失败文案、无 MEDIA 行（不抛错）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderMindmap: async () => ({ ok: false, error: "Command failed: dot: boom" }),
+  })
+  const result = await handlers.get("teacher_tutor_mindmap")!({
+    wecom_userid: "t1",
+    title: "t",
+    root: { children: [{ label: "a" }] },
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("生成失败"))
+  assert.ok(text.includes("文字版大纲"))
+  assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
 })
