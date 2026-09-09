@@ -1181,3 +1181,49 @@ async fn target_ref_and_body_validation_400() {
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
+
+/// media target_ref 后缀容错（2026-09-09 提速）：唯一后缀命中（≥8 字符）→ 201 且
+/// 落库条目 target_ref 补全为全量 slug；歧义后缀（两 slug 同尾）→ 400 明示；
+/// 短后缀（<8）不参与容错照 400。
+#[tokio::test]
+async fn plan_create_media_slug_suffix_tolerance() {
+    let (server, state, teacher, _teacher_id, _plain) = learning_fixture("sfx").await;
+
+    // 唯一后缀：slug 全量形 + 模型只传 8 位哈希尾
+    let slug_full = format!("后缀容错课例-{}", unique("m1"));
+    seed_media_asset(&state, &slug_full).await;
+    let suffix = &slug_full[slug_full.len() - 8..];
+
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&plan_body("chat", None, json!([{"kind": "media", "target_ref": suffix, "label": "后缀命中"}])))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED, "unique suffix must resolve: {suffix}");
+    let items = r.json::<serde_json::Value>()["items"].as_array().expect("items").to_vec();
+    assert_eq!(items[0]["target_ref"], slug_full.as_str(), "target_ref must be the full slug");
+
+    // 歧义后缀：两 slug 同 8 位尾 → 400 明示歧义
+    let amb_suffix = unique("amb"); // 8 字符（unique tag+hex），构造两 slug 同尾
+    seed_media_asset(&state, &format!("课例甲-{amb_suffix}")).await;
+    seed_media_asset(&state, &format!("课例乙-{amb_suffix}")).await;
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&plan_body("chat", None, json!([{"kind": "media", "target_ref": amb_suffix, "label": "l"}])))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "ambiguous suffix must 400");
+    let body = String::from_utf8_lossy(r.as_bytes());
+    assert!(body.contains("ambiguous"), "400 should mention ambiguity: {body}");
+
+    // 短后缀（<8）不参与容错
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&plan_body("chat", None, json!([{"kind": "media", "target_ref": "abc", "label": "l"}])))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "short suffix must 400 as not found");
+
+    // 测试卫生：清理本轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}

@@ -846,9 +846,10 @@ async fn insert_short_link(
 /// - kind wiki_page：transcripts/ 前缀放行（transcriber 命名空间，页可能未同步），
 ///   其余必须在 wiki_pages 存在——project 取 `state.training.project_id` 配置
 ///   （None → 500 配置缺失，不硬编码）；不存在的相对路径 → 400；
-/// - kind media：必须在 media_assets.slug 存在，否则 400；
+/// - kind media：必须在 media_assets.slug 存在，否则 400；唯一后缀命中（≥8 字符）
+///   原位补全全量 slug（模型偶发只传哈希尾缀，省一轮 400 重查），多命中 → 400；
 /// - 其他 kind → 400。
-async fn validate_plan_items(state: &AppState, items: &[PlanItemInput]) -> Result<(), AppError> {
+async fn validate_plan_items(state: &AppState, items: &mut [PlanItemInput]) -> Result<(), AppError> {
     let project_id = state.config.training.project_id;
     for it in items {
         if it.kind != "wiki_page" && it.kind != "media" {
@@ -894,6 +895,32 @@ async fn validate_plan_items(state: &AppState, items: &[PlanItemInput]) -> Resul
                         .fetch_optional(&state.db)
                         .await?;
                 if exists.is_none() {
+                    // 后缀容错（2026-09-09 提速）：模型偶发只传 8 位哈希尾缀
+                    //（检索结果 slug 的尾部形态），plan_create 曾 400 打回让模型
+                    // 多花一轮重查。唯一后缀命中 → 原位补全全量 slug（用 right()
+                    // 精确尾匹配，避免 LIKE 通配符歧义）；多命中 → 400 明示歧义；
+                    // <8 字符不参与容错（过短后缀误配面大）。
+                    let rref = it.target_ref.trim();
+                    if rref.chars().count() >= 8 {
+                        let hits: Vec<String> = sqlx::query_scalar(
+                            "SELECT slug FROM media_assets \
+                             WHERE right(slug, char_length($1)) = $1 ORDER BY slug LIMIT 2",
+                        )
+                        .bind(rref)
+                        .fetch_all(&state.db)
+                        .await?;
+                        if hits.len() == 1 {
+                            it.target_ref = hits.into_iter().next().expect("len==1 checked");
+                            continue;
+                        }
+                        if hits.len() > 1 {
+                            return Err(AppError::BadRequest(format!(
+                                "media target_ref '{}' is an ambiguous suffix ({} slugs match) — use the full slug",
+                                it.target_ref.chars().take(64).collect::<String>(),
+                                hits.len()
+                            )));
+                        }
+                    }
                     return Err(AppError::BadRequest(format!(
                         "media target_ref (slug) not found: {}...",
                         it.target_ref.chars().take(64).collect::<String>()
@@ -1013,7 +1040,8 @@ async fn create_plan(
     } else {
         req.period_key.clone()
     };
-    validate_plan_items(&state, &req.items).await?;
+    let mut req = req;
+    validate_plan_items(&state, &mut req.items).await?;
 
     let mut tx = state.db.begin().await.map_err(AppError::from)?;
 
