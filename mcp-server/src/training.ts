@@ -780,7 +780,8 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
         `思维导图生成失败：${result.error ?? "未知错误"}。可先给教师文字版大纲（层级列表），或稍后重试。`), ident.mode)
     }
     return withIdentitySource(textResult([
-      `思维导图已生成（${result.engine ? `引擎 ${result.engine}；` : ""}${result.nodes} 个节点 / ${result.depth} 层）。`,
+      // M3'（2026-09-10 评审）：引擎名不进教师可见摘要——SKILL §1「呈现结果而非过程」。
+      `思维导图已生成（${result.nodes} 个节点 / ${result.depth} 层）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
     ].join("\n")), ident.mode)

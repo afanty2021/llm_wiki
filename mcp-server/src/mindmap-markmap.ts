@@ -17,13 +17,14 @@
  */
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
   countNodes,
+  friendlyRenderError,
   maxDepth,
   renderMindmap,
   type MindmapNode,
@@ -40,7 +41,7 @@ export const MARKMAP_KILL_AFTER_MS = 20_000
 export const DEFAULT_MARKMAP_OUT_DIR = join(homedir(), ".hermes", "cache", "ltutor-mindmap")
 
 /** dist/src/ → mcp-server/node_modules（markmap/d3 本地资产，零 CDN 依赖）。 */
-const ASSET_BASE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "node_modules")
+export const ASSET_BASE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "node_modules")
 
 const CHROME_CANDIDATES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -60,12 +61,45 @@ export interface MindmapMarkmapDeps {
 const BRANCH_PALETTE = ["#E668A7", "#5FA0E8", "#66B987", "#E6A23C", "#8E7BE6", "#5EC2C2"]
 const ROOT_COLOR = "#4C6FFF"
 
+/** 三资产相对路径（评审 I-A.2：渲染前 existsSync 预检，404 白屏成功不再可能）。 */
+export const MARKMAP_ASSET_RELPATHS = [
+  "markmap-lib/dist/browser/index.iife.js",
+  "d3/dist/d3.min.js",
+  "markmap-view/dist/browser/index.js",
+]
+
+/** PNG 完整性：末 12 字节 = 空 IEND 长度 + "IEND" + 固定 CRC（评审 I-A 完成判据）。 */
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const PNG_IEND_TRAILER = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82])
+const PNG_MIN_BYTES = 100
+
+export function isCompletePng(path: string): boolean {
+  try {
+    const fd = openSync(path, "r")
+    try {
+      const size = fstatSync(fd).size
+      if (size < PNG_SIGNATURE.length + PNG_IEND_TRAILER.length || size < PNG_MIN_BYTES) return false
+      const tail = Buffer.alloc(PNG_IEND_TRAILER.length)
+      readSync(fd, tail, 0, tail.length, size - tail.length)
+      return tail.equals(PNG_IEND_TRAILER)
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return false
+  }
+}
+
 /**
- * outline → markmap markdown。换行/制表压成空格（列表行结构唯一硬约束；
- * 中段 #*-+ 等在列表行内是字面文本，探针实证无需转义）。
+ * outline → markmap markdown。控制字符压空格；`&`/`<` 转 HTML 实体——
+ * markdown 渲染层会把 `<...>` 当内联 HTML 吃掉（HTML 教学导图内容静默缺失，
+ * 2026-09-10 v2 目检实锺），实体形态在标签里还原为字面文本。
  */
 export function outlineToMarkdown(outline: MindmapOutline): string {
-  const escapeLabel = (s: string) => s.replace(/[\x00-\x1f]+/g, " ")
+  const escapeLabel = (s: string) => s
+    .replace(/[\x00-\x1f]+/g, " ")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
   const lines: string[] = [`# ${escapeLabel(outline.title)}`]
   const walk = (node: MindmapNode, depth: number): void => {
     for (const child of node.children) {
@@ -78,9 +112,11 @@ export function outlineToMarkdown(outline: MindmapOutline): string {
   return lines.join("\n") + "\n"
 }
 
-/** markdown 内联进 <script type="text/template"> 的安全转义：`</` 破坏标签边界。 */
-function escapeScriptClose(s: string): string {
-  return s.replace(/<\//g, "<\\/")
+/** markdown 内联进页面的安全形态：base64（评审 I-A——任何内容形态（`<!--`/
+ * `</script>`/`<script`）都不再进入 HTML 解析器，script data 状态机类吞标签
+ * 白屏成功整类消灭；页内 atob+TextDecoder 还原 UTF-8）。 */
+function encodeInline(markdown: string): string {
+  return Buffer.from(markdown, "utf8").toString("base64")
 }
 
 export function buildMarkmapHtml(markdown: string, opts: { assetBase: string; width: number; height: number }): string {
@@ -94,14 +130,13 @@ export function buildMarkmapHtml(markdown: string, opts: { assetBase: string; wi
   svg.markmap .markmap-node-text{fill:#333}
 </style></head><body>
 <div id="wrap"><svg class="markmap" id="mm"></svg></div>
-<script type="text/template" class="markmap" id="src">${escapeScriptClose(markdown)}</script>
-<script src="file://${join(opts.assetBase, "markmap-lib/dist/browser/index.iife.js")}"></script>
-<script src="file://${join(opts.assetBase, "d3/dist/d3.min.js")}"></script>
-<script src="file://${join(opts.assetBase, "markmap-view/dist/browser/index.js")}"></script>
+<script src="file://${join(opts.assetBase, MARKMAP_ASSET_RELPATHS[0]!)}"></script>
+<script src="file://${join(opts.assetBase, MARKMAP_ASSET_RELPATHS[1]!)}"></script>
+<script src="file://${join(opts.assetBase, MARKMAP_ASSET_RELPATHS[2]!)}"></script>
 <script>
   const PALETTE = ${JSON.stringify(BRANCH_PALETTE)};
   const ROOT_COLOR = ${JSON.stringify(ROOT_COLOR)};
-  const src = document.getElementById('src').textContent;
+  const src = new TextDecoder().decode(Uint8Array.from(atob("${encodeInline(markdown)}"), (c) => c.charCodeAt(0)));
   const { Transformer, Markmap } = markmap;
   const data = new Transformer().transform(src).root;
   // 预遍历：按一级分支序号固定色相（node.state.path 同层同值不可用，探针实证）。
@@ -134,6 +169,8 @@ function resolveChromePath(explicit?: string): string | null {
 /**
  * headless Chrome 截图 runner：spawn 后轮询 PNG 出现 → SIGKILL。
  * （本机 Chrome 152 --screenshot 后进程不自退，--timeout/--virtual-time-budget 均无效，探针实证。）
+ * 评审 I-B：监听 exit——Chrome 提前退出且无 PNG 时立即失败（快回落，不再固定烧满超时）；
+ * 与轮询 resolve 竞态时 settled 保证 no-op。
  */
 export async function chromeScreenshotRunner(htmlPath: string, outPath: string, opts: { chromePath?: string } = {}): Promise<void> {
   const chrome = resolveChromePath(opts.chromePath)
@@ -151,22 +188,29 @@ export async function chromeScreenshotRunner(htmlPath: string, outPath: string, 
   }
   try {
     await new Promise<void>((resolve, reject) => {
-      const poll = setInterval(() => {
-        if (existsSync(outPath)) {
-          clearInterval(poll)
-          resolve()
-        }
-      }, MARKMAP_POLL_MS)
-      child.on("error", (err) => {
+      let settled = false
+      const finish = (err?: Error) => {
+        if (settled) return
+        settled = true
         clearInterval(poll)
-        reject(err)
+        err ? reject(err) : resolve()
+      }
+      const poll = setInterval(() => {
+        if (existsSync(outPath)) finish()
+      }, MARKMAP_POLL_MS)
+      child.on("error", (err) => finish(err instanceof Error ? err : new Error(String(err))))
+      child.on("exit", () => {
+        if (existsSync(outPath)) finish()
+        else finish(new Error("Chrome 提前退出且未产出截图（安装损坏或参数异常）"))
       })
       setTimeout(() => {
-        clearInterval(poll)
-        if (existsSync(outPath)) resolve()
-        else reject(new Error(`Chrome 截图超时（${MARKMAP_KILL_AFTER_MS}ms 内未产出 PNG）`))
+        kill()
+        finish(existsSync(outPath) ? undefined : new Error(`Chrome 截图超时（${MARKMAP_KILL_AFTER_MS}ms 内未产出 PNG）`))
       }, MARKMAP_KILL_AFTER_MS).unref()
     })
+  } catch (err) {
+    console.error("[mindmap] markmap headless 截图失败:", err instanceof Error ? err.message : err)
+    throw err
   } finally {
     kill()
     rmSync(profileDir, { recursive: true, force: true })
@@ -174,32 +218,43 @@ export async function chromeScreenshotRunner(htmlPath: string, outPath: string, 
 }
 
 /**
- * markmap 渲染：成功返回 { ok, path, nodes, depth, engine:"markmap" }；
- * 失败返回 { ok:false, error }（调用方 renderMindmapAuto 回落 graphviz）。
+ * markmap 渲染：成功返回 { ok, path, engine:"markmap", nodes, depth }；
+ * 失败返回 { ok:false, error }（调用方 renderMindmapAuto 回落 graphviz），绝不抛错。
+ * 完成判据 = PNG 末 12 字节 IEND（评审 I-A：文件存在≠渲染成功——白屏/半截 PNG
+ * 均不得 ok:true）；截图落临时名、IEND 过后 renameSync 终名（顺解并发同图互写）。
  */
 export async function renderMindmapMarkmap(
   outline: MindmapOutline,
   deps: MindmapMarkmapDeps = {},
 ): Promise<MindmapRenderResult> {
   const outDir = deps.outDir ?? DEFAULT_MARKMAP_OUT_DIR
+  const assetBase = deps.assetBase ?? ASSET_BASE
+  const missing = MARKMAP_ASSET_RELPATHS.filter((rel) => !existsSync(join(assetBase, rel)))
+  if (missing.length > 0) {
+    return { ok: false, error: `markmap 资产缺失（${missing.join(", ")}）——请在 mcp-server 目录 npm install 后重试` }
+  }
   const screenshot = deps.screenshot ?? ((htmlPath, outPath) => chromeScreenshotRunner(htmlPath, outPath, { chromePath: deps.chromePath }))
   try {
     mkdirSync(outDir, { recursive: true })
     const tmp = mkdtempSync(join(outDir, "tmp-mm-"))
     try {
       const htmlPath = join(tmp, "page.html")
+      const shotPath = join(tmp, "shot.png")
       const finalPath = join(outDir, `mindmap-markmap-${hashOutline(outline)}.png`)
       writeFileSync(htmlPath, buildMarkmapHtml(outlineToMarkdown(outline), {
-        assetBase: deps.assetBase ?? ASSET_BASE, width: MARKMAP_CANVAS_W, height: MARKMAP_CANVAS_H,
+        assetBase, width: MARKMAP_CANVAS_W, height: MARKMAP_CANVAS_H,
       }), "utf8")
-      await screenshot(htmlPath, finalPath)
-      if (!existsSync(finalPath)) return { ok: false, error: "截图完成但 PNG 未落盘" }
+      await screenshot(htmlPath, shotPath)
+      if (!isCompletePng(shotPath)) {
+        return { ok: false, error: "截图不完整（PNG 缺 IEND 结束标记或过小，疑似白屏/半截）——请重试或改用文字版大纲" }
+      }
+      renameSync(shotPath, finalPath)
       return { ok: true, path: finalPath, engine: "markmap", nodes: countNodes(outline.root), depth: maxDepth(outline.root) + 1 }
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
   } catch (err) {
-    return { ok: false, error: String(err) }
+    return { ok: false, error: friendlyRenderError(err) }
   }
 }
 
@@ -213,7 +268,10 @@ export async function renderMindmapAuto(
   const fallback = await renderMindmap(outline, deps.graphviz ?? {})
   return fallback.ok ? fallback : {
     ...fallback,
-    error: `markmap 与 graphviz 渲染均失败：${primary.error ?? "?"}；${fallback.error ?? "?"}`,
+    // M2'：聚合错误同样过 friendlyRenderError——内部绝对路径不进模型视野。
+    error: friendlyRenderError(
+      new Error(`markmap 与 graphviz 渲染均失败：${primary.error ?? "?"}；${fallback.error ?? "?"}`),
+    ),
   }
 }
 
