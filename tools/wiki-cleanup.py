@@ -352,6 +352,11 @@ def cmd_merge(args):
         if n[0]:
             rewrites.append((p, new, n[0]))
     rewrites_map = {p["path"]: nw for p, nw, _ in rewrites}
+    # loser 正文改写闭包：canonical 追加 loser 正文前同样要过一遍 loser_forms——
+    # 否则 loser 正文里指向本批其他 loser 的链接原样进 keep 页（2026-09-09
+    # concepts 同 title 批实锺：刻意练习组 loser 被追加后留 1 条悬空链）
+    def rewrite_loser_body(text):
+        return RE_LINK.sub(repl, text)
     # 2) canonical 合并：内容追加 + sources 并集
     merges = []
     for g in plan["groups"]:
@@ -369,7 +374,7 @@ def cmd_merge(args):
             lp_page = pages.get(lp)
             if not lp_page:
                 continue
-            body = lp_page["content"].strip()
+            body = rewrite_loser_body(lp_page["content"]).strip()
             if body and body not in new_content:
                 lt = (lp_page["title"] or "").strip() or rla.stem_of(lp)
                 parts.append(f"\n\n## 合并自 {lt}\n\n{body}")
