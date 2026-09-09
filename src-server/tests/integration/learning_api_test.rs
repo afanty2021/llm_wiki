@@ -1227,3 +1227,50 @@ async fn plan_create_media_slug_suffix_tolerance() {
     // 测试卫生：清理本轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
+
+/// bind 大小写不敏感（2026-09-09 Wendy/wendy 双档案事故）：同账号不同大小写形态
+/// 必须落同一账号；既有档案保留首次绑定的 canonical 形态，第二次 bind 只发新 token
+/// （档案可变字段不被第二次 bind 的 display_name 覆盖）。
+#[tokio::test]
+async fn bind_is_case_insensitive_keeps_canonical_profile() {
+    let (server, state, _teacher, _tid, _plain) = learning_fixture("ci").await;
+
+    let wid = unique("ciw"); // t7_ciw_<pid>_<n>，全小写
+    let (tok1, id1) = bind_teacher(&server, &wid).await;
+
+    // 大写形态再 bind → 200，且是同一账号（不是惰性新建第二个）
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": wid.to_uppercase(), "display_name": "二形态挂名"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK, "case variant must bind, not 409/500");
+    let v = r.json::<serde_json::Value>();
+    assert_eq!(
+        v["user"]["id"].as_i64().unwrap(),
+        id1,
+        "case variant must resolve to the same account"
+    );
+    let tok2 = v["access_token"].as_str().unwrap().to_string();
+
+    // 两个 token 看到同一档案：wecom_userid 保持首绑 canonical 形态，
+    // display_name 保持首绑值（第二次 bind 的 display_name 不落库）
+    let p1 = server
+        .get("/api/v1/training/profile")
+        .add_header("authorization", bearer(&tok1))
+        .await;
+    assert_eq!(p1.status_code(), StatusCode::OK);
+    let p1v = p1.json::<serde_json::Value>();
+    assert_eq!(p1v["wecom_userid"], wid.as_str(), "canonical casing preserved");
+    assert_eq!(p1v["display_name"], "测试教师", "2nd bind must not overwrite profile");
+
+    let p2 = server
+        .get("/api/v1/training/profile")
+        .add_header("authorization", bearer(&tok2))
+        .await;
+    assert_eq!(p2.status_code(), StatusCode::OK);
+    assert_eq!(p2.json::<serde_json::Value>()["wecom_userid"], wid.as_str());
+
+    // 测试卫生：清理本轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}

@@ -217,14 +217,18 @@ async fn bind(
     // FOR UPDATE 锁不住不存在的行（READ COMMITTED 下 absent-row 不加锁），且旧的
     // existing 查询跑在池连接上（不在事务内）——并发新用户会双双 INSERT → 23505 → 500。
     // pg_advisory_xact_lock 随事务提交/回滚自动释放，key = hashtextextended(wecom_userid)。
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+    // 大小写归一（2026-09-09 Wendy/wendy 双档案事故）：企微回调的 userid 大小写不保证
+    // 稳定（同账号先后送出 wendy/Wendy 两种形态），查找与锁一律按 lower 归一，既有
+    // 档案保留首次绑定的 canonical 形态；归一在 SQL 侧做（与 019 迁移的 lower 唯一
+    // 索引同一 lower 语义），Rust 侧不再二次折叠。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(lower($1), 0))")
         .bind(&req.wecom_userid)
         .execute(&mut *tx)
         .await
         .map_err(AppError::from)?;
     // 存量检查移入事务（锁后）：第二个并发请求在此看到第一个已提交的档案
     let existing: Option<i32> =
-        sqlx::query_scalar("SELECT user_id FROM teacher_profiles WHERE wecom_userid = $1")
+        sqlx::query_scalar("SELECT user_id FROM teacher_profiles WHERE lower(wecom_userid) = lower($1)")
             .bind(&req.wecom_userid)
             .fetch_optional(&mut *tx)
             .await
