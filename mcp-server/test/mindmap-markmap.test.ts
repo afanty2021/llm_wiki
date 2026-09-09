@@ -257,10 +257,11 @@ test("chromeScreenshotRunner: Chrome 缺失 → 可读错误", async () => {
 
 // ── 真渲染冒烟（仅本机有 Chrome 时；无则跳过）──
 
-test("renderMindmapMarkmap: 真实 Chrome 冒烟（本地资产 + headless 截图 + IEND 判据）", { timeout: 40_000 }, async () => {
+test("renderMindmapMarkmap: 真实 Chrome 冒烟（本地资产 + headless 截图 + IEND 判据）", { timeout: 40_000 }, async (t) => {
   const outDir = mkdtempSync(path.join(tmpdir(), "ltutor-mindmap-real-"))
   const result = await renderMindmapMarkmap(normalizeOutline(SAMPLE), { outDir })
   if (!result.ok && /Chrome\/Chromium 未找到/.test(result.error ?? "")) {
+    t.skip("本机无 Chrome/Chromium——真渲染冒烟不可用（差额复验 §6.3：静默 return 改可见 skip）")
     return
   }
   assert.equal(result.ok, true)
