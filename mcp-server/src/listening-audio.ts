@@ -135,9 +135,12 @@ export async function synthesizeListeningAudio(
   const rate = speedToRate(options.speed ?? 1)
   const finalPath = path.join(outDir, `${timestampName()}_${sanitizeTitle(options.title)}.mp3`)
 
-  mkdirSync(outDir, { recursive: true })
-  const tmp = mkdtempSync(path.join(outDir, "tmp-"))
+  // mkdir/mkdtemp 全在 try 内（2026-09-10 评审 I3 与 mindmap.ts 同构）：outDir
+  // 不可写/EEXIST 等环境故障返回 ok:false，不抛错不进熔断器。
   try {
+    mkdirSync(outDir, { recursive: true })
+    const tmp = mkdtempSync(path.join(outDir, "tmp-"))
+    try {
     let engine: "edge-tts" | "say"
     try {
       await synthViaEdge(run, dialogue, rate, tmp)
@@ -189,7 +192,10 @@ export async function synthesizeListeningAudio(
       { timeout: LISTENING_PROC_TIMEOUT_MS },
     )
     return { ok: true, path: finalPath, engine, note: "双人声：A=Aria（女）B=Guy（男），行间留白 0.7s" }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  } catch (err) {
+    return { ok: false, error: `听力音频合成失败：${String(err)}` }
   }
 }

@@ -158,3 +158,11 @@ test("并发有界：12 行合成峰值 ≤ LISTENING_CONCURRENCY", async () => 
   assert.equal(result.ok, true)
   assert.ok(state.peakInflight <= LISTENING_CONCURRENCY + 2, `峰值 ${state.peakInflight} 应贴近并发上限（ffmpeg 静音/终编串行）`)
 })
+
+test("I3 同构: outDir 为普通文件 → ok:false 不抛错（2026-09-10 评审）", async () => {
+  const fileDir = path.join(mkdtempSync(path.join(tmpdir(), "ltutor-tts-ei-")), "not-a-dir")
+  writeFileSync(fileDir, "occupied")
+  const result = await synthesizeListeningAudio(DIALOGUE, { title: "x" }, { outDir: fileDir })
+  assert.equal(result.ok, false)
+  assert.ok(result.error!.length > 0)
+})

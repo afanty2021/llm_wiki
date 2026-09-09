@@ -429,9 +429,11 @@ export function trainingToolDefinitions(): ToolDefinition[] {
                   type: "object",
                   properties: {
                     label: { type: "string", description: "分支标签（1-40 字符）" },
+                    // 递归不可在 JSON Schema 内闭合表示（评审 I2）：声明 children 口子、
+                    // 不设 additionalProperties:false——深层结构交给运行时 normalizeOutline 校验。
+                    children: { type: "array", description: "更深分支（递归同构，运行时校验层级与数量）" },
                   },
                   required: ["label"],
-                  additionalProperties: false,
                 },
               },
             },

@@ -71,11 +71,18 @@ export function normalizeOutline(raw: { title: unknown; root: unknown }): Mindma
   const rootChildren = (raw.root as Record<string, unknown>).children
   return {
     title: raw.title,
-    root: { label: raw.title, children: normalizeChildren(rootChildren, "root.children") },
+    root: { label: raw.title, children: normalizeChildren(rootChildren, "root.children", 0) },
   }
 }
 
-function normalizeChildren(raw: unknown, at: string): MindmapNode[] {
+/** 嵌套深度前置拦截（评审 I3）：~8000 层即 RangeError 且非 OutlineFormatError，
+ * 会逸出「不进熔断器」承诺——在递归爆栈前以正常校验错误拒绝。 */
+const MAX_OUTLINE_NESTING = 100
+
+function normalizeChildren(raw: unknown, at: string, depth: number): MindmapNode[] {
+  if (depth > MAX_OUTLINE_NESTING) {
+    throw new OutlineFormatError(`${at} 嵌套超过 ${MAX_OUTLINE_NESTING} 层`)
+  }
   if (raw === undefined) return []
   if (!Array.isArray(raw)) throw new OutlineFormatError(`${at} must be an array`)
   return raw.map((item, i) => {
@@ -86,7 +93,7 @@ function normalizeChildren(raw: unknown, at: string): MindmapNode[] {
     if (typeof rec.label !== "string" || rec.label.trim() === "") {
       throw new OutlineFormatError(`${at}[${i}].label is required`)
     }
-    return { label: rec.label, children: normalizeChildren(rec.children, `${at}[${i}].children`) }
+    return { label: rec.label, children: normalizeChildren(rec.children, `${at}[${i}].children`, depth + 1) }
   })
 }
 
@@ -115,7 +122,13 @@ export function outlineCapsError(outline: MindmapOutline): string | null {
   if (depth > MINDMAP_MAX_DEPTH) {
     return `导图 ${depth + 1} 层超过上限 ${MINDMAP_MAX_DEPTH + 1} 层`
   }
-  return findOverlongLabel(outline.root, "root")
+  // root 不查 40 字符闸：root.label 由 title 强制而来、模型传不到该字段，
+  // title 的 60 字符上限已在上面单独检查（评审 I1——报错误导读不到的字段）。
+  for (const [i, child] of outline.root.children.entries()) {
+    const hit = findOverlongLabel(child, `root.children[${i}]`)
+    if (hit) return hit
+  }
+  return null
 }
 
 function findOverlongLabel(node: MindmapNode, at: string): string | null {
@@ -132,9 +145,9 @@ function findOverlongLabel(node: MindmapNode, at: string): string | null {
 // 深度配色（方案 §五，探针样式固化）：depth 0..3，更深回落最浅档。
 const DOT_FILLS = ["#4C6FFF", "#DCE7FF", "#F0F4FF", "#F7FAFF"]
 
-/** DOT 字符串字面量转义：反斜杠/双引号必须转义，控制字符压成空格。 */
+/** DOT 字符串字面量转义：反斜杠/双引号必须转义；全部控制字符压成空格（评审 M1——\x01 等会被 dot 原样画进 PNG）。 */
 function escapeDotLabel(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\r\n\t]+/g, " ")
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\x00-\x1f]+/g, " ")
 }
 
 /** 纯函数：outline → DOT 源码（rankdir=LR 圆角填充树，PingFang SC）。 */
@@ -168,9 +181,19 @@ export function compileDot(outline: MindmapOutline): string {
   return lines.join("\n") + "\n"
 }
 
+/** 渲染错误人性化：spawn ENOENT（含 tmp 绝对路径）→ 中文「组件未安装」引导（评审 M6）。 */
+export function friendlyRenderError(err: unknown): string {
+  const raw = String(err)
+  if (/spawn .*ENOENT/.test(raw)) {
+    return `渲染组件未安装（${/spawn \S+/.exec(raw)?.[0] ?? "子进程"} ENOENT）。dot 缺失时请先 brew install graphviz，再重试或先给教师文字版大纲`
+  }
+  return raw
+}
+
 /**
- * 渲染思维导图 PNG。成功返回 { ok, path, nodes, depth }；dot 缺失/失败返回
- * { ok:false, error }（不抛错——调用方走文本引导）。tmp 目录始终清理。
+ * 渲染思维导图 PNG。成功返回 { ok, path, engine, nodes, depth }；任何失败
+ * （dot 缺失/outDir 不可写等）返回 { ok:false, error }，绝不抛错——
+ * mkdir/mkdtemp 都在 try 内，环境故障走文本引导不进熔断器（评审 I3）。
  */
 export async function renderMindmap(
   outline: MindmapOutline,
@@ -183,22 +206,24 @@ export async function renderMindmap(
   const hash = createHash("sha1").update(dotSrc).digest("hex").slice(0, 12)
   const finalPath = path.join(outDir, `mindmap-${hash}.png`)
 
-  mkdirSync(outDir, { recursive: true })
-  const tmp = mkdtempSync(path.join(outDir, "tmp-"))
   try {
-    const dotPath = path.join(tmp, "mindmap.dot")
-    writeFileSync(dotPath, dotSrc, "utf8")
-    await run("dot", ["-Tpng", dotPath, "-o", finalPath], { timeout: MINDMAP_PROC_TIMEOUT_MS })
-    return {
-      ok: true,
-      path: finalPath,
-      engine: "graphviz",
-      nodes: countNodes(outline.root),
-      depth: maxDepth(outline.root) + 1,
+    mkdirSync(outDir, { recursive: true })
+    const tmp = mkdtempSync(path.join(outDir, "tmp-"))
+    try {
+      const dotPath = path.join(tmp, "mindmap.dot")
+      writeFileSync(dotPath, dotSrc, "utf8")
+      await run("dot", ["-Tpng", dotPath, "-o", finalPath], { timeout: MINDMAP_PROC_TIMEOUT_MS })
+      return {
+        ok: true,
+        path: finalPath,
+        engine: "graphviz",
+        nodes: countNodes(outline.root),
+        depth: maxDepth(outline.root) + 1,
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
     }
   } catch (err) {
-    return { ok: false, error: String(err) }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    return { ok: false, error: friendlyRenderError(err) }
   }
 }

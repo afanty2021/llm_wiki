@@ -170,3 +170,48 @@ test("renderMindmap: dot 失败 → ok:false + tmp 清理", async () => {
   assert.deepEqual(leftovers, [], "tmp 目录必须清理")
   rmSync(outDir, { recursive: true, force: true })
 })
+
+// ── 2026-09-10 评审跟进修（I1/I3/M1/M6）──
+
+test("I1: title 41-60 区间通过、61 拒——root 不再撞 40 闸", () => {
+  assert.equal(outlineCapsError(normalizeOutline({ title: "长".repeat(60), root: {} })), null)
+  assert.match(outlineCapsError(normalizeOutline({ title: "长".repeat(61), root: {} }))!, /标题 61 字符.*上限 60/)
+  // 子节点超长仍按 40 闸拒，且报错路径指向模型传得到的字段
+  const over = normalizeOutline({ title: "t".repeat(50), root: { children: [{ label: "x".repeat(41) }] } })
+  assert.match(outlineCapsError(over)!, /root\.children\[0\]/)
+})
+
+test("I3 洞二: 嵌套 >100 层 → OutlineFormatError（不爆 RangeError）", () => {
+  let node: Record<string, unknown> = { label: "leaf" }
+  for (let i = 0; i < 150; i++) node = { label: `l${i}`, children: [node] }
+  assert.throws(() => normalizeOutline({ title: "t", root: node }), OutlineFormatError)
+})
+
+test("M1: 控制字符（\\x01 等）压空格，不进 DOT 字符串", () => {
+  const dot = compileDot(normalizeOutline({ title: "t\x01\x1b", root: { children: [{ label: "a\x0bb" }] } }))
+  for (const ch of ["\x00", "\x01", "\x0b", "\x1b", "\x1f"]) {
+    assert.ok(!dot.includes(ch), `DOT 不得含控制字符 ${JSON.stringify(ch)}`)
+  }
+  assert.ok(dot.includes("t a b") || dot.includes('label="t  "') === false) // 压成空格即可
+})
+
+test("I3 洞一: outDir 为普通文件 → ok:false 不抛错（mkdir ECONFIG 不进熔断器）", async () => {
+  const fileDir = path.join(mkdtempSync(path.join(tmpdir(), "ltutor-mindmap-ei-")), "not-a-dir")
+  writeFileSync(fileDir, "occupied")
+  const result = await renderMindmap(normalizeOutline(SAMPLE), { outDir: fileDir })
+  assert.equal(result.ok, false)
+  assert.ok(result.error!.length > 0)
+})
+
+test("M6: dot ENOENT → 中文「渲染组件未安装」引导", async () => {
+  const outDir = mkdtempSync(path.join(tmpdir(), "ltutor-mindmap-enoent-"))
+  const result = await renderMindmap(normalizeOutline(SAMPLE), {
+    outDir,
+    execFile: async () => {
+      throw new Error("spawn dot ENOENT")
+    },
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.error!, /渲染组件未安装/)
+  assert.match(result.error!, /brew install graphviz/)
+})

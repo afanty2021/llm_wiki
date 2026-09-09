@@ -837,3 +837,11 @@ test("mindmap: 渲染失败 → 失败文案、无 MEDIA 行（不抛错）", as
   assert.ok(text.includes("文字版大纲"))
   assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
 })
+
+test("mindmap schema: 递归 children 不被 additionalProperties:false 禁绝（I2）", () => {
+  const tool = buildTools("src-server").find((t) => t.name === "teacher_tutor_mindmap")!
+  const root = tool.inputSchema.properties.root as Record<string, any>
+  const items = root.properties.children.items
+  assert.equal(items.additionalProperties, undefined, "items 不得声明 additionalProperties:false——递归深层靠运行时校验")
+  assert.ok(items.properties.children, "items 必须声明 children 口子")
+})

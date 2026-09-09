@@ -65,7 +65,7 @@ const ROOT_COLOR = "#4C6FFF"
  * 中段 #*-+ 等在列表行内是字面文本，探针实证无需转义）。
  */
 export function outlineToMarkdown(outline: MindmapOutline): string {
-  const escapeLabel = (s: string) => s.replace(/[\r\n\t]+/g, " ")
+  const escapeLabel = (s: string) => s.replace(/[\x00-\x1f]+/g, " ")
   const lines: string[] = [`# ${escapeLabel(outline.title)}`]
   const walk = (node: MindmapNode, depth: number): void => {
     for (const child of node.children) {
