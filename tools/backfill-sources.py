@@ -77,8 +77,13 @@ def main():
         done = 0
         for r in rows:
             newj = json.dumps(json.loads(r["new"]), ensure_ascii=False).replace("'", "''")
+            # frontmatter 可能为 jsonb null/标量（全库 48 页，jsonb_set 拒绝非对象）——
+            # 非对象时从 {} 起步再 set（与护栏 M8 语义对齐且更完整）
             q = (f"UPDATE wiki_pages SET sources='{newj}'::jsonb, "
-                 f"frontmatter=jsonb_set(coalesce(frontmatter,'{{}}'::jsonb),'{{sources}}','{newj}'::jsonb) "
+                 f"frontmatter=jsonb_set("
+                 f"CASE WHEN jsonb_typeof(coalesce(frontmatter,'{{}}'::jsonb))='object' "
+                 f"THEN frontmatter ELSE '{{}}'::jsonb END, "
+                 f"'{{sources}}','{newj}'::jsonb) "
                  f"WHERE project_id=614 AND path='{r['path'].replace(chr(39), chr(39)*2)}'")
             psql(q)
             done += 1
