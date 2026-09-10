@@ -447,16 +447,53 @@ export function buildWorksheetHtml(doc: WorksheetDoc): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{width:${WORKSHEET_CANVAS_W}px;height:${WORKSHEET_CANVAS_H}px;background:#faf6ec;
-       background-image:repeating-linear-gradient(45deg,transparent,transparent 18px,rgba(139,109,71,.04) 18px,rgba(139,109,71,.04) 36px);
+  body{width:${WORKSHEET_CANVAS_W}px;height:${WORKSHEET_CANVAS_H}px;
+       background:
+         repeating-linear-gradient(90deg,rgba(0,0,0,.08) 0 3px,transparent 3px 96px),
+         repeating-linear-gradient(90deg,rgba(255,255,255,.05) 0 48px,transparent 48px 96px),
+         linear-gradient(180deg,#b08050,#96693f);
        font-family:'PingFang SC','Hiragino Sans GB',sans-serif;color:#4a3b28}
-  .frame{width:1460px;height:1060px;margin:20px;border:3px solid #c9a86a;border-radius:18px;padding:26px;position:relative}
-  .title{text-align:center;font-size:46px;font-weight:800;color:#8b5e34;letter-spacing:2px}
+  /* 纸张 */
+  .paper{position:absolute;left:50px;top:44px;width:1400px;height:1012px;background:#faf5e9;border-radius:8px;
+         box-shadow:0 6px 24px rgba(60,40,10,.45),inset 0 0 60px rgba(160,120,60,.12)}
+  .paper::after{content:"";position:absolute;inset:0;border-radius:8px;
+         background:repeating-linear-gradient(45deg,transparent,transparent 22px,rgba(150,110,55,.05) 22px,rgba(150,110,55,.05) 44px)}
+  /* 竹节边框：四条竹竿（分段渐变+节环）+ 四角竹节 */
+  .bamboo{position:absolute;background:
+      repeating-linear-gradient(90deg,#8fbc64 0 88px,#e3efd2 92px,#8fbc64 96px 150px,#5f8f3f 150px 162px);
+      border-radius:9px;box-shadow:0 2px 5px rgba(40,60,20,.4),inset 0 2px 2px rgba(255,255,255,.35)}
+  .b-top{left:28px;top:26px;width:1344px;height:18px}
+  .b-bottom{left:28px;bottom:26px;width:1344px;height:18px}
+  .b-left{left:28px;top:28px;width:18px;height:1052px;
+      background:repeating-linear-gradient(180deg,#8fbc64 0 88px,#e3efd2 92px,#8fbc64 96px 150px,#5f8f3f 150px 162px)}
+  .b-right{right:28px;top:28px;width:18px;height:1052px;
+      background:repeating-linear-gradient(180deg,#8fbc64 0 88px,#e3efd2 92px,#8fbc64 96px 150px,#5f8f3f 150px 162px)}
+  .knot{position:absolute;width:30px;height:30px;border-radius:50%;
+      background:radial-gradient(circle at 35% 30%,#a5cd7c,#5f8f3f 70%);border:3px solid #4c7530;box-shadow:0 2px 4px rgba(40,60,20,.4);z-index:3}
+  .k1{left:20px;top:18px}.k2{right:20px;top:18px}.k3{left:20px;bottom:18px}.k4{right:20px;bottom:18px}
+  /* 角落绿植 */
+  .plant{position:absolute;font-size:64px;z-index:4;filter:saturate(1.1)}
+  .p1{left:40px;top:38px;transform:rotate(-18deg)}
+  .p2{right:44px;top:34px;transform:rotate(14deg)}
+  .p3{left:36px;bottom:36px;transform:rotate(160deg)}
+  .p4{right:38px;bottom:40px;transform:rotate(-12deg)}
+  /* 内容层 */
+  .inner{position:absolute;left:96px;top:78px;width:1228px;height:944px}
+  .title{text-align:center;font-size:48px;font-weight:800;color:#8b5e34;letter-spacing:2px;
+         text-shadow:0 2px 0 rgba(255,255,255,.8)}
+  .title .deco{font-size:38px;vertical-align:middle;margin:0 14px}
   .subtitle{text-align:center;font-size:24px;color:#7a6a4f;margin-top:8px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:26px}
-  .card{background:#fffdf5;border:2.5px solid #b99b5e;border-radius:14px;padding:20px 22px;position:relative;box-shadow:0 2px 0 rgba(139,94,52,.15)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px}
+  .card{background:#fffdf5;border:3px solid #9cbb72;border-radius:14px;padding:20px 22px;position:relative;
+        box-shadow:0 3px 8px rgba(90,60,20,.18)}
+  .card::before{content:"";position:absolute;top:-11px;left:26px;width:92px;height:24px;
+        background:rgba(226,200,140,.65);border-radius:3px;transform:rotate(-3deg)}
+  .card::after{content:"";position:absolute;top:-11px;right:26px;width:92px;height:24px;
+        background:rgba(226,200,140,.65);border-radius:3px;transform:rotate(3deg)}
   .card h2{font-size:27px;color:#5d4a2f;border-bottom:2px dashed #d8c39a;padding-bottom:8px}
-  .emoji{position:absolute;top:-20px;right:14px;font-size:40px}
+  .emoji{position:absolute;top:-22px;right:16px;font-size:44px;z-index:2;
+        background:#fffdf5;border:2.5px solid #c9a86a;border-radius:50%;width:62px;height:62px;
+        display:flex;align-items:center;justify-content:center;box-shadow:0 2px 5px rgba(90,60,20,.25)}
   .line{font-size:21px;margin-top:12px;line-height:1.7}
   .blank{display:inline-block;min-width:220px;border-bottom:2px dotted #9a8563;height:26px;vertical-align:bottom;margin:0 6px}
   .box{display:inline-block;min-width:150px;border:2px dashed #b99b5e;border-radius:6px;height:30px;vertical-align:bottom;margin:0 6px;background:#fffef9}
@@ -464,17 +501,25 @@ export function buildWorksheetHtml(doc: WorksheetDoc): string {
   .card,.line,.checks span{overflow-wrap:break-word;word-break:break-word}
   .cb{width:22px;height:22px;border:2px solid #9a8563;border-radius:5px;display:inline-block;vertical-align:middle;margin-right:8px;background:#fffef9}
   table{width:100%;border-collapse:collapse;margin-top:12px;font-size:19px}
-  th{background:#f3e8c8;color:#6b5433;padding:8px;border:1.5px solid #c9a86a}
+  th{background:repeating-linear-gradient(90deg,#e9d9a8 0 60px,#f3e8c8 60px 120px);color:#6b5433;padding:8px;border:1.5px solid #c9a86a}
   td{padding:8px;border:1.5px solid #d8c39a;text-align:center;background:#fffef9}
   .num{margin-top:10px;font-size:21px;line-height:2.1}
-  .num b{display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background:#e8d9ae;border-radius:50%;margin-right:10px}
+  .num b{display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background:repeating-linear-gradient(90deg,#e8d9ae,#d4c08c);border-radius:50%;margin-right:10px}
   .foot{text-align:center;margin-top:14px;font-size:18px;color:#a08a63}
-</style></head><body><div class="frame">
-  <div class="title">${title}</div>
+</style></head><body>
+  <div class="paper"></div>
+  <div class="bamboo b-top"></div><div class="bamboo b-bottom"></div>
+  <div class="bamboo b-left"></div><div class="bamboo b-right"></div>
+  <div class="knot k1"></div><div class="knot k2"></div><div class="knot k3"></div><div class="knot k4"></div>
+  <div class="plant p1">🎍</div><div class="plant p2">🌿</div>
+  <div class="plant p3">🌾</div><div class="plant p4">🍃</div>
+  <div class="inner">
+  <div class="title"><span class="deco">🎋</span>${title}<span class="deco">🌾</span></div>
   ${subtitle}
   <div class="grid">${cards}</div>
   ${footer}
-</div></body></html>
+  </div>
+</body></html>
 `
 }
 
