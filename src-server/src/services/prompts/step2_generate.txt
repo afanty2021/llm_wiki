@@ -5,7 +5,7 @@ Output each page as a FILE block:
 ---
 title: Title Here
 type: concept
-sources: ["source.md"]
+sources: []
 ---
 # Title Here
 
