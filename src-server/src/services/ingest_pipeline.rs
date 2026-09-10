@@ -1600,7 +1600,7 @@ pub async fn run_ingest_job(
                 let _ = ingest_queue::update_item_state(state, job.id, &sp, "done", None).await;
                 done_this_run += 1;
             }
-            Phase1Output::Done { sp, processed: Some(processed) } => {
+            Phase1Output::Done { sp, processed: Some(mut processed) } => {
                 if processed.link_downgrades > 0 {
                     result.warnings.push(format!(
                         "redlink: downgraded {} unresolvable wikilinks to plain text from {}",
@@ -1614,8 +1614,22 @@ pub async fn run_ingest_job(
                     ));
                 }
                 let pages_to_write = processed.pages.len();
+                // 红链降级索引的 cohort (path,title) 对：提升到循环前计算（loop 改
+                // iter_mut 后循环内不可再不可变借用 processed.pages；本对仅含
+                // path/title，循环体只改 sources/frontmatter，提升语义等价）。
+                let current_pairs: Vec<(String, String)> = processed
+                    .pages
+                    .iter()
+                    .map(|p| (p.path.clone(), p.title.clone().unwrap_or_default()))
+                    .collect();
                 let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
-                for page in &processed.pages {
+                for page in processed.pages.iter_mut() {
+                    // sources 归因兜底：LLM frontmatter 占位符/缺省 → 剥占位 + union sp。
+                    // frontmatter 同步同一份（列与元数据不劈叉）。
+                    sanitize_sources(&mut page.sources, &sp);
+                    if let Some(obj) = page.frontmatter.as_object_mut() {
+                        obj.insert("sources".into(), page.sources.clone());
+                    }
                     // 【删除今日 1147-1153 的页级 check_cancel 块——drain 裁定：
                     // cancel 后已生成 cohort 完整落库，F1 威胁由 ① 关口 + 有界
                     // cohort 结构性约束（spec §2）】
@@ -1669,13 +1683,6 @@ pub async fn run_ingest_job(
                                             .await
                                             {
                                                 Ok(db_pairs) => {
-                                                    let current_pairs: Vec<(String, String)> = processed
-                                                        .pages
-                                                        .iter()
-                                                        .map(|p| {
-                                                            (p.path.clone(), p.title.clone().unwrap_or_default())
-                                                        })
-                                                        .collect();
                                                     let idx = build_link_index(&db_pairs, &current_pairs);
                                                     let n =
                                                         downgrade_links_in_str(&mut merged_content, &idx);
@@ -1700,7 +1707,9 @@ pub async fn run_ingest_job(
                                                 }
                                             }
                                         }
-                                        Some(Ok((merged_content, union_sources(&e.sources, &page.sources, &sp))))
+                                        let mut merged = union_sources(&e.sources, &page.sources, &sp);
+                                        sanitize_sources(&mut merged, &sp); // C1（评审）：剥 existing 带入的存量占位符
+                                        Some(Ok((merged_content, merged)))
                                     }
                                     Err(err) => Some(Err(format!("merge {}: {} — fallback replace", page.path, err))),
                                 }
