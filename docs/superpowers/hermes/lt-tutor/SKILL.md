@@ -138,7 +138,7 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 **触发**：老师要求出学案/练习纸/知识海报（"出一份学案""做张练习海报"）。
 
 1. **取材**：先 `llm_wiki_search` + `llm_wiki_read_file` 读库内真实课文——学案内容必须来自真实材料，**不编造课文外内容**。检索无果 → 如实告知暂缺材料、先不出（老师口述内容可整理成**文字版**并注明非库内材料）。
-2. **构造结构**：调 `teacher_tutor_worksheet`：`title`（≤40 字符）、`subtitle`/`footer`（可选）、`sections` 2-4 张卡（每卡 `heading` + 可选 `icon` emoji + `blocks` 1-4 个，六型：`text` 叙述行 / `fill` 虚线填空 / `boxfill` 虚框填空 / `checklist` 勾选 / `numbered` 编号答题 / `table` 表格）。题型服务教学目标：认读用勾选、操练用填空、归纳用表格。**checklist 选项宜短（≤10 字），每卡从简（2-3 个内容块为宜）**——内容过密会被拒（版面高度限制，底部会被裁切），届时按老师确认拆成多张或精简。**设计参考**：出学案前可 `skill_view` 本技能的 `worksheet-lesson-notes.md`（样例海报 distill 的版式结构与教学设计五模式）。
+2. **构造结构**：调 `teacher_tutor_worksheet`：`title`（≤40 字符，**直接用主题名如「一般过去时 The Past Simple Tense」，不带「学案」等文档类型字样**）、`subtitle`/`footer`（可选）、`sections` 2-4 张卡（每卡 `heading` + 可选 `icon` emoji + `blocks` 1-4 个，六型：`text` 叙述行 / `fill` 虚线填空 / `boxfill` 虚框填空 / `checklist` 勾选 / `numbered` 编号答题 / `table` 表格）。题型服务教学目标：认读用勾选、操练用填空、归纳用表格。**checklist 选项宜短（≤10 字），每卡从简（2-3 个内容块为宜）**——内容过密会被拒（版面高度限制，底部会被裁切），届时按老师确认拆成多张或精简。**设计参考**：出学案前可 `skill_view` 本技能的 `worksheet-lesson-notes.md`（样例海报 distill 的版式结构与教学设计五模式）。
 3. **回复硬规则（MEDIA 回显，同流程 6/7）**：工具返回的 **`MEDIA:<路径>` 行必须原样保留**——独立一行、一字不改。多张时每张一行、全部保留，建议分多条消息发送。
 4. **失败回退**：**环境性失败勿反复重试刷屏**——改发文字版学案（按板块列出题型内容），说明图片稍后可再生成。话术预告：当前为屏幕比例海报，非 A4 打印版。
 

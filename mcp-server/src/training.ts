@@ -462,7 +462,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
         type: "object",
         properties: {
           wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
-          title: { type: "string", description: "学案标题（1-40 字符）" },
+          title: { type: "string", description: "学案标题（1-40 字符）：直接用主题名（如「一般过去时 The Past Simple Tense」），勿带「学案」等文档类型字样" },
           subtitle: { type: "string", description: "副标题（≤60 字符，可选）" },
           theme: { type: "string", enum: ["nature"], description: "视觉主题，v1 仅 nature（缺省即 nature）" },
           footer: { type: "string", description: "页脚提示（≤60 字符，可选，如完成后交给老师）" },
