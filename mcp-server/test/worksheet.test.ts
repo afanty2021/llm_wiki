@@ -172,7 +172,7 @@ test("I-8b 文字准确性: fixture 全字段 esc 后逐字存在于 page.html",
       else for (const x of b.items) expectedTexts.push(x.before, ...(x.after !== undefined ? [x.after] : []))
     }
   }
-  for (const s of expectedTexts) {
+  for (const s of expectedTexts.filter((x) => x !== "")) {
     assert.ok(html.includes(s), `逐字缺失: ${s}`)
   }
   assert.equal((html.match(/class="card"/g) || []).length, WORKSHEET_FIXTURE.sections.length)
@@ -260,7 +260,26 @@ test("I-A 半截 PNG → ok:false（不 ok:true 直送教师）", async () => {
   })
   assert.equal(result.ok, false)
   assert.match(result.error!, /IEND|不完整/)
+  assert.ok(!result.error!.includes("请重试"), "M-4：与 handler 勿刷屏话术不得矛盾")
   rmSync(outDir, { recursive: true, force: true })
+})
+
+test("M-3: 异常消息剥绝对路径", async () => {
+  const outDir = mkdtempSync(path.join(tmpdir(), "ltutor-ws-path-"))
+  const result = await renderWorksheet(normalizeWorksheet(WORKSHEET_FIXTURE), {
+    outDir,
+    screenshot: async () => {
+      throw new Error("/Users/berton/.hermes/cache/ltutor-worksheet/tmp-ws-x/shot.png: EACCES permission denied")
+    },
+  })
+  assert.equal(result.ok, false)
+  assert.ok(!result.error!.includes("/Users/berton"), "绝对路径不得进模型视野")
+  assert.ok(result.error!.includes("<路径>"))
+  rmSync(outDir, { recursive: true, force: true })
+})
+
+test("M-1: theme 非字符串 → WorksheetFormatError", () => {
+  assert.throws(() => normalizeWorksheet({ title: "t", theme: 42, sections: [{ heading: "h", blocks: [{ type: "text", text: "x" }] }, { heading: "h2", blocks: [{ type: "text", text: "y" }] }] }), WorksheetFormatError)
 })
 
 test("renderWorksheet: 截图异常 → ok:false 透传友好文案（不抛错）", async () => {
@@ -289,5 +308,67 @@ test("renderWorksheet: 真实 Chrome 冒烟（fixture → PNG + IEND 完整）",
   const bytes = readFileSync(result.path!)
   assert.ok(bytes.length > 20_000, `PNG 应为真实截图（${bytes.length} bytes）`)
   assert.equal(bytes[0], 0x89)
+  // M-8：IHDR 尺寸断言（1500×1100 @2x = 3000×2200）——C-1 布局回归的尺寸钉。
+  assert.equal(bytes.readUInt32BE(16), 3000)
+  assert.equal(bytes.readUInt32BE(20), 2200)
   rmSync(outDir, { recursive: true, force: true })
+})
+
+// ── 实现评审跟进修（2026-09-10 §五：C-1/I-1/I-2/I-4）──
+
+test("I-1 歪表: 行列数与表头不等 → WorksheetFormatError（超列/短列都拒）", () => {
+  const mk = (row: string[]) => normalizeWorksheet({
+    title: "t",
+    sections: [{ heading: "h", blocks: [{ type: "table", headers: ["a"], rows: [row] }] }, { heading: "h2", blocks: [{ type: "text", text: "x" }] }],
+  })
+  assert.throws(() => mk(["1", "2", "3"]), /3 个单元格，与表头 1 列不一致/)
+  assert.throws(() => mk([]), /0 个单元格，与表头 1 列不一致/)
+})
+
+test("I-2 numbered 带 after → WorksheetFormatError（渲染只用 before，接受即静默丢内容）", () => {
+  assert.throws(
+    () => normalizeWorksheet({
+      title: "t",
+      sections: [{ heading: "h", blocks: [{ type: "numbered", items: [{ before: "b", after: "a" }] }] }, { heading: "h2", blocks: [{ type: "text", text: "x" }] }],
+    }),
+    /after 不适用于 numbered/,
+  )
+})
+
+test("I-4 空数组拒 + cell 文案带位置与真实长度", () => {
+  const sec2 = { heading: "h2", blocks: [{ type: "text", text: "x" }] }
+  for (const blocks of [
+    [{ type: "checklist", items: [] }],
+    [{ type: "fill", items: [] }],
+    [{ type: "table", headers: [], rows: [] }],
+    [{ type: "table", headers: ["a"], rows: [] }],
+  ]) {
+    assert.throws(
+      () => normalizeWorksheet({ title: "t", sections: [{ heading: "h", blocks }, sec2] }),
+      /不能为空/,
+    )
+  }
+  const longCell = normalizeWorksheet({
+    title: "t",
+    sections: [{
+      heading: "h",
+      blocks: [{ type: "table", headers: ["a", "b"], rows: [["ok", "x".repeat(13)]] }],
+    }, sec2],
+  })
+  assert.match(worksheetCapsError(longCell)!, /rows\[0\]\[1\] 单元格 13 字符超过上限 12/)
+})
+
+test("C-1 布局预算闸: 对抗密度文档被拒、fixture 通过（评审双数据点标定）", () => {
+  const b60 = "请根据课文内容完成下列句子的填空练习并且注意时态变化和单复数拼写规则"
+  const dense = normalizeWorksheet({
+    title: "密集练习纸",
+    sections: [
+      { heading: "勾选", blocks: [{ type: "checklist", items: Array.from({ length: 6 }, () => b60.slice(0, 30)) }] },
+      { heading: "填空", blocks: [{ type: "fill", items: Array.from({ length: 4 }, () => ({ before: b60.slice(0, 60) })) }] },
+      { heading: "编号", blocks: [{ type: "numbered", items: Array.from({ length: 4 }, () => ({ before: b60.slice(0, 60) })) }] },
+      { heading: "短文", blocks: [{ type: "text", text: "短文内容" }] },
+    ],
+  })
+  assert.match(worksheetCapsError(dense)!, /内容过密.*1000px.*拆成多张/)
+  assert.equal(worksheetCapsError(normalizeWorksheet(WORKSHEET_FIXTURE)), null)
 })

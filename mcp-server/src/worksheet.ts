@@ -79,9 +79,7 @@ export interface WorksheetRenderResult {
 export interface WorksheetRenderDeps {
   outDir?: string
   chromePath?: string
-  width?: number
-  height?: number
-  /** 截图执行体（测试注入）；默认 = chromeScreenshotRunner。 */
+  /** 截图执行体（测试注入）；默认 = chromeScreenshotRunner（画布固定 WORKSHEET_CANVAS_*，M-2：不注入尺寸防与模板错位）。 */
   screenshot?: (htmlPath: string, outPath: string) => Promise<void>
 }
 
@@ -116,7 +114,10 @@ export function normalizeWorksheet(raw: {
 }): WorksheetDoc {
   const title = requireText(raw.title, "title")
   const subtitle = optionalText(raw.subtitle, "subtitle")
-  // theme：v1 仅 nature；其他值回落（schema enum 已限，纵深防御）。
+  // theme（M-1）：非字符串 fail-fast；字符串值非 nature 回落 nature（schema enum 已限，纵深防御）。
+  if (raw.theme !== undefined && typeof raw.theme !== "string") {
+    throw new WorksheetFormatError("theme must be a string")
+  }
   const footer = optionalText(raw.footer, "footer")
 
   if (!Array.isArray(raw.sections)) throw new WorksheetFormatError("sections must be an array")
@@ -148,6 +149,7 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
   }
   if (type === "checklist") {
     if (!Array.isArray(rec.items)) throw new WorksheetFormatError(`${at}.items must be an array`)
+    if (rec.items.length < 1) throw new WorksheetFormatError(`${at}.items 不能为空（I-4：空块不渲染）`)
     return {
       type,
       items: rec.items.map((item, k) => requireText(item, `${at}.items[${k}]`)),
@@ -156,9 +158,17 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
   if (type === "table") {
     if (!Array.isArray(rec.headers)) throw new WorksheetFormatError(`${at}.headers must be an array`)
     if (!Array.isArray(rec.rows)) throw new WorksheetFormatError(`${at}.rows must be an array`)
+    if (rec.headers.length < 1) throw new WorksheetFormatError(`${at}.headers 不能为空（I-4）`)
+    if (rec.rows.length < 1) throw new WorksheetFormatError(`${at}.rows 不能为空（I-4：空表格不渲染）`)
     const headers = rec.headers.map((h, k) => requireText(h, `${at}.headers[${k}]`))
     const rows = rec.rows.map((row, r) => {
       if (!Array.isArray(row)) throw new WorksheetFormatError(`${at}.rows[${r}] must be an array`)
+      // I-1：歪表行——列数与表头不等即拒（超列静默丢格 / 短列静默补空都吃内容）。
+      if (row.length !== headers.length) {
+        throw new WorksheetFormatError(
+          `${at}.rows[${r}] 有 ${row.length} 个单元格，与表头 ${headers.length} 列不一致——请补齐或删至列数一致`,
+        )
+      }
       return row.map((cell, c) => {
         if (typeof cell !== "string") throw new WorksheetFormatError(`${at}.rows[${r}][${c}] must be a string`)
         return cell.trim()
@@ -168,6 +178,7 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
   }
   // fill / boxfill / numbered：items[] { before, after? }
   if (!Array.isArray(rec.items)) throw new WorksheetFormatError(`${at}.items must be an array`)
+  if (rec.items.length < 1) throw new WorksheetFormatError(`${at}.items 不能为空（I-4：空块不渲染）`)
   const items = rec.items.map((item, k) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new WorksheetFormatError(`${at}.items[${k}] must be an object`)
@@ -175,6 +186,10 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
     const ir = item as Record<string, unknown>
     const before = requireText(ir.before, `${at}.items[${k}].before`)
     const after = optionalText(ir.after, `${at}.items[${k}].after`)
+    // I-2：numbered 渲染只用 before——after 被接受即静默丢内容，直接拒。
+    if (type === "numbered" && after !== undefined) {
+      throw new WorksheetFormatError(`${at}.items[${k}].after 不适用于 numbered（编号行只有题干+答题空线）——请改用 fill 并把内容并入 before`)
+    }
     return after === undefined ? { before } : { before, after }
   })
   return { type: type as "fill" | "boxfill" | "numbered", items }
@@ -239,7 +254,62 @@ export function worksheetCapsError(doc: WorksheetDoc): string | null {
   if (total > WORKSHEET_MAX_TOTAL_CHARS) {
     return `总文本量 ${total} 字符超过上限 ${WORKSHEET_MAX_TOTAL_CHARS}——请精简或拆成多张`
   }
+  // C-1 布局预算闸：估高 > 版心即拒——确定性零渲染开销，替代「渲染后静默裁切」。
+  const height = estimateWorksheetHeight(doc)
+  if (height > WORKSHEET_LAYOUT_BUDGET_PX) {
+    return `内容过密：预估排版高度 ${height}px 超出版心 ${WORKSHEET_LAYOUT_BUDGET_PX}px（底部会被裁切）——请精简内容或拆成多张`
+  }
   return null
+}
+
+// ── 布局预算（评审 C-1：caps 合法输入仍可能整页溢出被截图静默裁切）──
+
+/** 版心可用高度：frame 1060 − 上下 padding 52，留 8px 余量。 */
+export const WORKSHEET_LAYOUT_BUDGET_PX = 1000
+
+// 估高常量（探针 CSS 量纲：卡片内宽 ~649px、正文字号 21px/行高 36、CJK 每行 ~28 字）。
+const LINE_PX = 36
+const BLOCK_MARGIN_PX = 12
+const CHARS_PER_LINE = 28
+const CARD_PADDING_PX = 40
+const HEADING_PX = 44
+const PAGE_HEADER_PX = 130 // 标题 + 副标题 + 页脚 + grid 上边距
+const GRID_GAP_PX = 22
+
+function linesFor(chars: number): number {
+  return Math.max(1, Math.ceil(chars / CHARS_PER_LINE))
+}
+
+function blockHeight(b: WorksheetBlock): number {
+  if (b.type === "text") return linesFor(b.text.length) * LINE_PX + BLOCK_MARGIN_PX
+  if (b.type === "checklist") {
+    // flex-wrap 后：每项宽 ≈ 字数×21 + 勾选框与间距 60，按半宽卡 640px 折行。
+    const width = b.items.reduce((w, x) => w + x.length * 21 + 60, 0)
+    return Math.ceil(width / 640) * 38 + BLOCK_MARGIN_PX
+  }
+  if (b.type === "table") return (b.rows.length + 1) * 36 + BLOCK_MARGIN_PX
+  // fill/boxfill：内容宽 = before+after 字数×21 + 空线 ~220；numbered 行高 2.1 ≈ 46。
+  if (b.type === "numbered") {
+    return b.items.reduce((h, x) => h + linesFor(x.before.length) * 46 + 10, 0)
+  }
+  return b.items.reduce((h, x) => {
+    const widthChars = x.before.length + (x.after?.length ?? 0) + 10
+    return h + linesFor(widthChars) * LINE_PX + BLOCK_MARGIN_PX
+  }, 0)
+}
+
+/** 确定性估高（px）：页头 130 + Σ(网格行高=max(同行卡片)) + 行距。偏保守（估高≥实测）。 */
+export function estimateWorksheetHeight(doc: WorksheetDoc): number {
+  const cardHeights = doc.sections.map((s) => {
+    let h = CARD_PADDING_PX + HEADING_PX
+    for (const b of s.blocks) h += blockHeight(b)
+    return h
+  })
+  let grid = 0
+  for (let i = 0; i < cardHeights.length; i += 2) {
+    grid += Math.max(cardHeights[i]!, cardHeights[i + 1] ?? 0) + GRID_GAP_PX
+  }
+  return PAGE_HEADER_PX + grid
 }
 
 function blockCapsError(blocks: WorksheetBlock[], at: string): string | null {
@@ -264,8 +334,16 @@ function blockCapsError(blocks: WorksheetBlock[], at: string): string | null {
       }
       const wide = b.rows.findIndex((row) => row.length > WORKSHEET_MAX_TABLE_COLS)
       if (wide >= 0) return `${where}.rows[${wide}] ${b.rows[wide]!.length} 列超过上限 ${WORKSHEET_MAX_TABLE_COLS} 列`
-      const cell = firstOver(b.headers, WORKSHEET_MAX_TABLE_CELL_CHARS) ?? firstOver(b.rows.flat(), WORKSHEET_MAX_TABLE_CELL_CHARS)
-      if (cell !== null) return `${where} 表格单元格 ${cell} 字符超过上限 ${WORKSHEET_MAX_TABLE_CELL_CHARS}`
+      const cellIdx = firstOver(b.headers, WORKSHEET_MAX_TABLE_CELL_CHARS)
+      if (cellIdx !== null) {
+        return `${where}.headers[${cellIdx}] 单元格 ${b.headers[cellIdx]!.length} 字符超过上限 ${WORKSHEET_MAX_TABLE_CELL_CHARS}`
+      }
+      for (const [r, row] of b.rows.entries()) {
+        const c = firstOver(row, WORKSHEET_MAX_TABLE_CELL_CHARS)
+        if (c !== null) {
+          return `${where}.rows[${r}][${c}] 单元格 ${row[c]!.length} 字符超过上限 ${WORKSHEET_MAX_TABLE_CELL_CHARS}`
+        }
+      }
     } else {
       if (b.items.length > WORKSHEET_MAX_FILL_ITEMS) {
         return `${where} 填空行 ${b.items.length} 行超过上限 ${WORKSHEET_MAX_FILL_ITEMS} 行`
@@ -382,7 +460,8 @@ export function buildWorksheetHtml(doc: WorksheetDoc): string {
   .line{font-size:21px;margin-top:12px;line-height:1.7}
   .blank{display:inline-block;min-width:220px;border-bottom:2px dotted #9a8563;height:26px;vertical-align:bottom;margin:0 6px}
   .box{display:inline-block;min-width:150px;border:2px dashed #b99b5e;border-radius:6px;height:30px;vertical-align:bottom;margin:0 6px;background:#fffef9}
-  .checks{display:flex;gap:26px;margin-top:12px;font-size:21px}
+  .checks{display:flex;flex-wrap:wrap;gap:12px 26px;margin-top:12px;font-size:21px}
+  .card,.line,.checks span{overflow-wrap:break-word;word-break:break-word}
   .cb{width:22px;height:22px;border:2px solid #9a8563;border-radius:5px;display:inline-block;vertical-align:middle;margin-right:8px;background:#fffef9}
   table{width:100%;border-collapse:collapse;margin-top:12px;font-size:19px}
   th{background:#f3e8c8;color:#6b5433;padding:8px;border:1.5px solid #c9a86a}
@@ -421,8 +500,8 @@ export async function renderWorksheet(
     ?? ((htmlPath: string, outPath: string) =>
       chromeScreenshotRunner(htmlPath, outPath, {
         chromePath: deps.chromePath,
-        width: deps.width ?? WORKSHEET_CANVAS_W,
-        height: deps.height ?? WORKSHEET_CANVAS_H,
+        width: WORKSHEET_CANVAS_W,
+        height: WORKSHEET_CANVAS_H,
       }))
   try {
     mkdirSync(outDir, { recursive: true })
@@ -433,7 +512,7 @@ export async function renderWorksheet(
       writeFileSync(htmlPath, html, "utf8")
       await screenshot(htmlPath, shotPath)
       if (!isCompletePng(shotPath)) {
-        return { ok: false, error: "截图不完整（PNG 缺 IEND 结束标记或过小，疑似白屏/半截）——请重试或先以文字版学案继续" }
+        return { ok: false, error: "截图不完整（PNG 缺 IEND 结束标记或过小，疑似白屏/半截）——可先以文字版学案继续，图片稍后再生成" }
       }
       renameSync(shotPath, finalPath)
       return {
@@ -447,7 +526,10 @@ export async function renderWorksheet(
     }
   } catch (err) {
     // I-7b：自带最小透传文案（勿用 mindmap friendlyRenderError——其 ENOENT 文案是 graphviz 专属）。
-    return { ok: false, error: String(err) }
+    // M-3：绝对路径不进模型视野。
+    const raw = String(err)
+    const stripped = raw.replace(/\/(?:Users|tmp|home)\/[^\s'"]+/g, "<路径>")
+    return { ok: false, error: stripped === raw ? raw : stripped }
   }
 }
 
