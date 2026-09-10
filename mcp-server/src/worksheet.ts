@@ -1,0 +1,457 @@
+/**
+ * 教师学案海报渲染引擎（2026-09-10 方案
+ * docs/superpowers/plans/2026-09-10-teacher-worksheet-tool.md，评审 C-1/I-1..I-8 已并入）。
+ *
+ * 混合路径：LLM 只产 JSON 结构（六种块型判别联合）→ 确定性渲染 HTML（nature 主题，
+ * 探针样式固化 assets/worksheet-probe/page.html）→ 复用 chromeScreenshotRunner +
+ * isCompletePng + 临时名 rename → PNG → MEDIA: 投递链。
+ *
+ * 与 markmap 的差异：内容必须以可读文本进 HTML（非 base64），因此
+ * - 每个文本字段过 `esc()`（&<>"' 五件套 + 控制字符压空格），输入文本只进文本节点、
+ *   HTML 属性值一律模板常量（I-2）；
+ * - 模板零 script 元素（纯静态页）。
+ *
+ * 纪律沿袭：caps 超限→文本引导不进熔断器；IEND+临时名 rename（白屏/半截不得
+ * ok:true）；文件名 sha1(渲染 HTML)（I-4，与 mindmap.ts 哈希纪律对齐）；
+ * Chrome 缺失等环境故障透传友好文案（I-7b——勿用 mindmap friendlyRenderError，
+ * 其 ENOENT 文案是 graphviz 专属）。
+ */
+import { createHash } from "node:crypto"
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
+
+import { chromeScreenshotRunner, isCompletePng } from "./mindmap-markmap.js"
+
+export const WORKSHEET_CANVAS_W = 1500
+export const WORKSHEET_CANVAS_H = 1100
+export const DEFAULT_WORKSHEET_OUT_DIR = join(homedir(), ".hermes", "cache", "ltutor-worksheet")
+
+// ── caps（评审 I-5：字段级优先于总量；长度口径 String.length；min 2 sections 在 caps 强制）──
+export const WORKSHEET_MAX_TITLE_CHARS = 40
+export const WORKSHEET_MAX_SUBTITLE_CHARS = 60
+export const WORKSHEET_MAX_FOOTER_CHARS = 60
+export const WORKSHEET_MAX_HEADING_CHARS = 30
+export const WORKSHEET_MAX_ICON_CODEPOINTS = 8
+export const WORKSHEET_MAX_TEXT_CHARS = 120
+export const WORKSHEET_MAX_PHRASE_CHARS = 60
+export const WORKSHEET_MAX_CHECK_ITEM_CHARS = 30
+export const WORKSHEET_MAX_TABLE_CELL_CHARS = 12
+export const WORKSHEET_MAX_SECTIONS = 4
+export const WORKSHEET_MIN_SECTIONS = 2
+export const WORKSHEET_MAX_BLOCKS_PER_SECTION = 4
+export const WORKSHEET_MAX_LIST_ITEMS = 6
+export const WORKSHEET_MAX_FILL_ITEMS = 4
+export const WORKSHEET_MAX_TABLE_COLS = 5
+export const WORKSHEET_MAX_TABLE_ROWS = 4
+export const WORKSHEET_MAX_TOTAL_CHARS = 1200
+
+export type WorksheetBlockType = "text" | "fill" | "boxfill" | "checklist" | "numbered" | "table"
+
+export interface WorksheetTextBlock { type: "text"; text: string }
+export interface WorksheetFillBlock { type: "fill" | "boxfill" | "numbered"; items: Array<{ before: string; after?: string }> }
+export interface WorksheetChecklistBlock { type: "checklist"; items: string[] }
+export interface WorksheetTableBlock { type: "table"; headers: string[]; rows: string[][] }
+export type WorksheetBlock = WorksheetTextBlock | WorksheetFillBlock | WorksheetChecklistBlock | WorksheetTableBlock
+
+export interface WorksheetSection {
+  heading: string
+  icon?: string
+  blocks: WorksheetBlock[]
+}
+
+export interface WorksheetDoc {
+  title: string
+  subtitle?: string
+  theme: "nature"
+  footer?: string
+  sections: WorksheetSection[]
+}
+
+export interface WorksheetRenderResult {
+  ok: boolean
+  path?: string
+  sections?: number
+  blocks?: number
+  error?: string
+}
+
+export interface WorksheetRenderDeps {
+  outDir?: string
+  chromePath?: string
+  width?: number
+  height?: number
+  /** 截图执行体（测试注入）；默认 = chromeScreenshotRunner。 */
+  screenshot?: (htmlPath: string, outPath: string) => Promise<void>
+}
+
+/** 结构非法（类型/缺字段/空串）：handler 转 ToolArgumentError（normalizeOutline 先例）。 */
+export class WorksheetFormatError extends Error {}
+
+// ── 校验与归一 ──
+
+const BLOCK_TYPES: readonly WorksheetBlockType[] = ["text", "fill", "boxfill", "checklist", "numbered", "table"]
+
+function requireText(value: unknown, at: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new WorksheetFormatError(`${at} is required`)
+  }
+  return value.trim()
+}
+
+function optionalText(value: unknown, at: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== "string") throw new WorksheetFormatError(`${at} must be a string`)
+  const trimmed = value.trim()
+  return trimmed === "" ? undefined : trimmed
+}
+
+/** 结构校验+归一（trim 语义，normalizeOutline 先例）；长度/数量帽归 worksheetCapsError。 */
+export function normalizeWorksheet(raw: {
+  title: unknown
+  subtitle?: unknown
+  theme?: unknown
+  footer?: unknown
+  sections: unknown
+}): WorksheetDoc {
+  const title = requireText(raw.title, "title")
+  const subtitle = optionalText(raw.subtitle, "subtitle")
+  // theme：v1 仅 nature；其他值回落（schema enum 已限，纵深防御）。
+  const footer = optionalText(raw.footer, "footer")
+
+  if (!Array.isArray(raw.sections)) throw new WorksheetFormatError("sections must be an array")
+  const sections = raw.sections.map((item, i) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new WorksheetFormatError(`sections[${i}] must be an object`)
+    }
+    const rec = item as Record<string, unknown>
+    const heading = requireText(rec.heading, `sections[${i}].heading`)
+    const icon = optionalText(rec.icon, `sections[${i}].icon`)
+    if (!Array.isArray(rec.blocks)) throw new WorksheetFormatError(`sections[${i}].blocks must be an array`)
+    const blocks = rec.blocks.map((b, j) => normalizeBlock(b, `sections[${i}].blocks[${j}]`))
+    return { heading, icon, blocks }
+  })
+  return { title, subtitle, theme: "nature", footer, sections }
+}
+
+function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new WorksheetFormatError(`${at} must be an object`)
+  }
+  const rec = raw as Record<string, unknown>
+  const type = rec.type
+  if (typeof type !== "string" || !BLOCK_TYPES.includes(type as WorksheetBlockType)) {
+    throw new WorksheetFormatError(`${at}.type must be one of ${BLOCK_TYPES.join("/")}`)
+  }
+  if (type === "text") {
+    return { type, text: requireText(rec.text, `${at}.text`) }
+  }
+  if (type === "checklist") {
+    if (!Array.isArray(rec.items)) throw new WorksheetFormatError(`${at}.items must be an array`)
+    return {
+      type,
+      items: rec.items.map((item, k) => requireText(item, `${at}.items[${k}]`)),
+    }
+  }
+  if (type === "table") {
+    if (!Array.isArray(rec.headers)) throw new WorksheetFormatError(`${at}.headers must be an array`)
+    if (!Array.isArray(rec.rows)) throw new WorksheetFormatError(`${at}.rows must be an array`)
+    const headers = rec.headers.map((h, k) => requireText(h, `${at}.headers[${k}]`))
+    const rows = rec.rows.map((row, r) => {
+      if (!Array.isArray(row)) throw new WorksheetFormatError(`${at}.rows[${r}] must be an array`)
+      return row.map((cell, c) => {
+        if (typeof cell !== "string") throw new WorksheetFormatError(`${at}.rows[${r}][${c}] must be a string`)
+        return cell.trim()
+      })
+    })
+    return { type, headers, rows }
+  }
+  // fill / boxfill / numbered：items[] { before, after? }
+  if (!Array.isArray(rec.items)) throw new WorksheetFormatError(`${at}.items must be an array`)
+  const items = rec.items.map((item, k) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new WorksheetFormatError(`${at}.items[${k}] must be an object`)
+    }
+    const ir = item as Record<string, unknown>
+    const before = requireText(ir.before, `${at}.items[${k}].before`)
+    const after = optionalText(ir.after, `${at}.items[${k}].after`)
+    return after === undefined ? { before } : { before, after }
+  })
+  return { type: type as "fill" | "boxfill" | "numbered", items }
+}
+
+// ── caps ──
+
+function countBlocks(sections: WorksheetSection[]): number {
+  return sections.reduce((n, s) => n + s.blocks.length, 0)
+}
+
+function totalChars(doc: WorksheetDoc): number {
+  let n = doc.title.length + (doc.subtitle?.length ?? 0) + (doc.footer?.length ?? 0)
+  for (const s of doc.sections) {
+    n += s.heading.length + (s.icon?.length ?? 0)
+    for (const b of s.blocks) {
+      if (b.type === "text") n += b.text.length
+      else if (b.type === "checklist") n += b.items.reduce((m, x) => m + x.length, 0)
+      else if (b.type === "table") {
+        n += b.headers.reduce((m, x) => m + x.length, 0)
+        n += b.rows.reduce((m, row) => m + row.reduce((mm, x) => mm + x.length, 0), 0)
+      } else {
+        n += b.items.reduce((m, x) => m + x.before.length + (x.after?.length ?? 0), 0)
+      }
+    }
+  }
+  return n
+}
+
+/** 量级闸（超限返回人类可读原因，handler 包裹成文本引导；字段级优先于总量）。 */
+export function worksheetCapsError(doc: WorksheetDoc): string | null {
+  if (doc.title.length > WORKSHEET_MAX_TITLE_CHARS) {
+    return `标题 ${doc.title.length} 字符超过上限 ${WORKSHEET_MAX_TITLE_CHARS}`
+  }
+  if ((doc.subtitle?.length ?? 0) > WORKSHEET_MAX_SUBTITLE_CHARS) {
+    return `副标题 ${doc.subtitle!.length} 字符超过上限 ${WORKSHEET_MAX_SUBTITLE_CHARS}`
+  }
+  if ((doc.footer?.length ?? 0) > WORKSHEET_MAX_FOOTER_CHARS) {
+    return `页脚 ${doc.footer!.length} 字符超过上限 ${WORKSHEET_MAX_FOOTER_CHARS}`
+  }
+  if (doc.sections.length < WORKSHEET_MIN_SECTIONS) {
+    return `板块 ${doc.sections.length} 张少于下限 ${WORKSHEET_MIN_SECTIONS} 张`
+  }
+  if (doc.sections.length > WORKSHEET_MAX_SECTIONS) {
+    return `板块 ${doc.sections.length} 张超过上限 ${WORKSHEET_MAX_SECTIONS} 张`
+  }
+  for (const [i, s] of doc.sections.entries()) {
+    if (s.heading.length > WORKSHEET_MAX_HEADING_CHARS) {
+      return `sections[${i}].heading ${s.heading.length} 字符超过上限 ${WORKSHEET_MAX_HEADING_CHARS}`
+    }
+    if (s.icon !== undefined && [...s.icon].length > WORKSHEET_MAX_ICON_CODEPOINTS) {
+      return `sections[${i}].icon 超过 ${WORKSHEET_MAX_ICON_CODEPOINTS} 个码位`
+    }
+    if (s.blocks.length < 1) return `sections[${i}] 至少需要 1 个内容块`
+    if (s.blocks.length > WORKSHEET_MAX_BLOCKS_PER_SECTION) {
+      return `sections[${i}] 内容块 ${s.blocks.length} 个超过上限 ${WORKSHEET_MAX_BLOCKS_PER_SECTION} 个`
+    }
+    const blockErr = blockCapsError(s.blocks, `sections[${i}]`)
+    if (blockErr) return blockErr
+  }
+  const total = totalChars(doc)
+  if (total > WORKSHEET_MAX_TOTAL_CHARS) {
+    return `总文本量 ${total} 字符超过上限 ${WORKSHEET_MAX_TOTAL_CHARS}——请精简或拆成多张`
+  }
+  return null
+}
+
+function blockCapsError(blocks: WorksheetBlock[], at: string): string | null {
+  for (const [j, b] of blocks.entries()) {
+    const where = `${at}.blocks[${j}]`
+    if (b.type === "text") {
+      if (b.text.length > WORKSHEET_MAX_TEXT_CHARS) {
+        return `${where}.text ${b.text.length} 字符超过上限 ${WORKSHEET_MAX_TEXT_CHARS}`
+      }
+    } else if (b.type === "checklist") {
+      if (b.items.length > WORKSHEET_MAX_LIST_ITEMS) {
+        return `${where} 勾选项 ${b.items.length} 个超过上限 ${WORKSHEET_MAX_LIST_ITEMS} 个`
+      }
+      const over = b.items.findIndex((x) => x.length > WORKSHEET_MAX_CHECK_ITEM_CHARS)
+      if (over >= 0) return `${where}.items[${over}] ${b.items[over]!.length} 字符超过上限 ${WORKSHEET_MAX_CHECK_ITEM_CHARS}`
+    } else if (b.type === "table") {
+      if (b.headers.length > WORKSHEET_MAX_TABLE_COLS) {
+        return `${where} 表格 ${b.headers.length} 列超过上限 ${WORKSHEET_MAX_TABLE_COLS} 列`
+      }
+      if (b.rows.length > WORKSHEET_MAX_TABLE_ROWS) {
+        return `${where} 表格 ${b.rows.length} 行超过上限 ${WORKSHEET_MAX_TABLE_ROWS} 行`
+      }
+      const wide = b.rows.findIndex((row) => row.length > WORKSHEET_MAX_TABLE_COLS)
+      if (wide >= 0) return `${where}.rows[${wide}] ${b.rows[wide]!.length} 列超过上限 ${WORKSHEET_MAX_TABLE_COLS} 列`
+      const cell = firstOver(b.headers, WORKSHEET_MAX_TABLE_CELL_CHARS) ?? firstOver(b.rows.flat(), WORKSHEET_MAX_TABLE_CELL_CHARS)
+      if (cell !== null) return `${where} 表格单元格 ${cell} 字符超过上限 ${WORKSHEET_MAX_TABLE_CELL_CHARS}`
+    } else {
+      if (b.items.length > WORKSHEET_MAX_FILL_ITEMS) {
+        return `${where} 填空行 ${b.items.length} 行超过上限 ${WORKSHEET_MAX_FILL_ITEMS} 行`
+      }
+      const bad = b.items.findIndex((x) => x.before.length > WORKSHEET_MAX_PHRASE_CHARS || (x.after?.length ?? 0) > WORKSHEET_MAX_PHRASE_CHARS)
+      if (bad >= 0) return `${where}.items[${bad}] 短语超过上限 ${WORKSHEET_MAX_PHRASE_CHARS} 字符`
+    }
+  }
+  return null
+}
+
+function firstOver(items: string[], max: number): number | null {
+  const idx = items.findIndex((x) => x.length > max)
+  return idx === -1 ? null : idx
+}
+
+// ── HTML 组装 ──
+
+/** esc（I-2）：五件套 + 控制字符压空格；输入文本只进文本节点，属性值一律模板常量。 */
+function esc(s: string): string {
+  return s
+    .replace(/[\x00-\x1f]+/g, " ")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+/**
+ * emoji 彩色呈现（评审 I-3 钉死）：按字素簇（Intl.Segmenter）——仅「单码位且含
+ * Extended_Pictographic」的簇尾补单个 FE0F；多码位簇（旗 🇨🇳/ZWJ 序列 👨‍👩‍👧/
+ * 已带 FE0F/FE0E/20E3 变体者）结构性不动（探针实证：headless 截图部分 emoji
+ * 回落单色文本呈现）。
+ */
+const EXT_PICTOGRAPHIC = /\p{Extended_Pictographic}/u
+const VARIANT_TAIL = /[\uFE0F\u20E3]$/u
+
+export function emojiFe0f(s: string): string {
+  if (!Intl.Segmenter) return s
+  const seg = new Intl.Segmenter("en", { granularity: "grapheme" })
+  let out = ""
+  for (const { segment } of seg.segment(s)) {
+    const cps = [...segment]
+    out += cps.length === 1 && EXT_PICTOGRAPHIC.test(segment) && !VARIANT_TAIL.test(segment)
+      ? segment + "\uFE0F"
+      : segment
+  }
+  return out
+}
+
+/** 文本节点组装：emoji 彩色化在前、esc 在后（FE0F 不在 esc 替换集，顺序无歧义）。 */
+function textNode(s: string): string {
+  return esc(emojiFe0f(s))
+}
+
+function blockHtml(block: WorksheetBlock): string {
+  if (block.type === "text") {
+    return `<div class="line">${textNode(block.text)}</div>`
+  }
+  if (block.type === "checklist") {
+    const items = block.items.map((item) => `<span><span class="cb"></span>${textNode(item)}</span>`).join("")
+    return `<div class="checks">${items}</div>`
+  }
+  if (block.type === "table") {
+    const head = block.headers.map((h) => `<th>${textNode(h)}</th>`).join("")
+    const rows = block.rows
+      .map((row) => {
+        const cells = block.headers.map((_, c) => `<td>${textNode(row[c] ?? "")}</td>`).join("")
+        return `<tr>${cells}</tr>`
+      })
+      .join("")
+    return `<table><tr>${head}</tr>${rows}</table>`
+  }
+  // fill / boxfill / numbered
+  const cls = block.type === "boxfill" ? "box" : "blank"
+  const rows = block.items
+    .map((item, i) => {
+      if (block.type === "numbered") {
+        return `<div class="num"><b>${i + 1}</b>${textNode(item.before)}<span class="${cls}"></span></div>`
+      }
+      const after = item.after !== undefined ? textNode(item.after) : ""
+      return `<div class="line">${textNode(item.before)}<span class="${cls}"></span>${after}</div>`
+    })
+    .join("")
+  return rows
+}
+
+/** nature 主题（探针样式固化：assets/worksheet-probe/page.html）。 */
+export function buildWorksheetHtml(doc: WorksheetDoc): string {
+  const title = textNode(doc.title)
+  const subtitle = doc.subtitle !== undefined ? `<div class="subtitle">${textNode(doc.subtitle)}</div>` : ""
+  const footer = doc.footer !== undefined ? `<div class="foot">✂️ ${textNode(doc.footer)}</div>` : ""
+  const cards = doc.sections
+    .map((s) => {
+      const icon = s.icon !== undefined ? `<span class="emoji">${textNode(s.icon)}</span>` : ""
+      const blocks = s.blocks.map(blockHtml).join("")
+      return `<div class="card">${icon}<h2>${textNode(s.heading)}</h2>${blocks}</div>`
+    })
+    .join("")
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{width:${WORKSHEET_CANVAS_W}px;height:${WORKSHEET_CANVAS_H}px;background:#faf6ec;
+       background-image:repeating-linear-gradient(45deg,transparent,transparent 18px,rgba(139,109,71,.04) 18px,rgba(139,109,71,.04) 36px);
+       font-family:'PingFang SC','Hiragino Sans GB',sans-serif;color:#4a3b28}
+  .frame{width:1460px;height:1060px;margin:20px;border:3px solid #c9a86a;border-radius:18px;padding:26px;position:relative}
+  .title{text-align:center;font-size:46px;font-weight:800;color:#8b5e34;letter-spacing:2px}
+  .subtitle{text-align:center;font-size:24px;color:#7a6a4f;margin-top:8px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:26px}
+  .card{background:#fffdf5;border:2.5px solid #b99b5e;border-radius:14px;padding:20px 22px;position:relative;box-shadow:0 2px 0 rgba(139,94,52,.15)}
+  .card h2{font-size:27px;color:#5d4a2f;border-bottom:2px dashed #d8c39a;padding-bottom:8px}
+  .emoji{position:absolute;top:-20px;right:14px;font-size:40px}
+  .line{font-size:21px;margin-top:12px;line-height:1.7}
+  .blank{display:inline-block;min-width:220px;border-bottom:2px dotted #9a8563;height:26px;vertical-align:bottom;margin:0 6px}
+  .box{display:inline-block;min-width:150px;border:2px dashed #b99b5e;border-radius:6px;height:30px;vertical-align:bottom;margin:0 6px;background:#fffef9}
+  .checks{display:flex;gap:26px;margin-top:12px;font-size:21px}
+  .cb{width:22px;height:22px;border:2px solid #9a8563;border-radius:5px;display:inline-block;vertical-align:middle;margin-right:8px;background:#fffef9}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:19px}
+  th{background:#f3e8c8;color:#6b5433;padding:8px;border:1.5px solid #c9a86a}
+  td{padding:8px;border:1.5px solid #d8c39a;text-align:center;background:#fffef9}
+  .num{margin-top:10px;font-size:21px;line-height:2.1}
+  .num b{display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background:#e8d9ae;border-radius:50%;margin-right:10px}
+  .foot{text-align:center;margin-top:14px;font-size:18px;color:#a08a63}
+</style></head><body><div class="frame">
+  <div class="title">${title}</div>
+  ${subtitle}
+  <div class="grid">${cards}</div>
+  ${footer}
+</div></body></html>
+`
+}
+
+// ── 渲染 ──
+
+function hashHtml(html: string): string {
+  // I-4：哈希渲染产物而非输入 JSON（键序漂移不破坏幂等；theme 变更自动区分）。
+  return createHash("sha1").update(html).digest("hex").slice(0, 12)
+}
+
+/**
+ * 渲染学案海报 PNG。成功 { ok, path, sections, blocks }；任何失败（Chrome 缺失/
+ * 半截截图/目录故障）{ ok:false, error } 绝不抛错——环境故障走文本引导不进熔断器。
+ */
+export async function renderWorksheet(
+  doc: WorksheetDoc,
+  deps: WorksheetRenderDeps = {},
+): Promise<WorksheetRenderResult> {
+  const outDir = deps.outDir ?? DEFAULT_WORKSHEET_OUT_DIR
+  const html = buildWorksheetHtml(doc)
+  const finalPath = join(outDir, `worksheet-${hashHtml(html)}.png`)
+  const screenshot = deps.screenshot
+    ?? ((htmlPath: string, outPath: string) =>
+      chromeScreenshotRunner(htmlPath, outPath, {
+        chromePath: deps.chromePath,
+        width: deps.width ?? WORKSHEET_CANVAS_W,
+        height: deps.height ?? WORKSHEET_CANVAS_H,
+      }))
+  try {
+    mkdirSync(outDir, { recursive: true })
+    const tmp = mkdtempSync(join(outDir, "tmp-ws-"))
+    try {
+      const htmlPath = join(tmp, "page.html")
+      const shotPath = join(tmp, "shot.png")
+      writeFileSync(htmlPath, html, "utf8")
+      await screenshot(htmlPath, shotPath)
+      if (!isCompletePng(shotPath)) {
+        return { ok: false, error: "截图不完整（PNG 缺 IEND 结束标记或过小，疑似白屏/半截）——请重试或先以文字版学案继续" }
+      }
+      renameSync(shotPath, finalPath)
+      return {
+        ok: true,
+        path: finalPath,
+        sections: doc.sections.length,
+        blocks: countBlocks(doc.sections),
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  } catch (err) {
+    // I-7b：自带最小透传文案（勿用 mindmap friendlyRenderError——其 ENOENT 文案是 graphviz 专属）。
+    return { ok: false, error: String(err) }
+  }
+}
+
+/** 供测试断言「esc 后文本逐字存在于 page.html」（I-8b 文字准确性 HTML 层确定性）。 */
+export function readWorksheetHtml(htmlPath: string): string {
+  return readFileSync(htmlPath, "utf8")
+}

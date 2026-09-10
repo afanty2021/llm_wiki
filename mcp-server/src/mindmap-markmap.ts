@@ -172,14 +172,20 @@ function resolveChromePath(explicit?: string): string | null {
  * 评审 I-B：监听 exit——Chrome 提前退出且无 PNG 时立即失败（快回落，不再固定烧满超时）；
  * 与轮询 resolve 竞态时 settled 保证 no-op。
  */
-export async function chromeScreenshotRunner(htmlPath: string, outPath: string, opts: { chromePath?: string } = {}): Promise<void> {
+export async function chromeScreenshotRunner(
+  htmlPath: string,
+  outPath: string,
+  opts: { chromePath?: string; width?: number; height?: number } = {},
+): Promise<void> {
   const chrome = resolveChromePath(opts.chromePath)
   if (!chrome) throw new Error("Chrome/Chromium 未找到（headless 截图不可用）")
+  const width = opts.width ?? MARKMAP_CANVAS_W
+  const height = opts.height ?? MARKMAP_CANVAS_H
   const profileDir = mkdtempSync(join(dirname(outPath), "chrome-profile-"))
   const child = spawn(chrome, [
     "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
     "--hide-scrollbars", `--user-data-dir=${profileDir}`,
-    `--window-size=${MARKMAP_CANVAS_W},${MARKMAP_CANVAS_H}`,
+    `--window-size=${width},${height}`,
     "--force-device-scale-factor=2", `--screenshot=${outPath}`,
     `file://${htmlPath}`,
   ], { stdio: "ignore" })

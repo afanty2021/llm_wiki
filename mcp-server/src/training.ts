@@ -5,8 +5,9 @@
  *   {wecom_userid: {refreshToken, userId}}；内存 access 缓存提前 60s 过期；
  *   miss → POST /api/v1/auth/refresh（single-flight：并发同 userid 只发一次）；
  *   refresh 失败 → POST /api/v1/training/bind（TRAINING__ADMIN_TOKEN）重建/轮换。
- * - 12 个 src-server 工具：10 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
- *   为本地 TTS 合成、teacher_tutor_mindmap 为本地 graphviz 渲染，均不经 src-server API）
+ * - 13 个 src-server 工具：11 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
+ *   为本地 TTS 合成、teacher_tutor_mindmap 为本地 graphviz/markmap 渲染、
+ *   teacher_tutor_worksheet 为本地 Chrome 截图渲染，均不经 src-server API）
  *   + 重写的 llm_wiki_search /
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
  *   project_id 取 env TRAINING__PROJECT_ID；token 全部由 store 注入，绝不进工具返回值。
@@ -43,6 +44,14 @@ import {
   type MindmapRenderResult,
 } from "./mindmap.js"
 import { renderMindmapAuto } from "./mindmap-markmap.js"
+import {
+  normalizeWorksheet,
+  worksheetCapsError,
+  WorksheetFormatError,
+  renderWorksheet,
+  type WorksheetDoc,
+  type WorksheetRenderResult,
+} from "./worksheet.js"
 
 // ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
 // 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
@@ -214,6 +223,8 @@ export interface SrcServerHandlerDeps {
   synthesize?: (dialogue: DialogueLine[], options: { speed?: number; title?: string }) => Promise<ListeningSynthResult>
   /** 思维导图渲染（本地 graphviz 管线；可注入 mock 供测试）。 */
   renderMindmap?: (outline: MindmapOutline) => Promise<MindmapRenderResult>
+  /** 学案海报渲染（本地 Chrome 截图管线；可注入 mock 供测试）。 */
+  renderWorksheet?: (doc: WorksheetDoc) => Promise<WorksheetRenderResult>
 }
 
 // wecom_userid 在 schema 可选声明、不进 required（2026-09-05 修订 08-24 加固）：
@@ -441,6 +452,148 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           },
         },
         required: ["title", "root"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "teacher_tutor_worksheet",
+      description: "把知识点排成一张学案/练习海报 PNG（暖纸金框卡片版式，填空/勾选/表格等题型，中文完好）。返回含 MEDIA: 行——最终回复必须原样回显该行，图片才会送达教师。内容必须基于 search/read_file 取到的真实课文构造，勿编造课文外内容。用于教师要求出学案/练习纸/知识海报的场景。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+          title: { type: "string", description: "学案标题（1-40 字符）" },
+          subtitle: { type: "string", description: "副标题（≤60 字符，可选）" },
+          theme: { type: "string", enum: ["nature"], description: "视觉主题，v1 仅 nature（缺省即 nature）" },
+          footer: { type: "string", description: "页脚提示（≤60 字符，可选，如完成后交给老师）" },
+          sections: {
+            type: "array",
+            description: "内容卡片，2-4 张（少或多都会被拒）",
+            items: {
+              type: "object",
+              properties: {
+                heading: { type: "string", description: "卡片标题（1-30 字符）" },
+                icon: { type: "string", description: "卡片角标 emoji（可选，1 个）" },
+                blocks: {
+                  type: "array",
+                  description: "内容块 1-4 个，六型判别联合（type 字段区分）",
+                  items: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["text"], description: "叙述行" },
+                          text: { type: "string", description: "行文本（1-120 字符）" },
+                        },
+                        required: ["type", "text"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["fill"], description: "虚线填空行" },
+                          items: {
+                            type: "array",
+                            description: "≤4 行",
+                            items: {
+                              type: "object",
+                              properties: {
+                                before: { type: "string", description: "空线前文本（1-60 字符）" },
+                                after: { type: "string", description: "空线后文本（≤60 字符，可省略）" },
+                              },
+                              required: ["before"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        required: ["type", "items"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["boxfill"], description: "虚框填空行" },
+                          items: {
+                            type: "array",
+                            description: "≤4 行",
+                            items: {
+                              type: "object",
+                              properties: {
+                                before: { type: "string", description: "空框前文本（1-60 字符）" },
+                                after: { type: "string", description: "空框后文本（≤60 字符，可省略）" },
+                              },
+                              required: ["before"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        required: ["type", "items"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["numbered"], description: "编号+空线行" },
+                          items: {
+                            type: "array",
+                            description: "≤4 行",
+                            items: {
+                              type: "object",
+                              properties: {
+                                before: { type: "string", description: "该行题干（1-60 字符）" },
+                              },
+                              required: ["before"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        required: ["type", "items"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["checklist"], description: "勾选项" },
+                          items: {
+                            type: "array",
+                            description: "≤6 项",
+                            items: { type: "string", description: "选项文本（1-30 字符）" },
+                          },
+                        },
+                        required: ["type", "items"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["table"], description: "表格（课表/对照表）" },
+                          headers: {
+                            type: "array",
+                            description: "表头 ≤5 列",
+                            items: { type: "string", description: "列名（1-12 字符）" },
+                          },
+                          rows: {
+                            type: "array",
+                            description: "数据行 ≤4 行，每行单元格数与表头一致",
+                            items: {
+                              type: "array",
+                              items: { type: "string", description: "单元格（≤12 字符）" },
+                            },
+                          },
+                        },
+                        required: ["type", "headers", "rows"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                },
+              },
+              required: ["heading", "blocks"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["title", "sections"],
         additionalProperties: false,
       },
     },
@@ -782,6 +935,42 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     return withIdentitySource(textResult([
       // M3'（2026-09-10 评审）：引擎名不进教师可见摘要——SKILL §1「呈现结果而非过程」。
       `思维导图已生成（${result.nodes} 个节点 / ${result.depth} 层）。`,
+      `MEDIA:${result.path}`,
+      `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
+    ].join("\n")), ident.mode)
+  })
+
+  handlers.set("teacher_tutor_worksheet", async (args, meta) => {
+    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    let doc: WorksheetDoc
+    try {
+      doc = normalizeWorksheet({
+        title: args.title,
+        subtitle: args.subtitle,
+        theme: args.theme,
+        footer: args.footer,
+        sections: args.sections,
+      })
+    } catch (err) {
+      // 形状错误对齐 mindmap/listening 先例走 ToolArgumentError（schema 已约束、罕见）。
+      if (err instanceof WorksheetFormatError) throw new ToolArgumentError(err.message)
+      throw err
+    }
+    // 量级超限走正常文本引导（应用级输入问题不进熔断器，同 mindmap 前例）。
+    const capError = worksheetCapsError(doc)
+    if (capError) {
+      return withIdentitySource(textResult(
+        `未生成学案：${capError}。请精简内容或与教师确认后拆成多张。`), ident.mode)
+    }
+    const render = deps.renderWorksheet ?? renderWorksheet
+    const result = await render(doc)
+    if (!result.ok || !result.path) {
+      return withIdentitySource(textResult(
+        `学案海报生成失败：${result.error ?? "未知错误"}。环境性故障请勿反复重试——可先给教师文字版学案（按板块层级列出），图片稍后再生成。`), ident.mode)
+    }
+    return withIdentitySource(textResult([
+      // M3'/I-6：引擎名不进教师可见摘要——SKILL §1「呈现结果而非过程」。
+      `学案海报已生成（${result.sections} 个板块 / ${result.blocks} 个内容块）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
     ].join("\n")), ident.mode)

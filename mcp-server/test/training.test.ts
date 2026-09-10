@@ -88,6 +88,7 @@ function makeHandlers(
     tbase?: string
     synthesize?: Parameters<typeof createSrcServerHandlers>[0]["synthesize"]
     renderMindmap?: Parameters<typeof createSrcServerHandlers>[0]["renderMindmap"]
+    renderWorksheet?: Parameters<typeof createSrcServerHandlers>[0]["renderWorksheet"]
   } = {},
 ) {
   const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
@@ -98,6 +99,7 @@ function makeHandlers(
     getPublicTBase: () => opts.tbase ?? BASE,
     synthesize: opts.synthesize,
     renderMindmap: opts.renderMindmap,
+    renderWorksheet: opts.renderWorksheet,
   })
 }
 
@@ -610,7 +612,7 @@ test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {
 
 // ── 形态注册过滤 ──
 
-test("src-server 形态：只注册 11 工具，9 个桌面工具不在 ListTools", () => {
+test("src-server 形态：只注册 12 工具，9 个桌面工具不在 ListTools", () => {
   const names = buildTools("src-server").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
     "llm_wiki_read_file",
@@ -619,6 +621,7 @@ test("src-server 形态：只注册 11 工具，9 个桌面工具不在 ListTool
     "teacher_tutor_listening_audio",
     "teacher_tutor_mindmap",
     "teacher_tutor_plan_create",
+    "teacher_tutor_worksheet",
     "teacher_tutor_plan_link",
     "teacher_tutor_plan_list",
     "teacher_tutor_profile_get",
@@ -844,4 +847,86 @@ test("mindmap schema: 递归 children 不被 additionalProperties:false 禁绝�
   const items = root.properties.children.items
   assert.equal(items.additionalProperties, undefined, "items 不得声明 additionalProperties:false——递归深层靠运行时校验")
   assert.ok(items.properties.children, "items 必须声明 children 口子")
+})
+
+// ── teacher_tutor_worksheet（2026-09-10 学案海报工具，方案 plans/2026-09-10-teacher-worksheet-tool.md）──
+
+test("worksheet: 渲染成功 → MEDIA 行 + 板块/内容块计数 + identity_source（无引擎字样 M3'）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderWorksheet: async (doc) => {
+      assert.equal(doc.title, "Green School")
+      assert.equal(doc.sections.length, 2)
+      assert.equal(doc.theme, "nature", "theme 缺省归一为 nature")
+      return { ok: true, path: "/cache/worksheet-abc123.png", sections: 2, blocks: 5 }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_worksheet")!({
+    wecom_userid: "t1",
+    title: "Green School",
+    sections: [
+      { heading: "Classrooms", blocks: [{ type: "text", text: "Look!" }] },
+      { heading: "Farm", blocks: [{ type: "checklist", items: ["Feed"] }] },
+    ],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("\nMEDIA:/cache/worksheet-abc123.png\n"), "MEDIA 行必须独立成行")
+  assert.ok(text.includes("2 个板块 / 5 个内容块"))
+  assert.ok(text.includes("原样保留"))
+  assert.ok(!text.includes("引擎"), "M3'：引擎名不进教师可见摘要")
+  assert.ok(result.content.some((c) => c.text.includes('identity_source: "system"')))
+})
+
+test("worksheet: sections 少于 2 → 正常文本引导、不调渲染", async () => {
+  let called = false
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderWorksheet: async () => {
+      called = true
+      return { ok: true, path: "/x.png", sections: 1, blocks: 1 }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_worksheet")!({
+    wecom_userid: "t1",
+    title: "t",
+    sections: [{ heading: "h", blocks: [{ type: "text", text: "x" }] }],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("未生成学案"))
+  assert.ok(text.includes("少于下限 2"))
+  assert.equal(called, false)
+})
+
+test("worksheet: 形状非法 → ToolArgumentError（坏块型/缺 heading）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") })
+  await assert.rejects(
+    handlers.get("teacher_tutor_worksheet")!({
+      wecom_userid: "t1",
+      title: "t",
+      sections: [{ heading: "h", blocks: [{ type: "poem" }] }],
+    }),
+    /type must be one of/,
+  )
+  await assert.rejects(
+    handlers.get("teacher_tutor_worksheet")!({
+      wecom_userid: "t1",
+      title: "t",
+      sections: [{ blocks: [{ type: "text", text: "x" }] }],
+    }),
+    /heading/,
+  )
+})
+
+test("worksheet: 渲染失败 → 环境性故障引导文字版（I-7b 不刷屏）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderWorksheet: async () => ({ ok: false, error: "Chrome/Chromium 未找到（headless 截图不可用）" }),
+  })
+  const result = await handlers.get("teacher_tutor_worksheet")!({
+    wecom_userid: "t1",
+    title: "t",
+    sections: [{ heading: "h", blocks: [{ type: "text", text: "x" }] }, { heading: "h2", blocks: [{ type: "text", text: "y" }] }],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("生成失败"))
+  assert.ok(text.includes("勿反复重试"))
+  assert.ok(text.includes("文字版学案"))
+  assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
 })
