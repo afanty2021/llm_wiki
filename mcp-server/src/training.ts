@@ -457,7 +457,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "teacher_tutor_worksheet",
-      description: "把知识点排成一张学案/练习海报 PNG（暖纸金框卡片版式，填空/勾选/表格等题型，中文完好）。返回含 MEDIA: 行——最终回复必须原样回显该行，图片才会送达教师。内容必须基于 search/read_file 取到的真实课文构造，勿编造课文外内容。用于教师要求出学案/练习纸/知识海报的场景。",
+      description: "把知识点排成一张学案/练习海报 PNG（暖纸金框卡片版式，填空/勾选/表格等题型，中文完好）。返回含 MEDIA: 行——最终回复必须原样回显该行，图片才会送达教师。内容必须基于 search/read_file 取到的真实课文构造，勿编造课文外内容。老师发来试卷/课文/学案图片要求出学案时：先用 vision_analyze 转写图片中的文字内容，再基于转写文本构造本工具的入参（勿用 execute_code 等代码工具做 OCR）。用于教师要求出学案/练习纸/知识海报的场景。",
       inputSchema: {
         type: "object",
         properties: {

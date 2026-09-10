@@ -149,7 +149,12 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
   }
   if (type === "checklist") {
     if (!Array.isArray(rec.items)) throw new WorksheetFormatError(`${at}.items must be an array`)
-    if (rec.items.length < 1) throw new WorksheetFormatError(`${at}.items 不能为空（I-4：空块不渲染）`)
+    if (rec.items.length < 1) {
+      const demo = type === "checklist"
+        ? '如 {"type":"checklist","items":["Plants 🌱","Trees 🌳"]}'
+        : '如 {"type":"fill","items":[{"before":"We can see","after":"right outside."}]}'
+      throw new WorksheetFormatError(`${at}.items 不能为空——至少 1 项，${demo}`)
+    }
     return {
       type,
       items: rec.items.map((item, k) => requireText(item, `${at}.items[${k}]`)),
@@ -158,8 +163,12 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
   if (type === "table") {
     if (!Array.isArray(rec.headers)) throw new WorksheetFormatError(`${at}.headers must be an array`)
     if (!Array.isArray(rec.rows)) throw new WorksheetFormatError(`${at}.rows must be an array`)
-    if (rec.headers.length < 1) throw new WorksheetFormatError(`${at}.headers 不能为空（I-4）`)
-    if (rec.rows.length < 1) throw new WorksheetFormatError(`${at}.rows 不能为空（I-4：空表格不渲染）`)
+    if (rec.headers.length < 1) {
+      throw new WorksheetFormatError(`${at}.headers 不能为空——至少 1 列，如 ["Monday","Tuesday","Wednesday"]`)
+    }
+    if (rec.rows.length < 1) {
+      throw new WorksheetFormatError(`${at}.rows 不能为空——至少 1 行，如 [["English","Math","Music"]]，且每行格数与 headers 一致`)
+    }
     const headers = rec.headers.map((h, k) => requireText(h, `${at}.headers[${k}]`))
     const rows = rec.rows.map((row, r) => {
       if (!Array.isArray(row)) throw new WorksheetFormatError(`${at}.rows[${r}] must be an array`)
