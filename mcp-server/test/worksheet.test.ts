@@ -372,3 +372,31 @@ test("C-1 布局预算闸: 对抗密度文档被拒、fixture 通过（评审双
   assert.match(worksheetCapsError(dense)!, /内容过密.*1000px.*拆成多张/)
   assert.equal(worksheetCapsError(normalizeWorksheet(WORKSHEET_FIXTURE)), null)
 })
+
+// ── 标题剥「学案」+ numbered 剥前导题号（用户裁定 2026-09-10）──
+
+test("title 剥「学案」字样（确定性清洗）；剥空则拒", () => {
+  const doc = normalizeWorksheet({ title: "一般过去时 学案", sections: [{ heading: "h", blocks: [{ type: "text", text: "x" }] }, { heading: "h2", blocks: [{ type: "text", text: "y" }] }] })
+  assert.equal(doc.title, "一般过去时")
+  assert.throws(
+    () => normalizeWorksheet({ title: "学案", sections: [{ heading: "h", blocks: [{ type: "text", text: "x" }] }, { heading: "h2", blocks: [{ type: "text", text: "y" }] }] }),
+    /直接用主题名/,
+  )
+})
+
+test("numbered 剥前导题号（1./1、/① 防与自动编号重复）；剥空则拒；非题号数字不动", () => {
+  const mk = (before: string) => normalizeWorksheet({
+    title: "t",
+    sections: [{ heading: "h", blocks: [{ type: "numbered", items: [{ before }] }] }, { heading: "h2", blocks: [{ type: "text", text: "x" }] }],
+  })
+  const firstBefore = (before: string): string => {
+    const doc = mk(before)
+    const b0 = doc.sections[0]!.blocks[0]
+    assert.ok(b0.type === "numbered")
+    return b0.items[0]!.before
+  }
+  assert.equal(firstBefore("1. She (go) to school."), "She (go) to school.")
+  assert.equal(firstBefore("① We grow"), "We grow")
+  assert.equal(firstBefore("12 年前发生的事"), "12 年前发生的事", "无分隔符的数字开头不误剥")
+  assert.throws(() => mk("1."), /不能只有题号/)
+})

@@ -112,7 +112,12 @@ export function normalizeWorksheet(raw: {
   footer?: unknown
   sections: unknown
 }): WorksheetDoc {
-  const title = requireText(raw.title, "title")
+  // 标题剥「学案」字样（用户裁定 2026-09-10：标题=主题名本身，页面已是学案不必自报家门；
+  // 指引在 schema/SKILL，此处兜底保证规则恒成立）。剥空则拒。
+  let title = requireText(raw.title, "title").replace(/学案/g, "").trim()
+  if (title === "") {
+    throw new WorksheetFormatError('title 不能只含「学案」等文档类型字样——请直接用主题名，如「一般过去时 The Past Simple Tense」')
+  }
   const subtitle = optionalText(raw.subtitle, "subtitle")
   // theme（M-1）：非字符串 fail-fast；字符串值非 nature 回落 nature（schema enum 已限，纵深防御）。
   if (raw.theme !== undefined && typeof raw.theme !== "string") {
@@ -193,11 +198,18 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
       throw new WorksheetFormatError(`${at}.items[${k}] must be an object`)
     }
     const ir = item as Record<string, unknown>
-    const before = requireText(ir.before, `${at}.items[${k}].before`)
+    let before = requireText(ir.before, `${at}.items[${k}].before`)
     const after = optionalText(ir.after, `${at}.items[${k}].after`)
     // I-2：numbered 渲染只用 before——after 被接受即静默丢内容，直接拒。
     if (type === "numbered" && after !== undefined) {
       throw new WorksheetFormatError(`${at}.items[${k}].after 不适用于 numbered（编号行只有题干+答题空线）——请改用 fill 并把内容并入 before`)
+    }
+    // numbered：剥模型自带的前导题号（"1. "/"1、"/"①"），防与自动编号重复。
+    if (type === "numbered") {
+      before = before.replace(/^\s*(?:\d{1,2}\s*[.、)]|[①②③④⑤⑥⑦⑧⑨⑩])\s*/, "")
+      if (before === "") {
+        throw new WorksheetFormatError(`${at}.items[${k}].before 不能只有题号——请写题干内容（编号由工具自动生成）`)
+      }
     }
     return after === undefined ? { before } : { before, after }
   })

@@ -540,7 +540,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
                             items: {
                               type: "object",
                               properties: {
-                                before: { type: "string", description: "该行题干（1-60 字符）" },
+                                before: { type: "string", description: "该行题干（1-60 字符）——勿自带题号（工具自动编号），如「She (go) to school yesterday.」" },
                               },
                               required: ["before"],
                               additionalProperties: false,
