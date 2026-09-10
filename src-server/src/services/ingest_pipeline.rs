@@ -490,6 +490,32 @@ fn union_sources(
     serde_json::json!(out)
 }
 
+/// sources 归因兜底（2026-09-10 Wendy/QC 双事故收口）：parse_single_block 直接采信
+/// LLM frontmatter 的 sources，而 step2 模板示例逐字教 `sources: ["source.md"]`
+/// （prompts/step2_generate.txt:8，评审 I3 定谳根因——示例已随根改 `[]`，本护栏
+/// 退居兜底）→ 占位符/缺省坏值成批入库（全库 811 占位 + 305 空值，见
+/// .superpowers/today-ingest-qc-2026-09-10/ §六）。
+/// 本 helper 剥空串/占位项后尾部 union 真实源路径 sp（与 union_sources 的
+/// tail-append 约定一致）。调用点：run_ingest_job 写循环（sp 在 scope 的唯一层，
+/// 多源 job 每源页组用各自 sp——评审核验归因正确）+ merge 分支 union 之后（C1）；
+/// 不得放进 upsert_wiki_page——review.rs 的空 sources 是设计内（审核台页无源文件）。
+fn sanitize_sources(sources: &mut serde_json::Value, sp: &str) {
+    let mut out: Vec<String> = sources
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .filter(|s| !s.is_empty() && *s != "source.md")
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    if !out.iter().any(|o| o == sp) {
+        out.push(sp.to_string());
+    }
+    *sources = serde_json::json!(out);
+}
+
 /// R10（m3-impl-review 次级收编）：step1 merged 结果形状守卫——非对象直接报错
 /// （走解析失败路径），不再放行进 step2。Task 6 r3 时仅跳过缓存写但仍流向 step2：
 /// 非对象分析（"[]"/"null"/标量）进 step2 会基于空分析产出无效 wiki 页；宁可本次
@@ -2311,6 +2337,54 @@ mod tests {
     fn union_sources_dedup_order_tail_append_current() {
         let u = union_sources(&serde_json::json!(["a.md"]), &serde_json::json!(["b.md", "a.md"]), "c.md");
         assert_eq!(u, serde_json::json!(["a.md", "b.md", "c.md"]));
+    }
+
+    #[test]
+    fn sanitize_sources_placeholder_replaced_by_sp() {
+        let mut s = serde_json::json!(["source.md"]);
+        sanitize_sources(&mut s, "sources/transcripts/a-12345678.md");
+        assert_eq!(s, serde_json::json!(["sources/transcripts/a-12345678.md"]));
+    }
+
+    #[test]
+    fn sanitize_sources_empty_array_becomes_sp() {
+        let mut s = serde_json::json!([]);
+        sanitize_sources(&mut s, "raw/sources/Book/Ch01.md");
+        assert_eq!(s, serde_json::json!(["raw/sources/Book/Ch01.md"]));
+    }
+
+    #[test]
+    fn sanitize_sources_keeps_real_entries_drops_placeholder_unions_sp() {
+        let mut s = serde_json::json!(["a.md", "source.md"]);
+        sanitize_sources(&mut s, "b.md");
+        assert_eq!(s, serde_json::json!(["a.md", "b.md"]));
+    }
+
+    #[test]
+    fn sanitize_sources_no_double_append_when_sp_present() {
+        let mut s = serde_json::json!(["b.md"]);
+        sanitize_sources(&mut s, "b.md");
+        assert_eq!(s, serde_json::json!(["b.md"]));
+    }
+
+    #[test]
+    fn sanitize_sources_non_array_value_rebuilt_from_sp() {
+        let mut s = serde_json::json!("source.md"); // LLM 偶发非数组形态
+        sanitize_sources(&mut s, "sp.md");
+        assert_eq!(s, serde_json::json!(["sp.md"]));
+    }
+
+    #[test]
+    fn sanitize_after_union_strips_existing_placeholder() {
+        // C1（评审）：merge 分支 union 的 existing 取 DB 现值，可能带存量占位符——
+        // union 后 sanitize 必须剥净，否则存量坏值借合并还魂。
+        let mut s = union_sources(
+            &serde_json::json!(["source.md"]),
+            &serde_json::json!(["x.md"]),
+            "sp.md",
+        );
+        sanitize_sources(&mut s, "sp.md");
+        assert_eq!(s, serde_json::json!(["x.md", "sp.md"]));
     }
 
     #[test]
