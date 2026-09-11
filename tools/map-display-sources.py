@@ -134,7 +134,9 @@ def main():
         sys.exit("refusing: 需显式 --dry-run / --apply <冻结mapping> / --verify <mapping.csv>")
 
     if args.verify:
-        # §九 C-1 勘误后的诚实校验器：两类目标分账，不混计数
+        # §九 C-1 勘误后的诚实校验器：两类目标分账，不混计数。
+        # §十 I-1：目标缺失/空首行/空归一化 display 一律 FAIL——空串 startswith
+        # 恒真是假通过洞（本数据集未触发，与「诚实分账」宗旨相悖故修）。
         def norm_verify(s):
             s = s.strip().lstrip(">").strip()
             s = re.sub(r"^来源[:：]\s*", "", s)
@@ -142,25 +144,37 @@ def main():
             s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", s)
             return re.sub(r"-{2,}", "-", s).strip("-")
         rows = list(csv.DictReader(open(args.verify)))
-        raw_pass = raw_fail = tid = 0
+        raw_pass = raw_fail = tid = t_missing = 0
         fails = []
         for r in rows:
             m = r["mapped"]
             if m.startswith("raw/sources/"):
+                nd = norm_verify(r["display"])
                 src = ROOT / m
-                line = src.read_text(errors="replace").split("\n", 1)[0] if src.exists() else ""
-                nl, nd = norm_verify(line), norm_verify(r["display"])
-                if nl.startswith(nd) or nd.startswith(nl):
+                if not src.exists():
+                    raw_fail += 1
+                    fails.append((r["path"], r["display"][:50], m[:60], "<missing>"))
+                    continue
+                line = src.read_text(errors="replace").split("\n", 1)[0]
+                nl = norm_verify(line)
+                if not nd or not nl:
+                    raw_fail += 1
+                    fails.append((r["path"], r["display"][:50], m[:60], f"empty-norm line={nl!r} disp={nd!r}"))
+                elif nl.startswith(nd) or nd.startswith(nl):
                     raw_pass += 1
                 else:
                     raw_fail += 1
-                    fails.append((r["path"], r["display"], m, nl[:60], nd[:60]))
+                    fails.append((r["path"], r["display"][:50], m[:60], nl[:60]))
             else:
                 # 文件名身份映射：转写文件无来源行（frontmatter 形态，全库 898
                 # 个转写含「来源：」行者 0）——存在性即身份，单独计账
-                tid += 1 if (ROOT / m).exists() else 0
+                if (ROOT / m).exists():
+                    tid += 1
+                else:
+                    t_missing += 1
+                    fails.append((r["path"], r["display"][:50], m[:60], "<transcript-missing>"))
         print(f"raw 来源行实检: {raw_pass} pass / {raw_fail} fail")
-        print(f"transcripts 文件名身份: {tid}/{sum(1 for r in rows if r['mapped'].startswith('sources/transcripts/'))}")
+        print(f"transcripts 文件名身份: {tid} pass / {t_missing} missing")
         for f in fails[:10]:
             print("  FAIL", f)
         return
