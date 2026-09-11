@@ -18,9 +18,11 @@
   python3 map-display-sources.py --dry-run            # 产 i9-mapping.csv（只读）
   python3 map-display-sources.py --v3 --dry-run       # v3 确定解（§九 I-1 三修）
   python3 map-display-sources.py --apply <冻结mapping> # I1c：只消费显式冻结件
-输出：~/kb-dumps/20260911-sources-backfill/{i9*-mapping,i9*-misses}.csv
+输出：~/kb-dumps/20260911-sources-backfill/{i9*-mapping-<时间戳>,i9*-misses-<时间戳>}.csv
+（时间戳产物名：固定名无条件覆写曾把已应用的冻结件自毁为空，§十一跟进封堵）
 """
 import argparse, csv, io, json, re, subprocess, sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path("/Users/berton/kb-storage/teams/916/projects/614")
@@ -86,7 +88,7 @@ def resolve_v2(entry, disk_by_book, disk_all, transcripts):
         return f"sources/transcripts/{entry}.md"
     return None
 
-def resolve_v3(entry, disk_by_book, transcripts):
+def resolve_v3(entry, books, disk_by_book, transcripts):
     """v3 确定解（评审 §九 I-1 三修）：在 v2 门限语义上修三处——
 
       ① T1 stem 失配不再提前 return，落 T2/T3 兜底（v2 中 T2 贡献 0 的死代码根因，
@@ -95,9 +97,9 @@ def resolve_v3(entry, disk_by_book, transcripts):
          _norm 内，保 _norm v2 语义不动）；
       ③ 书名前缀匹配大小写不敏感（`think-teachers-l0-…` 形态 x~30）。
     分隔符表补 `/`（T1 直吃半路径形态，T2 保持 byte-exact 兜底）。
+    books=按名长降序预排序的书名清单（调用方一次排序，勿逐 entry 重算）。
     门限不变：目标盘上存在 + 精确或唯一前缀命中；裸书名（entry==book）仍策略性不动。
     """
-    books = sorted(disk_by_book.keys(), key=len, reverse=True)
     el = entry.lower()
     book = next((b for b in books if el.startswith(b.lower())), None)
     if book:
@@ -118,8 +120,8 @@ def resolve_v3(entry, disk_by_book, transcripts):
             if len(hits) == 1:
                 return f"raw/sources/{book}/{hits[0]}.md"
         # T1 失败 → 落 T2/T3（v3 ①），不再提前 return
-    # T2 半路径：<Book>/<stem>[.md]
-    if "/" in entry and not entry.endswith("/"):
+    # T2 半路径：<Book>/<stem>[.md]（前导 / 非半路径——否则产出 raw/sources//… 畸形串）
+    if "/" in entry and not entry.startswith("/") and not entry.endswith("/"):
         cand = f"raw/sources/{entry}" if entry.endswith(".md") else f"raw/sources/{entry}.md"
         if (ROOT / cand).exists():
             return cand
@@ -237,12 +239,23 @@ def main():
 
     if args.dry_run:
         mapping, misses, bare = [], [], 0
+        # 产物带时间戳（§十一 Important 跟进）：固定名无条件覆写曾把已应用的
+        # 冻结件自毁为空（执行后复核性 dry-run 事故）——时间戳名从类上封堵；
+        # 同秒重跑以 .k 后缀唯一化，绝不覆写既有产物
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        tag = f"i9{suffix}-{ts}"
+        k = 0
+        while (OUT / f"{tag}-mapping.csv").exists():
+            k += 1
+            tag = f"i9{suffix}-{ts}.{k}"
         if args.v2 or args.v3:
             disk_by_book = build_disk_by_book()
             transcripts = build_transcript_index()
+            books_sorted = sorted(disk_by_book.keys(), key=len, reverse=True)
+            reason = "unresolved" + suffix
             def resolve_ext(e):
                 if args.v3:
-                    return resolve_v3(e, disk_by_book, transcripts)
+                    return resolve_v3(e, books_sorted, disk_by_book, transcripts)
                 return resolve_v2(e, disk_by_book, disk, transcripts)
             for pg in pages:
                 for e in pg["sources"]:
@@ -252,7 +265,7 @@ def main():
                     if m:
                         mapping.append({"path": pg["path"], "display": e, "mapped": m})
                     else:
-                        misses.append([pg["path"], e, "unresolved-v2"])
+                        misses.append([pg["path"], e, reason])
         else:
             for pg in pages:
                 for e in pg["sources"]:
@@ -265,14 +278,15 @@ def main():
                         misses.append([pg["path"], e, "unresolved"])
                     else:
                         bare += 1
-        with open(OUT / f"i9{suffix}-mapping.csv", "w", newline="") as f:
+        map_csv = OUT / f"{tag}-mapping.csv"
+        with open(map_csv, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["path", "display", "mapped"])
             w.writeheader(); w.writerows(mapping)
-        with open(OUT / f"i9{suffix}-misses.csv", "w", newline="") as f:
+        with open(OUT / f"{tag}-misses.csv", "w", newline="") as f:
             w = csv.writer(f); w.writerow(["path", "display", "reason"]); w.writerows(misses)
         print(f"mapping: {len(mapping)} 条（页级 {len({m['path'] for m in mapping})}）| "
               f"misses: {len(misses)} | 裸书名（不动）: {bare}")
-        print("->", OUT / f"i9{suffix}-mapping.csv")
+        print("->", map_csv)
         return
 
     # —— apply：只消费显式冻结 mapping；页级备份先行；union 去重替换 ——
