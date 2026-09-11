@@ -13,6 +13,7 @@ import {
   outlineToMarkdown,
   renderMindmapAuto,
   renderMindmapMarkmap,
+  rmRfBestEffort,
 } from "../src/mindmap-markmap.js"
 
 const SAMPLE = {
@@ -297,4 +298,11 @@ test("I-A 内容保真: HTML 标签字面文本经实体转义可见（不 被 m
   // <script> → &lt;script>（> 无需转义，中段字面安全）
   assert.ok(md.includes("&lt;script> 标签"))
   assert.ok(!md.includes("<script> 标签"), "裸 <script> 不得进 markdown")
+})
+
+test("rmRfBestEffort：清理竞态（ENOTEMPTY 类）吞掉不外抛——渲染成功不得被清理失败误报（§九加固）", () => {
+  rmRfBestEffort("/tmp/definitely-nonexistent-path-x", () => {
+    throw Object.assign(new Error("ENOTEMPTY: Directory not empty"), { code: "ENOTEMPTY" })
+  })
+  rmRfBestEffort("/tmp/also-nonexistent-y", () => {})
 })

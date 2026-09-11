@@ -22,6 +22,20 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
+/** 清理 best-effort（§九同源加固 2026-09-11）：rm 的 ENOTEMPTY/ENOENT 是
+ * Chrome crashpad 残写竞态——吞掉不外抛。残留目录落在 cache 域、无害；
+ * 清理失败绝不允许把已成功的渲染误报为失败。rmImpl 注入供测试。 */
+export function rmRfBestEffort(
+  path: string,
+  rmImpl: (p: string, opts: { recursive: boolean; force: boolean }) => void = rmSync,
+): void {
+  try {
+    rmImpl(path, { recursive: true, force: true })
+  } catch {
+    /* 残写竞态/已消失——cache 域残留无害 */
+  }
+}
+
 import {
   countNodes,
   friendlyRenderError,
@@ -188,9 +202,16 @@ export async function chromeScreenshotRunner(
     `--window-size=${width},${height}`,
     "--force-device-scale-factor=2", `--screenshot=${outPath}`,
     `file://${htmlPath}`,
-  ], { stdio: "ignore" })
+  ], { stdio: "ignore", detached: true })
+  // detached 独立进程组：SIGKILL 发组信号把 crashpad 助手一并带走
+  // （2026-09-11 ggtms 回合实锺：只杀主进程时 crashpad 残写 profile 目录，
+  // finally rmSync ENOTEMPTY，渲染被误报失败）。
   const kill = () => {
-    try { child.kill("SIGKILL") } catch { /* 已退出 */ }
+    try {
+      if (child.pid) process.kill(-child.pid, "SIGKILL")
+    } catch {
+      try { child.kill("SIGKILL") } catch { /* 已退出 */ }
+    }
   }
   try {
     await new Promise<void>((resolve, reject) => {
@@ -219,7 +240,7 @@ export async function chromeScreenshotRunner(
     throw err
   } finally {
     kill()
-    rmSync(profileDir, { recursive: true, force: true })
+    rmRfBestEffort(profileDir)
   }
 }
 

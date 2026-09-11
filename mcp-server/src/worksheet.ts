@@ -17,11 +17,11 @@
  * 其 ENOENT 文案是 graphviz 专属）。
  */
 import { createHash } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-import { chromeScreenshotRunner, isCompletePng } from "./mindmap-markmap.js"
+import { chromeScreenshotRunner, isCompletePng, rmRfBestEffort } from "./mindmap-markmap.js"
 
 export const WORKSHEET_CANVAS_W = 1500
 export const WORKSHEET_CANVAS_H = 1100
@@ -598,7 +598,9 @@ export async function renderWorksheet(
         blocks: countBlocks(doc.sections),
       }
     } finally {
-      rmSync(tmp, { recursive: true, force: true })
+      // best-effort（§九同源加固）：ENOTEMPTY 竞态不外抛——renderWorksheet 的
+      // catch 会把清理失败误报为渲染失败（2026-09-11 ggtms 回合实锺）。
+      rmRfBestEffort(tmp)
     }
   } catch (err) {
     // I-7b：自带最小透传文案（勿用 mindmap friendlyRenderError——其 ENOENT 文案是 graphviz 专属）。
