@@ -32,6 +32,60 @@ MANUAL_FIXES = {
     "Look-Teachers-1 · Ch02-welcome": "raw/sources/Look-Teachers-Level1/Ch02-welcome.md",
 }
 
+def _norm(s):
+    """stem 归一化：小写、空白/下划线→连字符、去尾标点。"""
+    import re
+    s = s.strip().lower().replace("_", "-")
+    s = re.sub(r"\s+", "-", s)
+    return s.rstrip("-.,：:；;。")
+
+def build_transcript_index():
+    idx = set()
+    for f in (ROOT / "sources/transcripts").glob("*.md"):
+        idx.add(f.name)
+    return idx
+
+def resolve_v2(entry, disk_by_book, disk_all, transcripts):
+    """v2 确定解（§八 v2 材料：书名最长前缀切分 + stem 归一化，零歧义门）。
+
+    三层，全部要求目标盘上存在且唯一命中；返回 path 或 None：
+      T1 <Book><sep><rest>    书名最长前缀切分，rest 归一化后与该书章 stem
+                              精确或唯一前缀匹配（唯一前缀=恰 1 个 stem 以
+                              归一化 rest 为前缀）
+      T2 <Book>/<stem>[.md]   半路径补全（raw/ 前缀与 .md 后缀）
+      T3 孤儿 .md/转写名      sources/transcripts/<name>[.md] 存在即映射
+    """
+    books = sorted(disk_by_book.keys(), key=len, reverse=True)
+    book = next((b for b in books if entry == b or entry.startswith(b)), None)
+    if book:
+        rest = entry[len(book):]
+        if rest[:1] in (" ", "-", "_", "·", "：", ":", "—"):
+            rest = rest[1:].strip()
+        if rest:
+            stems = disk_by_book[book]          # {norm: real_stem}
+            n = _norm(rest)
+            hits = [s for k, s in stems.items() if k == n]
+            if not hits:
+                cand = [s for k, s in stems.items() if k.startswith(n)] if len(n) >= 4 else []
+                if len(cand) == 1:
+                    hits = cand
+            if len(hits) == 1:
+                return f"raw/sources/{book}/{hits[0]}.md"
+            return None
+        return None
+    # T2 半路径：<Book>/<stem>[.md]
+    if "/" in entry and not entry.endswith("/"):
+        cand = f"raw/sources/{entry}.md" if not entry.endswith(".md") else f"raw/sources/{entry}"
+        if (ROOT / cand).exists():
+            return cand
+        return None
+    # T3 孤儿 .md / 无后缀转写名
+    if entry.endswith(".md") and entry in transcripts:
+        return f"sources/transcripts/{entry}"
+    if not entry.endswith(".md") and f"{entry}.md" in transcripts:
+        return f"sources/transcripts/{entry}.md"
+    return None
+
 def psql(q):
     r = subprocess.run(PSQL + [q], capture_output=True, text=True)
     r.check_returncode()
@@ -42,6 +96,13 @@ def build_index():
     for f in (ROOT / "raw/sources").glob("*/*.md"):
         idx.add((f.parent.name, f.stem))
     return idx
+
+def build_disk_by_book():
+    """{book: {norm_stem: real_stem}}（v2 T1 匹配用）。"""
+    out = {}
+    for f in (ROOT / "raw/sources").glob("*/*.md"):
+        out.setdefault(f.parent.name, {})[_norm(f.stem)] = f.stem
+    return out
 
 def resolve(entry, disk):
     """返回 mapped path 或 None。"""
@@ -61,12 +122,15 @@ def resolve(entry, disk):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--v2", action="store_true",
+                    help="确定性扩展层：最长前缀切分+stem 归一化+唯一命中门（§八 v2 材料）")
     ap.add_argument("--apply", metavar="冻结mapping")
     args = ap.parse_args()
     if not args.dry_run and not args.apply:
         sys.exit("refusing: 需显式 --dry-run 或 --apply <冻结mapping>")
 
     disk = build_index()
+    suffix = "-v2" if args.v2 else ""
     pages = json.loads(psql(
         "SELECT coalesce(json_agg(t)::text,'[]') FROM (SELECT path, sources FROM wiki_pages "
         "WHERE project_id=614 AND NOT path LIKE 'wiki/%' AND jsonb_typeof(sources)='array' "
@@ -75,25 +139,38 @@ def main():
 
     if args.dry_run:
         mapping, misses, bare = [], [], 0
-        for pg in pages:
-            for e in pg["sources"]:
-                if not e or e.startswith(("sources/", "raw/")):
-                    continue
-                m = resolve(e, disk)
-                if m:
-                    mapping.append({"path": pg["path"], "display": e, "mapped": m})
-                elif " · " in e:
-                    misses.append([pg["path"], e, "unresolved"])
-                else:
-                    bare += 1
-        with open(OUT / "i9-mapping.csv", "w", newline="") as f:
+        if args.v2:
+            disk_by_book = build_disk_by_book()
+            transcripts = build_transcript_index()
+            for pg in pages:
+                for e in pg["sources"]:
+                    if not e or e.startswith(("sources/", "raw/")) or e == "source.md":
+                        continue
+                    m = resolve(e, disk) or resolve_v2(e, disk_by_book, disk, transcripts)
+                    if m:
+                        mapping.append({"path": pg["path"], "display": e, "mapped": m})
+                    else:
+                        misses.append([pg["path"], e, "unresolved-v2"])
+        else:
+            for pg in pages:
+                for e in pg["sources"]:
+                    if not e or e.startswith(("sources/", "raw/")):
+                        continue
+                    m = resolve(e, disk)
+                    if m:
+                        mapping.append({"path": pg["path"], "display": e, "mapped": m})
+                    elif " · " in e:
+                        misses.append([pg["path"], e, "unresolved"])
+                    else:
+                        bare += 1
+        with open(OUT / f"i9{suffix}-mapping.csv", "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["path", "display", "mapped"])
             w.writeheader(); w.writerows(mapping)
-        with open(OUT / "i9-misses.csv", "w", newline="") as f:
+        with open(OUT / f"i9{suffix}-misses.csv", "w", newline="") as f:
             w = csv.writer(f); w.writerow(["path", "display", "reason"]); w.writerows(misses)
         print(f"mapping: {len(mapping)} 条（页级 {len({m['path'] for m in mapping})}）| "
               f"misses: {len(misses)} | 裸书名（不动）: {bare}")
-        print("->", OUT / "i9-mapping.csv")
+        print("->", OUT / f"i9{suffix}-mapping.csv")
         return
 
     # —— apply：只消费显式冻结 mapping；页级备份先行；union 去重替换 ——
