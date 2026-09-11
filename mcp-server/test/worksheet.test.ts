@@ -400,3 +400,32 @@ test("numbered 剥前导题号（1./1、/① 防与自动编号重复）；剥�
   assert.equal(firstBefore("12 年前发生的事"), "12 年前发生的事", "无分隔符的数字开头不误剥")
   assert.throws(() => mk("1."), /不能只有题号/)
 })
+
+test("兜底（2026-09-11 ggtms 回合实发形态）：text 块误携 items 数组 → 拼接还原为 text，勿拒", () => {
+  const doc = normalizeWorksheet({
+    title: "Look Unit 1 Classroom",
+    sections: [{ heading: "句型梳理", blocks: [
+      { type: "text", items: ["What's this? It's a ___.", "Is it a ___? Yes, it is. / No, it isn't."] },
+    ] }],
+  })
+  const b0 = doc.sections[0]!.blocks[0]
+  assert.ok(b0.type === "text")
+  assert.equal(b0.text, "What's this? It's a ___.\nIs it a ___? Yes, it is. / No, it isn't.")
+})
+
+test("兜底（同实发）：numbered/fill 的字符串 items → {before} 归一，numbered 前导题号仍剥", () => {
+  const doc = normalizeWorksheet({
+    title: "t",
+    sections: [{ heading: "课堂操练", blocks: [
+      { type: "numbered", items: ["看图回答 What's this?", "1. 用 Is it a...? 互相猜文具"] },
+      { type: "fill", items: ["It's a ___."] },
+    ] }, { heading: "h2", blocks: [{ type: "text", text: "x" }] }],
+  })
+  const nb = doc.sections[0]!.blocks[0]
+  assert.ok(nb.type === "numbered")
+  assert.equal(nb.items[0]!.before, "看图回答 What's this?")
+  assert.equal(nb.items[1]!.before, "用 Is it a...? 互相猜文具")
+  const fb = doc.sections[0]!.blocks[1]
+  assert.ok(fb.type === "fill")
+  assert.equal(fb.items[0]!.before, "It's a ___.")
+})

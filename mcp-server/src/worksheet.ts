@@ -150,7 +150,14 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
     throw new WorksheetFormatError(`${at}.type must be one of ${BLOCK_TYPES.join("/")}`)
   }
   if (type === "text") {
-    return { type, text: requireText(rec.text, `${at}.text`) }
+    // 兜底（2026-09-11 ggtms 回合实发两例）：模型把行文本塞进 items 数组
+    // （{"type":"text","items":["…","…"]}）——拼接还原为 text，勿拒。
+    let text = rec.text
+    if (typeof text !== "string" && Array.isArray(rec.items)) {
+      const joined = rec.items.filter((x): x is string => typeof x === "string").join("\n")
+      if (joined.trim() !== "") text = joined
+    }
+    return { type, text: requireText(text, `${at}.text`) }
   }
   if (type === "checklist") {
     if (!Array.isArray(rec.items)) throw new WorksheetFormatError(`${at}.items must be an array`)
@@ -194,6 +201,9 @@ function normalizeBlock(raw: unknown, at: string): WorksheetBlock {
   if (!Array.isArray(rec.items)) throw new WorksheetFormatError(`${at}.items must be an array`)
   if (rec.items.length < 1) throw new WorksheetFormatError(`${at}.items 不能为空（I-4：空块不渲染）`)
   const items = rec.items.map((item, k) => {
+    // 兜底（2026-09-11 ggtms 回合实发）：字符串 item 视作整行题干 {"before": item}
+    // ——checklist 本就收字符串，numbered/fill/boxfill 的字符串误用照此归一，勿拒。
+    if (typeof item === "string") item = { before: item }
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new WorksheetFormatError(`${at}.items[${k}] must be an object`)
     }
