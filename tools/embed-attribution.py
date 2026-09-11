@@ -71,13 +71,28 @@ def chunks_of(text):
     return raw
 
 def load_cache():
-    cache = {}
+    """容错读缓存（§六 Minor 加固）：跳过截断/残行并报数；条目带 mtime 时
+    与盘上文件比对，源文件已变则视为过期（重新嵌入）。旧条目无 mtime 照收
+    （legacy），仅新写入条目起启用失效判定。"""
+    cache, bad = {}, 0
     if CACHE.exists():
         for line in open(CACHE):
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 o = json.loads(line)
-                cache[o["rel"]] = o["vecs"]
+            except json.JSONDecodeError:
+                bad += 1  # 崩溃中断的尾行/残行——跳过不致命
+                continue
+            rel = o["rel"]
+            f = ROOT / rel
+            if "mtime" in o and f.exists() and abs(f.stat().st_mtime - o["mtime"]) > 1:
+                bad += 1  # 源文件已变——缓存过期
+                continue
+            cache[rel] = o["vecs"]
+    if bad:
+        print(f"cache: skipped {bad} stale/corrupt entries")
     return cache
 
 def main():
@@ -160,7 +175,11 @@ def main():
                 for i in range(0, len(cs), BATCH):
                     vecs.extend(embed_batch(cs[i:i + BATCH], key))
                 cache[rel] = vecs
-                cf.write(json.dumps({"rel": rel, "vecs": vecs}) + "\n")
+                try:
+                    mtime = (ROOT / rel).stat().st_mtime
+                except OSError:
+                    mtime = 0
+                cf.write(json.dumps({"rel": rel, "mtime": mtime, "vecs": vecs}) + "\n")
                 done += 1
                 if done % 50 == 0:
                     print(f"  {done}/{len(todo)} files")
@@ -203,24 +222,44 @@ def main():
             continue
         rank = sorted(sims.items(), key=lambda x: -x[1])
         top, r2 = rank[0], (rank[1] if len(rank) > 1 else (None, 0.0))
+        # §六 I-2 扩量加固：sim 门单独无效（wrong≥0.70 有 7/26）、margin 门薄——
+        # 同书（raw/sources/<Book>/ 同目录）top2 对必须落人工门，不得自动执行
+        def same_book(a, b):
+            pa, pb = Path(a).parent, Path(b).parent
+            return (a != b and pa == pb
+                    and pa.as_posix().startswith("raw/sources/")
+                    and pa.as_posix().count("/") == 2)
+        gate = "SAME-BOOK-PAIR-HUMAN-GATE" if (r2[0] and same_book(top[0], r2[0])) else "PASS"
         trow = targets[p]
         if args.recheck_weak:
             # NEAR-TIE 复裁决：chosen=当前写库值；SWAP 门与主轮同（margin≥0.10 & sim≥0.70）
+            verdict = ("KEEP-EMBED" if top[0] == trow["chosen"]
+                       else ("SWAP-PROPOSE" if top[1] >= 0.70 and top[1] - r2[1] >= 0.10
+                             else "STILL-TIED"))
+            if verdict == "SWAP-PROPOSE" and gate != "PASS":
+                verdict = "SWAP-HOLD-GATE"
             rows.append({"path": p, "title": trow.get("title", ""), "chosen": trow["chosen"],
                          "chosen_comb": trow["chosen_comb"],
                          "embed_rank1": top[0], "embed_sim": round(top[1], 4),
                          "runner": r2[0] or "", "runner_sim": round(r2[1], 4),
-                         "margin": round(top[1] - r2[1], 4),
-                         "verdict": ("KEEP-EMBED" if top[0] == trow["chosen"]
-                                     else ("SWAP-PROPOSE" if top[1] >= 0.70 and top[1] - r2[1] >= 0.10
-                                           else "STILL-TIED"))})
+                         "margin": round(top[1] - r2[1], 4), "gate": gate, "verdict": verdict})
             continue
         rows.append({"path": p, "class": trow["class"], "v4_chosen": trow["chosen"],
                      "v4_score": trow["score"],
                      "embed_rank1": top[0], "embed_sim": round(top[1], 4),
                      "embed_sim3": round(float(np.mean(sorted(sims.values(), reverse=True)[:3])), 4),
                      "runner": r2[0] or "", "runner_sim": round(r2[1], 4),
-                     "margin": round(top[1] - r2[1], 4), "agree_v4": int(top[0] == trow["chosen"])})
+                     "margin": round(top[1] - r2[1], 4), "gate": gate,
+                     "agree_v4": int(top[0] == trow["chosen"])})
+    dropped = [p for p in sorted(targets) if p not in {r["path"] for r in rows}]
+    if dropped:
+        with open(OUT / ("embed-dropped-neartie.csv" if args.recheck_weak else "embed-dropped.csv"),
+                  "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["path", "reason"])
+            for p in dropped:
+                w.writerow([p, "no-page-vectors-or-no-scored-candidates"])
+        print(f"dropped (无向量/无候选): {len(dropped)} -> 清单已落盘")
     fout = OUT / ("embed-neartie.csv" if args.recheck_weak else "embed-proposal.csv")
     with open(fout, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
