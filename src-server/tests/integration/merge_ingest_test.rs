@@ -475,7 +475,8 @@ async fn t8_single_source_regeneration_replaces() {
 }
 
 /// case 4：A→B→A2 序列——B 撞入融合后，A 改写重摄（A2 对 AB 融合），
-/// B 内容存续且无逐字膨胀、sources 保持两源并集。#[tokio::test]
+/// B 内容存续且无逐字膨胀、sources 保持两源并集。
+#[tokio::test]
 #[ignore = "requires PG + Redis"]
 async fn t8_sequence_a_b_a2_preserves_b() {
     let src_a = "raw/sources/t8-book/A.md";
@@ -525,6 +526,16 @@ async fn t8_sequence_a_b_a2_preserves_b() {
         sources,
         serde_json::json!([src_a, src_b]),
         "A2 重摄后 sources 保持两源并集"
+    );
+    assert!(
+        r3.merged_pages.iter().any(|p| p == page),
+        "job A2 应走 merge（existing {src_a},{src_b} 与 incoming {src_a} 集合不等），got: {:?}",
+        r3.merged_pages
+    );
+    assert!(
+        !t8_has_warning(&r3, "fallback replace"),
+        "job A2 warnings 不应含 fallback replace: {:?}",
+        r3.warnings
     );
     crate::teardown_test_data(&env.state).await;
     env.stub.abort(); // 收掉进程内 stub（兼读字段，免 dead_code）
