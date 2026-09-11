@@ -17,6 +17,7 @@
 用法：
   python3 map-display-sources.py --dry-run            # 产 i9-mapping.csv（只读）
   python3 map-display-sources.py --v3 --dry-run       # v3 确定解（§九 I-1 三修）
+  python3 map-display-sources.py --v4 --dry-run       # v4 四族规则（§十一 处方 3）
   python3 map-display-sources.py --apply <冻结mapping> # I1c：只消费显式冻结件
 输出：~/kb-dumps/20260911-sources-backfill/{i9*-mapping-<时间戳>,i9*-misses-<时间戳>}.csv
 （时间戳产物名：固定名无条件覆写曾把已应用的冻结件自毁为空，§十一跟进封堵）
@@ -88,6 +89,20 @@ def resolve_v2(entry, disk_by_book, disk_all, transcripts):
         return f"sources/transcripts/{entry}.md"
     return None
 
+def _split_book(entry, books):
+    """大小写不敏感最长前缀切分；返回 (book, rest)。rest 已剥前导分隔符与尾部
+    .md、未归一化；裸书名 rest=""；无书前缀 book=None。（v3/v4 共用解析）"""
+    el = entry.lower()
+    book = next((b for b in books if el.startswith(b.lower())), None)
+    if not book:
+        return None, None
+    rest = entry[len(book):]
+    if rest[:1] in (" ", "-", "_", "/", "·", "：", ":", "—"):
+        rest = rest[1:].strip()
+    if rest:
+        rest = re.sub(r"\.md$", "", rest, flags=re.IGNORECASE)   # v3 ②
+    return book, rest
+
 def resolve_v3(entry, books, disk_by_book, transcripts):
     """v3 确定解（评审 §九 I-1 三修）：在 v2 门限语义上修三处——
 
@@ -100,15 +115,10 @@ def resolve_v3(entry, books, disk_by_book, transcripts):
     books=按名长降序预排序的书名清单（调用方一次排序，勿逐 entry 重算）。
     门限不变：目标盘上存在 + 精确或唯一前缀命中；裸书名（entry==book）仍策略性不动。
     """
-    el = entry.lower()
-    book = next((b for b in books if el.startswith(b.lower())), None)
-    if book:
-        rest = entry[len(book):]
-        if rest[:1] in (" ", "-", "_", "/", "·", "：", ":", "—"):
-            rest = rest[1:].strip()
-        if not rest:
-            return None                      # 裸书名：书级出处无文件精度，不动
-        rest = re.sub(r"\.md$", "", rest, flags=re.IGNORECASE)   # v3 ②
+    book, rest = _split_book(entry, books)
+    if book and not rest:
+        return None                      # 裸书名：书级出处无文件精度，不动
+    if book and rest:
         n = _norm(rest)
         if n:
             stems = disk_by_book[book]
@@ -130,6 +140,63 @@ def resolve_v3(entry, books, disk_by_book, transcripts):
         return f"sources/transcripts/{entry}"
     if not entry.endswith(".md") and f"{entry}.md" in transcripts:
         return f"sources/transcripts/{entry}.md"
+    return None
+
+def resolve_v4(entry, books, disk_by_book, transcripts):
+    """v4 四族规则（评审 §十一 处方 3）：v3 漏收的四类残渣，各立各形，全部要求
+    构造/变换候选在书内唯一命中（盘上存在门不变）；v3 规则先行，v4 只接 v3 漏——
+
+      R1 冒号标题尾   rest 截断至首个冒号再匹配（`… Ch04 Unit 2: Spending Money`）
+      R2 unit 缺连字符 unit(\\d) → unit-\\d 变体精确命中（`…ch10-unit8.md`）
+      R3 ETK-pp 构造  ChNN[ part-P] pp.A-B → ChNN-part-NN-pp-A-B（part 号==章号，
+                      pp 区间逐字对应；盘上 ETK 命名即此形）
+      R4 think2e 孤儿名 think2e-lN-videoscripts → 书内 ch*-lN-videoscripts 唯一
+    """
+    m = resolve_v3(entry, books, disk_by_book, transcripts)
+    if m:
+        return m
+    # R4：书前缀不匹配的孤儿名，形态自锚书
+    mv = re.match(r"^think2e-l(\d+)-videoscripts(\.md)?$", entry.lower())
+    if mv:
+        stems = disk_by_book.get("Think2e-Teaching-Notes", {})
+        hits = [s for k, s in stems.items()
+                if re.fullmatch(rf"ch\d+-l{mv.group(1)}-videoscripts", k)]
+        if len(hits) == 1:
+            return f"raw/sources/Think2e-Teaching-Notes/{hits[0]}.md"
+        return None
+    book, rest = _split_book(entry, books)
+    if not book or not rest:
+        return None
+    stems = disk_by_book[book]
+    # R1：冒号截断（截断发生在归一化前，冒号属标题尾非 stem 内容）
+    mcut = re.split(r"[:：]", rest, maxsplit=1)[0]
+    if mcut != rest:
+        n = _norm(mcut)
+        if n:
+            hits = [s for k, s in stems.items() if k == n]
+            if not hits and len(n) >= 4:
+                cand = [s for k, s in stems.items() if k.startswith(n)]
+                if len(cand) == 1:
+                    hits = cand
+            if len(hits) == 1:
+                return f"raw/sources/{book}/{hits[0]}.md"
+    n = _norm(rest)
+    if not n:
+        return None
+    # R2：unit 后缺连字符
+    n2 = re.sub(r"unit(\d)", r"unit-\1", n)
+    if n2 != n:
+        hits = [s for k, s in stems.items() if k == n2]
+        if len(hits) == 1:
+            return f"raw/sources/{book}/{hits[0]}.md"
+    # R3：ETK-pp 结构构造（构造即单候选，存在门==唯一门）
+    mp = re.match(r"^ch(\d+)(?:-part-(\d+))?-pp\.?(\d+)-(\d+)$", n)
+    if mp:
+        chap, part = mp.group(1), mp.group(2) or mp.group(1)
+        constructed = f"ch{int(chap):02d}-part-{int(part):02d}-pp-{mp.group(3)}-{mp.group(4)}"
+        hits = [s for k, s in stems.items() if k == constructed]
+        if len(hits) == 1:
+            return f"raw/sources/{book}/{hits[0]}.md"
     return None
 
 def psql(q):
@@ -173,6 +240,9 @@ def main():
     ap.add_argument("--v3", action="store_true",
                     help="确定性扩展层 v3（§九 I-1 三修）：T1 失配落 T2/T3 + rest 剥尾部 .md "
                          "+ 书名匹配大小写不敏感 + 分隔符补 /")
+    ap.add_argument("--v4", action="store_true",
+                    help="确定性扩展层 v4（§十一 处方 3，四族规则）：冒号截断 / unit 补连字符 / "
+                         "ETK-pp 构造 / think2e videoscripts 孤儿名；v3 规则先行")
     ap.add_argument("--apply", metavar="冻结mapping")
     ap.add_argument("--verify", metavar="mapping.csv",
                     help="映射校验（诚实分账，§九 C-1）：raw 目标=来源行实检；"
@@ -230,7 +300,7 @@ def main():
         return
 
     disk = build_index()
-    suffix = "-v3" if args.v3 else ("-v2" if args.v2 else "")
+    suffix = "-v4" if args.v4 else ("-v3" if args.v3 else ("-v2" if args.v2 else ""))
     pages = json.loads(psql(
         "SELECT coalesce(json_agg(t)::text,'[]') FROM (SELECT path, sources FROM wiki_pages "
         "WHERE project_id=614 AND NOT path LIKE 'wiki/%' AND jsonb_typeof(sources)='array' "
@@ -248,12 +318,14 @@ def main():
         while (OUT / f"{tag}-mapping.csv").exists():
             k += 1
             tag = f"i9{suffix}-{ts}.{k}"
-        if args.v2 or args.v3:
+        if args.v2 or args.v3 or args.v4:
             disk_by_book = build_disk_by_book()
             transcripts = build_transcript_index()
             books_sorted = sorted(disk_by_book.keys(), key=len, reverse=True)
             reason = "unresolved" + suffix
             def resolve_ext(e):
+                if args.v4:
+                    return resolve_v4(e, books_sorted, disk_by_book, transcripts)
                 if args.v3:
                     return resolve_v3(e, books_sorted, disk_by_book, transcripts)
                 return resolve_v2(e, disk_by_book, disk, transcripts)
