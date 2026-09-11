@@ -19,7 +19,7 @@
   python3 map-display-sources.py --apply <冻结mapping> # I1c：只消费显式冻结件
 输出：~/kb-dumps/20260911-sources-backfill/{i9-mapping,i9-misses}.csv
 """
-import argparse, csv, io, json, subprocess, sys
+import argparse, csv, io, json, re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path("/Users/berton/kb-storage/teams/916/projects/614")
@@ -125,9 +125,45 @@ def main():
     ap.add_argument("--v2", action="store_true",
                     help="确定性扩展层：最长前缀切分+stem 归一化+唯一命中门（§八 v2 材料）")
     ap.add_argument("--apply", metavar="冻结mapping")
+    ap.add_argument("--verify", metavar="mapping.csv",
+                    help="映射校验（诚实分账，§九 C-1）：raw 目标=来源行实检；"
+                         "transcripts 目标=文件名身份映射（转写为 frontmatter 形态、"
+                         "无来源行，只证存在性，不冒充来源行互证）")
     args = ap.parse_args()
-    if not args.dry_run and not args.apply:
-        sys.exit("refusing: 需显式 --dry-run 或 --apply <冻结mapping>")
+    if not args.dry_run and not args.apply and not args.verify:
+        sys.exit("refusing: 需显式 --dry-run / --apply <冻结mapping> / --verify <mapping.csv>")
+
+    if args.verify:
+        # §九 C-1 勘误后的诚实校验器：两类目标分账，不混计数
+        def norm_verify(s):
+            s = s.strip().lstrip(">").strip()
+            s = re.sub(r"^来源[:：]\s*", "", s)
+            s = s.lower().replace("·", "-")
+            s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", s)
+            return re.sub(r"-{2,}", "-", s).strip("-")
+        rows = list(csv.DictReader(open(args.verify)))
+        raw_pass = raw_fail = tid = 0
+        fails = []
+        for r in rows:
+            m = r["mapped"]
+            if m.startswith("raw/sources/"):
+                src = ROOT / m
+                line = src.read_text(errors="replace").split("\n", 1)[0] if src.exists() else ""
+                nl, nd = norm_verify(line), norm_verify(r["display"])
+                if nl.startswith(nd) or nd.startswith(nl):
+                    raw_pass += 1
+                else:
+                    raw_fail += 1
+                    fails.append((r["path"], r["display"], m, nl[:60], nd[:60]))
+            else:
+                # 文件名身份映射：转写文件无来源行（frontmatter 形态，全库 898
+                # 个转写含「来源：」行者 0）——存在性即身份，单独计账
+                tid += 1 if (ROOT / m).exists() else 0
+        print(f"raw 来源行实检: {raw_pass} pass / {raw_fail} fail")
+        print(f"transcripts 文件名身份: {tid}/{sum(1 for r in rows if r['mapped'].startswith('sources/transcripts/'))}")
+        for f in fails[:10]:
+            print("  FAIL", f)
+        return
 
     disk = build_index()
     suffix = "-v2" if args.v2 else ""
