@@ -59,8 +59,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--execute", action="store_true")
+    ap.add_argument("--enrich-unresolved", action="store_true",
+                    help="只重算未决集并写 unresolved-enriched.csv（含 second/second_score/margin，"
+                         "供 791 人工批）——不写 mapping.csv、不碰已评审归档件（I1c）")
     args = ap.parse_args()
     OUT.mkdir(exist_ok=True, parents=True)
+    if args.enrich_unresolved:
+        args.dry_run = True  # 复用匹配路径，仅输出物不同（见输出段）
     if args.execute:
         # I1c（评审）：执行只消费已评审的 mapping.csv——本分支不触达匹配逻辑，
         # 重算=覆写审计证据=评审失效；文件缺失即拒执行。
@@ -151,6 +156,14 @@ def main():
         # 原「best≥0.5 且 second≥0.4 → 双源并集」分支删除——首轮实测近并列
         # （margin<0.15）行双源分配不可靠（真源可能在 rank-2，rank-1 也可能是
         # 同书异章泛词伪源），近并列=探针无法区分的信号，一律落 unresolved 人工处置。
+        if args.enrich_unresolved:
+            # enrich 模式：不套判定规则，全量带 rank-2 证据落盘（791 人工批的裁定底稿）
+            unresolved.append({"path": pg["path"], "old": pg["old"],
+                               "best": best and best[0], "score": best and round(best[1], 3),
+                               "second": second and second[0], "second_score": second and round(second[1], 3),
+                               "margin": round((best[1] - second[1]) if (best and second) else (best[1] if best else 0), 3),
+                               "tier": tier})
+            continue
         if best and best[1] >= 0.6 and (not second or best[1] - second[1] >= 0.15):
             new = [best[0]]
         else:
@@ -161,6 +174,15 @@ def main():
                      "new": json.dumps(new, ensure_ascii=False),
                      "score": round(best[1], 3),
                      "margin": round(best[1] - (second[1] if second else 0), 3), "tier": tier})
+    if args.enrich_unresolved:
+        # enrich 模式：只写 unresolved-enriched.csv（mapping.csv 是已评审归档件，绝不覆写）
+        with open(OUT / "unresolved-enriched.csv", "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["path", "old", "best", "score",
+                                              "second", "second_score", "margin", "tier"])
+            w.writeheader()
+            w.writerows(unresolved)
+        print(f"enriched unresolved: {len(unresolved)}  (unresolved-enriched.csv in {OUT})")
+        return
     # 形态断言（评审 I1 验收线）：new 列必须 100% 项目相对路径形态
     bad_form = [r for r in rows
                 if not (r["new"].startswith('["sources/transcripts/') or r["new"].startswith('["raw/sources/'))]
