@@ -16,8 +16,9 @@
 
 用法：
   python3 map-display-sources.py --dry-run            # 产 i9-mapping.csv（只读）
+  python3 map-display-sources.py --v3 --dry-run       # v3 确定解（§九 I-1 三修）
   python3 map-display-sources.py --apply <冻结mapping> # I1c：只消费显式冻结件
-输出：~/kb-dumps/20260911-sources-backfill/{i9-mapping,i9-misses}.csv
+输出：~/kb-dumps/20260911-sources-backfill/{i9*-mapping,i9*-misses}.csv
 """
 import argparse, csv, io, json, re, subprocess, sys
 from pathlib import Path
@@ -33,8 +34,7 @@ MANUAL_FIXES = {
 }
 
 def _norm(s):
-    """stem 归一化：小写、空白/下划线→连字符、去尾标点。"""
-    import re
+    """stem 归一化：小写、空白/下划线→连字符、去尾标点。（v2 语义不变，保 --v2 可复现）"""
     s = s.strip().lower().replace("_", "-")
     s = re.sub(r"\s+", "-", s)
     return s.rstrip("-.,：:；;。")
@@ -86,6 +86,50 @@ def resolve_v2(entry, disk_by_book, disk_all, transcripts):
         return f"sources/transcripts/{entry}.md"
     return None
 
+def resolve_v3(entry, disk_by_book, transcripts):
+    """v3 确定解（评审 §九 I-1 三修）：在 v2 门限语义上修三处——
+
+      ① T1 stem 失配不再提前 return，落 T2/T3 兜底（v2 中 T2 贡献 0 的死代码根因，
+         实锺机制=v2 分隔符表漏 `/`，`Book/stem` 形态的 rest 带前导斜杠必然失配）；
+      ② rest 尾部 .md 先剥再归一化（`Book_Ch16-x.md` 形态 x~30；在 rest 上施行而非
+         _norm 内，保 _norm v2 语义不动）；
+      ③ 书名前缀匹配大小写不敏感（`think-teachers-l0-…` 形态 x~30）。
+    分隔符表补 `/`（T1 直吃半路径形态，T2 保持 byte-exact 兜底）。
+    门限不变：目标盘上存在 + 精确或唯一前缀命中；裸书名（entry==book）仍策略性不动。
+    """
+    books = sorted(disk_by_book.keys(), key=len, reverse=True)
+    el = entry.lower()
+    book = next((b for b in books if el.startswith(b.lower())), None)
+    if book:
+        rest = entry[len(book):]
+        if rest[:1] in (" ", "-", "_", "/", "·", "：", ":", "—"):
+            rest = rest[1:].strip()
+        if not rest:
+            return None                      # 裸书名：书级出处无文件精度，不动
+        rest = re.sub(r"\.md$", "", rest, flags=re.IGNORECASE)   # v3 ②
+        n = _norm(rest)
+        if n:
+            stems = disk_by_book[book]
+            hits = [s for k, s in stems.items() if k == n]
+            if not hits:
+                cand = [s for k, s in stems.items() if k.startswith(n)] if len(n) >= 4 else []
+                if len(cand) == 1:
+                    hits = cand
+            if len(hits) == 1:
+                return f"raw/sources/{book}/{hits[0]}.md"
+        # T1 失败 → 落 T2/T3（v3 ①），不再提前 return
+    # T2 半路径：<Book>/<stem>[.md]
+    if "/" in entry and not entry.endswith("/"):
+        cand = f"raw/sources/{entry}" if entry.endswith(".md") else f"raw/sources/{entry}.md"
+        if (ROOT / cand).exists():
+            return cand
+    # T3 孤儿 .md / 无后缀转写名
+    if entry.endswith(".md") and entry in transcripts:
+        return f"sources/transcripts/{entry}"
+    if not entry.endswith(".md") and f"{entry}.md" in transcripts:
+        return f"sources/transcripts/{entry}.md"
+    return None
+
 def psql(q):
     r = subprocess.run(PSQL + [q], capture_output=True, text=True)
     r.check_returncode()
@@ -124,6 +168,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--v2", action="store_true",
                     help="确定性扩展层：最长前缀切分+stem 归一化+唯一命中门（§八 v2 材料）")
+    ap.add_argument("--v3", action="store_true",
+                    help="确定性扩展层 v3（§九 I-1 三修）：T1 失配落 T2/T3 + rest 剥尾部 .md "
+                         "+ 书名匹配大小写不敏感 + 分隔符补 /")
     ap.add_argument("--apply", metavar="冻结mapping")
     ap.add_argument("--verify", metavar="mapping.csv",
                     help="映射校验（诚实分账，§九 C-1）：raw 目标=来源行实检；"
@@ -140,6 +187,7 @@ def main():
         def norm_verify(s):
             s = s.strip().lstrip(">").strip()
             s = re.sub(r"^来源[:：]\s*", "", s)
+            s = re.sub(r"\.md\s*$", "", s, flags=re.IGNORECASE)   # display 尾 .md 非来源行内容（v3 ② 同族）
             s = s.lower().replace("·", "-")
             s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", s)
             return re.sub(r"-{2,}", "-", s).strip("-")
@@ -180,7 +228,7 @@ def main():
         return
 
     disk = build_index()
-    suffix = "-v2" if args.v2 else ""
+    suffix = "-v3" if args.v3 else ("-v2" if args.v2 else "")
     pages = json.loads(psql(
         "SELECT coalesce(json_agg(t)::text,'[]') FROM (SELECT path, sources FROM wiki_pages "
         "WHERE project_id=614 AND NOT path LIKE 'wiki/%' AND jsonb_typeof(sources)='array' "
@@ -189,14 +237,18 @@ def main():
 
     if args.dry_run:
         mapping, misses, bare = [], [], 0
-        if args.v2:
+        if args.v2 or args.v3:
             disk_by_book = build_disk_by_book()
             transcripts = build_transcript_index()
+            def resolve_ext(e):
+                if args.v3:
+                    return resolve_v3(e, disk_by_book, transcripts)
+                return resolve_v2(e, disk_by_book, disk, transcripts)
             for pg in pages:
                 for e in pg["sources"]:
                     if not e or e.startswith(("sources/", "raw/")) or e == "source.md":
                         continue
-                    m = resolve(e, disk) or resolve_v2(e, disk_by_book, disk, transcripts)
+                    m = resolve(e, disk) or resolve_ext(e)
                     if m:
                         mapping.append({"path": pg["path"], "display": e, "mapped": m})
                     else:
@@ -237,7 +289,8 @@ def main():
     r = subprocess.run(["docker", "exec", "src-server-postgres-1", "psql", "-U", "llmwiki",
                         "-d", "llmwiki", "-c", q], capture_output=True, text=True)
     r.check_returncode()
-    (OUT / "i9-apply-before.csv").write_text(r.stdout + "\n")
+    backup = OUT / f"{frozen.stem}-before.csv"   # 备份随冻结件命名，不再覆写历史件
+    backup.write_text(r.stdout + "\n")
     rows = list(csv.reader(io.StringIO(r.stdout)))
     assert all(len(x) == 6 for x in rows) and len(rows) == len(fixes), \
         (len(rows), sorted({len(x) for x in rows}))
