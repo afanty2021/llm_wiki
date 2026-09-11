@@ -72,8 +72,10 @@ def main():
         with open(OUT / "affected-rows.csv", "w") as f:
             for i in range(0, len(rows), 200):
                 a = ",".join("'%s'" % r["path"].replace("'", "''") for r in rows[i:i+200])
+                # I-1（收官评审）：psql() strip 尾换行，批间必须补 \n 否则 200/201 行熔接
                 f.write(psql(f"COPY (SELECT path,title,page_type,frontmatter,sources,content FROM wiki_pages "
                              f"WHERE project_id=614 AND path IN ({a})) TO STDOUT WITH CSV"))
+                f.write("\n")
         done = 0
         for r in rows:
             newj = json.dumps(json.loads(r["new"]), ensure_ascii=False).replace("'", "''")
