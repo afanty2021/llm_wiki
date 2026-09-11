@@ -419,6 +419,23 @@ export class LlmWikiApiClient {
     }
   }
 
+  /**
+   * GET /api/v1/projects/:project_id/page?path= → wiki_pages 单页（DB 页，非 storage 源文件）。
+   * search 返回的 path 就是这个空间的——storage 里没有对应文件，readFileSrc 对页路径恒 404。
+   * 404 → ApiNotFoundError（调用方据此分流/回落）。
+   */
+  async readPageSrc(projectId: number, pagePath: string, options: { token?: string } = {}): Promise<{ path: string; title: string; content: string; pageType?: string; sources: unknown[] }> {
+    const params = new URLSearchParams({ path: pagePath })
+    const json = await this.requestObject(`/api/v1/projects/${projectId}/page?${params.toString()}`, { token: options.token })
+    return {
+      path: typeof json.path === "string" ? json.path : pagePath,
+      title: typeof json.title === "string" ? json.title : "",
+      content: typeof json.content === "string" ? json.content : "",
+      pageType: typeof json.page_type === "string" ? json.page_type : undefined,
+      sources: Array.isArray(json.sources) ? json.sources : [],
+    }
+  }
+
   /** POST /api/v1/auth/refresh {refresh_token} → AuthResponse（旧 refresh 即刻吊销）。 */
   async authRefresh(refreshToken: string): Promise<ApiAuthResponse> {
     return parseAuthResponse(await this.requestObject("/api/v1/auth/refresh", {

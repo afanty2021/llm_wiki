@@ -256,12 +256,12 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "llm_wiki_read_file",
-      description: "Read a text file from the training wiki project through the src-server API (GET /api/v1/files/:project_id/read?path=).",
+      description: "Read a wiki page (by the exact path returned by search — concepts/…, transcripts/…) or a source document (sources/…, raw/sources/…) from the training wiki project. Returns the page body with its source-document paths, useful for deeper quoting.",
       inputSchema: {
         type: "object",
         properties: {
           wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
-          path: { type: "string", description: "Project-relative file path, for example wiki/index.md." },
+          path: { type: "string", description: "Project-relative page or file path, exactly as returned by search (e.g. concepts/lexical-approach.md or sources/transcripts/….md)." },
         },
         required: ["path"],
         additionalProperties: false,
@@ -633,6 +633,20 @@ export function fileNotFoundText(relPath: string): string {
 }
 
 /**
+ * wiki 页读取的渲染：标题行 +（可选）类型/来源行 + 正文截断。sources 是 storage
+ * 路径（转写/书章原文）——本工具对它们走 ②回落读，模型要深挖原文时可拿去再读。
+ */
+export function formatWikiPageRead(relPath: string, page: { title: string; content: string; pageType?: string; sources: unknown[] }): string {
+  const heading = page.title || relPath
+  const metaParts = [
+    page.pageType ? `类型: ${page.pageType}` : null,
+    page.sources.length > 0 ? `来源原文: ${page.sources.map((s) => String(s)).join(", ")}` : null,
+  ].filter(Boolean)
+  const metaLine = metaParts.length > 0 ? `\n${metaParts.join(" | ")}\n` : "\n"
+  return `# ${heading}${metaLine}${truncateText(page.content, MAX_TEXT_BYTES)}`
+}
+
+/**
  * record_ask 拒绝的正常返回文案（isError=false）：空/无意义 payload 是应用级
  * 输入问题不是服务故障——抛 ToolArgumentError（-32602）会被 Hermes 熔断器计入，
  * 3 次即熔断 ~60s（同 read_file 404 前例，见上），弱模型连续传空 payload 会把
@@ -729,6 +743,17 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
   handlers.set("llm_wiki_read_file", async (args, meta) => {
     const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
     const relPath = stringArg(args.path, "path")
+    // ① 先查 wiki 页（DB）：search 返回的 path 是 wiki_pages 空间的（concepts/…、
+    //    transcripts/…），storage 里没有对应文件——旧实现直读 storage 对页路径恒 404，
+    //    教师回合每次 read_file 都被「未找到」拒绝（2026-09-11 根修）。
+    try {
+      const page = await callWithAccess(deps, ident.wecomUserid, (token) =>
+        deps.client.readPageSrc(deps.getProjectId(), relPath, { token }))
+      return withIdentitySource(textResult(formatWikiPageRead(relPath, page)), ident.mode)
+    } catch (err) {
+      if (!(err instanceof ApiNotFoundError)) throw err
+    }
+    // ② 页未命中 → 回落 storage 源文件读（sources/…、raw/sources/…，页 sources 列出的转写/书章原文）。
     try {
       const { path: filePath, content } = await callWithAccess(deps, ident.wecomUserid, (token) =>
         deps.client.readFileSrc(deps.getProjectId(), relPath, { token }))

@@ -362,29 +362,62 @@ test("llm_wiki_search（src-server 形态）: GET /api/v1/search?project_id&quer
   assert.ok(!text.includes("acc-tool"), "access token must never appear in tool output")
 })
 
-test("llm_wiki_read_file（src-server 形态）: GET /api/v1/files/:id/read?path=", async () => {
+test("llm_wiki_read_file: search 返回的 DB 页路径 → 页命中（正文+类型+来源原文），不再打 storage 读", async () => {
   const calls: RecordedCall[] = []
   const fetchImpl = mockFetch([
     {
-      when: (c) => c.url.startsWith(`${BASE}/api/v1/files/42/read`),
-      then: () => ({ body: { path: "wiki/a.md", content: "# Hello", extension: "md" } }),
+      when: (c) => c.url.includes("/api/v1/projects/42/page"),
+      then: () => ({ body: { path: "concepts/lexical-approach.md", title: "词汇法", content: "# 词汇法\n正文内容", page_type: "concept", sources: ["sources/transcripts/a.md"] } }),
     },
   ], calls)
 
   const handlers = makeHandlers(fetchImpl)
-  const result = await handlers.get("llm_wiki_read_file")!({ wecom_userid: "t1", path: "wiki/a.md" })
+  const result = await handlers.get("llm_wiki_read_file")!({ wecom_userid: "t1", path: "concepts/lexical-approach.md" })
 
-  assert.equal(calls[0]?.url, `${BASE}/api/v1/files/42/read?${new URLSearchParams({ path: "wiki/a.md" })}`)
-  assert.equal(calls[0]?.method, "GET")
-  assert.equal(calls[0]?.headers.Authorization, "Bearer acc-tool")
-  assert.equal(toolText(result), "# wiki/a.md\n\n# Hello")
+  const pageCall = calls.find((c) => c.url.includes("/api/v1/projects/42/page"))!
+  assert.equal(pageCall.url, `${BASE}/api/v1/projects/42/page?${new URLSearchParams({ path: "concepts/lexical-approach.md" })}`)
+  assert.equal(pageCall.method, "GET")
+  assert.equal(pageCall.headers.Authorization, "Bearer acc-tool")
+  assert.equal(calls.filter((c) => c.url.includes("/api/v1/files/42/read")).length, 0, "页命中不得再打 storage 读")
+  const text = toolText(result)
+  assert.ok(text.startsWith("# 词汇法"), text)
+  assert.ok(text.includes("类型: concept"), text)
+  assert.ok(text.includes("来源原文: sources/transcripts/a.md"), text)
+  assert.ok(text.includes("正文内容"), text)
+  // identity_source 尾块保留（system 模式：无 meta + 显式 wecom_userid）
+  assert.deepEqual(result.content.slice(1).map((block) => block.text), ['identity_source: "system"'])
+})
+
+test("llm_wiki_read_file: 页 404 → 回落 storage 源文件读（旧语义保持）", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url.includes("/api/v1/projects/42/page"),
+      then: () => ({ status: 404, body: { error: { code: "NOT_FOUND", message: "page" } } }),
+    },
+    {
+      when: (c) => c.url.includes("/api/v1/files/42/read"),
+      then: () => ({ body: { path: "sources/transcripts/a.md", content: "# Hello", extension: "md" } }),
+    },
+  ], calls)
+
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("llm_wiki_read_file")!({ wecom_userid: "t1", path: "sources/transcripts/a.md" })
+
+  assert.equal(toolText(result), "# sources/transcripts/a.md\n\n# Hello")
+  assert.equal(calls.filter((c) => c.url.includes("/api/v1/projects/42/page")).length, 1)
+  assert.equal(calls.filter((c) => c.url.includes("/api/v1/files/42/read")).length, 1)
 })
 
 // ── T8 周报 fire#1 根因：read_file 404 防熔断误伤 ──
 
-test("llm_wiki_read_file 404 → 正常返回（isError=false）+ 未找到文案，不抛 MCP 错误", async () => {
+test("llm_wiki_read_file 双 404（页+storage）→ 正常返回（isError=false）+ 未找到文案，不抛 MCP 错误", async () => {
   const calls: RecordedCall[] = []
   const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url.includes("/api/v1/projects/42/page"),
+      then: () => ({ status: 404, body: { error: { code: "NOT_FOUND", message: "page" } } }),
+    },
     {
       when: (c) => c.url.startsWith(`${BASE}/api/v1/files/42/read`),
       then: () => ({ status: 404, body: { error: { code: "FILE_NOT_FOUND", message: "File not found" } } }),
@@ -401,21 +434,22 @@ test("llm_wiki_read_file 404 → 正常返回（isError=false）+ 未找到文�
   assert.ok(text.includes("search 返回的确切 path"), text)
   // identity_source 尾块保留（system 模式：无 meta + 显式 wecom_userid）
   assert.deepEqual(result.content.slice(1).map((block) => block.text), ['identity_source: "system"'])
-  // 404 不吃 401 重试逻辑：只发一次读请求
+  // 页 1 次 + storage 1 次：404 不吃 401 重试逻辑
+  assert.equal(calls.filter((c) => c.url.includes("/api/v1/projects/42/page")).length, 1)
   assert.equal(calls.filter((c) => c.url.startsWith(`${BASE}/api/v1/files/42/read`)).length, 1)
 })
 
-test("llm_wiki_read_file 500 → 仍抛错（isError=true 路径保持，服务故障照常计熔断）", async () => {
+test("llm_wiki_read_file 页接口 500 → 仍抛错（服务故障不回落 storage，照常计熔断）", async () => {
   const fetchImpl = mockFetch([
     {
-      when: (c) => c.url.startsWith(`${BASE}/api/v1/files/42/read`),
+      when: (c) => c.url.includes("/api/v1/projects/42/page"),
       then: () => ({ status: 500, body: { error: { code: "INTERNAL", message: "boom" } } }),
     },
   ], [])
 
   const handlers = makeHandlers(fetchImpl)
   await assert.rejects(
-    handlers.get("llm_wiki_read_file")!({ wecom_userid: "t1", path: "wiki/a.md" }),
+    handlers.get("llm_wiki_read_file")!({ wecom_userid: "t1", path: "concepts/a.md" }),
     /LLM Wiki API 500: boom/,
   )
 })
