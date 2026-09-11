@@ -12,7 +12,10 @@ sim(page,file) = max(页 chunk × 文件 chunk) 余弦（max-pooling 对归因�
 用法：
   python3 embed-attribution.py --prepare   # 候选文件+标定文件现算向量入缓存
   python3 embed-attribution.py --score     # 页×候选 cosine 排序 + 标定表
-输出：embed-proposal.csv / embed-calibration.csv（均在 ~/kb-dumps/20260911-sources-backfill/）
+  python3 embed-attribution.py --recheck-weak  # §五 I-1：NEAR-TIE 53 页（已写库
+                               # 弱证据滞留）embedding 复裁决 -> embed-neartie.csv
+输出：embed-proposal.csv / embed-neartie.csv / embed-calibration.csv
+      （均在 ~/kb-dumps/20260911-sources-backfill/）
 """
 import argparse, csv, json, math, subprocess, sys, time
 from pathlib import Path
@@ -81,18 +84,42 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prepare", action="store_true")
     ap.add_argument("--score", action="store_true")
+    ap.add_argument("--recheck-weak", action="store_true",
+                    help="§五 I-1：对 recheck NEAR-TIE 桶（已写库弱证据页）做 embedding 复裁决")
     args = ap.parse_args()
-    if not args.prepare and not args.score:
-        sys.exit("refusing: 需显式 --prepare 或 --score")
+    if not args.prepare and not args.score and not args.recheck_weak:
+        sys.exit("refusing: 需显式 --prepare / --score / --recheck-weak")
 
-    v4 = {r["path"]: r for r in csv.DictReader(open(OUT / "proposal-v4.csv"))
-          if r["class"] in ("PROBE-RESOLVED", "WEAK", "AMBIGUOUS")}
+    def dt(s):
+        from datetime import datetime
+        return datetime.fromisoformat(s.replace(" ", "T").replace("+00", "+00:00"))
+
     broken = {r["path"] for r in json.loads(psql(
         "SELECT coalesce(json_agg(t)::text,'[]') FROM (SELECT path FROM wiki_pages "
         "WHERE project_id=614 AND NOT path LIKE 'wiki/%' "
         "AND (sources IS NULL OR sources='[]'::jsonb OR sources::text LIKE '%\"source.md\"%')) t"))}
-    targets = {p: r for p, r in v4.items() if p in broken and r["candidates_list"]}
-    print(f"targets: {len(targets)} (v4 {len(v4)} ∩ broken {len(broken)})")
+    if args.recheck_weak:
+        # §五 I-1：NEAR-TIE 桶=已写库的弱证据滞留种群，embedding 复裁决
+        targets = {r["path"]: r for r in csv.DictReader(open(OUT / "recheck-executed.csv"))
+                   if r["verdict"] == "NEAR-TIE"}
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location(
+            "rwa", Path(__file__).resolve().parent / "recheck-window-attribution.py")
+        _rwa = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_rwa)
+        jobs = _rwa.load_jobs()
+        cand_of = {}
+        for p in targets:
+            ca = psql("SELECT created_at::text FROM wiki_pages WHERE project_id=614 "
+                      "AND path='%s'" % p.replace("'", "''"))
+            cands, _ = _rwa.window_candidates(dt(ca), jobs)
+            cand_of[p] = cands
+    else:
+        v4 = {r["path"]: r for r in csv.DictReader(open(OUT / "proposal-v4.csv"))
+              if r["class"] in ("PROBE-RESOLVED", "WEAK", "AMBIGUOUS")}
+        targets = {p: r for p, r in v4.items() if p in broken and r["candidates_list"]}
+        cand_of = {p: [x for x in r["candidates_list"].split(";") if x] for p, r in targets.items()}
+    print(f"targets: {len(targets)} (broken={len(broken)})")
 
     # 标定文件：历史改正批的 add/remove + 信任 chosen（执行 429 未被改正者）
     calib_files = set()
@@ -113,9 +140,9 @@ def main():
             for e in removed:
                 pairs.append((p, e, "wrong")); calib_files.add(e)
 
-    files = calib_files
-    for r in targets.values():
-        files.update(x for x in r["candidates_list"].split(";") if x)
+    files = set(calib_files)
+    for p, cl in cand_of.items():
+        files.update(cl)
     files = {f for f in files if (ROOT / f).exists()}
     print("files to embed:", len(files))
 
@@ -139,7 +166,7 @@ def main():
                     print(f"  {done}/{len(todo)} files")
         print("prepare done")
 
-    if not args.score:
+    if not args.score and not args.recheck_weak:
         return
 
     # 页向量
@@ -168,7 +195,7 @@ def main():
         P = np.vstack(pv)
         P /= (np.linalg.norm(P, axis=1, keepdims=True) + 1e-9)
         sims = {}
-        for rel in targets[p]["candidates_list"].split(";"):
+        for rel in cand_of.get(p, []):
             M = mat(rel)
             if M is not None:
                 sims[rel] = float((P @ M.T).max())
@@ -176,17 +203,34 @@ def main():
             continue
         rank = sorted(sims.items(), key=lambda x: -x[1])
         top, r2 = rank[0], (rank[1] if len(rank) > 1 else (None, 0.0))
-        v4row = targets[p]
-        rows.append({"path": p, "class": v4row["class"], "v4_chosen": v4row["chosen"],
-                     "v4_score": v4row["score"],
+        trow = targets[p]
+        if args.recheck_weak:
+            # NEAR-TIE 复裁决：chosen=当前写库值；SWAP 门与主轮同（margin≥0.10 & sim≥0.70）
+            rows.append({"path": p, "title": trow.get("title", ""), "chosen": trow["chosen"],
+                         "chosen_comb": trow["chosen_comb"],
+                         "embed_rank1": top[0], "embed_sim": round(top[1], 4),
+                         "runner": r2[0] or "", "runner_sim": round(r2[1], 4),
+                         "margin": round(top[1] - r2[1], 4),
+                         "verdict": ("KEEP-EMBED" if top[0] == trow["chosen"]
+                                     else ("SWAP-PROPOSE" if top[1] >= 0.70 and top[1] - r2[1] >= 0.10
+                                           else "STILL-TIED"))})
+            continue
+        rows.append({"path": p, "class": trow["class"], "v4_chosen": trow["chosen"],
+                     "v4_score": trow["score"],
                      "embed_rank1": top[0], "embed_sim": round(top[1], 4),
                      "embed_sim3": round(float(np.mean(sorted(sims.values(), reverse=True)[:3])), 4),
                      "runner": r2[0] or "", "runner_sim": round(r2[1], 4),
-                     "margin": round(top[1] - r2[1], 4), "agree_v4": int(top[0] == v4row["chosen"])})
-    with open(OUT / "embed-proposal.csv", "w", newline="") as f:
+                     "margin": round(top[1] - r2[1], 4), "agree_v4": int(top[0] == trow["chosen"])})
+    fout = OUT / ("embed-neartie.csv" if args.recheck_weak else "embed-proposal.csv")
+    with open(fout, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
+    if args.recheck_weak:
+        from collections import Counter
+        print("verdicts:", dict(Counter(r["verdict"] for r in rows)))
+        print("->", fout)
+        return
 
     # 标定表
     for p, rel, label in pairs:

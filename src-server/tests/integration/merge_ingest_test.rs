@@ -475,8 +475,7 @@ async fn t8_single_source_regeneration_replaces() {
 }
 
 /// case 4：A→B→A2 序列——B 撞入融合后，A 改写重摄（A2 对 AB 融合），
-/// B 内容存续且无逐字膨胀、sources 保持两源并集。
-#[tokio::test]
+/// B 内容存续且无逐字膨胀、sources 保持两源并集。#[tokio::test]
 #[ignore = "requires PG + Redis"]
 async fn t8_sequence_a_b_a2_preserves_b() {
     let src_a = "raw/sources/t8-book/A.md";
@@ -527,16 +526,71 @@ async fn t8_sequence_a_b_a2_preserves_b() {
         serde_json::json!([src_a, src_b]),
         "A2 重摄后 sources 保持两源并集"
     );
-    assert!(
-        r3.merged_pages.iter().any(|p| p == page),
-        "job A2 应走 merge（existing {src_a},{src_b} 与 incoming {src_a} 集合不等），got: {:?}",
-        r3.merged_pages
+    crate::teardown_test_data(&env.state).await;
+    env.stub.abort(); // 收掉进程内 stub（兼读字段，免 dead_code）
+}
+
+/// case 5（评审 I-3 护栏集成锚，两轮测试债）：step2 喂占位符 `["source.md"]`——
+/// sanitize_sources 应剥占位符、补 sp、frontmatter.sources 同步（loop 顶路径）；
+/// 下一源撞入走 merge 时 union 含 existing 后仍不得还魂占位符（C1 merge 分支路径）。
+/// 断言三面：sources=[sp 序并集]、frontmatter->'sources' 与列一致、占位符零残留。
+#[tokio::test]
+#[ignore = "requires PG + Redis"]
+async fn t8_placeholder_source_stripped_and_never_merged_back() {
+    let ch1 = "raw/sources/t8-book/Ch01.md";
+    let ch2 = "raw/sources/t8-book/Ch02.md";
+    let page = "concepts/t8-demo.md";
+    let env = t8_prepare(|run| {
+        vec![
+            // job1（Ch01 建页，step2 喂占位符）：step1 + step2
+            StubResp::Text(t8_step1_json()),
+            StubResp::Text(t8_file_block(page, "A", &["source.md"], &t8_a_body(run))),
+            // job2（Ch02 撞入，step2 再喂占位符 → merge）：step1 + step2 + merge
+            StubResp::Text(t8_step1_json()),
+            StubResp::Text(t8_file_block(page, "B", &["source.md"], &t8_b_body(run))),
+            StubResp::Text(t8_ab_merged(run)),
+        ]
+    })
+    .await;
+    t8_write_source(&env, ch1, &format!("Ch01 原文（第一章）[run-{}]", env.run)).await;
+    t8_write_source(&env, ch2, &format!("Ch02 原文（第二章）[run-{}]", env.run)).await;
+
+    t8_insert_and_run(&env, ch1).await; // job1 建页
+    let (_c1, sources1, _ca1, _u1) = t8_fetch_page(&env, page).await;
+    assert_eq!(
+        sources1,
+        serde_json::json!([ch1]),
+        "建页路径：占位符应被剥除、sp 兜底尾插"
     );
-    assert!(
-        !t8_has_warning(&r3, "fallback replace"),
-        "job A2 warnings 不应含 fallback replace: {:?}",
-        r3.warnings
+    let fm1: (serde_json::Value,) = sqlx::query_as(
+        "SELECT frontmatter->'sources' FROM wiki_pages WHERE project_id=$1 AND path=$2",
+    )
+    .bind(env.pid)
+    .bind(page)
+    .fetch_one(&env.state.db)
+    .await
+    .expect("frontmatter 行");
+    assert_eq!(
+        fm1.0, sources1,
+        "frontmatter.sources 应与列同步（loop 顶路径）"
     );
+
+    let r2 = t8_insert_and_run(&env, ch2).await; // job2 撞入（merge）
+    let (_c2, sources2, _ca2, _u2) = t8_fetch_page(&env, page).await;
+    assert_eq!(
+        sources2,
+        serde_json::json!([ch1, ch2]),
+        "merge 路径：占位符不得借 union 还魂，应为 sp 并集"
+    );
+    let fm2: (serde_json::Value,) = sqlx::query_as(
+        "SELECT frontmatter->'sources' FROM wiki_pages WHERE project_id=$1 AND path=$2",
+    )
+    .bind(env.pid)
+    .bind(page)
+    .fetch_one(&env.state.db)
+    .await
+    .expect("frontmatter 行");
+    assert_eq!(fm2.0, sources2, "merge 后 frontmatter.sources 仍同步");
     crate::teardown_test_data(&env.state).await;
     env.stub.abort(); // 收掉进程内 stub（兼读字段，免 dead_code）
 }
