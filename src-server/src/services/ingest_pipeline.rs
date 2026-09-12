@@ -516,6 +516,57 @@ fn sanitize_sources(sources: &mut serde_json::Value, sp: &str) {
     *sources = serde_json::json!(out);
 }
 
+/// 护栏 v2（2026-09-12 ECE 批根因收口，评审两约束随行）：incoming sources 数组
+/// 只保路径形态（`sources/`、`raw/` 前缀），返回 (kept, stripped)——非路径显示名
+/// （如 `Everyone-Can-Use-English Ch03`）归 stripped，由调用方搬 frontmatter.citations
+/// 出口（约束②：内容性引文如词典书引不丢弃，与收官「留档」政策一致）。空串/占位符
+/// （source.md）无引文价值，直接丢弃（v1 语义）。
+/// ⚠约束①：只滤 incoming、必须在 union 之前调用。merge 分支（C1）的 sanitize_sources
+/// 作用于并集后数组（含存量页 I9 政策留守的书级引用/引文），严禁改挂本函数的
+/// 全剥语义——否则每次合并都会静默清掉存量非路径条目。
+fn sanitize_incoming_sources(sources: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut stripped: Vec<String> = Vec::new();
+    if let Some(arr) = sources.as_array() {
+        for x in arr {
+            if let Some(s) = x.as_str() {
+                if s.is_empty() || s == "source.md" {
+                    continue;
+                }
+                if s.starts_with("sources/") || s.starts_with("raw/") {
+                    kept.push(s.to_string());
+                } else {
+                    stripped.push(s.to_string());
+                }
+            }
+        }
+    }
+    (kept, stripped)
+}
+
+/// 护栏 v2 约束②出口：stripped 非路径条目并入 frontmatter.citations（去重保序、
+/// 缺 citations 键则建、frontmatter 非对象则重建为对象）。stripped 空 no-op。
+fn relocate_citations(frontmatter: &mut serde_json::Value, stripped: &[String]) {
+    if stripped.is_empty() {
+        return;
+    }
+    if !frontmatter.is_object() {
+        *frontmatter = serde_json::json!({});
+    }
+    let obj = frontmatter.as_object_mut().expect("just normalized to object");
+    let mut cur: Vec<String> = obj
+        .get("citations")
+        .and_then(|c| c.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    for s in stripped {
+        if !cur.iter().any(|o| o == s) {
+            cur.push(s.clone());
+        }
+    }
+    obj.insert("citations".into(), serde_json::json!(cur));
+}
+
 /// R10（m3-impl-review 次级收编）：step1 merged 结果形状守卫——非对象直接报错
 /// （走解析失败路径），不再放行进 step2。Task 6 r3 时仅跳过缓存写但仍流向 step2：
 /// 非对象分析（"[]"/"null"/标量）进 step2 会基于空分析产出无效 wiki 页；宁可本次
@@ -1624,9 +1675,26 @@ pub async fn run_ingest_job(
                     .collect();
                 let mut outcomes: Vec<PageWriteOutcome> = Vec::with_capacity(pages_to_write);
                 for page in processed.pages.iter_mut() {
-                    // sources 归因兜底：LLM frontmatter 占位符/缺省 → 剥占位 + union sp。
+                    // 护栏 v2（2026-09-12 ECE 批根因收口）：incoming 数组只保路径
+                    // 形态，非路径显示名搬 citations 出口——约束①：只滤 incoming、
+                    // 必须在 union 之前；下方 merge 口的 sanitize_sources（C1）作用
+                    // 于并集后数组（含存量 I9 政策留守引用），严禁改挂全剥语义。
+                    // 约束②：内容性引文有出口，与收官留档政策一致。
+                    let (mut kept, stripped) = sanitize_incoming_sources(&page.sources);
+                    if !kept.iter().any(|o| o == &sp) {
+                        kept.push(sp.clone());
+                    }
+                    page.sources = serde_json::json!(kept);
+                    relocate_citations(&mut page.frontmatter, &stripped);
+                    if !stripped.is_empty() {
+                        result.warnings.push(format!(
+                            "guard-v2: relocated {} non-path source entr{} to frontmatter.citations of {}",
+                            stripped.len(),
+                            if stripped.len() == 1 { "y" } else { "ies" },
+                            page.path
+                        ));
+                    }
                     // frontmatter 同步同一份（列与元数据不劈叉）。
-                    sanitize_sources(&mut page.sources, &sp);
                     if let Some(obj) = page.frontmatter.as_object_mut() {
                         obj.insert("sources".into(), page.sources.clone());
                     }
@@ -1721,7 +1789,12 @@ pub async fn run_ingest_job(
                     match merged_write {
                         Some(Ok((merged_content, merged_sources))) => match existing.as_ref() {
                             Some(e) => {
-                                match update_merged_page(state, job.project_id, &page.path, &merged_content, &merged_sources, &e.frontmatter).await {
+                                // 护栏 v2 约束②：incoming 被剥的显示名条目（已在
+                                // :1629 搬入 page.frontmatter.citations）须活过 merge——
+                                // 并入 existing frontmatter 后再写，防 merge 丢出口。
+                                let mut merged_fm = e.frontmatter.clone();
+                                relocate_citations(&mut merged_fm, &stripped);
+                                match update_merged_page(state, job.project_id, &page.path, &merged_content, &merged_sources, &merged_fm).await {
                                     Ok(()) => {
                                         result.merged_pages.push(page.path.clone());
                                         if !merged_content.trim().is_empty() {
@@ -2394,6 +2467,62 @@ mod tests {
         );
         sanitize_sources(&mut s, "sp.md");
         assert_eq!(s, serde_json::json!(["x.md", "sp.md"]));
+    }
+
+    // —— 护栏 v2：incoming 只保路径形态 + citations 出口（ECE 批根因收口）——
+    #[test]
+    fn sanitize_incoming_strips_display_entries_keeps_paths() {
+        let (kept, stripped) = sanitize_incoming_sources(&serde_json::json!(
+            ["Everyone-Can-Use-English Ch03", "raw/sources/B/C.md", "sources/transcripts/t-1.md"]
+        ));
+        assert_eq!(
+            kept,
+            vec!["raw/sources/B/C.md".to_string(), "sources/transcripts/t-1.md".to_string()]
+        );
+        assert_eq!(stripped, vec!["Everyone-Can-Use-English Ch03".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_incoming_drops_placeholder_and_empty_without_citation_exit() {
+        // 空串/占位符沿 v1 丢弃语义，不进 citations 出口（无引文价值）
+        let (kept, stripped) = sanitize_incoming_sources(&serde_json::json!(["source.md", "", "raw/sources/B/C.md"]));
+        assert_eq!(kept, vec!["raw/sources/B/C.md".to_string()]);
+        assert!(stripped.is_empty());
+    }
+
+    #[test]
+    fn sanitize_incoming_non_array_yields_empty_kept_and_no_stripped() {
+        let (kept, stripped) = sanitize_incoming_sources(&serde_json::json!("source.md"));
+        assert!(kept.is_empty());
+        assert!(stripped.is_empty());
+    }
+
+    #[test]
+    fn sanitize_incoming_out_of_scope_prefix_stripped() {
+        // 错命名空间形态（I9 残渣族 transcripts/X）无 sources//raw/ 前缀 → 搬出口
+        let (kept, stripped) = sanitize_incoming_sources(&serde_json::json!(["transcripts/x-1.md"]));
+        assert!(kept.is_empty());
+        assert_eq!(stripped, vec!["transcripts/x-1.md".to_string()]);
+    }
+
+    #[test]
+    fn relocate_citations_merges_dedups_and_creates_key() {
+        let mut fm = serde_json::json!({"title": "T", "citations": ["A"]});
+        relocate_citations(&mut fm, &["A".to_string(), "B".to_string()]);
+        assert_eq!(fm, serde_json::json!({"title": "T", "citations": ["A", "B"]}));
+        let mut fm2 = serde_json::json!({}); // 缺 citations 键则建
+        relocate_citations(&mut fm2, &["C".to_string()]);
+        assert_eq!(fm2, serde_json::json!({"citations": ["C"]}));
+    }
+
+    #[test]
+    fn relocate_citations_rebuilds_non_object_frontmatter_and_noop_on_empty() {
+        let mut fm = serde_json::json!("oops"); // LLM 偶发非对象形态 → 重建为对象
+        relocate_citations(&mut fm, &["D".to_string()]);
+        assert_eq!(fm, serde_json::json!({"citations": ["D"]}));
+        let mut untouched = serde_json::json!({"k": 1});
+        relocate_citations(&mut untouched, &[]); // stripped 空 no-op，frontmatter 不动
+        assert_eq!(untouched, serde_json::json!({"k": 1}));
     }
 
     #[test]
