@@ -361,8 +361,14 @@ def cmd_merge(args):
         def repl(m):
             k = rla.norm_server(m.group(1))
             if k in loser_forms:
+                token = loser_forms[k]
+                orig = m.group(1).strip()
+                if token == orig:
+                    # 同形（Tier-1 同基名对的裸 stem 链）：删 loser 后 stem 唯一解析到 keep，
+                    # 改写成 [[stem|stem]] 只是冗余别名且徒增 PUT/重嵌——原样保留不计改写。
+                    return m.group(0)
                 n[0] += 1
-                return f"[[{loser_forms[k]}|{m.group(1).strip()}]]"
+                return f"[[{token}|{orig}]]"
             return m.group(0)
         new = RE_LINK.sub(repl, p["content"])
         if n[0]:
