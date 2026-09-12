@@ -76,7 +76,12 @@ def put_page(token, path, content, frontmatter, skip_if_same=True):
     skip_if_same=False 时内容即使未变也写（用于 sources 并集等纯 frontmatter 变更
     ——复验 Minor：内容 sha 相同而只并 sources 时，整页 skip 会漏掉元数据）。
     I1（复验 #2 实锺）：body 的 frontmatter 必须用形参（合并后含并集 sources），
-    形参 None 才回落服务端现值——此前写死 cur.get() 使并集从未落库。"""
+    形参 None 才回落服务端现值——此前写死 cur.get() 使并集从未落库。
+    E2 补全上提（S1 评审 §3.4）：fm 键缺失/None 一律以 GET 现值补全（title/type/
+    sources/images，单页 GET 已含全四字段）。denormalize（pages.rs:59）对缺键的
+    回落是破坏性的：缺 title→列置 NULL、缺 type→page_type 静默重置 concept、
+    缺 sources/images→置 []。统一出口补全后，fm 全空（skehan 事故面，5b6fabad
+    只堵了一半）、部分缺键（存量 305 页）、调用方漏键三类全部封死。"""
     q = f"/page?path={urllib.request.quote(path, safe='')}"
     for _ in range(2):
         st, cur = api(token, "GET", q)
@@ -86,16 +91,17 @@ def put_page(token, path, content, frontmatter, skip_if_same=True):
         if skip_if_same and hashlib.sha256((cur.get("content") or "").encode()).hexdigest() == new_hash:
             return "skipped"
         fm = frontmatter if frontmatter is not None else cur.get("frontmatter")
-        # skehan 事故根治（r2.1 第四修）：fm 形参 None/{} 且服务端 fm 亦空时，以服务端
-        # 规范化列构造全量 fm——空 fm 会令 denormalize（pages.rs:63）把 title/sources/images
-        # 一并冲空（09-12 skehan 实锺；fm 形参非空但不完整时由调用方负责，见 merge-keep）。
-        if not fm:
-            fm = {
-                "title": cur.get("title") or "",
-                "type": cur.get("page_type") or "concept",
-                "sources": cur.get("sources") or [],
-                "images": cur.get("images") or [],
-            }
+        if not isinstance(fm, dict):
+            try:
+                fm = json.loads(fm) if fm else {}
+            except Exception:
+                fm = {}
+        for k, dflt in (("title", cur.get("title") or ""),
+                        ("type", cur.get("page_type") or "concept"),
+                        ("sources", cur.get("sources") or []),
+                        ("images", cur.get("images") or [])):
+            if fm.get(k) is None:
+                fm[k] = dflt
         st, resp = api(token, "PUT", q,
                        {"path": path, "content": content, "frontmatter": fm},
                        if_match=cur.get("updated_at"))
@@ -415,11 +421,8 @@ def cmd_merge(args):
             print(f"  改写进度 {i+1}/{len(rewrites)}")
     for kp, new_content, fm_sources, _ in merges:
         fm = json.loads(kp["frontmatter"]) if kp["frontmatter"] else {}
-        # r2.1 第四修：fm 不完整键补全（keep 原 title/type/images），否则 denormalize
-        # 会把缺键列冲空；幸存页 type 归一 concept 是执行显式步（charter §五），此处只保真。
-        fm.setdefault("title", kp.get("title") or "")
-        fm.setdefault("type", kp.get("page_type") or "concept")
-        fm.setdefault("images", [])
+        # E2 后 title/type/images 缺键补全统一在 put_page 出口（以服务端现值填）；
+        # 幸存页 type 归一 concept 是执行显式步（charter §五），此处只保真。
         # 复验 Minor：sources 并集变了就必须写，即使内容未变
         fm_changed = sorted(fm.get("sources") or []) != sorted(fm_sources)
         fm["sources"] = fm_sources

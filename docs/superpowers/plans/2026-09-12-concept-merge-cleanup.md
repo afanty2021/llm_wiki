@@ -28,7 +28,7 @@
 1. **候选网放宽**：`adjudicate-merge.py` 现按 `page_type=='entity'` 过滤（:69），A 类 26 组仅 19 过筛，FAIL 七组 = Deci（成员 typed `researchers`）+ MI（`concept`）+ TPR (Total Physical Response)（`teaching-method`）+ 3 个 concepts 组（全 concept 型）+ unit-11 对（双 concept 型）→ S1 改为 **按 title 归组、类型无关**。
 2. **新 prompt + plan-builder 桥**：现 prompt 语义为「同一现实世界实体」，仅 P0 的 **entities 组**沿用；P0 的 3 个 concepts 组与 P1 Tier-1 同用新 same-topic prompt 形态；甄别输出（平铺 results）与 merge 计划输入（`groups:[{key,keep_path,losers}]`）之间补 plan-builder。
 3. **产物落 `.superpowers/concept-merge-cleanup/`**：results/plan/dump 一律不落 /tmp（08-24 重启清空灭失前科；S1-S3 之间隔人工复核，必须可回溯）。
-4. **第四修（S4 硬前置，已实现）**：`put_page` 空 fm 根治——fm 形参 None/{} 且服务端 fm 亦空时，以服务端规范化列（title/type/sources/images）构造全量 fm，堵死 denormalize 空回落冲空面（tools/wiki-cleanup.py 单点修复，覆盖 :216/:403/:407 全部调用点及未来调用者）；merge-keep 另补键完整性（keep 原 title/type/images，:407）。危险面实测：fm NULL/`{}` 页现存 **53**（有 title 39、title+wikilink 31=入链改写候选、有 sources 8；**B 对内 2 页**：entities/cefr.md fm=null、concepts/logical-mathematical-intelligence.md）。S4 开工前对这 53 页做行级备份+fm 补全迁移（或 I8 服务端保留式硬化，09-11 已提未做，作备选）。
+4. **第四修（S4 硬前置，已实现；S1 评审 E2 后上提加固）**：`put_page` 补全下沉统一出口——fm 键缺失/None 一律以单页 GET 现值补全（title/type/sources/images，GET 已含全四字段），覆盖三类暴露：fm 全空（skehan 面，5b6fabad 首修）、**部分缺键（S1 评审 E1 更正：title 冲空真实种群 = 53 fm 全空 + 252 fm 非空但缺 title 键 = 305 页，其中 236 含 wikilink=改写候选）**、调用方漏键。denormalize 三冲空面全部封死：缺 title→列 NULL、**缺 type→page_type 静默重置 concept（第三冲空面，S1 评审发现）**、缺 sources/images→置 []。计划内具体暴露页 entities/unit-10-eat-and-drink.md（fm 仅 sources 键、正文链 [[tpr-total-physical-response]]）已被改写路径覆盖。原「53 页行级备份+fm 补全迁移」前置项由该根治取代，S4 三件套备份纪律不变。
 5. **page_type 归一无机制（并入第四修边界）**：merge-keep 现只写 `fm['sources']`——幸存页归一 concept 须为执行显式步（写 `fm['type']` 并记变更账），不随 merge 自动发生（concepts/mary.md type=entity 为漂移实证）。
 
 ## 四、机制真相（评审实测，本专项风险面）
@@ -36,7 +36,7 @@
 - **embeddings.wiki_page_id（存 path）无 FK**：005 注释 CASCADE 指 project_id；loser 向量删除为 best-effort（`let _ = delete_embedding`，失败静默）→ S5 必须做**按 path 孤儿向量对账**（现库孤儿=0，执行后须仍为 0）。
 - **API PUT 无 sources 净化**：sanitize_sources 只在 ingest 管线（pages.rs 计数=0）→ 工具侧并集前**自净化占位符**（09-11 陷阱同款）+ **并集落库后验**（merge 后校验 keep 页 sources 确含并集——f6bbb59a I1 教训）。
 - **keep 页 PUT 自动重嵌 ✓**（pages.rs:239），但失败静默吞、行覆盖判据看不出 stale：覆盖率判据改为「row 覆盖 + 抽样 chunk_text 与现内容一致」；存量 69 页 stale 噪声地板（直写 SQL 回填所致）先处置或明示容忍。
-- **④ 本批实证新陷阱（已根治入册）**：wiki-cleanup `put_page(fm=None/{})` 触发服务端 denormalize（pages.rs:63-73）**空回落，把 title 连同 sources/images 一并冲掉**（skehan 页 01:40 实锺；恢复=**sources 自备份逐字恢复；title 为重定**——备份时 title 本为 NULL）。**空 `{}` 同样致死**。工具根治见 §三.4；残余脆弱性（fm 至今 NULL 的页在任何不带全量 fm 的 PUT 下原样重演）由 S4 前置迁移收口。
+- **④ 本批实证新陷阱（已根治入册）**：wiki-cleanup `put_page(fm=None/{})` 触发服务端 denormalize（pages.rs:63-73）**空回落，把 title 连同 sources/images 一并冲掉**（skehan 页 01:40 实锺；恢复=**sources 自备份逐字恢复；title 为重定**——备份时 title 本为 NULL）。**空 `{}` 同样致死**。工具根治见 §三.4；残余脆弱性已由 E2 上提根治收口（§三.4：统一出口补全，覆盖 305 页暴露种群与缺 type 改型第三面）。
 - graph.rs:276 stem first-wins 无 ORDER BY：156 共享 stem 裸链解析现状不可复现——执行前后红链审计不直接可比，判据按「执行后 server 面」单侧计。
 
 ## 五、P1 政策（已拍板：hybrid 精修版，锚定 title 同一性、不锚 basename）

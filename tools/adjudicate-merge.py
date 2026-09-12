@@ -4,7 +4,8 @@
 #   旧版按 page_type=='entity' 过筛只过 19/26 组（评审 §三.1 实锺），废弃。
 # prompt 双面（§三.2）：entities 组沿用「同一现实世界实体」判据；concepts 组用「同一知识主题」。
 # 产物落 .superpowers/concept-merge-cleanup/（§三.3 禁 /tmp；psql 导出 CSV 仅为可再生缓存）：
-#   s1-census.json / s1-results.json / s1-judgment-table.md / s1-pages/*.md / s1-merge-plan*.json
+#   s1-census.json / s1-results.json / s1-run-meta.json / s1-judgment-table.md /
+#   s1-pages/*.md / s1-merge-plan*.json
 # plan-builder（§三.2 桥）：plan 子命令把平铺 results（可加人工覆写 overrides.json）转成
 #   {"groups":[{key,keep_path,losers}]}，供 wiki-cleanup.py merge --plan 消费（S4 干跑输入）。
 # 本脚本只读库 + 调 LLM + 写产物目录，不写库。LLM 预算 ≤2 调用/对、90s 超时（§六）。
@@ -28,6 +29,7 @@ F_TABLE = os.path.join(OUT_DIR, "s1-judgment-table.md")
 F_PLAN_TENT = os.path.join(OUT_DIR, "s1-merge-plan-tentative.json")
 F_PLAN = os.path.join(OUT_DIR, "s1-merge-plan.json")
 F_OVERRIDES = os.path.join(OUT_DIR, "overrides.json")
+F_META = os.path.join(OUT_DIR, "s1-run-meta.json")
 
 JUDGE_NS = ("entities", "concepts")  # A 类 = 双命名空间内同 title（charter §二）
 
@@ -123,8 +125,7 @@ def build_census(pages, icnt, ts):
             members.append({
                 "path": p["path"], "title": (p["title"] or "").strip(),
                 "page_type": p["page_type"], "chars": len(p["content"]),
-                "inbound": icnt.get(rla.norm_server(rla.stem_of(p["path"])), 0)
-                         + icnt.get(rla.norm_server((p["title"] or "").strip()), 0),
+                "inbound": _inbound_of(p, icnt),
                 "fm_empty": (p.get("frontmatter") or "").strip() in ("", "{}", "null"),
             })
         entry = {"key": f"{ns}::{tkey}", "namespace": ns, "title": tkey, "members": members}
@@ -139,6 +140,13 @@ def load_fresh():
     stems, titles, _ = wc.build_index(pages)
     icnt = wc.inbound_counts(pages, stems, titles)
     return pages, icnt
+
+
+def _inbound_of(p, icnt):
+    """stem 与 title 归一键相同（deci 型）时去重，否则入链双计（S1 评审 §3.4 展示项）。"""
+    keys = {rla.norm_server(rla.stem_of(p["path"])),
+            rla.norm_server((p["title"] or "").strip())}
+    return sum(icnt.get(k, 0) for k in keys)
 
 
 # ---------------- 甄别（judge） ----------------
@@ -185,9 +193,10 @@ def cmd_judge(args):
         for r in json.load(open(F_RESULTS)):
             if r["same"] is not None:
                 prev[(r["anchor"], r["member"])] = r
-    results = [] if args.fresh else [r for r in _load_prev(F_RESULTS)]
+    results = [] if args.fresh else [r for r in _load_prev(F_RESULTS) if r["same"] is not None]
+    # 评审 §3.4：null 行不进 results（重判后追加新行），否则 resume 会重复判定并虚增未定计数
     key = zai_key()
-    n_call = 0
+    n_call = n_new = 0
     for g in census["candidates"]:
         if args.groups and g["key"] not in args.groups.split(","):
             continue
@@ -200,14 +209,17 @@ def cmd_judge(args):
                 v = dict(prev[pair])
             else:
                 a, b = bypath[anchor_path], bypath[m["path"]]
+                calls = 1
                 same, reason = llm_judge(key, kind, a, b)
                 n_call += 1
                 if same is None:  # 空响应/截断重试一次（≤2 调用/对）
+                    calls = 2
                     same, reason = llm_judge(key, kind, a, b)
                     n_call += 1
+                n_new += 1
                 v = {"group": g["key"], "namespace": g["namespace"], "prompt": kind,
                      "anchor": anchor_path, "member": m["path"],
-                     "same": same, "reason": reason, "model": MODEL}
+                     "same": same, "reason": reason, "model": MODEL, "calls": calls}
                 results.append(v)
                 json.dump(results, open(F_RESULTS, "w"), ensure_ascii=False, indent=1)
             mark = "同" if v["same"] else ("?" if v["same"] is None else "异")
@@ -215,6 +227,13 @@ def cmd_judge(args):
     json.dump(results, open(F_RESULTS, "w"), ensure_ascii=False, indent=1)
     n_same = sum(1 for r in results if r["same"] is True)
     n_none = sum(1 for r in results if r["same"] is None)
+    # 调用计数落盘：retried_pairs = llm_calls - new_pairs 可从产物直接验证重试率
+    json.dump({"finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": MODEL,
+               "pairs": len(results), "new_pairs": n_new, "llm_calls": n_call,
+               "retried_pairs": n_call - n_new,
+               "same": n_same, "diff": len(results) - n_same - n_none,
+               "undetermined": n_none},
+              open(F_META, "w"), ensure_ascii=False, indent=1)
     write_table(census, results)
     plan = build_plan(census, results, None)
     json.dump(plan, open(F_PLAN_TENT, "w"), ensure_ascii=False, indent=1)
@@ -236,7 +255,10 @@ def write_table(census, results):
         by_group[r["group"]].append(r)
     L = [f"# S1 判定表 — P0 A 类同 title 组甄别（{census['generated_at']}，{MODEL}）\n"]
     L.append(f"口径：{census['total_pages']} 页全库导出，entities/concepts 命名空间内 title lower+trim 分组、"
-             f"类型无关；LLM 逐对甄别（anchor=组内入链+字数最高分页）。宁缺毋错：不确定一律判异，人工复核可翻案。\n")
+             f"类型无关；LLM 逐对甄别（anchor=组内入链+字数最高分页）。宁缺毋错：不确定一律判异，人工复核可翻案。")
+    L.append("人工覆写（S3 裁决用）：编辑 overrides.json——`{\"<组key>\": {\"keep_path\": \"…\", \"losers\": [\"…\"]}}` "
+             "覆写该组合并方向；`{\"<组key>\": \"skip\"}` 撤销该组合并。存后跑 "
+             "`python3 tools/adjudicate-merge.py plan` 生成 s1-merge-plan.json。\n")
     L.append(f"候选 {len(census['candidates'])} 组；排除（另案）{len(census['excluded'])} 组："
              + "、".join(g["key"] for g in census["excluded"]) + "\n")
     for g in census["candidates"]:
