@@ -8,6 +8,9 @@
 #   s1-pages/*.md / s1-merge-plan*.json
 # plan-builder（§三.2 桥）：plan 子命令把平铺 results（可加人工覆写 overrides.json）转成
 #   {"groups":[{key,keep_path,losers}]}，供 wiki-cleanup.py merge --plan 消费（S4 干跑输入）。
+# S2（P1 Tier-1）：s2-census/s2-judge/s2-plan 三子命令——B 口径=slug 同基名严格 1:1（大小写敏感）
+#   × title 全同（lower+trim）=Tier-1；其余=Tier-2 See-Also 清单（落地另批）。全对 same_topic
+#   prompt、keep=富侧、UbD 置顶（G11 自愈门）、overrides 走 overrides-s2.json。
 # 本脚本只读库 + 调 LLM + 写产物目录，不写库。LLM 预算 ≤2 调用/对、90s 超时（§六）。
 import argparse, json, os, re, sys, time, importlib.util, urllib.request
 from collections import defaultdict
@@ -30,6 +33,16 @@ F_PLAN_TENT = os.path.join(OUT_DIR, "s1-merge-plan-tentative.json")
 F_PLAN = os.path.join(OUT_DIR, "s1-merge-plan.json")
 F_OVERRIDES = os.path.join(OUT_DIR, "overrides.json")
 F_META = os.path.join(OUT_DIR, "s1-run-meta.json")
+# ---- S2（P1 Tier-1 跨命名空间 same-topic 甄别）产物 ----
+F2_PAIRS = os.path.join(OUT_DIR, "s2-pairs.json")
+F2_TIER2 = os.path.join(OUT_DIR, "s2-tier2-seealso.json")
+F2_RESULTS = os.path.join(OUT_DIR, "s2-results.json")
+F2_META = os.path.join(OUT_DIR, "s2-run-meta.json")
+F2_TABLE = os.path.join(OUT_DIR, "s2-judgment-table.md")
+F2_PAGES = os.path.join(OUT_DIR, "s2-pages")
+F2_PLAN_TENT = os.path.join(OUT_DIR, "s2-merge-plan-tentative.json")
+F2_PLAN = os.path.join(OUT_DIR, "s2-merge-plan.json")
+F2_OVERRIDES = os.path.join(OUT_DIR, "overrides-s2.json")
 
 JUDGE_NS = ("entities", "concepts")  # A 类 = 双命名空间内同 title（charter §二）
 
@@ -329,6 +342,202 @@ def build_plan(census, results, overrides):
             "groups": sorted(groups, key=lambda g: g["key"])}
 
 
+def _member_row(p, icnt):
+    return {"path": p["path"], "title": (p["title"] or "").strip(),
+            "page_type": p["page_type"], "chars": len(p["content"]),
+            "inbound": _inbound_of(p, icnt),
+            "fm_empty": (p.get("frontmatter") or "").strip() in ("", "{}", "null")}
+
+
+# ---------------- S2：P1 跨命名空间同基名配对（charter §二 B 口径） ----------------
+
+def build_b_pairs(pages, icnt):
+    """slug 同基名严格 1:1（大小写敏感同值）：entities×concepts 各恰一页才成对。
+    title 比较一律 lower+trim（charter §二口径基准）→ Tier-1=title 全同，其余=Tier-2。"""
+    by = defaultdict(lambda: defaultdict(list))  # stem -> ns -> [pages]
+    for p in pages:
+        ns = p["path"].split("/", 1)[0]
+        if ns in JUDGE_NS:
+            by[rla.stem_of(p["path"])][ns].append(p)
+    tier1, tier2, ambiguous = [], [], []
+    for stem, nsmap in sorted(by.items()):
+        cs, es = nsmap.get("concepts", []), nsmap.get("entities", [])
+        if len(cs) == 1 and len(es) == 1:
+            c, e = cs[0], es[0]
+            tc = (c["title"] or "").strip().lower()
+            te = (e["title"] or "").strip().lower()
+            mc, me = _member_row(c, icnt), _member_row(e, icnt)
+            pair = {"stem": stem, "key": f"xns::{stem}", "concept": mc, "entity": me,
+                    "titles": {"concept": mc["title"], "entity": me["title"]},
+                    "title_same": bool(tc) and bool(te) and tc == te,
+                    "keep_rich": mc["path"] if (mc["chars"], mc["inbound"]) >= (me["chars"], me["inbound"]) else me["path"]}
+            (tier1 if pair["title_same"] else tier2).append(pair)
+        elif len(cs) + len(es) >= 2:  # 同基名但非严格 1:1 → B 口径外，如实列示
+            ambiguous.append({"stem": stem,
+                              "concepts": [p["path"] for p in cs], "entities": [p["path"] for p in es]})
+    return tier1, tier2, ambiguous
+
+
+def cmd_s2_census(_):
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    pages, icnt = load_fresh()
+    tier1, tier2, ambiguous = build_b_pairs(pages, icnt)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(F2_PAGES, exist_ok=True)
+    bypath = {p["path"]: p for p in pages}
+    json.dump({"generated_at": ts, "total_pages": len(pages),
+               "tier1": tier1, "tier2": tier2, "ambiguous": ambiguous},
+              open(F2_PAIRS, "w"), ensure_ascii=False, indent=1)
+    json.dump({"generated_at": ts,
+               "note": "Tier-2 See-Also 清单（charter §五：落地另批/追加步骤，届时遵守全量 fm 写入规则）",
+               "pairs": tier2},
+              open(F2_TIER2, "w"), ensure_ascii=False, indent=1)
+    # Tier-1 双侧页面快照（人工复核离线读）
+    for pr in tier1:
+        for m in (pr["concept"], pr["entity"]):
+            fn = os.path.join(F2_PAGES, m["path"].replace("/", "--"))
+            with open(fn, "w") as f:
+                f.write(f"<!-- snapshot {ts} | title={m['title']} | type={m['page_type']} "
+                        f"| chars={m['chars']} | inbound={m['inbound']} | fm_empty={m['fm_empty']} -->\n\n")
+                f.write(bypath[m["path"]]["content"])
+    print(f"B 口径配对：Tier-1（title 全同）{len(tier1)} 对 / Tier-2 {len(tier2)} 对 / 非 1:1 歧义 stem {len(ambiguous)}；"
+          f"总页 {len(pages)}")
+    for pr in tier1[:6]:
+        print(f"  {pr['key']}: {pr['concept']['path']}({pr['concept']['chars']}) <-> "
+              f"{pr['entity']['path']}({pr['entity']['chars']})")
+    if len(tier1) > 6:
+        print(f"  … 共 {len(tier1)} 对，明细 {F2_PAIRS}")
+    print(f"pairs -> {F2_PAIRS}\nTier-2 清单 -> {F2_TIER2}")
+
+
+def _pair_verdicts(census_t1, results):
+    by_pair = {(r["concept"], r["entity"]): r for r in results}
+    return by_pair
+
+
+def write_s2_table(tier1, results):
+    by_pair = _pair_verdicts(tier1, results)
+    n_same = sum(1 for r in results if r["same"] is True)
+    L = [f"# S2 判定表 — P1 Tier-1 跨命名空间 same-topic 甄别（{time.strftime('%Y-%m-%dT%H:%M:%S')}，{MODEL}）\n"]
+    L.append(f"口径：slug 同基名严格 1:1（大小写敏感）× title 全同（lower+trim）；全对 same_topic prompt；"
+             f"keep 方向=组内实测富侧（charter §五）。宁缺毋错：不确定判异，人工复核可翻案。")
+    L.append(f"人工覆写（S3 裁决用）：编辑 overrides-s2.json——`{{\"xns::<stem>\": {{\"keep_path\": \"…\", \"losers\": [\"…\"]}}}}` "
+             f"覆写合并方向；`{{\"xns::<stem>\": \"skip\"}}` 撤销该对。存后跑 "
+             f"`python3 tools/adjudicate-merge.py s2-plan` 生成 s2-merge-plan.json。\n")
+    L.append(f"共 {len(tier1)} 对；LLM 判同 {n_same} / 判异 {len(results)-n_same}。UbD 对置顶（G11 自愈门）。\n")
+    for pr in tier1:
+        r = by_pair.get((pr["concept"]["path"], pr["entity"]["path"]))
+        L.append(f"## {pr['key']}（{'★G11' if pr['stem'] == 'understanding-by-design' else 'pair'}）")
+        L.append(f"- concept 侧：`{pr['concept']['path']}` title={pr['titles']['concept']} "
+                 f"（{pr['concept']['chars']} 字/入链 {pr['concept']['inbound']}{'/fm空' if pr['concept']['fm_empty'] else ''}）")
+        L.append(f"- entity 侧：`{pr['entity']['path']}` title={pr['titles']['entity']} "
+                 f"（{pr['entity']['chars']} 字/入链 {pr['entity']['inbound']}{'/fm空' if pr['entity']['fm_empty'] else ''}）")
+        if r:
+            mark = "同（可合并）" if r["same"] else ("? 未定" if r["same"] is None else "异（保留）")
+            L.append(f"- 判定：**{mark}**｜{r['reason']}")
+        else:
+            L.append("- 判定：（未跑）")
+        L.append(f"- **建议**：keep=`{pr['keep_rich']}`（富侧）" if r and r["same"] else f"- **建议**：{'保留双侧' if r and r['same'] is False else '待判定'}")
+        L.append("")
+    open(F2_TABLE, "w").write("\n".join(L))
+
+
+def s2_plan_groups(tier1, results, overrides):
+    by_pair = _pair_verdicts(tier1, results)
+    groups = []
+    for pr in tier1:
+        r = by_pair.get((pr["concept"]["path"], pr["entity"]["path"]))
+        if r and r["same"] is True:
+            keep = pr["keep_rich"]
+            loser = pr["entity"]["path"] if keep == pr["concept"]["path"] else pr["concept"]["path"]
+            groups.append({"key": pr["key"], "keep_path": keep, "losers": [loser]})
+    if overrides:
+        for k, ov in overrides.items():
+            if ov == "skip":
+                groups = [g for g in groups if g["key"] != k]
+            elif isinstance(ov, dict) and "keep_path" in ov:
+                groups = [g for g in groups if g["key"] != k]
+                groups.append({"key": k, "keep_path": ov["keep_path"], "losers": ov.get("losers", [])})
+    return {"source": "S2 Tier-1 adjudication (charter 2026-09-12)",
+            "groups": sorted(groups, key=lambda g: g["key"])}
+
+
+def cmd_s2_judge(args):
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    pages, icnt = load_fresh()
+    tier1, tier2, ambiguous = build_b_pairs(pages, icnt)
+    bypath = {p["path"]: p for p in pages}
+    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(F2_PAGES, exist_ok=True)
+    for pr in tier1:
+        for m in (pr["concept"], pr["entity"]):
+            fn = os.path.join(F2_PAGES, m["path"].replace("/", "--"))
+            with open(fn, "w") as f:
+                f.write(f"<!-- snapshot {ts} | title={m['title']} | type={m['page_type']} "
+                        f"| chars={m['chars']} | inbound={m['inbound']} | fm_empty={m['fm_empty']} -->\n\n")
+                f.write(bypath[m["path"]]["content"])
+    # UbD 对置顶（G11 自愈门），其余按 stem 稳定序
+    tier1 = sorted(tier1, key=lambda pr: (pr["stem"] != "understanding-by-design", pr["stem"]))
+    json.dump({"generated_at": ts, "total_pages": len(pages),
+               "tier1": tier1, "tier2": tier2, "ambiguous": ambiguous},
+              open(F2_PAIRS, "w"), ensure_ascii=False, indent=1)
+    prev = {}
+    if os.path.exists(F2_RESULTS) and not args.fresh:
+        for r in json.load(open(F2_RESULTS)):
+            if r["same"] is not None:
+                prev[(r["concept"], r["entity"])] = r
+    results = [] if args.fresh else [r for r in _load_prev(F2_RESULTS) if r["same"] is not None]
+    key = zai_key()
+    n_call = n_new = 0
+    for pr in tier1:
+        pair = (pr["concept"]["path"], pr["entity"]["path"])
+        if pair in prev:
+            v = dict(prev[pair])
+        else:
+            a, b = bypath[pr["concept"]["path"]], bypath[pr["entity"]["path"]]
+            calls = 1
+            same, reason = llm_judge(key, "same_topic", a, b)
+            n_call += 1
+            if same is None:
+                calls = 2
+                same, reason = llm_judge(key, "same_topic", a, b)
+                n_call += 1
+            n_new += 1
+            v = {"key": pr["key"], "stem": pr["stem"], "prompt": "same_topic",
+                 "concept": pr["concept"]["path"], "entity": pr["entity"]["path"],
+                 "same": same, "reason": reason, "model": MODEL, "calls": calls}
+            results.append(v)
+            json.dump(results, open(F2_RESULTS, "w"), ensure_ascii=False, indent=1)
+        mark = "同" if v["same"] else ("?" if v["same"] is None else "异")
+        print(f"{mark} | {v['concept']} <-> {v['entity']} | {v['reason'][:80]}")
+    json.dump(results, open(F2_RESULTS, "w"), ensure_ascii=False, indent=1)
+    n_same = sum(1 for r in results if r["same"] is True)
+    n_none = sum(1 for r in results if r["same"] is None)
+    json.dump({"finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": MODEL,
+               "pairs": len(results), "new_pairs": n_new, "llm_calls": n_call,
+               "retried_pairs": n_call - n_new, "same": n_same,
+               "diff": len(results) - n_same - n_none, "undetermined": n_none},
+              open(F2_META, "w"), ensure_ascii=False, indent=1)
+    write_s2_table(tier1, results)
+    overrides = json.load(open(F2_OVERRIDES)) if os.path.exists(F2_OVERRIDES) else None
+    plan = s2_plan_groups(tier1, results, overrides)
+    json.dump(plan, open(F2_PLAN_TENT, "w"), ensure_ascii=False, indent=1)
+    print(f"\n完成：{len(results)} 对（本轮新调 {n_call} 次），同 {n_same} / 异 {len(results)-n_same-n_none} / 未定 {n_none}")
+    print(f"判定表 {F2_TABLE}\n暂定计划 {F2_PLAN_TENT}（{len(plan['groups'])} 对待人工复核）")
+
+
+def cmd_s2_plan(args):
+    data = json.load(open(F2_PAIRS))
+    results = _load_prev(F2_RESULTS)
+    overrides = json.load(open(args.overrides)) if args.overrides else (
+        json.load(open(F2_OVERRIDES)) if os.path.exists(F2_OVERRIDES) else None)
+    plan = s2_plan_groups(data["tier1"], results, overrides)
+    out = args.out or F2_PLAN
+    json.dump(plan, open(out, "w"), ensure_ascii=False, indent=1)
+    print(f"Tier-1 合并计划 {len(plan['groups'])} 对，删 {sum(len(g['losers']) for g in plan['groups'])} loser -> {out}"
+          + ("（含人工覆写）" if overrides else "（暂定，未经人工复核）"))
+
+
 def cmd_plan(args):
     census = json.load(open(F_CENSUS))
     results = _load_prev(F_RESULTS)
@@ -351,8 +560,15 @@ def main():
     p = sub.add_parser("plan", help="results(+overrides.json) → merge 计划")
     p.add_argument("--overrides", help="人工覆写 JSON：{group: \"skip\" 或 {keep_path, losers}}")
     p.add_argument("--out", help="输出路径（默认 s1-merge-plan.json）")
+    sub.add_parser("s2-census", help="S2：B 口径跨命名空间配对盘点（Tier-1/Tier-2/歧义），不调 LLM")
+    j2 = sub.add_parser("s2-judge", help="S2：Tier-1 same_topic 逐对甄别 + 判定表 + 暂定计划（UbD 置顶）")
+    j2.add_argument("--fresh", action="store_true", help="忽略断点续跑，全部重判")
+    p2 = sub.add_parser("s2-plan", help="S2：results(+overrides-s2.json) → Tier-1 merge 计划")
+    p2.add_argument("--overrides")
+    p2.add_argument("--out")
     args = ap.parse_args()
-    {"census": cmd_census, "judge": cmd_judge, "plan": cmd_plan}[args.cmd](args)
+    {"census": cmd_census, "judge": cmd_judge, "plan": cmd_plan,
+     "s2-census": cmd_s2_census, "s2-judge": cmd_s2_judge, "s2-plan": cmd_s2_plan}[args.cmd](args)
 
 
 if __name__ == "__main__":
