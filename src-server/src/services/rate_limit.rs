@@ -84,6 +84,10 @@ pub const BEACON_CAP_PER_MIN: usize = 60;
 /// 足够宽裕（连续刷新/重开链接），超限 429 与 /s/ 同语义。env
 /// PAGE_RATE_LIMITS__T_PER_MIN 可覆盖。**默认值单一真源在此**（同上）。
 pub const T_VIEW_CAP_PER_MIN: usize = 30;
+/// POST /t/:token/play 播放心跳限流默认规格：60 次/分钟/plan（**独立桶**——心跳
+/// 洪峰不得饿死 seen/complete 共桶；客户端稀疏化 ≤4 beacon/视频，60 为 >10× 余量）。
+/// env PAGE_RATE_LIMITS__PLAY_PER_MIN 可覆盖。**默认值单一真源在此**（同上）。
+pub const PLAY_CAP_PER_MIN: usize = 60;
 
 /// t_page 端点限流规格组合（AppState.limiter 持有，见模块注释）。
 pub struct PageRateLimits {
@@ -93,25 +97,34 @@ pub struct PageRateLimits {
     pub beacon: FixedWindowLimiter,
     /// GET /t/:token（默认 30/min，key=token 指纹，独立桶——view 事件写库闸门）
     pub t_page: FixedWindowLimiter,
+    /// POST /t/:token/play 播放心跳（默认 60/min，独立桶——play_progress 事件写库闸门）
+    pub play: FixedWindowLimiter,
 }
 
 impl PageRateLimits {
     /// 按规格构造（lib.rs create_app 从 config 接线处调用）。
-    pub fn with_caps(s_per_min: usize, beacon_per_min: usize, t_per_min: usize) -> Self {
+    pub fn with_caps(
+        s_per_min: usize,
+        beacon_per_min: usize,
+        t_per_min: usize,
+        play_per_min: usize,
+    ) -> Self {
         let minute = Duration::from_secs(60);
         Self {
             short_link: FixedWindowLimiter::new(s_per_min, minute),
             beacon: FixedWindowLimiter::new(beacon_per_min, minute),
             t_page: FixedWindowLimiter::new(t_per_min, minute),
+            play: FixedWindowLimiter::new(play_per_min, minute),
         }
     }
 
-    /// 默认规格（30/60/30 每分钟，与 config 缺省一致——规格件单测用）。
+    /// 默认规格（30/60/30/60 每分钟，与 config 缺省一致——规格件单测用）。
     pub fn new() -> Self {
         Self::with_caps(
             S_REDIRECT_CAP_PER_MIN,
             BEACON_CAP_PER_MIN,
             T_VIEW_CAP_PER_MIN,
+            PLAY_CAP_PER_MIN,
         )
     }
 }
@@ -240,13 +253,18 @@ mod tests {
         }
         assert!(!limits.beacon.check("fp1"), "beacon 超过 60/min 拒绝");
         assert!(limits.beacon.check("fp2"), "他 token 不受影响");
+        for i in 0..60 {
+            assert!(limits.play.check("pk"), "play 第 {} 次应放行", i + 1);
+        }
+        assert!(!limits.play.check("pk"), "play 超过 60/min 拒绝");
+        assert!(limits.play.check("pk2"), "他 plan 不受影响");
     }
 
     #[test]
     fn page_rate_limits_with_caps_override() {
         // R4：规格经 config 注入——with_caps 生效即 config 覆盖生效（默认值路径
-        // 由 with_caps(三常量) 复用同一实现）
-        let limits = PageRateLimits::with_caps(1, 2, 3);
+        // 由 with_caps(四常量) 复用同一实现）
+        let limits = PageRateLimits::with_caps(1, 2, 3, 4);
         assert!(limits.short_link.check("c"));
         assert!(!limits.short_link.check("c"), "cap=1 → 第 2 次拒绝");
         assert!(limits.beacon.check("f1"));
@@ -256,16 +274,29 @@ mod tests {
         assert!(limits.t_page.check("f1"));
         assert!(limits.t_page.check("f1"), "t_page cap=3 内放行");
         assert!(!limits.t_page.check("f1"), "t_page 第 4 次拒绝");
+        for i in 0..4 {
+            assert!(limits.play.check("p"), "play #{i} cap=4 内放行");
+        }
+        assert!(!limits.play.check("p"), "play 第 5 次拒绝");
     }
 
     /// SEC-7：t_page 桶与 beacon 桶独立——GET 落地打满不影响 beacon 上报，
     /// 反之亦然（共指纹形态不共预算）。
     #[test]
     fn t_page_bucket_independent_of_beacon() {
-        let limits = PageRateLimits::with_caps(30, 1, 1);
+        let limits = PageRateLimits::with_caps(30, 1, 1, 1);
         assert!(limits.t_page.check("f1"));
         assert!(!limits.t_page.check("f1"), "t_page cap=1 已打满");
         assert!(limits.beacon.check("f1"), "beacon 桶不受 t_page 消耗影响");
+    }
+
+    /// play 心跳桶与 beacon（seen/complete）桶独立——心跳洪峰不饿死 complete。
+    #[test]
+    fn play_bucket_independent_of_beacon() {
+        let limits = PageRateLimits::with_caps(30, 1, 30, 1);
+        assert!(limits.play.check("f1"));
+        assert!(!limits.play.check("f1"), "play cap=1 已打满");
+        assert!(limits.beacon.check("f1"), "beacon（seen/complete）不受 play 消耗影响");
     }
 
     #[test]

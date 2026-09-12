@@ -409,12 +409,12 @@ async fn progress_empty_then_populated() {
     assert_eq!(plans[0]["title"], "第33周周计划");
     assert_eq!(plans[0]["origin"], "weekly");
     assert_eq!(plans[0]["status"], "archived");
-    assert_eq!(plans[0]["items"], json!({"total": 0, "viewed": 0, "completed": 0}));
+    assert_eq!(plans[0]["items"], json!({"total": 0, "viewed": 0, "watched": 0, "completed": 0}));
     assert_eq!(plans[1]["id"], plan_a as i64);
     assert_eq!(plans[1]["title"], "分数教学补强");
     assert_eq!(plans[1]["origin"], "chat");
     assert_eq!(plans[1]["status"], "active");
-    assert_eq!(plans[1]["items"], json!({"total": 3, "viewed": 1, "completed": 1}));
+    assert_eq!(plans[1]["items"], json!({"total": 3, "viewed": 1, "watched": 0, "completed": 1}));
 
     // recent_events：恰好最近 20 条、最新在前（payload.n 标识）
     let evs = v["recent_events"].as_array().expect("recent_events array");
@@ -1272,5 +1272,165 @@ async fn bind_is_case_insensitive_keeps_canonical_profile() {
     assert_eq!(p2.json::<serde_json::Value>()["wecom_userid"], wid.as_str());
 
     // 测试卫生：清理本轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
+/// play_progress 投影 + rebuild 重放（评审 I-1）+ recent_events 窗口排除 + watched 计数。
+/// 状态格：checkpoint → viewed；ended → watched（pending 直达或 viewed 推进）；
+/// completed 永不回退；checkpoint-only 条目 rebuild 后停在 viewed（重放链含
+/// play_progress → viewed，评审 I-1）；ended 条目 rebuild 后回到 watched。
+#[tokio::test]
+async fn play_progress_watched_rebuild_and_window() {
+    let (server, state, teacher, teacher_id, _plain) = learning_fixture("play").await;
+
+    // 3 个 transcripts 条目（transcriber 命名空间允许无实体页）
+    let t1 = format!("transcripts/play-{}.md", unique("a"));
+    let t2 = format!("transcripts/play-{}.md", unique("b"));
+    let t3 = format!("transcripts/play-{}.md", unique("c"));
+    let body = plan_body(
+        "chat",
+        None,
+        json!([
+            {"kind": "wiki_page", "target_ref": t1, "label": "p1"},
+            {"kind": "wiki_page", "target_ref": t2, "label": "p2"},
+            {"kind": "wiki_page", "target_ref": t3, "label": "p3"}
+        ]),
+    );
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&body)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v = r.json::<serde_json::Value>();
+    let plan_id = v["plan"]["id"].as_i64().unwrap() as i32;
+    let item1 = v["items"][0]["id"].as_i64().unwrap() as i32;
+    let item2 = v["items"][1]["id"].as_i64().unwrap() as i32;
+    let item3 = v["items"][2]["id"].as_i64().unwrap() as i32;
+
+    // lib 直调 apply_play_progress：checkpoint → viewed（非 watched）
+    {
+        let mut tx = state.db.begin().await.unwrap();
+        llm_wiki_server::services::projection::apply_play_progress(
+            &mut tx, plan_id, item1, "checkpoint", 150, 25, teacher_id as i32,
+        )
+        .await
+        .unwrap();
+        llm_wiki_server::services::projection::apply_play_progress(
+            &mut tx, plan_id, item2, "ended", 540, 100, teacher_id as i32,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item1)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "viewed", "checkpoint → viewed (not watched)");
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item2)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "watched", "ended: pending 直达 watched");
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM learning_events WHERE event_type='play_progress' AND item_id = $1",
+    )
+    .bind(item1)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(payload, json!({"phase": "checkpoint", "position_s": 150, "percent": 25}));
+
+    // watched 后再 checkpoint 不回退（格单调性关键边，评审 M-2b）
+    {
+        let mut tx = state.db.begin().await.unwrap();
+        llm_wiki_server::services::projection::apply_play_progress(
+            &mut tx, plan_id, item2, "checkpoint", 560, 101, teacher_id as i32,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item2)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "watched", "checkpoint after watched must not regress");
+
+    // item3 显式完成后 ended beacon → completed 不回退（watched 不覆盖 completed）
+    let r = server
+        .post(&format!("/api/v1/training/items/{item3}/complete"))
+        .add_header("authorization", bearer(&teacher))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    {
+        let mut tx = state.db.begin().await.unwrap();
+        llm_wiki_server::services::projection::apply_play_progress(
+            &mut tx, plan_id, item3, "ended", 600, 100, teacher_id as i32,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item3)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "completed", "ended must not overwrite completed");
+
+    // progress：watched 计数 + recent_events 排除 play_progress（播 3 条心跳不挤窗）
+    let r = server
+        .post("/api/v1/training/events")
+        .add_header("authorization", bearer(&teacher))
+        .json(&json!({"event_type": "ask", "payload": {"question": "时态怎么教"}}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let r = server
+        .get("/api/v1/training/progress")
+        .add_header("authorization", bearer(&teacher))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let v = r.json::<serde_json::Value>();
+    assert_eq!(
+        v["plans"][0]["items"],
+        json!({"total": 3, "viewed": 1, "watched": 1, "completed": 1})
+    );
+    let evs = v["recent_events"].as_array().unwrap();
+    assert!(
+        evs.iter().all(|e| e["event_type"] != "play_progress"),
+        "play_progress must be excluded from recent_events window"
+    );
+    assert!(
+        evs.iter().any(|e| e["event_type"] == "ask"),
+        "ask remains visible in window"
+    );
+
+    // rebuild（端点）：checkpoint-only → viewed（I-1）；ended → watched 重放；
+    // completed → completed。响应含 watched 字段（M-3）。
+    let r = server
+        .post("/api/v1/training/progress/rebuild")
+        .add_header("authorization", bearer(&teacher))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let v = r.json::<serde_json::Value>();
+    // stats.watched=2：item2（ended，定格 watched）+ item3（ended 先 watched、
+    // complete 重放再覆盖 completed——重放链中间转移照计，事件即事实）
+    assert_eq!(v["watched"], 2, "replay chain mid-step transitions counted");
+    async fn status_of(state: &llm_wiki_server::AppState, id: i32) -> String {
+        sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap()
+    }
+    assert_eq!(status_of(&state, item1).await, "viewed", "checkpoint-only replayed to viewed (I-1)");
+    assert_eq!(status_of(&state, item2).await, "watched", "ended replayed to watched");
+    assert_eq!(status_of(&state, item3).await, "completed", "completed replayed");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }

@@ -853,7 +853,7 @@ async fn overview_aggregates_plans_items_events_per_teacher() {
     assert_eq!(r.status_code(), StatusCode::OK);
 
     // 播种（learning_api_test 同款注入 created_at）：plan_old 10 天前（出 7d 窗）
-    // 2 items（pending/completed）；plan_new 1 天前（7d 窗内）2 items（viewed/completed）
+    // 2 items（pending/completed）；plan_new 1 天前（7d 窗内）3 items（viewed/watched/completed）
     let now = chrono::Utc::now();
     let plan_old: i32 = sqlx::query_scalar(
         "INSERT INTO learning_plans (user_id, title, origin, period_key, created_at) \
@@ -889,7 +889,7 @@ async fn overview_aggregates_plans_items_events_per_teacher() {
     .fetch_one(&state.db)
     .await
     .unwrap();
-    for (i, status) in ["viewed", "completed"].iter().enumerate() {
+    for (i, status) in ["viewed", "watched", "completed"].iter().enumerate() {
         sqlx::query(
             "INSERT INTO learning_items (plan_id, kind, target_ref, label, sort_order, status) \
              VALUES ($1, 'wiki_page', $2, $3, $4, $5)",
@@ -934,13 +934,13 @@ async fn overview_aggregates_plans_items_events_per_teacher() {
     assert!(v["generated_at"].as_str().is_some());
     let teachers = v["teachers"].as_array().expect("teachers array");
 
-    // A：全期 items=4（1 viewed/2 completed），7d 窗 items=2（1 viewed/1 completed）
+    // A：全期 items=5（1 viewed/1 watched/2 completed），7d 窗 items=3（1 viewed/1 watched/1 completed）
     let ta = t3_find_teacher(teachers, &wid_a);
     assert_eq!(ta["display_name"], "甲老师");
     assert_eq!(ta["onboarding_state"], "surveyed");
     assert_eq!(ta["plans_total"], 2);
-    assert_eq!(ta["items"], json!({"total": 4, "viewed": 1, "completed": 2}));
-    assert_eq!(ta["items_7d"], json!({"total": 2, "viewed": 1, "completed": 1}));
+    assert_eq!(ta["items"], json!({"total": 5, "viewed": 1, "watched": 1, "completed": 2}));
+    assert_eq!(ta["items_7d"], json!({"total": 3, "viewed": 1, "watched": 1, "completed": 1}));
     let la = t3_parse_ts(&ta["last_active_at"]);
     let lk = t3_parse_ts(&ta["last_ask_at"]);
     assert!(
@@ -957,8 +957,8 @@ async fn overview_aggregates_plans_items_events_per_teacher() {
     assert_eq!(tb["display_name"], "乙老师");
     assert_eq!(tb["onboarding_state"], "pending");
     assert_eq!(tb["plans_total"], 0);
-    assert_eq!(tb["items"], json!({"total": 0, "viewed": 0, "completed": 0}));
-    assert_eq!(tb["items_7d"], json!({"total": 0, "viewed": 0, "completed": 0}));
+    assert_eq!(tb["items"], json!({"total": 0, "viewed": 0, "watched": 0, "completed": 0}));
+    assert_eq!(tb["items_7d"], json!({"total": 0, "viewed": 0, "watched": 0, "completed": 0}));
     assert_eq!(tb["last_active_at"], serde_json::Value::Null);
     assert_eq!(tb["last_ask_at"], serde_json::Value::Null);
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）

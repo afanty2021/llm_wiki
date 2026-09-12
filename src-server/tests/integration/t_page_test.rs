@@ -1017,27 +1017,315 @@ async fn s_short_link_redirect_matrix() {
     crate::teardown_test_data(&state).await;
 }
 
-/// SEC-7（终审强烈建议）：GET /t/:token 落地限流——同 token 超过 t_per_min → 429。
-/// 限流先于验签（与 beacon 同位）：无效 token 也计数打满自己的桶（key=token 指纹，
-/// 无 DB 依赖即可验证闸门）；view 事件随 GET 无界写由此收口。
+/// SEC-7（终审强烈建议）+ SEC-8 语义：GET /t/:token 限流在**验签后**（桶 key=
+/// plan 身份）——无效 token 走 403 友好页**不耗桶**；同 plan 超过 t_per_min → 429，
+/// view 事件随 GET 无界写由此收口。（原版用假 token 打满的前提随 SEC-8 失效，
+/// 09-12 随批重写为有效 token + 真实 plan，模板=t_page_play_rate_limited_429。）
 #[tokio::test]
 async fn t_page_view_rate_limited_429() {
     crate::ensure_test_jwt_secret();
     let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
+    cfg.auth.registration_enabled = true;
     cfg.page_rate_limits.t_per_min = 2;
+    let (app, _s1) = llm_wiki_server::create_app(cfg).await.unwrap();
+    let server0 = TestServer::new(app).unwrap();
+
+    let owner_name = unique("view429");
+    let owner = crate::register_user(
+        &server0,
+        &owner_name,
+        &format!("{}@t9.com", owner_name),
+        "secret123",
+    )
+    .await;
+    let team = server0
+        .post("/api/v1/teams")
+        .add_header("authorization", bearer(&owner))
+        .json(&json!({"name": format!("LT测试team_{}", owner_name)}))
+        .await;
+    let team_id = team.json::<serde_json::Value>()["id"].as_i64().unwrap();
+    let proj = server0
+        .post("/api/v1/projects")
+        .add_header("authorization", bearer(&owner))
+        .json(&json!({"name": format!("LT项目_{}", owner_name), "team_id": team_id}))
+        .await;
+    let project_id = proj.json::<serde_json::Value>()["id"].as_i64().unwrap() as i32;
+
+    let mut cfg2 = llm_wiki_server::AppConfig::from_env().unwrap();
+    cfg2.auth.registration_enabled = true;
+    cfg2.training.project_id = Some(project_id);
+    cfg2.training.admin_token = "tok123".to_string();
+    cfg2.page_rate_limits.t_per_min = 2;
+    let (app2, state) = llm_wiki_server::create_app(cfg2).await.unwrap();
+    let server = TestServer::new(app2).unwrap();
+
+    let wid = unique("w");
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": wid, "display_name": "落地教师"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let teacher = r.json::<serde_json::Value>()["access_token"].as_str().unwrap().to_string();
+
+    let page_path = format!("concepts/v429-{}.md", unique("pg"));
+    seed_wiki_page(&state, &page_path, "p", "内容", json!([])).await;
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&json!({
+            "title": "落地计划", "origin": "chat", "period_key": null,
+            "items": [{"kind": "wiki_page", "target_ref": page_path, "label": "i1"}]
+        }))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v = r.json::<serde_json::Value>();
+    let (_code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
+
+    // 有效 token：前 2 次进 handler（200 落地页 + view 事件）
+    for i in 0..2 {
+        let r = server.get(&format!("/t/{token}")).await;
+        assert_eq!(r.status_code(), StatusCode::OK, "within cap #{i}");
+    }
+    // 第 3 次：429（view 事件随 GET 无界写由此收口）
+    let r = server.get(&format!("/t/{token}")).await;
+    assert_eq!(r.status_code(), StatusCode::TOO_MANY_REQUESTS, "over cap must 429");
+    // 无效 token：验签 403，**不耗桶**（SEC-8 后假 token 与真 plan 不同 key）
+    let r = server.get("/t/not-a-real-plan-link-token").await;
+    assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "invalid token 403, not rate-limit response");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
+// ============ play_progress（播放遥测 + watched 投影）============
+
+/// play beacon 主流程：checkpoint → viewed（非 watched）；ended → watched；
+/// watched 后 checkpoint 不回退；complete 后 ended 不回退；400 矩阵
+///（坏 phase / 伪造 item / 越界 item_id）；渲染 HTML 含 keepalive 与 /play。
+#[tokio::test]
+async fn t_page_play_beacon_watched_flow() {
+    let (server, state) = t_fixture("play").await;
+    let (teacher, _uid) = bind_teacher(&server, &unique("w")).await;
+
+    let slug1 = unique("md1");
+    let slug2 = unique("md2");
+    seed_media_asset(&state, &slug1, json!([]), None, None).await;
+    seed_media_asset(&state, &slug2, json!([]), None, None).await;
+    let body = json!({
+        "title": "播放计划", "origin": "chat", "period_key": null,
+        "items": [
+            {"kind": "media", "target_ref": slug1, "label": "v1"},
+            {"kind": "media", "target_ref": slug2, "label": "v2"}
+        ]
+    });
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&body)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v = r.json::<serde_json::Value>();
+    let (_code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
+    let item1 = v["items"][0]["id"].as_i64().unwrap();
+    let item2 = v["items"][1]["id"].as_i64().unwrap();
+
+    // 渲染页含心跳脚本要素（I-2 keepalive + /play 端点 + 90% 阈值）
+    let r = server.get(&format!("/t/{token}")).await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let html = r.text();
+    assert!(html.contains("keepalive: true"), "beacon must use keepalive (review I-2)");
+    assert!(html.contains("'/play'"), "heartbeat endpoint present");
+    assert!(html.contains("0.9"), "accumulated 90% threshold present");
+
+    // checkpoint → 200 {watched:false}；item viewed 非 watched
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1, "phase": "checkpoint", "position_s": 150, "percent": 25}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    assert_eq!(r.json::<serde_json::Value>()["watched"], false);
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item1 as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "viewed", "checkpoint → viewed");
+
+    // ended → watched
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1, "phase": "ended", "position_s": 540, "percent": 100}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    assert_eq!(r.json::<serde_json::Value>()["watched"], true);
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item1 as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "watched");
+
+    // watched 后 checkpoint 不回退（M-2b）
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1, "phase": "checkpoint", "position_s": 560, "percent": 100}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item1 as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "watched", "checkpoint after watched must not regress");
+
+    // 400：非法 phase / 伪造 item / 越界 item_id
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1, "phase": "rewind", "position_s": 1, "percent": 1}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "phase 枚举外 400");
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": 999999999, "phase": "ended", "position_s": 1, "percent": 1}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "伪造 item 400");
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": 99999999999i64, "phase": "ended", "position_s": 1, "percent": 1}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "item_id 越界 400");
+
+    // complete 后 ended → completed 不回退
+    let r = server
+        .post(&format!("/t/{token}/complete"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1}))
+        .await;
+    if r.status_code() != StatusCode::OK {
+        panic!("complete -> {} body={:?}", r.status_code(), r.text());
+    }
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item1, "phase": "ended", "position_s": 600, "percent": 100}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item1 as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "completed", "ended must not regress completed");
+
+    // item2：pending 直达 watched（ended 首 beacon 即 watched）
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": item2, "phase": "ended", "position_s": 540, "percent": 100}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let st: String = sqlx::query_scalar("SELECT status FROM learning_items WHERE id = $1")
+        .bind(item2 as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(st, "watched", "pending → watched directly on ended");
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
+/// play 桶独立于 seen/complete 共桶（M-2d）：play_per_min=2 打满后第 3 次 429，
+/// 而 seen（beacon 桶）不受影响。限流在验签后——用有效 token + 真实 plan。
+#[tokio::test]
+async fn t_page_play_rate_limited_429() {
+    crate::ensure_test_jwt_secret();
+    let mut cfg = llm_wiki_server::AppConfig::from_env().unwrap();
+    cfg.auth.registration_enabled = true;
+    cfg.page_rate_limits.play_per_min = 2;
     let (app, _state) = llm_wiki_server::create_app(cfg).await.unwrap();
     let server = TestServer::new(app).unwrap();
 
-    let tok = "not-a-real-plan-link-token";
-    // 前 2 次：进 handler（无效 token → 403 友好页，非限流响应）
+    // 注册/建 team/project 走第一个 app（registration_enabled=true）；随后按
+    // t_fixture 同款以 training project + play_per_min=2 重建第二个 app。
+    let owner_name = unique("play429");
+    let owner = crate::register_user(
+        &server,
+        &owner_name,
+        &format!("{}@t9.com", owner_name),
+        "secret123",
+    )
+    .await;
+    let team = server
+        .post("/api/v1/teams")
+        .add_header("authorization", bearer(&owner))
+        .json(&json!({"name": format!("LT测试team_{}", owner_name)}))
+        .await;
+    let team_id = team.json::<serde_json::Value>()["id"].as_i64().unwrap();
+    let proj = server
+        .post("/api/v1/projects")
+        .add_header("authorization", bearer(&owner))
+        .json(&json!({"name": format!("LT项目_{}", owner_name), "team_id": team_id}))
+        .await;
+    let project_id = proj.json::<serde_json::Value>()["id"].as_i64().unwrap() as i32;
+    let mut cfg2 = llm_wiki_server::AppConfig::from_env().unwrap();
+    cfg2.auth.registration_enabled = true;
+    cfg2.training.project_id = Some(project_id);
+    cfg2.training.admin_token = "tok123".to_string();
+    cfg2.page_rate_limits.play_per_min = 2;
+    let (app2, state) = llm_wiki_server::create_app(cfg2).await.unwrap();
+    let server = TestServer::new(app2).unwrap();
+
+    let wid = unique("w");
+    let r = server
+        .post("/api/v1/training/bind")
+        .add_header("x-training-admin-token", "tok123")
+        .json(&json!({"wecom_userid": wid, "display_name": "播放教师"}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let teacher = r.json::<serde_json::Value>()["access_token"].as_str().unwrap().to_string();
+
+    let slug = unique("md");
+    seed_media_asset(&state, &slug, json!([]), None, None).await;
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&json!({
+            "title": "限流计划", "origin": "chat", "period_key": null,
+            "items": [{"kind": "media", "target_ref": slug, "label": "v1"}]
+        }))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v = r.json::<serde_json::Value>();
+    let (_code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
+    let item1 = v["items"][0]["id"].as_i64().unwrap();
+
+    // 限流先于校验（桶在验签后、归属校验前）——伪造 item 的 400 也消耗桶：
+    // 前 2 次 400（过桶），第 3 次 429（play_per_min=2 打满）
     for i in 0..2 {
-        let r = server.get(&format!("/t/{tok}")).await;
-        assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "within cap #{i}");
+        let r = server
+            .post(&format!("/t/{token}/play"))
+            .content_type("application/json")
+            .json(&json!({"item_id": 0, "phase": "checkpoint", "position_s": 1, "percent": 1}))
+            .await;
+        assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "过桶后伪造 item 400 #{i}");
     }
-    // 第 3 次：429（red：修复前仍 403——无闸门，view 可无界刷库）
-    let r = server.get(&format!("/t/{tok}")).await;
-    assert_eq!(r.status_code(), StatusCode::TOO_MANY_REQUESTS, "over cap must 429");
-    // 其他 token 不受影响（key=指纹非全局桶）
-    let r = server.get("/t/another-distinct-token").await;
-    assert_eq!(r.status_code(), StatusCode::FORBIDDEN, "other token unaffected");
+    let r = server
+        .post(&format!("/t/{token}/play"))
+        .content_type("application/json")
+        .json(&json!({"item_id": 0, "phase": "checkpoint", "position_s": 1, "percent": 1}))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::TOO_MANY_REQUESTS, "play 桶打满 429");
+    // beacon（seen/complete）桶不受 play 消耗影响：seen 仍 200
+    let r = server.post(&format!("/t/{token}/seen")).await;
+    assert_eq!(r.status_code(), StatusCode::OK, "seen 独立桶不受 play 打满影响");
+    let _ = item1;
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
 }

@@ -66,6 +66,7 @@ pub fn t_routes() -> Router<AppState> {
         .route("/t/:token", get(get_t_page))
         .route("/t/:token/seen", post(post_seen))
         .route("/t/:token/complete", post(post_complete))
+        .route("/t/:token/play", post(post_play))
         .route("/s/:code", get(get_s_redirect))
 }
 
@@ -300,6 +301,7 @@ a.ts { color: #1a56b0; text-decoration: none; font-variant-numeric: tabular-nums
         let status_cls = match item.status.as_str() {
             "completed" => "badge-completed",
             "viewed" => "badge-viewed",
+            "watched" => "badge-viewed",
             _ => "",
         };
         html.push_str(&format!(
@@ -460,7 +462,7 @@ fn beacon_js(token: &str) -> String {
   var TOKEN = {token_lit};
   function beacon(path, body) {{
     try {{
-      fetch('/t/' + TOKEN + path, {{ method: 'POST', headers: {{ 'content-type': 'application/json' }}, body: body }}).catch(function () {{}});
+      fetch('/t/' + TOKEN + path, {{ method: 'POST', headers: {{ 'content-type': 'application/json' }}, body: body, keepalive: true }}).catch(function () {{}});
     }} catch (e) {{}}
   }}
   beacon('/seen', '{{}}');
@@ -475,6 +477,52 @@ fn beacon_js(token: &str) -> String {
     }}, {{ threshold: 0.4 }});
     Array.prototype.forEach.call(document.querySelectorAll('section.item'), function (el) {{ io.observe(el); }});
   }}
+  // 播放心跳（play_progress）：稀疏 ≤4 beacon/视频——25/50/75% 检查点各一次 +
+  // ended 一次。watched 口径=「累计真实播放时长 ≥90%」或自然播完（非「位置 ≥90%」）；
+  // delta 按壁钟钳制：章节/时间戳跳转（currentTime 大幅前跳）不计入累计时长——
+  // 否则两次章节跳转即可伪造「看完」（实现评审 Imp-1）；单 tick 回退置零。
+  // duration 可能短暂为 NaN/Infinity（preload=metadata），一律 isFinite 守卫。
+  // 服务端投影闸只认 phase='ended'。
+  Array.prototype.forEach.call(document.querySelectorAll('section.item'), function (sec) {{
+    var player = sec.querySelector('video,audio');
+    if (!player) return;
+    var itemId = parseInt(sec.getAttribute('data-item'), 10);
+    var acc = 0, lastT = null, lastWall = null, sentEnded = false;
+    var marks = {{}};
+    [25, 50, 75].forEach(function (m) {{ marks[m] = false; }});
+    function pct() {{
+      var d = player.duration;
+      return (isFinite(d) && d > 0) ? Math.min(100, Math.round(player.currentTime / d * 100)) : 0;
+    }}
+    player.addEventListener('timeupdate', function () {{
+      var now = Date.now();
+      if (player.paused) {{ lastT = null; lastWall = null; return; }}
+      if (lastT !== null && lastWall !== null) {{
+        var delta = player.currentTime - lastT;
+        if (delta > 0) {{ acc += Math.min(delta, (now - lastWall) / 1000); }}
+      }}
+      lastT = player.currentTime;
+      lastWall = now;
+      var d = player.duration;
+      if (!isFinite(d) || !(d > 0)) return; // 等价于数值非正判断：JS 内不出现小于号（XSS 结构审计要求全文标签白名单）
+      var p = pct();
+      [25, 50, 75].forEach(function (m) {{
+        if (!marks[m] && p >= m) {{
+          marks[m] = true;
+          beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'checkpoint', position_s: Math.round(player.currentTime), percent: p }}));
+        }}
+      }});
+      if (!sentEnded && acc >= d * 0.9) {{
+        sentEnded = true;
+        beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'ended', position_s: Math.round(player.currentTime), percent: p }}));
+      }}
+    }});
+    player.addEventListener('ended', function () {{
+      if (sentEnded) return;
+      sentEnded = true;
+      beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'ended', position_s: Math.round(player.currentTime), percent: 100 }}));
+    }});
+  }});
   document.addEventListener('click', function (ev) {{
     var t = ev.target;
     while (t && t !== document.body) {{
@@ -516,6 +564,17 @@ fn beacon_js(token: &str) -> String {
 #[derive(Deserialize, Default)]
 pub struct SeenBody {
     pub item_id: Option<i64>,
+}
+
+/// 播放心跳 body：phase ∈ {checkpoint, ended}（枚举外 400）；position_s/percent
+/// 仅入 payload 供审计，watched 投影闸 = phase=="ended"（服务端不复核时长，
+/// 信任模型与 seen/complete 同级——capability URL 本就可伪造任意 beacon）。
+#[derive(Deserialize)]
+pub struct PlayBody {
+    pub item_id: i64,
+    pub phase: String,
+    pub position_s: Option<i64>,
+    pub percent: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -874,6 +933,77 @@ async fn post_complete(
     Ok(Json(serde_json::json!({ "item_id": body.item_id, "status": "completed" })))
 }
 
+/// POST /t/:token/play — 播放心跳 beacon（body PlayBody）。watched 投影的服务端
+/// 闸 = phase=="ended"；checkpoint 仅记事件（payload 供审计与 rebuild 重放）。
+/// 限流走独立 play 桶（60/min/plan）——心跳洪峰不得饿死 seen/complete 共桶。
+async fn post_play(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    Json(body): Json<PlayBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (user_id, plan_id) =
+        crate::utils::verify_plan_link_token(&token, state.config.jwt_secret())?;
+    if !state.limiter.play.check(&plan_identity_key(user_id, plan_id)) {
+        return Err(AppError::TooManyRequests);
+    }
+    if body.phase != "checkpoint" && body.phase != "ended" {
+        return Err(AppError::BadRequest(format!(
+            "phase must be 'checkpoint' or 'ended', got {:?}",
+            body.phase
+        )));
+    }
+    let mut tx = state.db.begin().await.map_err(AppError::from)?;
+
+    // 归属 + status 门禁：与 seen/complete 一致，归档 plan 拒收（404）。
+    let owned: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM learning_plans \
+         WHERE id = $1 AND user_id = $2 AND status = 'active'",
+    )
+    .bind(plan_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if owned.is_none() {
+        return Err(AppError::ResourceNotFound("Plan not found".into()));
+    }
+
+    // item ∈ plan 校验（伪造 → 400）。绑定必须用 i64 原值——与 post_complete 的
+    // 同文本 SQL 同型（sqlx 连接级预编译缓存按 SQL 文本复用：play 先以 int4 备语句、
+    // complete 再以 int8 编码发参 → "incorrect binary data format"，09-12 实锤）；
+    // 投影层 i32 转换放在存在性校验之后（越界 → 400，遗留债同款）。
+    let ok: Option<i32> =
+        sqlx::query_scalar("SELECT id FROM learning_items WHERE id = $1 AND plan_id = $2")
+            .bind(body.item_id)
+            .bind(plan_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if ok.is_none() {
+        return Err(AppError::BadRequest(format!(
+            "item_id {} does not belong to this plan",
+            body.item_id
+        )));
+    }
+    let item_id_i32 = i32::try_from(body.item_id)
+        .map_err(|_| AppError::BadRequest(format!("item_id {} out of range", body.item_id)))?;
+
+    crate::services::projection::apply_play_progress(
+        &mut tx,
+        plan_id,
+        item_id_i32,
+        &body.phase,
+        body.position_s.unwrap_or(0),
+        body.percent.unwrap_or(0),
+        user_id,
+    )
+    .await?;
+    tx.commit().await.map_err(AppError::from)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "item_id": body.item_id,
+        "watched": body.phase == "ended"
+    })))
+}
+
 /// chapters JSONB → Vec<TChapter>（防御式：畸形数组/缺失字段降级为空/默认，
 /// 负 start/end 钳 0——CLI/LLM 产出的 JSON 不可信）。
 fn parse_chapters(v: &serde_json::Value) -> Vec<TChapter> {
@@ -908,6 +1038,19 @@ mod tests {
 
     fn media_view(kind: &str, chapters: Vec<TChapter>, transcript: Option<String>) -> TMediaAssetView {
         TMediaAssetView { kind: kind.into(), duration_s: 600, chapters, transcript, summary_pages: vec![] }
+    }
+
+    /// play_progress 心跳脚本要素：keepalive（评审 I-2——看完即关页场景下
+    /// ended beacon 的送达保障）、/play 端点、累计 90% 阈值、ended 相位。
+    #[test]
+    fn beacon_js_contains_play_heartbeat_elements() {
+        let js = beacon_js("tok");
+        assert!(js.contains("keepalive: true"), "beacon fetch must set keepalive");
+        assert!(js.contains("'/play'"), "play endpoint present");
+        assert!(js.contains("phase: 'ended'"), "ended phase present");
+        assert!(js.contains("d * 0.9"), "accumulated >= 90% duration threshold");
+        assert!(js.contains("isFinite"), "duration NaN/Infinity guard");
+        assert!(js.contains("lastWall"), "wall-clock clamp present (seek must not inflate acc, review Imp-1)");
     }
 
     /// 敌意 fixture 全量渲染：所有插值点均被转义，语义保留。

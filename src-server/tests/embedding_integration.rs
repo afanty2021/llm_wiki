@@ -68,7 +68,7 @@ async fn embed_and_store_noop_when_cfg_none() {
     let (pool, _cfg, client) = setup().await;
     let store = PgVectorStore::new(pool.clone());
     let n = embedding::embed_and_store(&store, None, &client, 249, &[("x.md".into(), "x".into())]).await.unwrap();
-    assert_eq!(n, 0);
+    assert_eq!(n.stored, 0, "EmbedOutcome.stored（P2 批化重构后的返回类型）");
 }
 
 #[tokio::test]

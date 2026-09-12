@@ -97,7 +97,10 @@ completed 永不回退；watched 不覆盖 completed。
 ## 四、已完成与偏差（诚实记账）
 
 - **迁移 020 已写入文件并已应用 live PG（5433）**（2026-09-12，本计划落盘前的实现启动阶段）：DDL 仅放宽 CHECK、对旧二进制零影响（旧代码只写旧类型），且集成测试依赖。风险评级：低（ADD CONSTRAINT 纯收紧方向的反向操作=放宽，无数据回填）。
-- 其余代码步骤（projection/t_page/training/测试）**尚未开始**——等待本计划评审。
+- ~~其余代码步骤尚未开始~~（**勘误 2026-09-12 实现评审 Imp-3**：此半句在实现收官后未及时改写，与代码现实矛盾——本节现补收官态，教训=分段编辑脚本中途断言失败会静默丢前半改动，自报前必须回读产物）：
+  - 全部代码步骤已落地（见 §四 第一条后各条与 §五b 测试终态）；
+  - 评审 I-1/I-2 已吸收、I-3 记账动作在部署窗执行；M-1..M-7 全落（M-3/M-7/M-1 尾巴实现期补齐）；
+  - 实现评审（.superpowers/play-progress-watched-impl-review-2026-09-12/report.md，Approve with fixes）新增三条 Imp 已收口：①心跳 delta 按壁钟钳制（前向章节跳转不计入累计，防假「看完」）；②`t_page_view_rate_limited_429` 随批重写为有效 token+真实 plan（SEC-8 后旧前提失效，main CI 门因此红）；③即本条。
 
 ## 五、明确不做（范围边界）
 
@@ -114,9 +117,9 @@ completed 永不回退；watched 不覆盖 completed。
 4. seen/complete 现有限流与测试零回归；rebuild 后 watched 不丢；recent_events 窗口无 play_progress。
 5. 全量相关测试绿（t_page/learning_api/training），`cargo build` 无警告级新增。
 
-## 七、评审关注点建议
+## 七、评审关注点（已裁定，报告 .superpowers/play-progress-watched-plan-review-2026-09-12/report.md）
 
-1. watched 与 completed 的语义边界是否认可（被动证据 vs 主动确认）。
-2. 服务端投影闸仅认 phase='ended'（信任客户端 accumulated 阈值）是否可接受——备选是服务端按 position_s/duration 复核，但 duration 需进 payload 且仍有伪造面。
-3. play 桶 60/min/plan 的额度（现设计心跳稀疏 ≤4/视频，60 充裕）。
-4. recent_events 排除 play_progress 后，tutor 对「看完」的感知完全依赖 plans.watched 计数——是否需要在 progress 响应里另加最近 watched 摘要（本期不做，留观测项）。
+1. watched/completed 语义边界——**认可**（被动证据 vs 主动确认分工清晰）。
+2. 投影闸仅认 phase='ended' 的信任模型——**认可**（capability URL 下伪造面不变，克制正确）；附实现要求：口径注释 + isFinite 守卫（M-7，已落）。
+3. play 桶 60/min/plan——**认可**（>10× 余量）。
+4. recent_events 排除后 tutor 感知走 plans.watched 计数——**认可**，摘要留观测项（SKILL 双份热部署，补 prompt 成本极低）。

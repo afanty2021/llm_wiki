@@ -385,9 +385,11 @@ struct OverviewRow {
     plans_total: i64,
     items_total: i64,
     items_viewed: i64,
+    items_watched: i64,
     items_completed: i64,
     items_7d_total: i64,
     items_7d_viewed: i64,
+    items_7d_watched: i64,
     items_7d_completed: i64,
     last_active_at: Option<chrono::DateTime<chrono::Utc>>,
     last_ask_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -402,9 +404,11 @@ SELECT tp.wecom_userid, tp.display_name, tp.onboarding_state, \
        COALESCE(pi.plans_total, 0) AS plans_total, \
        COALESCE(pi.items_total, 0) AS items_total, \
        COALESCE(pi.items_viewed, 0) AS items_viewed, \
+       COALESCE(pi.items_watched, 0) AS items_watched, \
        COALESCE(pi.items_completed, 0) AS items_completed, \
        COALESCE(p7.items_total, 0) AS items_7d_total, \
        COALESCE(p7.items_viewed, 0) AS items_7d_viewed, \
+       COALESCE(p7.items_watched, 0) AS items_7d_watched, \
        COALESCE(p7.items_completed, 0) AS items_7d_completed, \
        ev.last_active_at, ev.last_ask_at \
 FROM teacher_profiles tp \
@@ -413,6 +417,7 @@ LEFT JOIN ( \
          COUNT(DISTINCT p.id) AS plans_total, \
          COUNT(i.id) AS items_total, \
          COUNT(i.id) FILTER (WHERE i.status = 'viewed') AS items_viewed, \
+         COUNT(i.id) FILTER (WHERE i.status = 'watched') AS items_watched, \
          COUNT(i.id) FILTER (WHERE i.status = 'completed') AS items_completed \
   FROM learning_plans p \
   LEFT JOIN learning_items i ON i.plan_id = p.id \
@@ -422,6 +427,7 @@ LEFT JOIN ( \
   SELECT p.user_id, \
          COUNT(i.id) AS items_total, \
          COUNT(i.id) FILTER (WHERE i.status = 'viewed') AS items_viewed, \
+         COUNT(i.id) FILTER (WHERE i.status = 'watched') AS items_watched, \
          COUNT(i.id) FILTER (WHERE i.status = 'completed') AS items_completed \
   FROM learning_plans p \
   LEFT JOIN learning_items i ON i.plan_id = p.id \
@@ -480,11 +486,13 @@ async fn get_overview(
             items: ItemCounts {
                 total: r.items_total,
                 viewed: r.items_viewed,
+                watched: r.items_watched,
                 completed: r.items_completed,
             },
             items_7d: ItemCounts {
                 total: r.items_7d_total,
                 viewed: r.items_7d_viewed,
+                watched: r.items_7d_watched,
                 completed: r.items_7d_completed,
             },
             last_active_at: r.last_active_at,
@@ -676,12 +684,14 @@ pub struct PlanProgress {
     pub items: ItemCounts,
 }
 
-/// items 计数：total / viewed / completed 按 learning_items.status 精确计数
-/// （viewed 仅 status='viewed'；"至少看过" = viewed + completed，由消费方自行求和）。
+/// items 计数：total / viewed / watched / completed 按 learning_items.status 精确计数
+/// （watched = 播放 ≥90%/ended 的被动证据；"至少看过" = viewed + watched + completed，
+/// 由消费方自行求和）。
 #[derive(Serialize)]
 pub struct ItemCounts {
     pub total: i64,
     pub viewed: i64,
+    pub watched: i64,
     pub completed: i64,
 }
 
@@ -705,10 +715,11 @@ async fn get_progress(
     let claims = require_auth(&state, &headers).await?;
     let user_id: i32 = claims.sub.parse()?;
 
-    let rows = sqlx::query_as::<_, (i32, String, String, String, i64, i64, i64)>(
+    let rows = sqlx::query_as::<_, (i32, String, String, String, i64, i64, i64, i64)>(
         "SELECT p.id, p.title, p.origin, p.status, \
                 COUNT(i.id) AS total, \
                 COUNT(i.id) FILTER (WHERE i.status = 'viewed') AS viewed, \
+                COUNT(i.id) FILTER (WHERE i.status = 'watched') AS watched, \
                 COUNT(i.id) FILTER (WHERE i.status = 'completed') AS completed \
          FROM learning_plans p \
          LEFT JOIN learning_items i ON i.plan_id = p.id \
@@ -721,18 +732,21 @@ async fn get_progress(
     .await?;
     let plans = rows
         .into_iter()
-        .map(|(id, title, origin, status, total, viewed, completed)| PlanProgress {
+        .map(|(id, title, origin, status, total, viewed, watched, completed)| PlanProgress {
             id,
             title,
             origin,
             status,
-            items: ItemCounts { total, viewed, completed },
+            items: ItemCounts { total, viewed, watched, completed },
         })
         .collect();
 
+    // play_progress 高频心跳不入 LLM 窗口（周报/tutor 消费 ask/complete 与 plans
+    // 计数即可——watched 聚合走 ItemCounts，明细在库可审计）。
     let recent_events = sqlx::query_as::<_, RecentEvent>(
         "SELECT id, event_type, payload, created_at FROM learning_events \
-         WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT 20",
+         WHERE user_id = $1 AND event_type <> 'play_progress' \
+         ORDER BY created_at DESC, id DESC LIMIT 20",
     )
     .bind(user_id)
     .fetch_all(&state.db)
@@ -1198,6 +1212,7 @@ async fn list_plans(
         "SELECT p.id, p.title, p.reason, p.origin, p.period_key, p.status, p.created_at, \
                 COUNT(i.id) AS total, \
                 COUNT(i.id) FILTER (WHERE i.status = 'viewed') AS viewed, \
+                COUNT(i.id) FILTER (WHERE i.status = 'watched') AS watched, \
                 COUNT(i.id) FILTER (WHERE i.status = 'completed') AS completed \
          FROM learning_plans p \
          LEFT JOIN learning_items i ON i.plan_id = p.id \
@@ -1206,7 +1221,7 @@ async fn list_plans(
          ORDER BY p.created_at DESC, p.id DESC",
         if q.status.is_some() { "AND p.status = $2" } else { "" }
     );
-    let mut query = sqlx::query_as::<_, (i32, String, Option<String>, String, Option<String>, String, chrono::DateTime<chrono::Utc>, i64, i64, i64)>(&sql)
+    let mut query = sqlx::query_as::<_, (i32, String, Option<String>, String, Option<String>, String, chrono::DateTime<chrono::Utc>, i64, i64, i64, i64)>(&sql)
         .bind(user_id);
     if let Some(st) = &q.status {
         query = query.bind(st);
@@ -1214,10 +1229,10 @@ async fn list_plans(
     let rows = query.fetch_all(&state.db).await?;
     let plans = rows
         .into_iter()
-        .map(|(id, title, reason, origin, period_key, status, created_at, total, viewed, completed)| {
+        .map(|(id, title, reason, origin, period_key, status, created_at, total, viewed, watched, completed)| {
             PlanListItem {
                 plan: PlanResponse { id, title, reason, origin, period_key, status, created_at },
-                items: ItemCounts { total, viewed, completed },
+                items: ItemCounts { total, viewed, watched, completed },
             }
         })
         .collect();
@@ -1320,6 +1335,7 @@ async fn rebuild_progress(
     Ok(Json(serde_json::json!({
         "cleared": stats.cleared,
         "viewed": stats.viewed,
+        "watched": stats.watched,
         "completed": stats.completed,
     })))
 }

@@ -28,7 +28,8 @@
   "page_rate_limits": {
     "s_per_min": 30,
     "beacon_per_min": 60,
-    "t_per_min": 30
+    "t_per_min": 30,
+    "play_per_min": 60
   },
   "embedding": {
     "base_url": "http://localhost:8001/v1",

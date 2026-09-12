@@ -6,10 +6,10 @@
 //! 语义就是「事件即事实，投影可重建」，回滚重放天然安全）。路由层一律
 //! 在同一事务内调用：事件记账与状态转移原子提交，中途失败整体回滚。
 //!
-//! 单调性：items.status 格为 pending < viewed < completed，所有转移均带
-//! WHERE 守卫单向推进（completed 永不回退、completed_at 不重置）；
-//! `rebuild` 的集合式重放与按时间逐条重放收敛到同一不动点（格上取 max
-//! 与顺序无关），故无需逐事件循环。
+//! 单调性：items.status 格为 pending < viewed < watched < completed，所有转移
+//! 均带 WHERE 守卫单向推进（completed 永不回退、completed_at 不重置；watched
+//! 不覆盖 completed）；`rebuild` 的集合式重放与按时间逐条重放收敛到同一不动
+//! 点（格上取 max 与顺序无关），故无需逐事件循环。
 
 use serde::Serialize;
 use sqlx::PgConnection;
@@ -50,7 +50,8 @@ pub async fn complete_item(
     .bind(item_id)
     .bind(user_id)
     .execute(&mut *tx)
-    .await?
+    .await
+    .map_err(AppError::from)?
     .rows_affected();
     Ok(n)
 }
@@ -107,22 +108,85 @@ pub async fn apply_seen(
     Ok(())
 }
 
+/// 记 play_progress 播放心跳事件 + watched 单向投影。
+///
+/// - 事件即事实：checkpoint/ended 每次都记事件（payload 携带 phase/position_s/
+///   percent 供审计与 rebuild 重放判定）；
+/// - 投影：任何 phase 都先做 pending → viewed（与项级 seen 同守卫——点开播放
+///   即「看过」，老 WebView 无 IntersectionObserver 时 play beacon 是唯一证据）；
+///   `phase='ended'`（客户端 accumulated ≥0.9×duration 或自然播完）再做
+///   viewed/pending → watched（`WHERE status IN ('pending','viewed')` 守卫：
+///   watched 幂等、completed 永不回退）。
+///
+/// 归属守卫与 apply_seen 项级同款（plan 属 user + item 属该 plan）。
+pub async fn apply_play_progress(
+    tx: &mut PgConnection,
+    plan_id: i32,
+    item_id: i32,
+    phase: &str,
+    position_s: i64,
+    percent: i64,
+    user_id: i32,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO learning_events (user_id, item_id, event_type, payload) \
+         VALUES ($1, $2, 'play_progress', $3)",
+    )
+    .bind(user_id)
+    .bind(item_id)
+    .bind(serde_json::json!({ "phase": phase, "position_s": position_s, "percent": percent }))
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+
+    sqlx::query(
+        "UPDATE learning_items i \
+         SET status = 'viewed' \
+         WHERE i.id = $1 AND i.plan_id = $2 AND i.status = 'pending' \
+           AND EXISTS (SELECT 1 FROM learning_plans p WHERE p.id = i.plan_id AND p.user_id = $3)",
+    )
+    .bind(item_id)
+    .bind(plan_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    if phase == "ended" {
+        sqlx::query(
+            "UPDATE learning_items i \
+             SET status = 'watched' \
+             WHERE i.id = $1 AND i.plan_id = $2 AND i.status IN ('pending','viewed') \
+               AND EXISTS (SELECT 1 FROM learning_plans p WHERE p.id = i.plan_id AND p.user_id = $3)",
+        )
+        .bind(item_id)
+        .bind(plan_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    Ok(())
+}
+
 /// rebuild 统计（调试端点响应 + 测试断言用）。
 #[derive(Debug, Serialize)]
 pub struct RebuildStats {
     pub cleared: u64,
     pub viewed: u64,
+    pub watched: u64,
     pub completed: u64,
 }
 
 /// 重建本人全部 items 投影：清零（pending + completed_at=NULL）后按
 /// **item 级**事件重放（页面级 seen 的 item_id 为 NULL，天然不参与）。
 ///
-/// 三步集合式 SQL（见模块注释：格上单向转移，集合重放 = 逐条重放的不动点）：
+/// 四步集合式 SQL（见模块注释：格上单向转移，集合重放 = 逐条重放的不动点）：
 /// 1. 清零：user 名下所有 items → pending（含无事件支撑的脏 completed——
 ///    回正为 pending，这正是 rebuild 的存在意义）；
-/// 2. 重放 seen：存在 item 级 seen 事件的 pending 项 → viewed；
-/// 3. 重放 complete：存在 complete 事件的项 → completed，
+/// 2. 重放 seen：存在 item 级 seen **或任意 play_progress** 事件的 pending 项
+///    → viewed（checkpoint-only 条目——老 WebView 无 IO、play beacon 是唯一
+///    证据——不因缺 seen 事件而回退，「事件即事实」；评审 I-1）；
+/// 3. 重放 watched：存在 phase='ended' play_progress 事件的 pending/viewed 项
+///    → watched；
+/// 4. 重放 complete：存在 complete 事件的项 → completed，
 ///    completed_at 取该 item **首个** complete 事件时间（MIN(created_at)，
 ///    与在线路径「首次完成时刻」语义一致）。
 ///
@@ -144,7 +208,22 @@ pub async fn rebuild(tx: &mut PgConnection, user_id: i32) -> Result<RebuildStats
          WHERE i.status = 'pending' \
            AND i.plan_id IN (SELECT id FROM learning_plans WHERE user_id = $1) \
            AND EXISTS (SELECT 1 FROM learning_events e \
-                       WHERE e.item_id = i.id AND e.user_id = $1 AND e.event_type = 'seen')",
+                       WHERE e.item_id = i.id AND e.user_id = $1 \
+                         AND e.event_type IN ('seen','play_progress'))",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    let watched = sqlx::query(
+        "UPDATE learning_items i \
+         SET status = 'watched' \
+         WHERE i.status IN ('pending','viewed') \
+           AND i.plan_id IN (SELECT id FROM learning_plans WHERE user_id = $1) \
+           AND EXISTS (SELECT 1 FROM learning_events e \
+                       WHERE e.item_id = i.id AND e.user_id = $1 AND e.event_type = 'play_progress' \
+                         AND e.payload->>'phase' = 'ended')",
     )
     .bind(user_id)
     .execute(&mut *tx)
@@ -166,5 +245,5 @@ pub async fn rebuild(tx: &mut PgConnection, user_id: i32) -> Result<RebuildStats
     .await?
     .rows_affected();
 
-    Ok(RebuildStats { cleared, viewed, completed })
+    Ok(RebuildStats { cleared, viewed, watched, completed })
 }
