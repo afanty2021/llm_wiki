@@ -1329,3 +1329,121 @@ async fn t_page_play_rate_limited_429() {
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
+
+/// 断点续播（play-resume）：GET /t/ 按各 media 项**最新**一条 play_progress
+/// 注入 data-resume。覆盖：checkpoint 注入值正确 / ended 缺席 / position 边界
+/// 4 缺席 5 注入 / latest 口径钉死（先高后低取后发，Imp-2a——防 ORDER BY 改
+/// position_s DESC 或 id ASC 的静默劣化）/ 多 media 项混合相位（Imp-2b）/
+/// 他人事件隔离（user_id 谓词）。
+#[tokio::test]
+async fn t_page_play_resume_injection() {
+    let (server, state) = t_fixture("resume").await;
+    let (teacher, _uid) = bind_teacher(&server, &unique("w")).await;
+
+    let slugs: Vec<String> = (1..=4).map(|i| unique(&format!("rs{i}"))).collect();
+    for s in &slugs {
+        seed_media_asset(&state, s, json!([]), None, None).await;
+    }
+    let body = json!({
+        "title": "续播计划", "origin": "chat", "period_key": null,
+        "items": slugs
+            .iter()
+            .map(|s| json!({"kind": "media", "target_ref": s, "label": s}))
+            .collect::<Vec<_>>()
+    });
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher))
+        .json(&body)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v = r.json::<serde_json::Value>();
+    let (_code, token) = resolve_short_link(&server, v["link"].as_str().unwrap()).await;
+    let ids: Vec<i64> = (0..4).map(|i| v["items"][i]["id"].as_i64().unwrap()).collect();
+
+    async fn play(server: &TestServer, token: &str, item: i64, phase: &str, pos: i64) {
+        let r = server
+            .post(&format!("/t/{token}/play"))
+            .content_type("application/json")
+            .json(&json!({"item_id": item, "phase": phase, "position_s": pos, "percent": 10}))
+            .await;
+        assert_eq!(r.status_code(), StatusCode::OK);
+    }
+    async fn resume_attrs(server: &TestServer, token: &str) -> String {
+        let r = server.get(&format!("/t/{token}")).await;
+        assert_eq!(r.status_code(), StatusCode::OK);
+        r.text()
+    }
+
+    // 无事件基线：四个 media 项全部无 data-resume
+    let html = resume_attrs(&server, &token).await;
+    assert!(!html.contains("data-resume="), "no events -> no resume attrs");
+
+    // item A（latest 钉死，Imp-2a）：先 100 后 50 —— 后发低值入选；
+    // max 口径会给 100、id ASC 会给 100，此断言把两种劣化全钉死
+    play(&server, &token, ids[0], "checkpoint", 100).await;
+    play(&server, &token, ids[0], "checkpoint", 50).await;
+    // item B：ended → 缺席（看完从头看）
+    play(&server, &token, ids[1], "ended", 540).await;
+    // item C：position 边界上半——作为 latest 时 4 噪声缺席，5 注入
+    play(&server, &token, ids[2], "checkpoint", 4).await;
+    play(&server, &token, ids[2], "checkpoint", 5).await;
+    // item D：边界下半（评审 Minor-1）——latest 恒为 4 时缺席（防噪声过滤
+    // 弱化为 >=0 时矩阵静默劣化）
+    play(&server, &token, ids[3], "checkpoint", 4).await;
+
+    let html = resume_attrs(&server, &token).await;
+    assert!(html.contains("data-resume=\"50\""), "A: latest (50) wins over max (100)");
+    assert!(!html.contains("data-resume=\"100\""), "A: max value must not appear");
+    assert_eq!(html.matches("data-resume=").count(), 2, "B ended + D(=4 latest) -> only A and C");
+    assert!(html.contains("data-resume=\"5\""), "C: boundary position 5 injected");
+    assert!(!html.contains("data-resume=\"4\""), "D: latest 4 below noise floor absent");
+
+    // 他人事件隔离（跨 plan 形态）：第二教师自己的 plan 播放，其位置不得出现在第一教师页面
+    let (teacher2, uid2) = bind_teacher(&server, &unique("w2")).await;
+    let slug2 = unique("rs-other");
+    seed_media_asset(&state, &slug2, json!([]), None, None).await;
+    let r = server
+        .post("/api/v1/training/plans")
+        .add_header("authorization", bearer(&teacher2))
+        .json(&json!({
+            "title": "他人计划", "origin": "chat", "period_key": null,
+            "items": [{"kind": "media", "target_ref": slug2, "label": "other"}]
+        }))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::CREATED);
+    let v2 = r.json::<serde_json::Value>();
+    let (_c2, token2) = resolve_short_link(&server, v2["link"].as_str().unwrap()).await;
+    let item_other = v2["items"][0]["id"].as_i64().unwrap();
+    play(&server, &token2, item_other, "checkpoint", 777).await;
+
+    let html = resume_attrs(&server, &token).await;
+    assert!(!html.contains("data-resume=\"777\""), "other teacher's position must not leak");
+    let html2 = resume_attrs(&server, &token2).await;
+    assert!(html2.contains("data-resume=\"777\""), "owner still sees own position");
+
+    // 安全谓词守护（max 终审 Minor）：他人 uid × 本人 item 的 play_progress 行
+    // ——item_id = ANY 排不掉，只有 user_id 谓词能挡。直插 DB 使其成为 item A
+    // 的最新行（id DESC）：谓词若缺席，A 会以 data-resume="999" 漏出、断言即红。
+    sqlx::query(
+        "INSERT INTO learning_events (user_id, item_id, event_type, payload) \
+         VALUES ($1, $2, 'play_progress', $3)",
+    )
+    .bind(uid2 as i32)
+    .bind(ids[0] as i32)
+    .bind(serde_json::json!({"phase": "checkpoint", "position_s": 999, "percent": 90}))
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let html = resume_attrs(&server, &token).await;
+    assert!(
+        !html.contains("data-resume=\"999\""),
+        "foreign-uid row on own item must be filtered by user_id predicate"
+    );
+    assert!(html.contains("data-resume=\"50\""), "own latest (50) unaffected by foreign row");
+    assert_eq!(html.matches("data-resume=").count(), 2, "still only A and C");
+
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}

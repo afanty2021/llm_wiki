@@ -230,6 +230,7 @@ pub fn render_t_page(
     items: &[TItemView],
     media_assets: &BTreeMap<String, TMediaAssetView>,
     signed_urls: &BTreeMap<String, String>,
+    resume: &BTreeMap<i32, i64>,
     token: &str,
 ) -> String {
     let total = items.len();
@@ -339,8 +340,14 @@ a.ts { color: #1a56b0; text-decoration: none; font-variant-numeric: tabular-nums
                         } else {
                             ""
                         };
+                        // 断点续播：整数值插值（无注入面），仅 signed_urls 命中分支
+                        // 内注入——无签名密钥分支无媒体标签，属性自然缺席
+                        let resume_attr = match resume.get(&item.id) {
+                            Some(pos) => format!(" data-resume=\"{pos}\""),
+                            None => String::new(),
+                        };
                         html.push_str(&format!(
-                            "<{tag}{inline_attrs} controls preload=\"metadata\" src=\"{}\"></{tag}>\n",
+                            "<{tag}{inline_attrs}{resume_attr} controls preload=\"metadata\" src=\"{}\"></{tag}>\n",
                             html_escape(url)
                         ));
                     } else {
@@ -487,6 +494,25 @@ fn beacon_js(token: &str) -> String {
     var player = sec.querySelector('video,audio');
     if (!player) return;
     var itemId = parseInt(sec.getAttribute('data-item'), 10);
+    // 断点续播：服务端按最新 play_progress 注入 data-resume（ended 或噪音位置
+    // 不注入）。双路就绪：preload=metadata 下 loadedmetadata 可能已发（本脚本
+    // 在 body 尾）——readyState >= 1 立即 apply，否则挂事件。一次性 best-effort；
+    // 接近看完（超过九成时长）不续、已手动定位（章节/时间戳）不抢；只定位不
+    // 自动播放。全文禁小于号（XSS 结构审计）：比较一律反向书写。
+    var resumeS = parseInt(player.getAttribute('data-resume'), 10);
+    if (!isNaN(resumeS) && resumeS > 0) {{
+      var resumeApplied = false;
+      var applyResume = function () {{
+        if (resumeApplied) return;
+        resumeApplied = true;
+        var d = player.duration;
+        if (isFinite(d) && d > 0 && !(resumeS > d * 0.9) && player.currentTime === 0) {{
+          try {{ player.currentTime = resumeS; }} catch (e) {{}}
+        }}
+      }};
+      if (player.readyState >= 1) {{ applyResume(); }}
+      else {{ player.addEventListener('loadedmetadata', applyResume); }}
+    }}
     var acc = 0, lastT = null, lastWall = null, sentEnded = false;
     var marks = {{}};
     [25, 50, 75].forEach(function (m) {{ marks[m] = false; }});
@@ -724,6 +750,36 @@ async fn get_t_page(
             .await?
         };
 
+    // 断点续播：各 media 项最新一条 play_progress 的位置（latest 口径——污染面
+    // 显著小于 max：max 被任意前跳 seek 无界抬高，latest 仅 marks 用尽后回退一隅
+    // 且受 25% 窗口钳制）。ended → 从头看；position_s < 5 → 误触噪声不注入。
+    // user_id 谓词是跨用户安全隔离（item 索引 idx_events_item 已在位，非性能考量；
+    // 勿再「补」item_id 索引=beacon 写路径重复索引）。cast 安全=单写者不变量。
+    let media_item_ids: Vec<i32> = items
+        .iter()
+        .filter(|(_, kind, _, _, _)| kind == "media")
+        .map(|(id, _, _, _, _)| *id)
+        .collect();
+    let resume_positions: BTreeMap<i32, i64> = if media_item_ids.is_empty() {
+        BTreeMap::new()
+    } else {
+        sqlx::query_as::<_, (i32, String, i64)>(
+            "SELECT DISTINCT ON (item_id) item_id, payload->>'phase', \
+             (payload->>'position_s')::bigint \
+             FROM learning_events \
+             WHERE user_id = $1 AND item_id = ANY($2) AND event_type = 'play_progress' \
+             ORDER BY item_id, id DESC",
+        )
+        .bind(user_id)
+        .bind(&media_item_ids)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .filter(|(_, phase, pos)| phase != "ended" && *pos >= 5)
+        .map(|(item_id, _, pos)| (item_id, pos))
+        .collect()
+    };
+
     // wiki 内容装载：wiki_page 项 target_ref + media transcript_page_path。
     // TRAINING__PROJECT_ID 缺失（或页未同步）→ 内容为空 → 占位文案，页面其余
     // 功能（媒体播放/beacon/完成）不受影响（内容是辅助呈现，plan 归属才是硬门）。
@@ -819,7 +875,7 @@ async fn get_t_page(
     let plan_view = TPlanView { title, reason };
     Ok((
         StatusCode::OK,
-        Html(render_t_page(&plan_view, &t_items, &media_assets, &signed_urls, &token)),
+        Html(render_t_page(&plan_view, &t_items, &media_assets, &signed_urls, &resume_positions, &token)),
     )
         .into_response())
 }
@@ -1051,6 +1107,15 @@ mod tests {
         assert!(js.contains("d * 0.9"), "accumulated >= 90% duration threshold");
         assert!(js.contains("isFinite"), "duration NaN/Infinity guard");
         assert!(js.contains("lastWall"), "wall-clock clamp present (seek must not inflate acc, review Imp-1)");
+        // 断点续播恢复段（play-resume 计划 §三.3）
+        assert!(js.contains("data-resume"), "resume attribute reader present");
+        assert!(js.contains("loadedmetadata"), "metadata-ready listener present");
+        assert!(js.contains("readyState >= 1"), "dual-path immediate apply present");
+        assert!(js.contains("currentTime === 0"), "manual-seek guard present");
+        assert!(
+            !js.contains('<'),
+            "inline JS must never contain `<` (XSS structural audit)"
+        );
     }
 
     /// 敌意 fixture 全量渲染：所有插值点均被转义，语义保留。
@@ -1096,7 +1161,7 @@ mod tests {
         );
         let mut urls = BTreeMap::new();
         urls.insert("slug\"a<b".to_string(), "/media/slug%22a%3Cb?exp=1&sig=ab&fp=cd".to_string());
-        let html = render_t_page(&plan, &items, &assets, &urls, "tok.en_123");
+        let html = render_t_page(&plan, &items, &assets, &urls, &BTreeMap::new(), "tok.en_123");
 
         // 敌意标签不出现原样（转义后仅作可见文本，无标签语义）
         assert!(!html.contains("<img"), "no raw <img> tag");
@@ -1163,7 +1228,7 @@ mod tests {
                 wiki_content: Some("正文".into()),
             },
         ];
-        let html = render_t_page(&plan, &items, &BTreeMap::new(), &BTreeMap::new(), "tok");
+        let html = render_t_page(&plan, &items, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new(), "tok");
         assert!(html.contains("内容尚未同步到知识库"));
         assert!(html.contains("共 2 项 · 已完成 1 项"));
         assert!(html.contains("data-complete=\"8\" disabled"));
@@ -1192,7 +1257,7 @@ mod tests {
         assets.insert("s1".to_string(), mv);
         let mut urls = BTreeMap::new();
         urls.insert("s1".to_string(), "/media/s1?exp=1&sig=ab&fp=cd".to_string());
-        let html = render_t_page(&plan, &items, &assets, &urls, "tok");
+        let html = render_t_page(&plan, &items, &assets, &urls, &BTreeMap::new(), "tok");
         assert!(html.contains("href=\"#item-3-summary\""), "summary anchor link");
         assert!(html.contains("id=\"item-3-summary\""), "summary details block");
         assert!(html.contains("&lt;i&gt;摘要标题&lt;/i&gt;"), "summary title escaped");
@@ -1201,6 +1266,46 @@ mod tests {
         assert!(
             html.contains("playsinline webkit-playsinline x5-playsinline"),
             "video carries inline-playback attrs for iOS WKWebView / Android X5"
+        );
+    }
+
+    /// 断点续播：resume map 命中的 media 项注入 data-resume（signed_urls 命中
+    /// 分支内、整数插值）；未命中项属性缺席（play-resume 计划 §三.4）。
+    #[test]
+    fn render_t_page_injects_data_resume_only_for_mapped_items() {
+        let plan = TPlanView { title: "p".into(), reason: None };
+        let items = vec![
+            TItemView {
+                id: 11,
+                kind: "media".into(),
+                target_ref: "s1".into(),
+                label: "a".into(),
+                status: "viewed".into(),
+                wiki_content: None,
+            },
+            TItemView {
+                id: 12,
+                kind: "media".into(),
+                target_ref: "s2".into(),
+                label: "b".into(),
+                status: "pending".into(),
+                wiki_content: None,
+            },
+        ];
+        let mut assets = BTreeMap::new();
+        assets.insert("s1".to_string(), media_view("video", vec![], None));
+        assets.insert("s2".to_string(), media_view("video", vec![], None));
+        let mut urls = BTreeMap::new();
+        urls.insert("s1".to_string(), "/media/s1?exp=1&sig=ab&fp=cd".to_string());
+        urls.insert("s2".to_string(), "/media/s2?exp=1&sig=ab&fp=cd".to_string());
+        let mut resume = BTreeMap::new();
+        resume.insert(11i32, 42i64);
+        let html = render_t_page(&plan, &items, &assets, &urls, &resume, "tok");
+        assert!(html.contains("data-resume=\"42\""), "resume position injected");
+        assert_eq!(
+            html.matches("data-resume=").count(),
+            1,
+            "unmapped item must not carry the attribute"
         );
     }
 
