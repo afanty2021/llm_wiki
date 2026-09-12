@@ -554,11 +554,16 @@ fn relocate_citations(frontmatter: &mut serde_json::Value, stripped: &[String]) 
         *frontmatter = serde_json::json!({});
     }
     let obj = frontmatter.as_object_mut().expect("just normalized to object");
-    let mut cur: Vec<String> = obj
-        .get("citations")
-        .and_then(|c| c.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-        .unwrap_or_default();
+    let mut cur: Vec<String> = match obj.get("citations") {
+        Some(serde_json::Value::Array(a)) => {
+            a.iter().filter_map(|x| x.as_str().map(String::from)).collect()
+        }
+        // 签收条件①（S5 评审 §6.2）：citations 为非数组标量时 coerce 进数组保原值——
+        // 旧实现 unwrap_or_default 会静默用 stripped 数组覆盖原值（静默丢失语义）
+        Some(serde_json::Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        Some(v @ (serde_json::Value::Number(_) | serde_json::Value::Bool(_))) => vec![v.to_string()],
+        _ => Vec::new(), // 缺键/null → 视为空
+    };
     for s in stripped {
         if !cur.iter().any(|o| o == s) {
             cur.push(s.clone());
@@ -2523,6 +2528,20 @@ mod tests {
         let mut untouched = serde_json::json!({"k": 1});
         relocate_citations(&mut untouched, &[]); // stripped 空 no-op，frontmatter 不动
         assert_eq!(untouched, serde_json::json!({"k": 1}));
+    }
+
+    #[test]
+    fn relocate_citations_coerces_non_array_scalar() {
+        // 签收条件①：非数组标量 coerce 进数组保原值，不得静默覆盖
+        let mut fm = serde_json::json!({"citations": "legacy-note"});
+        relocate_citations(&mut fm, &["S".to_string()]);
+        assert_eq!(fm, serde_json::json!({"citations": ["legacy-note", "S"]}));
+        let mut num = serde_json::json!({"citations": 42});
+        relocate_citations(&mut num, &["S".to_string()]);
+        assert_eq!(num, serde_json::json!({"citations": ["42", "S"]}));
+        let mut nul = serde_json::json!({"citations": null});
+        relocate_citations(&mut nul, &["S".to_string()]);
+        assert_eq!(nul, serde_json::json!({"citations": ["S"]}));
     }
 
     #[test]
