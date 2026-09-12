@@ -86,6 +86,16 @@ def put_page(token, path, content, frontmatter, skip_if_same=True):
         if skip_if_same and hashlib.sha256((cur.get("content") or "").encode()).hexdigest() == new_hash:
             return "skipped"
         fm = frontmatter if frontmatter is not None else cur.get("frontmatter")
+        # skehan 事故根治（r2.1 第四修）：fm 形参 None/{} 且服务端 fm 亦空时，以服务端
+        # 规范化列构造全量 fm——空 fm 会令 denormalize（pages.rs:63）把 title/sources/images
+        # 一并冲空（09-12 skehan 实锺；fm 形参非空但不完整时由调用方负责，见 merge-keep）。
+        if not fm:
+            fm = {
+                "title": cur.get("title") or "",
+                "type": cur.get("page_type") or "concept",
+                "sources": cur.get("sources") or [],
+                "images": cur.get("images") or [],
+            }
         st, resp = api(token, "PUT", q,
                        {"path": path, "content": content, "frontmatter": fm},
                        if_match=cur.get("updated_at"))
@@ -405,6 +415,11 @@ def cmd_merge(args):
             print(f"  改写进度 {i+1}/{len(rewrites)}")
     for kp, new_content, fm_sources, _ in merges:
         fm = json.loads(kp["frontmatter"]) if kp["frontmatter"] else {}
+        # r2.1 第四修：fm 不完整键补全（keep 原 title/type/images），否则 denormalize
+        # 会把缺键列冲空；幸存页 type 归一 concept 是执行显式步（charter §五），此处只保真。
+        fm.setdefault("title", kp.get("title") or "")
+        fm.setdefault("type", kp.get("page_type") or "concept")
+        fm.setdefault("images", [])
         # 复验 Minor：sources 并集变了就必须写，即使内容未变
         fm_changed = sorted(fm.get("sources") or []) != sorted(fm_sources)
         fm["sources"] = fm_sources
