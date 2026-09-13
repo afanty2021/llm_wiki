@@ -1,21 +1,26 @@
 {
-  "startedAt": "2026-09-07T16:25:51.693Z",
-  "finishedAt": "2026-09-07T18:58:25.921Z",
-  "files": 47,
-  "transcribed": 45,
-  "skipped": 0,
-  "failed": 2,
+  "startedAt": "2026-09-12T23:28:34.122Z",
+  "finishedAt": "2026-09-12T23:51:54.625Z",
+  "files": 21,
+  "transcribed": 7,
+  "skipped": 14,
+  "failed": 0,
   "jobStatus": "succeeded_with_warnings",
-  "jobId": "e325a6ff-0e06-4d7d-9d73-3499dc2cead7",
+  "jobId": "ce23babc-1414-412e-a19a-543ceb7d5976",
   "jobError": null,
-  "failedSources": [],
+  "failedSources": [
+    {
+      "path": "sources/transcripts/15-Reading-Spelling-Teacher-Training-Section-7-5-logicofengl-fdcdd989.md",
+      "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象，retried once + 控制字符修复层 fired=true）| serde: Syntax at line 1 col 1 | line_text: \"```json\" | head: \"```json\\n{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Logic of English 教师培训课程\\\",\\n      \\\"\" | tail: \"指出该长音规则存在少数例外位置，其中之一是 W 之后的 a 常发 broad sound，如 water、wall、wash。\\\"\\n    }\\n  ]\\n}\\n```\""
+    }
+  ],
   "exhaustedRetries": [],
-  "durationMinutes": 152.6,
-  "transcribeMinutes": 331.7,
-  "mediaHours": 25.03,
-  "realtimeFactor": 4.5,
+  "durationMinutes": 23.3,
+  "transcribeMinutes": 15.7,
+  "mediaHours": 1.77,
+  "realtimeFactor": 6.8,
   "reAudit": {
-    "generatedAt": "2026-09-07T16:26:02.924Z",
+    "generatedAt": "2026-09-12T23:29:01.612Z",
     "probeFailures": 0,
     "firstBatch": {
       "dir": "英语教师语言学习专栏",
@@ -30,381 +35,164 @@
   },
   "perFile": [
     {
-      "slug": "assessment-activity-e9d6a31d",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/一张图看懂assessment activity（三阶段）.mp4",
+      "slug": "03-Reading-Spelling-Teacher-Training-Section-2-logicofenglis-7f950441",
+      "relPath": "Logic-of-English-Teacher-Training/03. Reading & Spelling Teacher Training Section 2 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 1540,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "04-Reading-Spelling-Teacher-Training-Section-3-by-Logic-Of-E-7ce3c22d",
+      "relPath": "Logic-of-English-Teacher-Training/04. Reading & Spelling Teacher Training Section 3 by Logic Of English #logicofenglish #scienceofreading.mp4",
+      "status": "skipped",
+      "durationS": 1120,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "05-Reading-Spelling-Teacher-Training-Section-4-logicofenglis-61ed53aa",
+      "relPath": "Logic-of-English-Teacher-Training/05. Reading & Spelling Teacher Training Section 4 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 1467,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "06-Reading-Spelling-Teacher-Training-Section-5-1-logicofengl-f6bba58f",
+      "relPath": "Logic-of-English-Teacher-Training/06. Reading & Spelling Teacher Training Section 5.1 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 845,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "07-Reading-Spelling-Teacher-Training-Section-5-2-by-Logic-of-77106e20",
+      "relPath": "Logic-of-English-Teacher-Training/07. Reading & Spelling Teacher Training Section 5.2 by Logic of English #logicofenglish.mp4",
+      "status": "skipped",
+      "durationS": 1246,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "08-Reading-Spelling-Teacher-Training-Section-5-3-logicofengl-470887d8",
+      "relPath": "Logic-of-English-Teacher-Training/08. Reading & Spelling Teacher Training Section 5.3 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 650,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "09-Reading-Spelling-Teacher-Training-Section-5-4-logicofengl-5986ca10",
+      "relPath": "Logic-of-English-Teacher-Training/09. Reading & Spelling Teacher Training Section 5.4 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 274,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "10-Reading-Spelling-Teacher-Training-Section-6-logicofenglis-d78caac1",
+      "relPath": "Logic-of-English-Teacher-Training/10. Reading & Spelling Teacher Training Section 6 #logicofenglish #spelling #reading #scienceofreading.mp4",
+      "status": "skipped",
+      "durationS": 975,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "11-Reading-Spelling-Teacher-Training-Section-7-1-logicofengl-b2fc59af",
+      "relPath": "Logic-of-English-Teacher-Training/11. Reading & Spelling Teacher Training Section 7.1 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 510,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "12-Reading-Spelling-Teacher-Training-Section-7-2-logicofengl-8574e5c4",
+      "relPath": "Logic-of-English-Teacher-Training/12. Reading & Spelling Teacher Training Section 7.2 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 994,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "13-Reading-Spelling-Teacher-Training-Section-7-3-logicofengl-0b757fc1",
+      "relPath": "Logic-of-English-Teacher-Training/13. Reading & Spelling Teacher Training Section 7.3 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 514,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "14-Reading-Spelling-Teacher-Training-Section-7-4-logicofengl-b25ee39b",
+      "relPath": "Logic-of-English-Teacher-Training/14. Reading & Spelling Teacher Training Section 7.4 #logicofenglish #scienceofreading #reading #spelling.mp4",
+      "status": "skipped",
+      "durationS": 889,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "01-Reading-Spelling-Teacher-Training-Intro-by-Logic-of-Engli-c30b15df",
+      "relPath": "Logic-of-English-Teacher-Training/01. Reading & Spelling Teacher Training Intro by Logic of English #logicofenglish #scienceofreading.mp4",
+      "status": "skipped",
+      "durationS": 152,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "16-Reading-Spelling-Teacher-Training-Section-7-6-89890772",
+      "relPath": "Logic-of-English-Teacher-Training/16. Reading & Spelling Teacher Training Section 7.6.mp4",
       "status": "done",
-      "durationS": 776,
-      "transcribeMs": 122344,
-      "upsert": "updated"
+      "durationS": 465,
+      "transcribeMs": 50660,
+      "upsert": "created"
     },
     {
-      "slug": "2-88220692",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/写作课堂的2种教学方法（二阶段）.mp4",
+      "slug": "02-Reading-Spelling-Teacher-Training-Section-1-logicofenglis-2ccc14fa",
+      "relPath": "Logic-of-English-Teacher-Training/02. Reading & Spelling Teacher Training Section 1 #logicofenglish #spelling #reading #scienceofreading.mp4",
+      "status": "skipped",
+      "durationS": 1438,
+      "transcribeMs": 0
+    },
+    {
+      "slug": "15-Reading-Spelling-Teacher-Training-Section-7-5-logicofengl-fdcdd989",
+      "relPath": "Logic-of-English-Teacher-Training/15. Reading & Spelling Teacher Training Section 7.5 #logicofenglish #scienceofreading #reading #spelling.mp4",
       "status": "done",
-      "durationS": 997,
-      "transcribeMs": 176276,
-      "upsert": "updated"
+      "durationS": 1193,
+      "transcribeMs": 126672,
+      "upsert": "created"
     },
     {
-      "slug": "412c21d5",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/检测学生的学习效果有哪些形式（二阶段）.mp4",
+      "slug": "17-Reading-Spelling-Teacher-Training-Section-7-7-logicofengl-25b30728",
+      "relPath": "Logic-of-English-Teacher-Training/17. Reading & Spelling Teacher Training Section 7.7 #logicofenglish #scienceofreading #reading #spelling.mp4",
       "status": "done",
-      "durationS": 812,
-      "transcribeMs": 88123,
-      "upsert": "updated"
+      "durationS": 688,
+      "transcribeMs": 63519,
+      "upsert": "created"
     },
     {
-      "slug": "function-f280f48a",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（基础阶）/学生课堂语言function有哪些（三阶段）.mp4",
+      "slug": "19-Reading-Spelling-Teacher-Training-Section-7-9-logicofengl-b5f9b1c6",
+      "relPath": "Logic-of-English-Teacher-Training/19. Reading & Spelling Teacher Training Section 7.9 #logicofenglish #scienceofreading #reading #spelling.mp4",
       "status": "done",
-      "durationS": 1141,
-      "transcribeMs": 268702,
-      "upsert": "updated"
+      "durationS": 1003,
+      "transcribeMs": 148297,
+      "upsert": "created"
     },
     {
-      "slug": "54ed0893",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（高阶版）/小组合作式阅读课堂.mp4",
+      "slug": "20-Reading-Spelling-Teacher-Training-Section-8-logicofenglis-ca3d44f1",
+      "relPath": "Logic-of-English-Teacher-Training/20. Reading & Spelling Teacher Training Section 8 #logicofenglish #scienceofreading #reading #spelling.mp4",
       "status": "done",
-      "durationS": 966,
-      "transcribeMs": 112681,
-      "upsert": "updated"
+      "durationS": 967,
+      "transcribeMs": 119445,
+      "upsert": "created"
     },
     {
-      "slug": "listening-decoding-process-904c4ac1",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT教学法系统知识库（高阶版）/listening decoding process- 大脑是如何处理听力信息的.mp4",
+      "slug": "18-Reading-Spelling-Teacher-Training-Section-7-8-logicofengl-3c80ca79",
+      "relPath": "Logic-of-English-Teacher-Training/18. Reading & Spelling Teacher Training Section 7.8 #logicofenglish #scienceofreading #reading #spelling.mp4",
       "status": "done",
-      "durationS": 2013,
-      "transcribeMs": 197658,
-      "upsert": "updated"
+      "durationS": 1338,
+      "transcribeMs": 277046,
+      "upsert": "created"
     },
     {
-      "slug": "儿歌分享-What-s-your-favourite-color-f30ce801",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/幼儿英语启蒙少儿英语教学/儿歌分享- What's your favourite color.mp4",
-      "status": "failed",
-      "durationS": 648,
-      "transcribeMs": 62671,
-      "error": "DegenerationRejectError: 转写退化守门拒页：退化窗字占 48% ≥40%（1796/3749 字符）——须重转或人工复核。签名：[0:00]「favorite」×25(链覆盖 0.61)"
-    },
-    {
-      "slug": "116-3f89a942",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/116. 如何准备公开课.mp4",
+      "slug": "21-Reading-Spelling-Teacher-Training-Section-9-logicofenglis-7ea768dd",
+      "relPath": "Logic-of-English-Teacher-Training/21. Reading & Spelling Teacher Training Section 9 #logicofenglish #scienceofreading #reading #spelling.mp4",
       "status": "done",
-      "durationS": 672,
-      "transcribeMs": 117485,
-      "upsert": "updated"
-    },
-    {
-      "slug": "126-Word-wall-b7acd2e1",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/126. Word wall单词墙制作.mp4",
-      "status": "done",
-      "durationS": 1747,
-      "transcribeMs": 371097,
-      "upsert": "updated"
-    },
-    {
-      "slug": "LT-2023-12-6-磨课视频回放-3a816c53",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT直播回放专栏/LT 2023. 12.6 磨课视频回放.mp4",
-      "status": "done",
-      "durationS": 3925,
-      "transcribeMs": 832551,
-      "upsert": "updated"
-    },
-    {
-      "slug": "144-Scaffolding-through-teaching-strategies-5bea9330",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/144. Scaffolding through teaching strategies.mp4",
-      "status": "done",
-      "durationS": 2230,
-      "transcribeMs": 266930,
-      "upsert": "updated"
-    },
-    {
-      "slug": "149-Differentiated-Instructions-7fd69f62",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/149. 如何开展差异化教学-Differentiated Instructions.mp4",
-      "status": "done",
-      "durationS": 1681,
-      "transcribeMs": 205853,
-      "upsert": "updated"
-    },
-    {
-      "slug": "LT-2023-11-29-磨课视频回放-5265e0a7",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT直播回放专栏/LT 2023. 11. 29 磨课视频回放.mp4",
-      "status": "done",
-      "durationS": 6720,
-      "transcribeMs": 1199732,
-      "upsert": "updated"
-    },
-    {
-      "slug": "174-教学设计大赛-小学词汇课堂教学录像-4a4d430a",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/174.【教学设计大赛】-小学词汇课堂教学录像.mov",
-      "status": "done",
-      "durationS": 2382,
-      "transcribeMs": 196726,
-      "upsert": "updated"
-    },
-    {
-      "slug": "LT教学大赛-高中阅读课-Rachel-baa2efb2",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/LT教学大赛-高中阅读课- Rachel.mp4",
-      "status": "done",
-      "durationS": 353,
-      "transcribeMs": 45940,
-      "upsert": "updated"
-    },
-    {
-      "slug": "如何帮助学生拓展写作思路-bc7ea2b4",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/如何帮助学生拓展写作思路.mp4",
-      "status": "done",
-      "durationS": 2421,
-      "transcribeMs": 569878,
-      "upsert": "updated"
-    },
-    {
-      "slug": "11-人教版初中阅读课-一篇阅读素材的多种教法-上-ea26f1b1",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/11. 人教版初中阅读课-一篇阅读素材的多种教法-上.mp4",
-      "status": "done",
-      "durationS": 2584,
-      "transcribeMs": 882272,
-      "upsert": "updated"
-    },
-    {
-      "slug": "不用PPT的小班外教全英文教学课堂-9d0eaf43",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/不用PPT的小班外教全英文教学课堂.mp4",
-      "status": "done",
-      "durationS": 1484,
-      "transcribeMs": 660152,
-      "upsert": "updated"
-    },
-    {
-      "slug": "台湾老师有效词汇教学课堂-31d7f9e4",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/台湾老师有效词汇教学课堂.mp4",
-      "status": "done",
-      "durationS": 1989,
-      "transcribeMs": 324199,
-      "upsert": "updated"
-    },
-    {
-      "slug": "初中优质词汇课教学视频分析-上-f42b6b61",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/初中优质词汇课教学视频分析-上.mp4",
-      "status": "done",
-      "durationS": 2318,
-      "transcribeMs": 1055718,
-      "upsert": "updated"
-    },
-    {
-      "slug": "外教优质写作课堂-narrative-writing教学-6c6e4c50",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/外教优质写作课堂- narrative writing教学.mp4",
-      "status": "done",
-      "durationS": 3309,
-      "transcribeMs": 241054,
-      "upsert": "updated"
-    },
-    {
-      "slug": "如何教单词stress-prominence-LearningTeaching分析-b7e02a92",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/如何教单词stress&prominence-LearningTeaching分析.mp4",
-      "status": "done",
-      "durationS": 2081,
-      "transcribeMs": 306541,
-      "upsert": "updated"
-    },
-    {
-      "slug": "初中语法课教学视频分析-上-0ac20082",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/初中语法课教学视频分析-上.mp4",
-      "status": "done",
-      "durationS": 2272,
-      "transcribeMs": 1032141,
-      "upsert": "updated"
-    },
-    {
-      "slug": "校内阅读素材教学创新设计-Lisa-f94525c8",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/校内阅读素材教学创新设计--Lisa.mp4",
-      "status": "done",
-      "durationS": 665,
-      "transcribeMs": 96518,
-      "upsert": "updated"
-    },
-    {
-      "slug": "小学教学案例视频分析-综合课-上-f021e6c8",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/小学教学案例视频分析-综合课 上.mp4",
-      "status": "done",
-      "durationS": 2584,
-      "transcribeMs": 277039,
-      "upsert": "updated"
-    },
-    {
-      "slug": "高中写作课-如何全英文eliciting-下-1ec973af",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/高中写作课-如何全英文eliciting-下.mp4",
-      "status": "done",
-      "durationS": 1766,
-      "transcribeMs": 216271,
-      "upsert": "updated"
-    },
-    {
-      "slug": "词汇游戏-What-s-missing课堂上怎么玩-ac7fbd1e",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂活动游戏合集/【词汇游戏】What's missing课堂上怎么玩？.mp4",
-      "status": "done",
-      "durationS": 474,
-      "transcribeMs": 69029,
-      "upsert": "updated"
-    },
-    {
-      "slug": "高中写作课-如何全英文eliciting-上-dc9d4f73",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/高中写作课-如何全英文eliciting-上.mp4",
-      "status": "done",
-      "durationS": 2736,
-      "transcribeMs": 444003,
-      "upsert": "updated"
-    },
-    {
-      "slug": "暖身语法小活动Organize-yourself-from-ac66fdcc",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂活动游戏合集/暖身语法小活动Organize yourself from.mp4",
-      "status": "failed",
-      "durationS": 197,
-      "transcribeMs": 11504,
-      "error": "DegenerationRejectError: 转写退化守门拒页：退化窗字占 100% ≥40%（1079/1079 字符）——须重转或人工复核。签名：[0:00]「organize」×2(链覆盖 1.00)"
-    },
-    {
-      "slug": "语法复习活动-Grammar-Gameshow-09fc65da",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂活动游戏合集/语法复习活动 Grammar Gameshow.mp4",
-      "status": "done",
-      "durationS": 766,
-      "transcribeMs": 66583,
-      "upsert": "updated"
-    },
-    {
-      "slug": "Information-Gap-Activity的操作方法-c7945f9c",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂活动游戏合集/Information Gap Activity的操作方法.mp4",
-      "status": "done",
-      "durationS": 578,
-      "transcribeMs": 99149,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-13-如何教单词stress-prominence-LearningTeaching分析-8a7adce4",
-      "relPath": "4.课堂教学案例视频分析（新）/4_13-如何教单词stress&prominence-LearningTeaching分析.mp4",
-      "status": "done",
-      "durationS": 2081,
-      "transcribeMs": 330158,
-      "upsert": "updated"
-    },
-    {
-      "slug": "1-1-LT教材解析-THiNK-Life-Competencies-9c21a489",
-      "relPath": "1.LT2024-2025专栏更新/1_1-LT教材解析- THiNK- Life Competencies.mp4",
-      "status": "done",
-      "durationS": 2005,
-      "transcribeMs": 455660,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-14-看大师用guided-discovery-LearningTeaching视频分析-7e1e5235",
-      "relPath": "4.课堂教学案例视频分析（新）/4_14-看大师用guided discovery-LearningTeaching视频分析.mp4",
-      "status": "done",
-      "durationS": 2365,
-      "transcribeMs": 288448,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-23-外教初中阅读课精彩课堂活动-优质课-b7b39a93",
-      "relPath": "4.课堂教学案例视频分析（新）/4_23-外教初中阅读课精彩课堂活动（优质课）.mp4",
-      "status": "done",
-      "durationS": 1814,
-      "transcribeMs": 514079,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-4-欧美外教如何教过去时-5ce4b532",
-      "relPath": "4.课堂教学案例视频分析（新）/4_4-欧美外教如何教过去时.mp4",
-      "status": "done",
-      "durationS": 1496,
-      "transcribeMs": 350585,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-46-初中人教版阅读素材教学视频分析-上-9ccc89ac",
-      "relPath": "4.课堂教学案例视频分析（新）/4_46-初中人教版阅读素材教学视频分析-上.mp4",
-      "status": "done",
-      "durationS": 2301,
-      "transcribeMs": 233118,
-      "upsert": "updated"
-    },
-    {
-      "slug": "外教听力bottom-up课堂-7bb93250",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/课堂教学案例视频分析（新）/外教听力bottom up课堂.mp4",
-      "status": "done",
-      "durationS": 3381,
-      "transcribeMs": 2432184,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-56-高中写作课-如何全英文eliciting-下-94b4ab31",
-      "relPath": "4.课堂教学案例视频分析（新）/4_56-高中写作课-如何全英文eliciting-下.mp4",
-      "status": "done",
-      "durationS": 1766,
-      "transcribeMs": 177430,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-57-高中写作课-如何全英文eliciting-上-2030e069",
-      "relPath": "4.课堂教学案例视频分析（新）/4_57-高中写作课-如何全英文eliciting-上.mp4",
-      "status": "done",
-      "durationS": 2737,
-      "transcribeMs": 340705,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-58-主题阅读词汇课-19年老教师如何育人-上-159ddef1",
-      "relPath": "4.课堂教学案例视频分析（新）/4_58-主题阅读词汇课-19年老教师如何育人-上.mp4",
-      "status": "done",
-      "durationS": 1634,
-      "transcribeMs": 363541,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-43-初中语法课教学视频分析-上-9c94e7ec",
-      "relPath": "4.课堂教学案例视频分析（新）/4_43-初中语法课教学视频分析-上.mp4",
-      "status": "done",
-      "durationS": 2272,
-      "transcribeMs": 847498,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-61-公办学校语法教学-输出效果最大化-上-009b19b9",
-      "relPath": "4.课堂教学案例视频分析（新）/4_61-公办学校语法教学-输出效果最大化-上.mp4",
-      "status": "done",
-      "durationS": 2462,
-      "transcribeMs": 258912,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-7-外教优质写作课堂-narrative-writing教学-9e3b3bad",
-      "relPath": "4.课堂教学案例视频分析（新）/4_7-外教优质写作课堂- narrative writing教学.mp4",
-      "status": "done",
-      "durationS": 3309,
-      "transcribeMs": 371744,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-77-LT教学大赛-高中阅读课-Rachel-4b8961b9",
-      "relPath": "4.课堂教学案例视频分析（新）/4_77-LT教学大赛-高中阅读课- Rachel.mp4",
-      "status": "done",
-      "durationS": 353,
-      "transcribeMs": 39351,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-62-初中优质词汇课教学视频分析-上-90de389e",
-      "relPath": "4.课堂教学案例视频分析（新）/4_62-初中优质词汇课教学视频分析-上.mp4",
-      "status": "done",
-      "durationS": 2318,
-      "transcribeMs": 860734,
-      "upsert": "updated"
-    },
-    {
-      "slug": "4-6-外教听力bottom-up课堂-1004ca8d",
-      "relPath": "4.课堂教学案例视频分析（新）/4_6-外教听力bottom up课堂.mp4",
-      "status": "done",
-      "durationS": 3381,
-      "transcribeMs": 1498129,
-      "upsert": "updated"
+      "durationS": 726,
+      "transcribeMs": 156779,
+      "upsert": "created"
     }
   ],
-  "warnings": []
+  "warnings": [
+    "ingest前 覆写告警：transcripts/01-Reading-Spelling-Teacher-Training-Intro-by-Logic-of-Engli-c30b15df.md 服务端 hash 不符（疑似 LLM 页覆写），重写…",
+    "ingest前 已重写 transcripts/01-Reading-Spelling-Teacher-Training-Intro-by-Logic-of-Engli-c30b15df.md（upsert=updated）",
+    "ingest前 覆写告警：transcripts/02-Reading-Spelling-Teacher-Training-Section-1-logicofenglis-2ccc14fa.md 服务端 hash 不符（疑似 LLM 页覆写），重写…",
+    "ingest前 已重写 transcripts/02-Reading-Spelling-Teacher-Training-Section-1-logicofenglis-2ccc14fa.md（upsert=updated）"
+  ]
 }

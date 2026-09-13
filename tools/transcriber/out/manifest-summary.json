@@ -1,16 +1,16 @@
 {
-  "generatedAt": "2026-09-07T16:26:02.924Z",
-  "elapsedS": 11.1,
-  "totalFiles": 2075,
-  "totalDurationH": 558.33,
+  "generatedAt": "2026-09-12T23:29:01.612Z",
+  "elapsedS": 27.4,
+  "totalFiles": 3848,
+  "totalDurationH": 603.44,
   "byBucket": {
     "A_playable": {
-      "files": 764,
-      "durationH": 139.55
+      "files": 1620,
+      "durationH": 175.03
     },
     "B_transcode": {
-      "files": 922,
-      "durationH": 418.78
+      "files": 950,
+      "durationH": 428.41
     }
   },
   "bySource": {
@@ -19,18 +19,18 @@
       "durationH": 0
     },
     "hevc": {
-      "files": 2075,
-      "durationH": 558.33
+      "files": 3848,
+      "durationH": 603.44
     }
   },
-  "docFiles": 389,
+  "docFiles": 1278,
   "privacyFiles": 0,
-  "ignoredFiles": 33,
+  "ignoredFiles": 1207,
   "probeFailures": 0,
   "overlap": {
     "matchedPairs": 0,
     "mainOnly": 0,
-    "hevcOnly": 1557
+    "hevcOnly": 2429
   },
   "firstBatch": {
     "dir": "英语教师语言学习专栏",
