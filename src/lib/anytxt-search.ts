@@ -3,6 +3,7 @@ import type { AnyTxtConfig, LlmConfig } from "@/stores/wiki-store"
 import { normalizePath } from "@/lib/path-utils"
 import { streamChat } from "@/lib/llm-client"
 import type { WebSearchResult } from "./web-search"
+import { resolveIngestReasoning } from "@/lib/reasoning-capabilities"
 
 const logger = createLogger("anytxt-search")
 import { createLogger } from "@/lib/logger"
@@ -115,7 +116,7 @@ export async function rewriteAnyTxtQueries(queries: string[], llmConfig: LlmConf
       onError: () => {},
     },
     undefined,
-    { temperature: 0.1, max_tokens: 512, reasoning: { mode: "off" } },
+    { temperature: 0.1, max_tokens: 512, reasoning: resolveIngestReasoning(llmConfig) },
   )
 
   const rewritten = parseAnyTxtQueryRewrite(output)
