@@ -451,6 +451,14 @@ fn sources_set(v: &serde_json::Value) -> std::collections::BTreeSet<String> {
 
 /// 碰撞判定（评审 I2 收紧）：仅「集合相等 且 incoming 恰为 {当前源}」判 Replace；
 /// 多元素巧合相等（LLM 自由引用）走 Merge——最坏同内容融合，不丢数据。
+///
+/// F-B 阈值收紧（2026-09-14）：真膨胀判定——仅当 merged_len > combined_len
+/// （100%，输出超过旧文+新文之和）且绝对量 merged_len > 20KB 才升 warning；
+/// 其余（80-100% 或 <20KB）只进 merge_stats（F-A 结构化分流），不进 warnings。
+fn merge_inflation_is_warning(merged_len: usize, combined_len: usize) -> bool {
+    merged_len > combined_len && merged_len > 20_000
+}
+
 fn collision_mode(
     existing_sources: &serde_json::Value,
     incoming_sources: &serde_json::Value,
@@ -1525,6 +1533,7 @@ pub async fn run_ingest_job(
     let mut result = IngestJobResult {
         new_pages: vec![],
         merged_pages: vec![],
+        merge_stats: vec![],
         updated_reserved: vec![],
         warnings: vec![],
     };
@@ -1737,12 +1746,9 @@ pub async fn run_ingest_job(
                             match merge_provider.as_ref() {
                                 Some(p) => match merge_pages_via(&**p, language, &sp, &e.content, &page.content).await {
                                     Ok(mut merged_content) => {
-                                        if merged_content.len() > (e.content.len() + page.content.len()) * 4 / 5 {
-                                            result.warnings.push(format!(
-                                                "merge {}: output longer than 80% of combined inputs (inflation watch)",
-                                                page.path
-                                            ));
-                                        }
+                                        // 膨胀哨兵（原 80% inflation watch）已移至合并成功
+                                        // 记账处（update_merged_page Ok 分支），按 F-A/F-B 新
+                                        // 规则结构化分流进 merge_stats，此处不再发 warning。
                                         // 处方 E·merge 口（试点 2026-09-08 补）：merge 输入含旧版
                                         // 正文，存量红链会借合并还魂（our-dreams-lesson ×4 实证）
                                         // ——落库前跑同一降级；现查 DB + 本响应块 pairs 与生成口
@@ -1802,6 +1808,23 @@ pub async fn run_ingest_job(
                                 match update_merged_page(state, job.project_id, &page.path, &merged_content, &merged_sources, &merged_fm).await {
                                     Ok(()) => {
                                         result.merged_pages.push(page.path.clone());
+                                        // F-A 结构化分流 + F-B 阈值收紧：膨胀页级记录进
+                                        // merge_stats（仅 path/merged_len/combined_len，勿塞
+                                        // 内容片段）；仅 merged > combined（100%）且
+                                        // > 20KB 才升 warning，其余 stats-only。
+                                        let combined_len = e.content.len() + page.content.len();
+                                        let merged_len = merged_content.len();
+                                        result.merge_stats.push(serde_json::json!({
+                                            "path": page.path,
+                                            "merged_len": merged_len,
+                                            "combined_len": combined_len,
+                                        }));
+                                        if merge_inflation_is_warning(merged_len, combined_len) {
+                                            result.warnings.push(format!(
+                                                "merge {}: output longer than combined inputs ({} > {} bytes, inflation watch)",
+                                                page.path, merged_len, combined_len
+                                            ));
+                                        }
                                         if !merged_content.trim().is_empty() {
                                             collected.push((page.path.clone(), merged_content));
                                         }
@@ -2381,6 +2404,43 @@ mod tests {
     }
 
     // —— 多源累积合并 §1：碰撞判定（评审 I2 收紧 + A-M3 set 语义）——
+
+    // —— F-A/F-B：merge 膨胀阈值收紧（2026-09-14）——
+    #[test]
+    fn inflation_over_100pct_and_over_20kb_still_warns() {
+        // >100% 且 >20KB → 真膨胀，仍在 warnings
+        assert!(merge_inflation_is_warning(30_000, 25_000));
+        assert!(merge_inflation_is_warning(20_001, 20_000));
+    }
+
+    #[test]
+    fn inflation_80_to_100pct_stats_only() {
+        // 80-100% 区间：不再报 warning（旧 80% 阈值的噪音源）
+        assert!(!merge_inflation_is_warning(9_500, 10_000));
+        assert!(!merge_inflation_is_warning(10_000, 10_000)); // 恰好 100%，未超过
+        assert!(!merge_inflation_is_warning(30_000, 30_000));
+    }
+
+    #[test]
+    fn inflation_over_100pct_but_under_20kb_stats_only() {
+        // 超过 100% 但绝对量 ≤20KB → stats-only
+        assert!(!merge_inflation_is_warning(15_000, 10_000));
+        assert!(!merge_inflation_is_warning(20_000, 19_999));
+    }
+
+    #[test]
+    fn merge_stats_item_carries_only_three_keys() {
+        // F-A：merge_stats 每项仅 path/merged_len/combined_len 三键，无内容片段
+        let item = serde_json::json!({
+            "path": "notes/a.md",
+            "merged_len": 123,
+            "combined_len": 100,
+        });
+        let keys: Vec<&str> = item.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        assert_eq!(keys.len(), 3);
+        assert!(keys.contains(&"path") && keys.contains(&"merged_len") && keys.contains(&"combined_len"));
+    }
+
     #[test]
     fn collision_mode_single_current_source_equal_replaces() {
         assert_eq!(

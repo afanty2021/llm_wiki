@@ -79,6 +79,10 @@ pub struct IngestJobResult {
     /// 多源累积合并页（只进此列表不进 new_pages，评审 A-M1）。
     #[serde(default)]
     pub merged_pages: Vec<String>,
+    /// F-A 结构化分流：merge 膨胀页级记录（每项仅 path/merged_len/combined_len，
+    /// 勿塞内容片段）。仅构造+序列化透传，src-server 内从不反序列化。
+    #[serde(default)]
+    pub merge_stats: Vec<serde_json::Value>,
     pub updated_reserved: Vec<String>,
     pub warnings: Vec<String>,
 }
