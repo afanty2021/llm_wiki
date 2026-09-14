@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// 复用 files_raw_test.rs 的 setup 模式:register → 查 team_id → POST /projects。
-/// 返回 (server, state, pid, token);全新项目不落盘,storage base 不存在。
+/// 返回 (server, state, pid, token);base 随项目创建即落盘(ecb675a04),用例守「base 在而子目录树缺失」(见文件头)。
 async fn setup() -> (
     axum_test::TestServer,
     llm_wiki_server::AppState,

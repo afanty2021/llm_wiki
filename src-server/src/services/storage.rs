@@ -45,6 +45,14 @@ pub fn safe_resolve(
                 None => break,
             }
         }
+        // 上溯中断（路径以 .. 截尾，锚点挂着解析不了的 .. 前缀）而锚点仍不存在：
+        // canonicalize 必 ENOENT。此形只出自 .. 叠缺失段，按穿越 400 拒绝，
+        // 不再误报 500 InternalError（与下方前缀检查的拒绝口径一致）。
+        if !anchor.exists() {
+            return Err(AppError::BadRequest(
+                "Path traversal detected".to_string(),
+            ));
+        }
         let mut resolved = anchor.canonicalize()
             .map_err(|e| AppError::InternalError(
                 format!("Failed to resolve parent path: {}", e)
@@ -354,8 +362,13 @@ mod safe_resolve_tests {
     fn traversal_still_rejected_with_missing_intermediates() {
         let base = std::env::temp_dir().join(format!("llmwiki-sr-t-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
+        // 锚点 base/.. 存在 → 循环不启动，拒绝来自最终前缀检查
         let r = safe_resolve(&base, "../../outside.md");
-        assert!(r.is_err(), "缺失中间段的穿越路径必须仍被拒绝");
+        assert!(matches!(r, Err(AppError::BadRequest(_))), "穿越必须 400，实际 {:?}", r.err());
+        // sub 缺失 → 真正踩上溯分支的 .. 守卫（循环以 .. 截尾中断）：
+        // 400 BadRequest，不得回退成 500 InternalError
+        let r2 = safe_resolve(&base, "sub/../../outside.md");
+        assert!(matches!(r2, Err(AppError::BadRequest(_))), ".. 叠缺失段必须 400，实际 {:?}", r2.err());
         let _ = std::fs::remove_dir_all(&base);
     }
 }
