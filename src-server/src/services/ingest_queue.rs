@@ -83,6 +83,13 @@ pub struct IngestJobResult {
     /// 勿塞内容片段）。仅构造+序列化透传，src-server 内从不反序列化。
     #[serde(default)]
     pub merge_stats: Vec<serde_json::Value>,
+    /// G1 源级计账：dedup 跳过（ingested_files 同 hash）的 source_path 清单。
+    /// resume 快路径预期行为，不进 warnings；仅构造+序列化透传。
+    #[serde(default)]
+    pub dedup_skipped: Vec<String>,
+    /// G2 源级计账：processed 为 Some 但 pages 为空的源（每源另有 1 条 warning）。
+    #[serde(default)]
+    pub zero_page_sources: Vec<String>,
     pub updated_reserved: Vec<String>,
     pub warnings: Vec<String>,
 }
