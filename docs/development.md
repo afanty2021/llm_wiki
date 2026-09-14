@@ -143,11 +143,11 @@ cargo test -- --ignored
 **操作步骤**（按序执行，①②不可颠倒）：
 
 ```bash
-# ① 备份目标行（psql 连 src-server 库，端口 5433；按实际 project_id 与路径前缀调整筛选条件）
-\copy (SELECT * FROM ingested_files WHERE project_id = <PID> AND file_path LIKE '<目标路径前缀>%') TO 'backup_ingested_files_<日期>.csv' CSV HEADER
+# ① 备份目标行（psql 连 src-server 库，端口 5433；按实际 project_id 与路径前缀调整筛选条件。列名是 original_path，非 file_path）
+\copy (SELECT * FROM ingested_files WHERE project_id = <PID> AND original_path LIKE '<目标路径前缀>%') TO 'backup_ingested_files_<日期>.csv' CSV HEADER
 
 # ② 删除目标路径的去重记录（条件须与 ① 完全一致，先 SELECT COUNT 确认行数）
-DELETE FROM ingested_files WHERE project_id = <PID> AND file_path LIKE '<目标路径前缀>%';
+DELETE FROM ingested_files WHERE project_id = <PID> AND original_path LIKE '<目标路径前缀>%';
 
 # ③ 重新 trigger 摄取 job（CLI / API / UI 任一入口）
 
