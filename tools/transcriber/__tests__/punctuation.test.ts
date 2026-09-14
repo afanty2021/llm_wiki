@@ -290,9 +290,11 @@ describe("快照幂等（maybePunctuate）", () => {
   it("快照存在 → 字节回用不调 LLM；成功后落快照；失败回落原文", async () => {
     const dir = mkdtempSync(join(tmpdir(), "punct-test-"))
     try {
-      // 失败回落：无快照 + LLM 挂 → 原文
+      // 失败回落：无快照 + LLM 挂 → 原文。deps.apiKey 必带：maybePunctuate 的
+      // key 门（punctuation.ts，缺 key 短路返回原文）在 CI 无 ZAI_API_KEY/
+      // ~/.hermes/.env，不带会短路绕过被测的 LLM/快照路径（2026-09-14 CI 实锤）。
       const bad = vi.fn(async () => new Response("{}", { status: 500 })) as unknown as typeof fetch
-      const out1 = await maybePunctuate({ md: MD, slug: "s1", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: bad, sleepFn: async () => {} } })
+      const out1 = await maybePunctuate({ md: MD, slug: "s1", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: bad, sleepFn: async () => {}, apiKey: "test-key" } })
       expect(out1).toBe(MD)
       // 成功路径：回声加标点 → 快照落盘
       const echo = (async (_u: unknown, init?: RequestInit) => {
@@ -301,17 +303,17 @@ describe("快照幂等（maybePunctuate）", () => {
         const out = user.split("\n").map((l) => (/\[\d{1,3}:\d{2}\] /.test(l) ? `${l}。` : l)).join("\n")
         return new Response(JSON.stringify({ choices: [{ message: { content: out } }] }), { status: 200 })
       }) as unknown as typeof fetch
-      const out2 = await maybePunctuate({ md: MD, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: echo } })
+      const out2 = await maybePunctuate({ md: MD, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: echo, apiKey: "test-key" } })
       expect(verifyPunctuated(MD, out2)).toBe(true)
       expect(loadPunctMd(dir, "s2")).toBe(out2)
       // 快照命中：LLM 永不被调（mock 抛错证明）
       const boom = (async () => { throw new Error("不应被调用") }) as unknown as typeof fetch
-      const out3 = await maybePunctuate({ md: MD, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: boom } })
+      const out3 = await maybePunctuate({ md: MD, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: boom, apiKey: "test-key" } })
       expect(out3).toBe(out2)
       // 快照与当前正文不一致（同 slug 不同 md：重转写/重切章）→ 按 miss
       // 重新标点并覆盖快照（不把陈旧文本写回）
       const altered = MD.replace("词汇教学", "语法教学")
-      const out5 = await maybePunctuate({ md: altered, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: echo } })
+      const out5 = await maybePunctuate({ md: altered, slug: "s2", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl: echo, apiKey: "test-key" } })
       expect(verifyPunctuated(altered, out5)).toBe(true)
       expect(out5).not.toBe(out2)
       expect(loadPunctMd(dir, "s2")).toBe(out5)
@@ -344,7 +346,7 @@ describe("快照幂等（maybePunctuate）", () => {
         if (user.includes("语料")) return new Response(JSON.stringify({ choices: [{ message: { content: user } }] }), { status: 200 })
         return new Response(JSON.stringify({ choices: [{ message: { content: `${user}。` } }] }), { status: 200 })
       }) as unknown as typeof fetch
-      const out = await maybePunctuate({ md, slug: "s9", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl, sleepFn: async () => {} } })
+      const out = await maybePunctuate({ md, slug: "s9", outDir: dir, cfg: { enabled: true }, deps: { fetchImpl, sleepFn: async () => {}, apiKey: "test-key" } })
       expect(verifyPunctuated(md, out)).toBe(true)
       expect(out).toContain("[50:00] 今天我们讲词汇教学。")  // 混合体（好章加工）
       expect(loadPunctMd(dir, "s9")).toBeNull()               // 不落快照

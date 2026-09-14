@@ -23,20 +23,39 @@ pub fn safe_resolve(
 ) -> Result<PathBuf, AppError> {
     let candidate = base.join(user_path.trim_start_matches('/'));
 
-    // 如果文件不存在，先对父目录做 canonicalize 再做检查
+    // 如果文件不存在，对最近一个**已存在**的祖先目录做 canonicalize，再拼回缺失
+    // 段与目标名。项目 base 自创建即落盘（projects.rs create_dir_all），delete/list
+    // 高频命中「base 在而中间目录从未创建」（如 wiki/none.md、/raw/sources）——对
+    // 不存在的直接父目录 canonicalize 会把「目标不存在」误伤成 500。
     let resolved = if candidate.exists() {
         candidate.canonicalize().map_err(|e| AppError::BadRequest(
             format!("Invalid path: {}", e)
-        ))
+        ))?
     } else {
-        // 对于写操作，文件可能还不存在 — 只规范化可解析的部分
-        let parent = candidate.parent().unwrap_or(base);
-        let parent_canon = parent.canonicalize()
+        let mut anchor = candidate.parent().unwrap_or(base).to_path_buf();
+        let mut missing: Vec<std::ffi::OsString> = Vec::new();
+        while !anchor.exists() {
+            match anchor.file_name() {
+                Some(seg) => missing.push(seg.to_os_string()),
+                None => break,
+            }
+            match anchor.parent() {
+                Some(p) => anchor = p.to_path_buf(),
+                None => break,
+            }
+        }
+        let mut resolved = anchor.canonicalize()
             .map_err(|e| AppError::InternalError(
                 format!("Failed to resolve parent path: {}", e)
             ))?;
-        Ok(parent_canon.join(candidate.file_name().unwrap_or_default()))
-    }?;
+        for seg in missing.iter().rev() {
+            resolved.push(seg);
+        }
+        if let Some(name) = candidate.file_name() {
+            resolved.push(name);
+        }
+        resolved
+    };
 
     // canonicalize 必须保留 base 前缀
     if !resolved.starts_with(base.canonicalize()
@@ -300,6 +319,42 @@ mod list_order_tests {
             vec!["book", "zzz-dir", "Ch01-a.md", "Ch02-b.md", "Ch10-b.md", "Ch19-b.md"],
             "目录在前组内按名：章节须按 Ch01→Ch19 字典序（零填充名天然有序）"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod safe_resolve_tests {
+    use super::*;
+
+    /// base 随项目创建即存在（projects.rs create_dir_all），delete/list 高频命中
+    /// 「base 在而中间目录从未创建」——safe_resolve 不得因父目录缺失 500。
+    /// 回归：CI files_fresh_project/files_list 两测试 500（2026-09-08 ecb675a04 起）。
+    #[test]
+    fn resolves_missing_intermediate_dirs_under_existing_base() {
+        let base = std::env::temp_dir().join(format!("llmwiki-sr-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        // 中间目录 wiki/ 不存在（delete 深路径场景）
+        let p = safe_resolve(&base, "wiki/none.md").unwrap();
+        assert!(p.starts_with(base.canonicalize().unwrap()));
+        assert!(p.ends_with("wiki/none.md"));
+        // 深层缺失（list 子目录场景）
+        let d = safe_resolve(&base, "/raw/sources").unwrap();
+        assert!(d.ends_with("raw/sources"));
+        // 目标自身存在时行为不变
+        std::fs::create_dir_all(base.join("real/dir")).unwrap();
+        std::fs::write(base.join("real/dir/f.md"), b"x").unwrap();
+        let e = safe_resolve(&base, "real/dir/f.md").unwrap();
+        assert_eq!(e, base.join("real/dir/f.md").canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn traversal_still_rejected_with_missing_intermediates() {
+        let base = std::env::temp_dir().join(format!("llmwiki-sr-t-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let r = safe_resolve(&base, "../../outside.md");
+        assert!(r.is_err(), "缺失中间段的穿越路径必须仍被拒绝");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -63,8 +63,10 @@ async fn team_id_of(state: &llm_wiki_server::AppState, pid: i32) -> i32 {
         .unwrap()
 }
 
-/// 全新项目(storage base 尚未落盘)list 子目录 /raw/sources → 200 + []。
+/// 全新项目 list 子目录 /raw/sources → 200 + []。
 /// 回归保护:修复前返回 500(safe_resolve 对不存在 base canonicalize 失败)。
+/// ⚠ 前提更新(2026-09-08 ecb675a04):base 现随项目创建即落盘——本用例现守
+/// 「base 在而子目录树不存在 → 200 + [] 不 500」(safe_resolve 祖先上溯)。
 #[tokio::test]
 async fn list_files_empty_for_fresh_project_subdir() {
     let (server, _state, pid, token) = setup().await;
