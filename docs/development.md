@@ -156,11 +156,11 @@ DELETE FROM ingested_files WHERE project_id = <PID> AND file_path LIKE '<目标�
 
 **④ 逐源对账（必做）**: 检查 job result JSON 的计账字段——
 
-- `dedup_skipped`: 被去重跳过的源列表（含跳过原因）；
+- `dedup_skipped`: 被去重跳过的源列表；
 - `zero_page_sources`: 产出零页的源列表；
 - `merge_stats`: 合并统计。
 
-逐源核对「应产出页数 = 实际落库页数」。**部分吞没形态（跳过 + 正常混合，written > 0）不会触发管线侧的全跳过汇总告警，只有这一步能捕捉**；全跳过形态（所有源零页）才会触发告警。
+逐源核对「应产出页数 = 实际落库页数」。**部分吞没形态（跳过 + 正常混合，written > 0）不会触发管线侧的全跳过汇总告警，只有这一步能捕捉**；全部源被去重跳过（written=0 且无失败）才触发全跳过汇总告警；零页源触发的是逐源 warning。
 
 **边界提醒**:
 
