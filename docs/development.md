@@ -131,6 +131,45 @@ cargo test -- --ignored
 
 ---
 
+## 🧰 摄取运维
+
+### 修复性重投 SOP（ingested_files 去重吞没）
+
+**适用场景**: 摄取 job 显示 succeeded，但部分（或全部）源因 `ingested_files` 去重被跳过、未产出页。已有两次先例：
+
+- **2026-09-02 直播回放批**: 零页产出（zero_page_sources），须先 DELETE 对应 `ingested_files` 行再重新 trigger，直接重跑仍会被去重吞掉。
+- **2026-09-14 孤儿章批（job `e8e73204`）**: 12 源中 11 章被 `ingested_files` 去重吞掉；备份后 DELETE 11 行、重投 job `f753f756` 才闭合。
+
+**操作步骤**（按序执行，①②不可颠倒）：
+
+```bash
+# ① 备份目标行（psql 连 src-server 库，端口 5433；按实际 project_id 与路径前缀调整筛选条件）
+\copy (SELECT * FROM ingested_files WHERE project_id = <PID> AND file_path LIKE '<目标路径前缀>%') TO 'backup_ingested_files_<日期>.csv' CSV HEADER
+
+# ② 删除目标路径的去重记录（条件须与 ① 完全一致，先 SELECT COUNT 确认行数）
+DELETE FROM ingested_files WHERE project_id = <PID> AND file_path LIKE '<目标路径前缀>%';
+
+# ③ 重新 trigger 摄取 job（CLI / API / UI 任一入口）
+
+# ④ 按源对账页产出 —— job succeeded ≠ 源落库
+```
+
+**④ 逐源对账（必做）**: 检查 job result JSON 的计账字段——
+
+- `dedup_skipped`: 被去重跳过的源列表（含跳过原因）；
+- `zero_page_sources`: 产出零页的源列表；
+- `merge_stats`: 合并统计。
+
+逐源核对「应产出页数 = 实际落库页数」。**部分吞没形态（跳过 + 正常混合，written > 0）不会触发管线侧的全跳过汇总告警，只有这一步能捕捉**；全跳过形态（所有源零页）才会触发告警。
+
+**边界提醒**:
+
+- 不要跳过①直接 DELETE——删错行后无恢复手段。
+- ②的 WHERE 条件务必先 `SELECT COUNT(*)` 复核，避免误伤同 project 下其他路径。
+- 09-02 批的教训：不 DELETE 直接重 trigger，重跑 job 仍会被同一批 `ingested_files` 记录吞掉，形成「看似成功实则零产出」的循环。
+
+---
+
 ## 📐 编码规范
 
 ### TypeScript/JavaScript
