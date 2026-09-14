@@ -129,15 +129,15 @@ async fn t8_setup_project(state: &llm_wiki_server::AppState) -> (i32, i32, Strin
 // ── Task 6：用例公共脚手架 ──
 
 /// 用例环境：app state + fixture 项目坐标 + 本次运行唯一 uuid + stub 句柄。
-struct T8Env {
-    state: llm_wiki_server::AppState,
-    pid: i32,
-    team_id: i32,
+pub(crate) struct T8Env {
+    pub(crate) state: llm_wiki_server::AppState,
+    pub(crate) pid: i32,
+    pub(crate) team_id: i32,
     /// 每次运行唯一 uuid，内嵌进 fixture source 文本——`ingest:cache:{content_hash}`
     /// 是无 project 维度的全局 Redis 键（TTL 7 天），不嵌则重跑/并行同内容互相污染
     /// （症状：第一次过、重跑挂，评审 C-2）。
-    run: String,
-    stub: tokio::task::JoinHandle<()>,
+    pub(crate) run: String,
+    pub(crate) stub: tokio::task::JoinHandle<()>,
 }
 
 /// 组装公共前置：生成 run uuid → stub（脚本由 uuid 现场构建——FILE 块正文同样
@@ -146,7 +146,7 @@ struct T8Env {
 /// （provider_type openai，base_url=stub 根；llm_stream 拼接 `{base}/chat/completions`
 /// 命中 stub 路由，见 spawn_stub_chat_server 注释；api_key 任意非空、model 任意——
 /// stub 不校验）。
-async fn t8_prepare<F>(script_of: F) -> T8Env
+pub(crate) async fn t8_prepare<F>(script_of: F) -> T8Env
 where
     F: FnOnce(&str) -> Vec<StubResp>,
 {
@@ -184,7 +184,7 @@ where
 /// teams/{tid}/projects/{pid}，与 run_ingest_job 的 read_bytes 同一后端，无视图漂移）。
 /// dyn Trait 接收者上
 /// 调 trait 方法无需 use 引入（类型即作用域），故无内部 use 行。
-async fn t8_write_source(env: &T8Env, rel: &str, content: &str) {
+pub(crate) async fn t8_write_source(env: &T8Env, rel: &str, content: &str) {
     env.state
         .storage
         .write_string(env.team_id, env.pid, rel, content)
@@ -200,7 +200,7 @@ async fn t8_write_source(env: &T8Env, rel: &str, content: &str) {
 /// 测试直调绕过 worker）——不补 UPDATE 则行永久停留 running，每轮测试向 live 库
 /// 写残留，server 重启被 recover_pending 重投（噪音）。Ok → succeeded；Err →
 /// failed + error 列留诊断（同 mark_job_failed 的列形态），落库后再 panic 上抛。
-async fn t8_insert_and_run(
+pub(crate) async fn t8_insert_and_run(
     env: &T8Env,
     source: &str,
 ) -> llm_wiki_server::services::ingest_queue::IngestJobResult {
@@ -245,7 +245,7 @@ async fn t8_insert_and_run(
 }
 
 /// 取 DB 页行 (content, sources, created_at, updated_at)。
-async fn t8_fetch_page(
+pub(crate) async fn t8_fetch_page(
     env: &T8Env,
     path: &str,
 ) -> (
@@ -267,7 +267,7 @@ async fn t8_fetch_page(
 
 /// step1 最小合法输出（对象形状即过 merged_step1_result 守卫；空数组无实体，
 /// step2 prompt 仅透传 analysis，stub 不消费请求内容）。
-fn t8_step1_json() -> String {
+pub(crate) fn t8_step1_json() -> String {
     r#"{"entities":[],"connections":[],"contradictions":[]}"#.to_string()
 }
 
@@ -276,7 +276,7 @@ fn t8_step1_json() -> String {
 /// 单块 + 数百字符，远低于 dedicated review 阈值（≥4 块或 ≥10000 字符）。
 /// sources 用 JSON 数组字面量——同是合法 YAML flow 序列。
 /// 落库 content 恰为 `{body}\n`（解析器逐行 push 且 END 行不计入）。
-fn t8_file_block(path: &str, title: &str, sources: &[&str], body: &str) -> String {
+pub(crate) fn t8_file_block(path: &str, title: &str, sources: &[&str], body: &str) -> String {
     let srcs = serde_json::to_string(&sources).unwrap();
     format!(
         "---FILE: {path} ---\n---\ntitle: {title}\ntype: concept\nsources: {srcs}\n---\n{body}\n---END FILE---\n"

@@ -451,6 +451,14 @@ fn sources_set(v: &serde_json::Value) -> std::collections::BTreeSet<String> {
 
 /// 碰撞判定（评审 I2 收紧）：仅「集合相等 且 incoming 恰为 {当前源}」判 Replace；
 /// 多元素巧合相等（LLM 自由引用）走 Merge——最坏同内容融合，不丢数据。
+///
+/// F-B 阈值收紧（2026-09-14）：真膨胀判定——仅当 merged_len > combined_len
+/// （100%，输出超过旧文+新文之和）且绝对量 merged_len > 20KB 才升 warning；
+/// 其余（80-100% 或 <20KB）只进 merge_stats（F-A 结构化分流），不进 warnings。
+fn merge_inflation_is_warning(merged_len: usize, combined_len: usize) -> bool {
+    merged_len > combined_len && merged_len > 20_000
+}
+
 fn collision_mode(
     existing_sources: &serde_json::Value,
     incoming_sources: &serde_json::Value,
@@ -1469,6 +1477,45 @@ fn peek_outcome(r: Result<bool, AppError>) -> Option<Phase1Output> {
 /// 原始 source 数为分母，去重后 received 封顶不可及）、item_states 条目少于
 /// 源数——终态仍是尾段无条件 building_index+100；spec 去重裁定的既定行为，
 /// 勿误判为进度 bug。
+/// G1 计账：dedup 跳过（ingested_files 同 project+path+content_hash+file_size）
+/// 进结构化清单，**不产 warning**——resume 快路径预期行为，G3 汇总是唯一例外。
+fn account_dedup_skip(result: &mut IngestJobResult, sp: &str) {
+    result.dedup_skipped.push(sp.to_string());
+}
+
+/// G2 计账 + 告警：processed 为 Some 但 pages 为空 → zero_page_sources 记一笔 +
+/// 单条 actionable warning（bigmodel thinking 静默零页类故障的观测面）。
+fn account_zero_page_source(result: &mut IngestJobResult, sp: &str) {
+    result.zero_page_sources.push(sp.to_string());
+    result
+        .warnings
+        .push(format!("step2: source {} produced 0 pages (possible truncation/empty output)", sp));
+}
+
+/// G3 触发条件（r2 修订，五条件逐条钉死，全 conjunct 不可省）：
+/// 等值子条件 `done_this_run == dedup_skipped.len()` ⇔ done 增量全部来自
+/// dedup-skip ⇔ 无 prior-done 残留、无正常完成源（防混合 resume 误触发）；
+/// `total_sources > 0` 在等值条件下恒冗余，保留为防御守卫（routes/ingest.rs:50
+/// 不校验 source_paths 非空）。纯函数，单测/Task 6 集成复用同一条件。
+fn g3_all_sources_dedup_skipped(
+    total_sources: usize,
+    written: usize,
+    failed_this_run: usize,
+    dedup_skipped_len: usize,
+    done_this_run: usize,
+) -> bool {
+    total_sources > 0
+        && written == 0
+        && failed_this_run == 0
+        && dedup_skipped_len > 0
+        && done_this_run == dedup_skipped_len
+}
+
+/// G3 汇总告警文案（N = dedup_skipped.len()，等值条件迫使 N = 全部源数）。
+fn g3_all_dedup_skipped_warning(dedup_skipped_len: usize) -> String {
+    format!("all {} sources dedup-skipped (unchanged content) — if a repair reingest was intended, clear ingested_files rows first (backup!)", dedup_skipped_len)
+}
+
 pub(crate) fn dedupe_targets(source_paths: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -1525,6 +1572,9 @@ pub async fn run_ingest_job(
     let mut result = IngestJobResult {
         new_pages: vec![],
         merged_pages: vec![],
+        merge_stats: vec![],
+        dedup_skipped: vec![],
+        zero_page_sources: vec![],
         updated_reserved: vec![],
         warnings: vec![],
     };
@@ -1553,6 +1603,9 @@ pub async fn run_ingest_job(
         .filter(|sp| is_prior_done(sp.as_str()))
         .count();
     let mut done_this_run = prior_done;
+    // G3 计数器：本次 run 的失败源数（Phase1 Failed + Phase2 全 upsert 失败两臂都递增，
+    // 漏计后者则 [dedup 跳过+写库故障] 混合形态会把 DB 故障误导为「清 ingested_files 重投」）。
+    let mut failed_this_run = 0usize;
     let targets: Vec<String> = dedupe_targets(&job.source_paths)
         .into_iter()
         .filter(|sp| !is_prior_done(sp))
@@ -1648,11 +1701,13 @@ pub async fn run_ingest_job(
             }
             Phase1Output::JobError(e) => return Err(e),
             Phase1Output::Failed { sp, err } => {
+                failed_this_run += 1;
                 // 今日 1300-1305 原样：源级隔离
                 result.warnings.push(format!("process {}: {}", sp, err));
                 let _ = ingest_queue::update_item_state(state, job.id, &sp, "failed", Some(&err)).await;
             }
             Phase1Output::Done { sp, processed: None } => {
+                account_dedup_skip(&mut result, &sp);
                 let _ = ingest_queue::update_item_state(state, job.id, &sp, "done", None).await;
                 done_this_run += 1;
             }
@@ -1670,6 +1725,11 @@ pub async fn run_ingest_job(
                     ));
                 }
                 let pages_to_write = processed.pages.len();
+                // G2 零页源：processed 为 Some 但 pages 为空 → 计账 + 单条 actionable
+                // warning（bigmodel thinking 静默零页类故障的观测面）。
+                if pages_to_write == 0 {
+                    account_zero_page_source(&mut result, &sp);
+                }
                 // 红链降级索引的 cohort (path,title) 对：提升到循环前计算（loop 改
                 // iter_mut 后循环内不可再不可变借用 processed.pages；本对仅含
                 // path/title，循环体只改 sources/frontmatter，提升语义等价）。
@@ -1737,12 +1797,9 @@ pub async fn run_ingest_job(
                             match merge_provider.as_ref() {
                                 Some(p) => match merge_pages_via(&**p, language, &sp, &e.content, &page.content).await {
                                     Ok(mut merged_content) => {
-                                        if merged_content.len() > (e.content.len() + page.content.len()) * 4 / 5 {
-                                            result.warnings.push(format!(
-                                                "merge {}: output longer than 80% of combined inputs (inflation watch)",
-                                                page.path
-                                            ));
-                                        }
+                                        // 膨胀哨兵（原 80% inflation watch）已移至合并成功
+                                        // 记账处（update_merged_page Ok 分支），按 F-A/F-B 新
+                                        // 规则结构化分流进 merge_stats，此处不再发 warning。
                                         // 处方 E·merge 口（试点 2026-09-08 补）：merge 输入含旧版
                                         // 正文，存量红链会借合并还魂（our-dreams-lesson ×4 实证）
                                         // ——落库前跑同一降级；现查 DB + 本响应块 pairs 与生成口
@@ -1802,6 +1859,23 @@ pub async fn run_ingest_job(
                                 match update_merged_page(state, job.project_id, &page.path, &merged_content, &merged_sources, &merged_fm).await {
                                     Ok(()) => {
                                         result.merged_pages.push(page.path.clone());
+                                        // F-A 结构化分流 + F-B 阈值收紧：膨胀页级记录进
+                                        // merge_stats（仅 path/merged_len/combined_len，勿塞
+                                        // 内容片段）；仅 merged > combined（100%）且
+                                        // > 20KB 才升 warning，其余 stats-only。
+                                        let combined_len = e.content.len() + page.content.len();
+                                        let merged_len = merged_content.len();
+                                        result.merge_stats.push(serde_json::json!({
+                                            "path": page.path,
+                                            "merged_len": merged_len,
+                                            "combined_len": combined_len,
+                                        }));
+                                        if merge_inflation_is_warning(merged_len, combined_len) {
+                                            result.warnings.push(format!(
+                                                "merge {}: output longer than combined inputs ({} > {} bytes, inflation watch)",
+                                                page.path, merged_len, combined_len
+                                            ));
+                                        }
                                         if !merged_content.trim().is_empty() {
                                             collected.push((page.path.clone(), merged_content));
                                         }
@@ -1877,6 +1951,7 @@ pub async fn run_ingest_job(
                     let _ = ingest_queue::update_item_state(state, job.id, &sp, "done", None).await;
                     done_this_run += 1;
                 } else {
+                    failed_this_run += 1;
                     let _ = ingest_queue::update_item_state(
                         state,
                         job.id,
@@ -1916,6 +1991,20 @@ pub async fn run_ingest_job(
             total_sources,
             result.warnings.join("; ")
         )));
+    }
+    // G3 全跳过汇总告警（all-failed 判定的对偶面：零产出但零失败）：
+    // 五条件全成立 = 本 run 的 done 增量全部来自 dedup-skip 且零页落库——
+    // 等值子条件（done_this_run == dedup_skipped.len()）排除 prior-done 残留
+    // 与正常完成源，防混合 resume 误触发。written 收尾现算，勿用 done_this_run。
+    let written = result.new_pages.len() + result.merged_pages.len();
+    if g3_all_sources_dedup_skipped(
+        total_sources,
+        written,
+        failed_this_run,
+        result.dedup_skipped.len(),
+        done_this_run,
+    ) {
+        result.warnings.push(g3_all_dedup_skipped_warning(result.dedup_skipped.len()));
     }
     if let Err(e) = ingest_queue::check_cancel(state, job.id).await {
         return Err(e);
@@ -2381,6 +2470,43 @@ mod tests {
     }
 
     // —— 多源累积合并 §1：碰撞判定（评审 I2 收紧 + A-M3 set 语义）——
+
+    // —— F-A/F-B：merge 膨胀阈值收紧（2026-09-14）——
+    #[test]
+    fn inflation_over_100pct_and_over_20kb_still_warns() {
+        // >100% 且 >20KB → 真膨胀，仍在 warnings
+        assert!(merge_inflation_is_warning(30_000, 25_000));
+        assert!(merge_inflation_is_warning(20_001, 20_000));
+    }
+
+    #[test]
+    fn inflation_80_to_100pct_stats_only() {
+        // 80-100% 区间：不再报 warning（旧 80% 阈值的噪音源）
+        assert!(!merge_inflation_is_warning(9_500, 10_000));
+        assert!(!merge_inflation_is_warning(10_000, 10_000)); // 恰好 100%，未超过
+        assert!(!merge_inflation_is_warning(30_000, 30_000));
+    }
+
+    #[test]
+    fn inflation_over_100pct_but_under_20kb_stats_only() {
+        // 超过 100% 但绝对量 ≤20KB → stats-only
+        assert!(!merge_inflation_is_warning(15_000, 10_000));
+        assert!(!merge_inflation_is_warning(20_000, 19_999));
+    }
+
+    #[test]
+    fn merge_stats_item_carries_only_three_keys() {
+        // F-A：merge_stats 每项仅 path/merged_len/combined_len 三键，无内容片段
+        let item = serde_json::json!({
+            "path": "notes/a.md",
+            "merged_len": 123,
+            "combined_len": 100,
+        });
+        let keys: Vec<&str> = item.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        assert_eq!(keys.len(), 3);
+        assert!(keys.contains(&"path") && keys.contains(&"merged_len") && keys.contains(&"combined_len"));
+    }
+
     #[test]
     fn collision_mode_single_current_source_equal_replaces() {
         assert_eq!(
@@ -3280,6 +3406,82 @@ mod tests {
             fold_page_write_outcomes(&[PageWriteOutcome::GuardSkipped, PageWriteOutcome::UpsertFailed]);
         assert_eq!(wm, 1);
         assert!(!upm);
+    }
+
+    // ── G1/G2/G3 dedup 计账与零页/全跳过告警（Task 3+4）──
+
+    fn empty_result() -> IngestJobResult {
+        IngestJobResult {
+            new_pages: vec![],
+            merged_pages: vec![],
+            merge_stats: vec![],
+            dedup_skipped: vec![],
+            zero_page_sources: vec![],
+            updated_reserved: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn dedup_skip_accounts_without_warning() {
+        // G1：dedup 跳过只进 dedup_skipped 计账，不产任何 warning
+        //（resume 快路径预期行为，G3 汇总是唯一例外）。
+        let mut result = empty_result();
+        let mut done_this_run = 0usize;
+        let mut failed_this_run = 0usize;
+        // 模拟 Done { processed: None } 分支的计账动作
+        for sp in ["raw/a.md", "raw/b.md"] {
+            account_dedup_skip(&mut result, sp);
+            done_this_run += 1;
+        }
+        assert_eq!(result.dedup_skipped, vec!["raw/a.md", "raw/b.md"]);
+        assert!(result.warnings.is_empty(), "dedup skip must not push warnings");
+        assert_eq!(result.zero_page_sources.len(), 0);
+        // 全跳过形态下 G3 才触发（此处只验证条件，warning 注入见 g3 测试）
+        assert!(g3_all_sources_dedup_skipped(2, 0, failed_this_run, result.dedup_skipped.len(), done_this_run));
+    }
+
+    #[test]
+    fn zero_page_source_accounts_one_warning() {
+        // G2：processed 为 Some 但 pages 为空 → 1 条 warning + zero_page_sources 计账。
+        let mut result = empty_result();
+        let pages_to_write = 0usize;
+        if pages_to_write == 0 {
+            account_zero_page_source(&mut result, "raw/empty.md");
+        }
+        assert_eq!(result.zero_page_sources, vec!["raw/empty.md"]);
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0],
+            "step2: source raw/empty.md produced 0 pages (possible truncation/empty output)"
+        );
+        // 对照：pages 非空不触发
+        let mut result2 = empty_result();
+        if 2usize == 0 {
+            account_zero_page_source(&mut result2, "raw/full.md");
+        }
+        assert!(result2.warnings.is_empty());
+        assert!(result2.zero_page_sources.is_empty());
+    }
+
+    #[test]
+    fn g3_condition_all_conjuncts() {
+        // 全跳过：触发，N = dedup_skipped.len() = 全部源数
+        assert!(g3_all_sources_dedup_skipped(2, 0, 0, 2, 2));
+        // 五条件逐一证伪（漏任一即不触发）
+        assert!(!g3_all_sources_dedup_skipped(0, 0, 0, 2, 2), "total_sources == 0 防御守卫");
+        assert!(!g3_all_sources_dedup_skipped(2, 1, 0, 2, 2), "written > 0（正常产出）");
+        assert!(!g3_all_sources_dedup_skipped(2, 0, 1, 2, 2), "failed > 0（Phase1/Phase2 失败臂）");
+        assert!(!g3_all_sources_dedup_skipped(2, 0, 0, 0, 0), "dedup_skipped 空（纯零产出）");
+        assert!(!g3_all_sources_dedup_skipped(2, 0, 0, 1, 2), "done > dedup（prior-done 残留）");
+        assert!(!g3_all_sources_dedup_skipped(3, 0, 0, 1, 2), "部分跳过 + 零产出源混合（done > dedup）");
+        // 注：total > dedup 时条件仍可成立——dedupe_targets 折叠重复路径后
+        //（如 [a,a,b] → targets [a,b] 全跳过），done 增量仍全部来自 dedup-skip，触发正确。
+        // 文案：N = dedup_skipped.len()
+        assert_eq!(
+            g3_all_dedup_skipped_warning(3),
+            "all 3 sources dedup-skipped (unchanged content) — if a repair reingest was intended, clear ingested_files rows first (backup!)"
+        );
     }
 
     // ── W3（批 C）：语言规则提为 project 级配置——prompt 注入 + reserved 模板分流 ──

@@ -22,6 +22,7 @@ mod learning_api_test;
 mod media_test;
 mod t_page_test;
 pub mod merge_ingest_test;
+mod inflation_watch_test;
 pub mod ingest_concurrency_test;
 mod search_rerank_optout_test;
 

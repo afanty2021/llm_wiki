@@ -22,6 +22,14 @@ const STAGE_LABELS: Record<string, string> = {
 const stageLabel = (stage?: string | null) =>
   (stage && STAGE_LABELS[stage]) || stage
 
+// 终态判定:一处定义三处引用(轮询 break / 超时守卫 / 成功分支)。
+// succeeded_with_warnings 也是终态(ingest worker mark_job_succeeded_with_warnings),
+// 若只补轮询 break 而漏超时守卫,会在第一跳 break 后立刻误报「摄取超时」。
+const isTerminalStatus = (status?: string | null) =>
+  status === "succeeded" ||
+  status === "succeeded_with_warnings" ||
+  status === "failed"
+
 /**
  * web 摄取面板:upload → triggerIngest → 轮询 getIngestJob。
  * 不复用桌面 ingest.ts(依赖本地绝对路径 + copy/preprocess),web 走上传→触发→轮询,
@@ -71,20 +79,23 @@ export function WebIngestPanel({ projectId, onDone }: Props) {
       if (!alive()) return
       setStatus("处理中…")
       let job: IngestJob | undefined
-      // 终态 succeeded/failed(ingest_queue.rs mark_job_succeeded/mark_job_failed)。
+      // 终态判定统一走 isTerminalStatus(succeeded/succeeded_with_warnings/failed)。
       for (let i = 0; i < POLL_MAX; i++) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
         if (!alive()) return
         // getIngestJob 返回 IngestJob,id 字段为 .id(非 job_id)。
         job = await apiClient.getIngestJob(job_id)
         if (!alive()) return
-        if (job.status === "succeeded" || job.status === "failed") break
+        if (isTerminalStatus(job.status)) break
         setStatus(`处理中… ${stageLabel(job.stage) ?? job.status}`)
       }
-      if (!job || (job.status !== "succeeded" && job.status !== "failed")) {
+      if (!job || !isTerminalStatus(job.status)) {
         setError("摄取超时(5min 无终态)")
       } else if (job.status === "succeeded") {
         setStatus("完成")
+        onDone?.(job)
+      } else if (job.status === "succeeded_with_warnings") {
+        setStatus("完成（有告警）")
         onDone?.(job)
       } else {
         setError(`摄取失败: ${job.error ?? job.status}`)

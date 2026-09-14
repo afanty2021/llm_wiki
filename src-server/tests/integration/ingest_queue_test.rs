@@ -115,6 +115,9 @@ async fn mark_job_lifecycle() {
     let result = IngestJobResult {
         new_pages: vec!["concepts/x.md".into()],
         merged_pages: vec![],
+        merge_stats: vec![],
+        dedup_skipped: vec![],
+        zero_page_sources: vec![],
         updated_reserved: vec![],
         warnings: vec![],
     };

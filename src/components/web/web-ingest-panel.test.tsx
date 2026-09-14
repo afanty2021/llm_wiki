@@ -96,6 +96,36 @@ describe("WebIngestPanel", () => {
     await waitFor(() => expect(screen.getByText(/boom/)).toBeTruthy())
   })
 
+  it("轮询到 succeeded_with_warnings 终态显示完成（有告警）", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const onDone = vi.fn()
+    uploadFile.mockImplementation(async (_pid: number, file: File) => ({
+      name: file.name,
+      path: `raw/sources/${file.name}`,
+      size: file.size,
+    }))
+    triggerIngest.mockResolvedValue({ job_id: "job-4", status: "pending" })
+    getIngestJob
+      .mockResolvedValueOnce({ id: "job-4", status: "processing", progress: 10, stage: "parsing" })
+      .mockResolvedValueOnce({ id: "job-4", status: "succeeded_with_warnings", progress: 100, stage: "succeeded" })
+
+    const { WebIngestPanel } = await import("./web-ingest-panel")
+    render(<WebIngestPanel projectId={1} onDone={onDone} />)
+
+    const file = new File(["hi"], "e.md", { type: "text/markdown" })
+    fireEvent.change(screen.getByLabelText(/upload/i), { target: { files: [file] } })
+    fireEvent.click(screen.getByRole("button", { name: /ingest|摄取/i }))
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // 终态文案 + onDone 回调(视为成功),且不误报「摄取超时」。
+    await waitFor(() => expect(screen.getByText(/完成（有告警）/)).toBeTruthy())
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText(/摄取超时/)).toBeNull()
+  })
+
   it("stage 中文映射：processing → 处理中（新枚举）且未知 stage 裸透传", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     uploadFile.mockImplementation(async (_pid: number, file: File) => ({
