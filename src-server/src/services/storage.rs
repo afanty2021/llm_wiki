@@ -13,10 +13,11 @@ pub fn project_base(storage_path: &str, team_id: i32, project_id: i32) -> PathBu
 
 /// 安全地将用户请求的路径约束在项目基路径内。
 /// 1. 将 user_path 拼接到 base 后得到完整路径 P。
-/// 2. canonicalize(P) — 解析所有 ../ 和符号链接。
-/// 3. 验证 canonicalized 路径以 base 开头。
+/// 2. P 存在 → canonicalize(P)（解析 ../ 与符号链接）；P 不存在 → 对最近的
+///    **已存在**祖先 canonicalize，缺失段与目标名原样词法拼回（不解析符号链接）。
+/// 3. 验证结果以 base 开头——两条分支共同且唯一的包含性强制门。
 ///
-/// 返回完全解析后的 PathBuf。
+/// 返回解析后的 PathBuf。
 pub fn safe_resolve(
     base: &Path,
     user_path: &str,
