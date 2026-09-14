@@ -1,10 +1,14 @@
-/// files 端点对全新项目(storage base 未落盘)的统一行为集成测试。
+/// files 端点对全新项目的统一行为集成测试。
 ///
 /// 回归:读端点(list/stat/raw/read)对不存在 base 的 safe_resolve 会 canonicalize 失败 → 500;
 /// 写端点(upload/write)同理 500(阻断 web 摄取第一次上传)。修复:读端点加 base.exists()
 /// 短路(返回空/404),写端点加 ensure_dir(&base)(创建目录)。delete 同读端点返回 404。
 ///
-/// 每个 #[tokio::test] 独立 setup()(各自新 project),隔离 base 是否已创建的状态。
+/// ⚠ 前提更新(2026-09-08 ecb675a04):项目创建即 create_dir_all 落盘 base——「base 未落盘」
+/// 已不可能;本文件现守的是「base 在而目标路径(含中间目录)不存在 → 404 不 500」
+/// (safe_resolve 祖先上溯,storage.rs)。
+///
+/// 每个 #[tokio::test] 独立 setup()(各自新 project),互不共享目标路径。
 ///
 /// 运行:`cargo test --test integration files_fresh`(src-server 内,连 live DB 5433 + Redis 6380)。
 use axum::http::StatusCode;
