@@ -1450,6 +1450,66 @@ async fn media_search_hits_slug_title_and_null_transcript_fallback() {
     crate::teardown_test_data(&_state).await;
 }
 
+/// 相关度排序钉子（T6 试跑 LOE 大水漫灌事故的回归防御，max 评审 Important）：
+/// q 同时命中「转录页标题」与「仅 slug」两行时，标题命中（tier 0）必须排在
+/// 仅 slug 命中（tier 1）之前——删掉 ORDER BY CASE 分层此断言即红。
+/// 夹具自造自清（SWEEPS media 前缀兜底），只引用现有 wiki_pages.path 不写该表。
+#[tokio::test]
+async fn media_search_orders_title_hits_before_slug_only_hits() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("msord").await;
+    let tok = "tok123";
+
+    // 借一行现有转录页作标题源（只读 path/title，不写 wiki_pages）
+    let (page_path, title): (String, String) = sqlx::query_as(
+        "SELECT path, title FROM wiki_pages WHERE COALESCE(title, '') <> '' ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    let token: String = title.chars().take(6).collect();
+
+    // F_title：transcript_page_path 指向该页 → wp.title 含 token → tier 0；
+    // F_slug：NULL 转录页 + slug 内嵌 token → 仅 slug 命中 → tier 1
+    let base = unique("ord");
+    let f_title = format!("{base}ttl");
+    let f_slug = format!("{base}slu_{}", token);
+    for (slug, tp) in [(&f_title, Some(page_path.as_str())), (&f_slug, None)] {
+        sqlx::query(
+            "INSERT INTO media_assets (slug, media_ref, duration_s, kind, transcript_page_path) \
+             VALUES ($1, '/tmp/nonexistent.mp4', 0, 'video', $2)",
+        )
+        .bind(slug)
+        .bind(tp)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+
+    let r = server
+        .get("/api/v1/training/media/search")
+        .add_query_param("q", &token)
+        .add_header("x-training-admin-token", tok)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let arr = r.json::<serde_json::Value>().as_array().unwrap().clone();
+    let pos = |s: &str| arr.iter().position(|it| it["slug"] == s);
+    let i_title = pos(&f_title).unwrap_or_else(|| panic!("title-hit fixture '{f_title}' missing from results"));
+    let i_slug = pos(&f_slug).unwrap_or_else(|| panic!("slug-only fixture '{f_slug}' missing from results"));
+    assert!(
+        i_title < i_slug,
+        "title hit (idx {i_title}) must rank before slug-only hit (idx {i_slug})"
+    );
+
+    // 本轮内自清（SWEEPS media 前缀清扫兜底）
+    sqlx::query("DELETE FROM media_assets WHERE slug = ANY($1)")
+        .bind(&[f_title, f_slug])
+        .execute(&state.db)
+        .await
+        .unwrap();
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
 // ============ T1b 补遗：GET /training/roster（教师名册检索，仅两键）============
 
 /// 反泄漏硬契约钉子：响应条目的键**恰好** {wecom_userid, display_name}——
