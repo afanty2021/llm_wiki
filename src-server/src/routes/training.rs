@@ -594,7 +594,9 @@ const MEDIA_SEARCH_MAX_LIMIT: i64 = 20;
 /// transcript_page_path，t_page 生产先例）**或** ma.slug 模糊（ILIKE %q%）。
 /// **不按 project 过滤**（media_assets 全局表无 project_id，与 /t/ 媒体链全局
 /// slug 用法一致）；**不加 kind 过滤**（主管分享面由 SKILL 流程约束，不由端点
-/// 约束）。ORDER BY slug 仅求结果确定序。q 缺失/空白 → 400；token → 401。
+/// 约束）。ORDER BY 相关度：标题命中 > slug 命中，同级短标题优先（更具体的
+/// 命中排前——泛词如 reading/第二讲 会大水漫灌，端点管不了词选得好不好，
+/// 但至少别把最具体的行挤下榜；T6 试跑教训）。q 缺失/空白 → 400；token → 401。
 async fn search_media(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -614,7 +616,8 @@ async fn search_media(
          FROM media_assets ma \
          LEFT JOIN wiki_pages wp ON wp.path = ma.transcript_page_path \
          WHERE wp.title ILIKE $1 OR ma.slug ILIKE $1 \
-         ORDER BY ma.slug \
+         ORDER BY CASE WHEN wp.title ILIKE $1 THEN 0 WHEN ma.slug ILIKE $1 THEN 1 ELSE 2 END, \
+                  length(COALESCE(wp.title, ma.slug)), ma.slug \
          LIMIT $2",
     )
     .bind(format!("%{kw}%"))

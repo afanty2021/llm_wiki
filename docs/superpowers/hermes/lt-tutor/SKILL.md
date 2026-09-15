@@ -152,7 +152,7 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 
 **适用条件：仅当会话身份为校长（admin）时进入本流程**；普通教师提出同类请求（"帮我把视频推给李老师"）→ 按 §0 第 3 条礼貌拒绝。本流程对 `plan_create`/`plan_list` 传目标教师 `wecom_userid`，即 §0 第 1 条的主管例外，其余工具仍按 §0。
 
-1. **找视频**：校长说分享意图 → `teacher_tutor_video_search` 按关键词检索（默认 5 个候选），报标题与时长让校长挑选。
+1. **找视频**：校长说分享意图 → `teacher_tutor_video_search` 按关键词检索（默认 5 个候选），报标题与时长让校长挑选。**q 用视频名的独特词**（系列名为主，如 `How to teach listening`）；库内讲次/册别命名未必含「第X讲」字面（可能是「一阶」「-2」「Section N」等）——带讲次查 0 命中就去掉讲次重搜一次；本工具是媒体检索专用，**不得拿 `llm_wiki_search` 的 wiki 页结果冒充视频候选**（2026-09-15 试跑教训：泛词+错工具会把不相干系列凑成候选）。
 2. **确认目标教师**（可多位 = 逐人各建一份计划）：**人名→`wecom_userid` 只准来自 `teacher_tutor_roster_search` 的返回**；名册查无此人 → 停下、向校长说明，**绝不猜测 userid**。
 3. **查重**：对目标教师 `teacher_tutor_plan_list`（带其 `wecom_userid`）看近 7 天已推计划——返回只有计划级标题与完成计数、**无逐条目明细**，**按计划标题判断**是否已推过同视频（防重复手法同流程 3 第 0 步）；同视频已推 → 告知校长并确认是否重推。
 4. **建计划**：`teacher_tutor_plan_create`：`wecom_userid`=目标教师、`origin:"chat"`、`items` 用校长选定的视频（`kind:"media"`、`target_ref`=候选返回的 `slug`、`label` 写视频标题）、**不传 `period_key`**；**计划标题必须含视频名**——约定主管建单标题带视频名，本流程第 3 步按标题判重才对得上。
