@@ -83,7 +83,7 @@
 
 | 项 | 处置 | 落点 |
 |---|---|---|
-| Issue 1（Important）media/search 零顺序断言 | ✅ 合并前已闭环 | cc5f5c10（本报告归档前即补，24/24 含新用例） |
+| Issue 1（Important）media/search 零顺序断言 | ✅ 真闭环（跟进评审证伪后修复） | cc5f5c10 的「删掉 ORDER BY 即红」声明被跟进评审证伪（借行标题 len12 < slug 键，删 CASE 后 length() 次级键同序、断言仍绿）；0f34b247 改借全库最长标题（104 字符）+ 前提自检断言，变异实跑：删 CASE→红、恢复→24/24 绿。详见 followup 评审报告处置表 |
 | Rec-2 plan_create override 前目标预查 | ✅ 已实施 | 4571463e：supervisor 路径建单前经 member-role 预查目标存在性——404（查无档案/不在 team）→ 正常文本拒（isError=false 防熔断，回显目标 userid + 引导回 roster_search）；查询失败 → unavailable 臂 fail-closed 抛错；user/system 路径零额外往返。mcp 179/179 绿（+4 新用例钉 404 拒全链/在册放行/500 fail-closed/零往返）；SKILL §11 第 2 步补机器侧兜底说明，双份 cp 部署 diff 一致；网关 kickstart 重启（PID 5534，lstart 20:02:48）+ dist 标志串实证 |
 | Rec-3 t6gate_ 域外残留收编 SWEEPS | ✅ 已实施 | b4eac867：users 扫描补 `t6gate\_` 起始锚定（username+email，registration_gate_test 注册残留按构造两者均以该前缀起始）；存量 12 行（08-30→09-15 积累，无 profile 不进 roster）经 training 套件起始 sweep 一轮收清，live PG 复核 count=0；training 24/24 绿 |
 | Minor 2 计划 §2.3 第 3 步文本滞后 | 知情接受（记档） | SKILL §11 第 3 步已是事实正确版；计划文档为历史评审锚不改写 |
