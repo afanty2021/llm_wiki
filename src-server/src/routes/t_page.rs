@@ -1,7 +1,7 @@
 //! Task 9：/t/ 落地页（顶级路由，plan_link token 凭证，教师移动端）。
 //! Task 9b：/s/ 短链现签跳转（`GET /s/:code` → 303 `/t/<现签 token>`）。
 //!
-//! 四端点：
+//! 五端点：
 //! - `GET /s/:code`（Task 9b）：查 short_links → 无 → 404；命中 → 现签 7d
 //!   plan_link token → 303 See Other Location `/t/<token>`。无鉴权（capability
 //!   URL，与 /t/:token 同信任模型）；不记事件（纯跳转，view 由 /t/ 落地记）；
@@ -15,11 +15,16 @@
 //!   无 content-type 时 axum `Json` 会 415/400，Option 把一切提取失败折叠为
 //!   None = 页面级语义；有 `{"item_id": N}` 则项级（item ∈ plan 校验 + apply_seen）；
 //! - `POST /t/:token/complete`：body `{item_id}`，校验 ∈ plan（伪造 → 400）后
-//!   projection::complete_item（单调、幂等）。
+//!   projection::complete_item（单调、幂等）；
+//! - `POST /t/:token/play`（0d45d322 起）：播放心跳 beacon——checkpoint/ended
+//!   相位记 play_progress 事件（仅供断点续播回读），watched 投影闸 =
+//!   「累计真实播放 ≥90% 或 ended」。
 //!
 //! **限流（Task 6 r3 + SEC-7 + SEC-8）**：`/s/:code` 30 次/分钟（key=code，先于
 //! DB）、`/t/` 的 seen/complete beacon 60 次/分钟（两端点共桶）、`GET /t/:token`
-//! 落地 30 次/分钟（SEC-7：view 事件随 GET 无界写，独立桶）。SEC-8 起 `/t/` 系
+//! 落地 30 次/分钟（SEC-7：view 事件随 GET 无界写，独立桶）、`POST /t/:token/play`
+//! 60 次/分钟（独立桶——心跳洪峰不得饿死 seen/complete 共桶；心跳化后客户端约
+//! 1 beacon/分钟/播放器）。SEC-8 起 `/t/` 系
 //! 桶 key = **plan 身份**（`user_id:plan_id`，验签后取）——token 指纹可经 /s/
 //! 铸链放大约 30×，plan 身份使同一 plan 无论换多少 token 共享预算。超限
 //! `TooManyRequests` → 429（带 Retry-After: 60）。
@@ -57,6 +62,20 @@ const PLAN_LINK_TTL_DAYS: i64 = 7;
 
 /// view 事件 payload 的 ua 截断长度（「ua 简化」：整段 UA 落库只留前 120 chars）。
 const UA_MAX_CHARS: usize = 120;
+
+/// 播放检查点阈值（beacon_js 模板经 format! 注入，数值由单测断言——09-15 max
+/// 评审 M-3：跨端阈值交互不能只靠 contains 形状断言）。早检点：10s 或 5% 时长
+/// 先到先发、仅 25% 前有效；心跳：每 60s 真实播放一条（acc 口径）。
+const PLAY_EARLY_MAX_S: f64 = 10.0;
+const PLAY_EARLY_PCT: f64 = 0.05;
+const PLAY_BEAT_INTERVAL_S: f64 = 60.0;
+
+/// 检查点最小有效位置（秒），双端同源：服务端 resume 回读过滤
+/// `pos >= PLAY_CHECKPOINT_FLOOR_S`（低于=误触噪声不注入），客户端早检点阈值
+/// 以它为地板（`Math.max(floor, 5% 时长)`）——早检点落库位置必能存活 resume
+/// 过滤。09-15 max 评审 I-1：此前客户端 5% 阈值可低于 5，≲90s 短视频早检点
+/// 取整 <5 被过滤吞掉、观看又 <60s 够不着心跳 = 零续播点。
+const PLAY_CHECKPOINT_FLOOR_S: i64 = 5;
 
 /// 摘要页（ingest 蒸馏页）查找上限：一个媒体最多展示 3 页相关摘要。
 const SUMMARY_PAGE_LIMIT: i64 = 3;
@@ -464,6 +483,11 @@ body { margin: 0; font: 16px/1.7 -apple-system, "PingFang SC", sans-serif; backg
 /// 字符串字面量嵌入（JWT 字符集无引号/反斜杠，serde_json 再兜底转义）。
 fn beacon_js(token: &str) -> String {
     let token_lit = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".into());
+    // 阈值常量绑同名局部入模板（f64 Display 无尾零：10.0→"10"，JS 数字字面量合法）
+    let early_max = PLAY_EARLY_MAX_S;
+    let early_floor = PLAY_CHECKPOINT_FLOOR_S;
+    let early_pct = PLAY_EARLY_PCT;
+    let beat_s = PLAY_BEAT_INTERVAL_S;
     format!(
         r#"(function () {{
   var TOKEN = {token_lit};
@@ -485,8 +509,9 @@ fn beacon_js(token: &str) -> String {
     Array.prototype.forEach.call(document.querySelectorAll('section.item'), function (el) {{ io.observe(el); }});
   }}
   // 播放心跳（play_progress）：首条早检点（10s 或 5% 时长先到先发，仅 25% 前
-  // 有效）+ 每 60s 真实播放一条检查点 + ended——检查点仅供断点续播（续播粒度
-  // 1 分钟），预算≈时长/60+2 条，/play 独立限流桶 60/min 余量充足。
+  // 有效；地板 5s=服务端 resume 噪声地板，低于它的检查点落库即被吞）+ 每 60s
+  // 真实播放一条检查点 + ended——检查点仅供断点续播（续播粒度 1 分钟），预算
+  // ≈时长/60+2 条，/play 独立限流桶 60/min 余量充足。
   // （2026-09-15 用户拍板心跳化：真机验收 13s/5min 短观看无近期续播点，原
   // 25/50/75% 稀疏 marks 撤除。）
   // watched 口径=「累计真实播放时长 ≥90%」或自然播完（非「位置 ≥90%」）；
@@ -517,7 +542,7 @@ fn beacon_js(token: &str) -> String {
       if (player.readyState >= 1) {{ applyResume(); }}
       else {{ player.addEventListener('loadedmetadata', applyResume); }}
     }}
-    var acc = 0, lastT = null, lastWall = null, sentEnded = false, earlySent = false, nextBeatAt = 60;
+    var acc = 0, lastT = null, lastWall = null, sentEnded = false, earlySent = false, nextBeatAt = {beat_s};
     function pct() {{
       var d = player.duration;
       return (isFinite(d) && d > 0) ? Math.min(100, Math.round(player.currentTime / d * 100)) : 0;
@@ -534,16 +559,17 @@ fn beacon_js(token: &str) -> String {
       var d = player.duration;
       if (!isFinite(d) || !(d > 0)) return; // 等价于数值非正判断：JS 内不出现小于号（XSS 结构审计要求全文标签白名单）
       var p = pct();
-      // 首条早检点：10s 或 5% 时长先到先发，仅 25% 前有效——续播落点越过 25%
-      // 的会话不重复补发同位信标
-      if (!earlySent && 25 > p && player.currentTime >= Math.min(10, d * 0.05)) {{
+      // 首条早检点：10s 或 5% 时长先到先发，仅 25% 前有效；Math.max 地板对齐
+      // 服务端 resume 噪声地板（pos 低于它的检查点落库即被过滤）——续播落点
+      // 越过 25% 的会话不重复补发同位信标
+      if (!earlySent && 25 > p && player.currentTime >= Math.min({early_max}, Math.max({early_floor}, d * {early_pct}))) {{
         earlySent = true;
         beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'checkpoint', position_s: Math.round(player.currentTime), percent: p }}));
       }}
       // 心跳检查点：每 60s 真实播放一条（acc 口径——seek 前跳不触发、暂停不计
       // 时），续播粒度 1 分钟
       if (acc >= nextBeatAt) {{
-        nextBeatAt = acc + 60;
+        nextBeatAt = acc + {beat_s};
         beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'checkpoint', position_s: Math.round(player.currentTime), percent: p }}));
       }}
       if (!sentEnded && acc >= d * 0.9) {{
@@ -760,8 +786,8 @@ async fn get_t_page(
 
     // 断点续播：各 media 项最新一条 play_progress 的位置（latest 口径——污染面
     // 显著小于 max：max 被任意前跳 seek 无界抬高，latest 为检查点/ended 序列的
-    // 末条，2026-09-15 起含 25% 前的早检点）。ended → 从头看；position_s < 5 →
-    // 误触噪声不注入。
+    // 末条，2026-09-15 起含 25% 前的早检点）。ended → 从头看；position_s 低于
+    // PLAY_CHECKPOINT_FLOOR_S → 误触噪声不注入（客户端早检点地板同源对齐，I-1）。
     // user_id 谓词是跨用户安全隔离（item 索引 idx_events_item 已在位，非性能考量；
     // 勿再「补」item_id 索引=beacon 写路径重复索引）。cast 安全=单写者不变量。
     let media_item_ids: Vec<i32> = items
@@ -784,7 +810,7 @@ async fn get_t_page(
         .fetch_all(&mut *tx)
         .await?
         .into_iter()
-        .filter(|(_, phase, pos)| phase != "ended" && *pos >= 5)
+        .filter(|(_, phase, pos)| phase != "ended" && *pos >= PLAY_CHECKPOINT_FLOOR_S)
         .map(|(item_id, _, pos)| (item_id, pos))
         .collect()
     };
@@ -1121,8 +1147,12 @@ mod tests {
         assert!(js.contains("loadedmetadata"), "metadata-ready listener present");
         assert!(js.contains("readyState >= 1"), "dual-path immediate apply present");
         assert!(js.contains("currentTime === 0"), "manual-seek guard present");
-        // 早检点（2026-09-15：短观看续播——10s 或 5% 时长先到先发，仅 25% 前有效）
-        assert!(js.contains("Math.min(10, d * 0.05)"), "early checkpoint threshold present");
+        // 早检点（2026-09-15：短观看续播——10s 或 5% 时长先到先发，仅 25% 前有效；
+        // I-1 地板对齐——≲90s 短视频落点不再低于 resume 噪声地板被服务端过滤吞）
+        assert!(
+            js.contains("Math.min(10, Math.max(5, d * 0.05))"),
+            "early checkpoint threshold with resume-floor alignment present"
+        );
         assert!(js.contains("25 > p"), "early checkpoint gated before 25% (no resume-session duplicate)");
         assert!(js.contains("earlySent"), "early checkpoint once-flag present");
         // 心跳检查点（2026-09-15 用户拍板加密：每 60s 真实播放一条，百分比 marks 撤除）
@@ -1131,6 +1161,23 @@ mod tests {
         assert!(
             !js.contains('<'),
             "inline JS must never contain `<` (XSS structural audit)"
+        );
+    }
+
+    /// 阈值数值断言（09-15 max 评审 M-3）：模板值来自常量注入，跨端耦合直接对
+    /// 数值断言——早检点地板=服务端 resume 噪声过滤下限（同一常量编译期对齐），
+    /// 落库位置恒 ≥ 地板才不会被吞；间隔守住 /play 限流预算（60/min 桶）。
+    #[test]
+    fn play_checkpoint_thresholds_aligned_with_resume_noise_floor() {
+        assert_eq!(PLAY_CHECKPOINT_FLOOR_S, 5, "resume noise floor (get_t_page filter)");
+        assert!(
+            PLAY_CHECKPOINT_FLOOR_S as f64 <= PLAY_EARLY_MAX_S,
+            "floor must not exceed early checkpoint cap"
+        );
+        assert!((0.0..1.0).contains(&PLAY_EARLY_PCT), "early pct is a fraction of duration");
+        assert!(
+            PLAY_BEAT_INTERVAL_S >= 30.0,
+            "heartbeat interval sane vs /play 60/min bucket (~1 beacon/min/player)"
         );
     }
 
