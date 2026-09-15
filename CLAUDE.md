@@ -3,7 +3,7 @@
 > 跨平台桌面应用（React 19 + Tauri v2 + Rust），把文档自动转化为结构化、互联的知识库。
 > 基于 Andrej Karpathy 的 [llm-wiki.md](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 设计模式——Human curates, LLM maintains。
 
-**Version**: 0.6.10+fork · **Last Updated**: 2026-09-07 · **Project Type**: Desktop (Tauri v2) + 独立服务端 (src-server) + MCP Server
+**Version**: 0.6.11+fork · **Last Updated**: 2026-09-14 · **Project Type**: Desktop (Tauri v2) + 独立服务端 (src-server) + MCP Server
 
 ---
 
@@ -30,10 +30,10 @@
 
 - **技术栈**：React 19 + Tauri v2 (Rust) + LanceDB + Milkdown + sigma.js + Zustand
 - **启动开发**：`npm run tauri dev`（前端热重载 1420）
-- **测试**：`npm run test:mocks`（CI 门，2253+ 用例）/ `npm run test:llm`（真模型，慢）/ `npm --prefix mcp-server test` / `cargo test`（分 workspace，见下）
+- **测试**：`npm run test:mocks`（CI 门，2394+ 用例 / 174 文件）/ `npm run test:llm`（真模型，慢）/ `npm --prefix mcp-server test` / `cargo test`（分 workspace，见下）
 - **核心文件**：`src/lib/ingest.ts`（两步摄取）/ `wiki-graph.ts`（图谱 + Louvain）/ `search.ts`（多阶段检索）/ `graph-relevance.ts`（四信号相关性）
 - **Rust 后端**：`src-tauri/src/commands/`（fs / project / search / vectorstore 等）+ `api_server.rs`（本地 HTTP API）+ `clip_server.rs`（Web Clipper）
-- **服务端**：`src-server/`（axum + Postgres docker :5433；API + web 同源 :8080；launchd `wiki.src-server`）
+- **服务端**：`src-server/`（axum + Postgres docker :5433；API + web 同源 :8080；launchd `wiki.src-server`）。files 端点路径安全 = `services/storage.rs::safe_resolve`，现行口径：缺失中间目录祖先上溯（base 随项目创建即落盘）、`..` 叠缺失段 400 穿越、base 缺失/真 IO 错 500
 - **MCP**：`mcp-server/` → `llm-wiki-training`（`TRAINING__PROJECT_ID` 绑定项目）+ `llm-wiki-admin`
 
 ## ⚠️ 硬约束（改代码前必读）
@@ -45,3 +45,4 @@
 5. **SKILL 热部署**：`docs/superpowers/hermes/lt-tutor/SKILL.md` 双份 cp 即生效（仓源 + `~/.hermes/profiles/lt-tutor/` 运行副本），无需重启。
 6. **git 纪律**：`git add` 禁 `-A`；提交前必查 `git branch --show-current`（本仓库有并行会话共存，分支会被切走）。
 7. **密钥不进仓不回显**（bootstrap.env / 各 .env / launchd plist 各有落点）；launchd 改动 bootout 完全退出后再 bootstrap；重启 src-server/Hermes 避开周日 19:00 教师周报窗。
+8. **摄取红线**：ECE 语料（人人都能用英语）为 CC BY-NC——禁商用、不可整库摄取；其余外部语料摄取前先核 license。
