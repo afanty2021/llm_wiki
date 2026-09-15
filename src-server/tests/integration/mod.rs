@@ -150,6 +150,8 @@ fn pin_test_redis_db_cases() {
         pin_test_redis_db("redis://:pass@localhost:6380/2"),
         "redis://:pass@localhost:6380/1"
     );
+    // 多位 DB 序号（如 env 误指 DB 10-15）同样落入覆写臂
+    assert_eq!(pin_test_redis_db("redis://localhost:6380/12"), "redis://localhost:6380/1");
 }
 
 /// 构建测试 app（连 live DB 5433 + Redis 6380/DB1，配置来自 config/default.json）。
