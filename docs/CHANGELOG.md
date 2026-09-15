@@ -2,6 +2,10 @@
 
 ## 📋变更记录 (Changelog)
 
+### 2026-09-15 - ingest_queue 环境红定谳根修：集成测 Redis 钉 DB1
+- ✅ **集成测 Redis 隔离根治**：setup_test_app 统一压平 redis_url DB 序号为 /1（pin_test_redis_db 无段追加/带段覆写幂等 + 6 断言守卫单测，c9e7c2c1）——定谳根因=DB0 是 live 队列，launchd src-server 的 ingest/research worker 无限超时 BRPOP `ingest:queue`/`research:queue`，测试入队 job 被抢真跑/断言 LLEN 归零即环境红；ingest_concurrency_test 旧「手工 REDIS_URL=.../1 必守」口径收编进代码不再依赖 env
+- 🧪 全量验证绿：ingest_queue 3 连×2 + 全套件 lib 377+集成 127 + ignored ingest_reliability 8 + ingest_concurrency 11 零失败；跑测全程 DB0 LLEN 恒 0 live 无扰；DB1 无消费者，残留条目跨轮无害累积（文档化已知取舍）
+
 ### 2026-09-15 - AGENTS.md 收编 + CHANGELOG 补账
 - ✅ **AGENTS.md(=CLAUDE.md)**：版本 0.6.10→0.6.11+fork、Last Updated 09-14、CI 门用例数实测刷新（2394+/174 文件）、快速入口补 safe_resolve 现行口径、硬约束新增 #8 摄取 license 红线（ECE CC BY-NC 禁商用不可整库摄取）（09b0f00d）
 - 📄 CHANGELOG 补齐 2026-08-23→09-14 缺口（本笔，13 笔战役）
