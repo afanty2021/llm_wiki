@@ -76,3 +76,21 @@
 **Ready to merge? Yes**
 
 **Reasoning**: 实现与计划定稿及六条关键决策锚点逐条吻合，无迁移、鉴权与防泄漏面核过且 live 抽验全过（175/175、23/23、残渣归零、SKILL 副本逐字节一致、三端点 401），提交信息全部「已验证」声明抽验无一虚报。唯一 Important 是修复行为的测试保护缺口（序断言），不影响运行时正确性，可作为合并后第一跟进项；7 条 Minor 均为记档级。
+
+## 合并后跟进（2026-09-15 同日收口）
+
+全部 7 条编号 Issue 与 Recommendations 2/3 逐项处置（用户指令「逐次修掉」）：
+
+| 项 | 处置 | 落点 |
+|---|---|---|
+| Issue 1（Important）media/search 零顺序断言 | ✅ 合并前已闭环 | cc5f5c10（本报告归档前即补，24/24 含新用例） |
+| Rec-2 plan_create override 前目标预查 | ✅ 已实施 | 4571463e：supervisor 路径建单前经 member-role 预查目标存在性——404（查无档案/不在 team）→ 正常文本拒（isError=false 防熔断，回显目标 userid + 引导回 roster_search）；查询失败 → unavailable 臂 fail-closed 抛错；user/system 路径零额外往返。mcp 179/179 绿（+4 新用例钉 404 拒全链/在册放行/500 fail-closed/零往返）；SKILL §11 第 2 步补机器侧兜底说明，双份 cp 部署 diff 一致；网关 kickstart 重启（PID 5534，lstart 20:02:48）+ dist 标志串实证 |
+| Rec-3 t6gate_ 域外残留收编 SWEEPS | ✅ 已实施 | b4eac867：users 扫描补 `t6gate\_` 起始锚定（username+email，registration_gate_test 注册残留按构造两者均以该前缀起始）；存量 12 行（08-30→09-15 积累，无 profile 不进 roster）经 training 套件起始 sweep 一轮收清，live PG 复核 count=0；training 24/24 绿 |
+| Minor 2 计划 §2.3 第 3 步文本滞后 | 知情接受（记档） | SKILL §11 第 3 步已是事实正确版；计划文档为历史评审锚不改写 |
+| Minor 3 searchUnavailableText 无外部消费者 | 知情接受（记档） | 后续触碰 training.ts 时可顺手同 pendingHintText 案去 export |
+| Minor 4 memberRole 畸形 200 静默降级 | 知情接受（记档） | fail-closed 方向未破（"" 落非 admin 臂）；改 throw 需另配测试，收益边际 |
+| Minor 5 T1 deferred minors 三件 | 知情接受（记档） | 已裁定知情取舍维持原判 |
+| Minor 6 「系统/cron 回合不可用」非服务端硬闸 | 知情接受（记档） | 无可利用面（cron prompt 可信通道 + glm-5.3-flash 严守 schema 实测）；防御纵深备注 |
+| Minor 7 CHANGELOG 零记录 | ✅ 本笔闭环 | docs/CHANGELOG.md 2026-09-15「视频学习任务全案收官 + 合并后跟进」条目 |
+
+**主动通知裁定**：维持现状（主管转发链接，教师下次使用助手时见 pending 提醒、完成情况周报可见）——Case A Hermes push 不实施，用户 09-15 裁定。另实证：手动 fire 的周报 cron 结构上不投递（detached 进程单-WS 约束无 WeCom 发送通道，executions.delivery_outcome=failed 而 status=completed；gateway 日志窗口零行），真投递以周日 19:00 builtin 班次为准（09-06/09-13 两轮教师实收）。

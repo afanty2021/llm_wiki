@@ -2,6 +2,11 @@
 
 ## 📋变更记录 (Changelog)
 
+### 2026-09-15 - 视频学习任务（主管分享→回执→周报考核）全案收官 + 合并后跟进
+- ✅ **全案交付**（计划 max 评审 Ready Yes → SDD T1-T6 → 终审 Ready Yes，feat 8cacd780..6d492596 并 main，终审报告归档 9d956134）：src-server 三读端点 member-role/media/search/roster（全 require_training_admin）；MCP 主管越权门——SUPERVISION_TOOLS 白名单分发层判定（仅 mismatch 查会话者角色、fail-closed 三臂、identity.ts 保持纯函数）+ video_search/roster_search 两工具（roster 反泄漏恰两键契约用断言钉死）+ 检索端点 404 转正常文本防熔断；SKILL §11 主管六步流（userid 只准来自 roster_search、建单不传 period_key 防 C1 同日异视频静默丢、按标题判重）+ §4.8 视频讨论 + 周报学习任务段；案 B pending 提示（plan_list/profile_get 尾 hint，零网关改动）；media/search 相关度排序（LOE 试跑大水漫灌生产修复 f1bee4f4）+ 序断言回归钉（cc5f5c10，评审唯一 Important）；T5 三 admin（Carina/Wendy/HuangZhengBo）+ T6 真人验收（分享→观看→complete→周报段全链）
+- ✅ **合并后三跟进**（终审 Rec-2/Rec-3 + Minor 记档，用户指令逐次修掉）：① plan_create 主管 override 前目标 member-role 预查——不在名册即拒（正常文本防熔断+引导回 roster_search）/查询失败 fail-closed 抛错，user/system 路径零往返，根除猜错 userid 被服务端自动 bind 脏档案（4571463e，mcp 179/179 绿+SKILL 双份部署+网关重启）；② t6gate_ 前缀收编 SWEEPS users 扫描——registration_gate_test 注册残留存量 12 行一轮收清归零（b4eac867，training 24/24 绿）；③ 本笔 CHANGELOG 补账 + 终审报告「合并后跟进」处置表（7 条编号 Issue 全落点）
+- 🔧 主动通知维持现状（主管转发链接给老师，教师下次使用时见提醒），Hermes Case A push 未实施——用户裁定；另：手动 fire 的 cron 周报结构上不投递（detached 进程无 WeCom 通道，delivery_outcome=failed），真投递以周日 19:00 builtin 班次为准
+
 ### 2026-09-15 - /t/ 播放检查点心跳化 + max 评审 fix-forward
 - ✅ **心跳化**：早检点（10s 或 5% 时长先到先发、仅 25% 前有效，36a31efb）+ 每 60s 真实播放一条检查点（acc 口径——seek 前跳不触发、暂停不计时）+ ended；25/50/75% 稀疏 marks 撤除（352bc749）——续播粒度 25% → 1 分钟，预算≈时长/60+2 条（/play 独立桶 60/min 实占 ~1/min）；已部署 live 并真机验收。动机：真机验收 13s 短观看无续播点、5 分钟观看只能续到 25%（36a31efb 曾只垫地板检点，用户复核指正未达「加密」本意）
 - 🔧 **max 评审（Ready: Yes，0C/1I/5M）fix-forward**：I-1 早检点地板对齐——客户端阈值改 `Math.min(10, Math.max(5, d*0.05))`，与服务端 resume 噪声过滤 `pos >= PLAY_CHECKPOINT_FLOOR_S` 双端共用一常量（此前 ≲90s 短视频早检点取整 <5 落库即被吞、观看 <60s 无心跳=零续播点）；M-3 阈值常量 format! 注入模板+数值断言单测（跨端阈值交互不再只靠形状断言）；M-1 rate_limit /play 注释旧「≤4 beacon」口径更新为心跳化实况；M-5 模块头补 /play 端点与限流条目（M-4 卸载尾段 visibilitychange flush 留档不修）
