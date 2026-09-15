@@ -446,6 +446,91 @@ test("集成·决策② 仅 mismatch 才查：白名单工具本人调用（无�
   assert.deepEqual(seen, ["T1"])
 })
 
+// ── 集成：plan_create 主管 override 目标预查（终审 Rec-2 合并后跟进）──
+// plan_create 是唯一带 bind 写副作用的白名单工具：猜错的 userid 会被服务端自动
+// 建脏档案（G7 残面）。override 路径建计划前先查目标 member-role，404 即拒；
+// user/system 路径零额外往返。
+
+const MEMBER_ROLE_URL_T2 = `${BASE}/api/v1/training/member-role?${new URLSearchParams({ wecom_userid: "T2" })}`
+
+const PLAN_CREATE_ARGS = {
+  wecom_userid: "T2",
+  title: "听力任务",
+  origin: "supervisor",
+  items: [{ kind: "media", target_ref: "m1", label: "L1" }],
+}
+
+test("集成·目标预查·404 拒：admin 会话 plan_create 带不在册 T2 → 正常文本拒（isError=false）+ 不触达 plans/凭证", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "admin" } }) },
+    { when: (c) => c.url === MEMBER_ROLE_URL_T2, then: () => ({ status: 404, body: { error: { code: "NOT_FOUND", message: "Member not found" } } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  const result = await handlers.get("teacher_tutor_plan_create")!({ ...PLAN_CREATE_ARGS }, META_WECOM_T1)
+
+  const text = result.content[0]!.text
+  assert.ok(text.includes("不在名册"), "拒绝文案点名不在名册")
+  assert.ok(text.includes("roster_search"), "文案引导回 roster_search 核实")
+  assert.ok(text.includes("T2"), "文案回显目标 userid 供模型自纠")
+  assert.equal(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`), false, "拒绝后不得触达 plans")
+  assert.deepEqual(seen, [], "拒绝后不得取凭证")
+  const targetCall = calls.find((c) => c.url === MEMBER_ROLE_URL_T2)!
+  assert.ok(targetCall, "目标 member-role 查询发生了")
+  assert.equal(targetCall.headers["x-training-admin-token"], "adm-secret")
+  assert.deepEqual(identityBlocks(result).slice(1), ['identity_source: "supervisor"'], "尾块如实标 supervisor")
+})
+
+test("集成·目标预查·在册放行：目标 member-role 200（普通 member 即可）→ plans 正常建", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "admin" } }) },
+    { when: (c) => c.url === MEMBER_ROLE_URL_T2, then: () => ({ body: { role: "member" } }) },
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: { plan: { id: 9 }, items: [], link: "/s/abcdefghij" } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  const result = await handlers.get("teacher_tutor_plan_create")!({ ...PLAN_CREATE_ARGS }, META_WECOM_T1)
+  assert.ok(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`))
+  assert.equal(JSON.parse(result.content[0]!.text).plan.id, 9)
+  assert.deepEqual(seen, ["T2"], "凭证层用目标身份")
+})
+
+test("集成·目标预查·查询失败 fail-closed：目标 member-role 500 → unavailable 臂抛错 + 不触达 plans", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "admin" } }) },
+    { when: (c) => c.url === MEMBER_ROLE_URL_T2, then: () => ({ status: 500, body: { error: { code: "INTERNAL", message: "boom" } } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await assert.rejects(
+    handlers.get("teacher_tutor_plan_create")!({ ...PLAN_CREATE_ARGS }, META_WECOM_T1),
+    (err: unknown) =>
+      err instanceof IdentityMismatchError && /temporarily unavailable/.test(err.message),
+  )
+  assert.equal(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`), false)
+  assert.deepEqual(seen, [])
+})
+
+test("集成·目标预查仅 supervisor 路径：教师本人自建（无冲突）与 system 回合均零 member-role 往返", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: { plan: { id: 1 }, items: [] } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await handlers.get("teacher_tutor_plan_create")!({ title: "t", origin: "chat", items: [] }, META_WECOM_T1)
+  await handlers.get("teacher_tutor_plan_create")!({ wecom_userid: "cron-teacher", title: "t", origin: "cron", items: [] }, undefined)
+  assert.equal(calls.some((c) => c.url.includes("member-role")), false, "user/system 路径零额外往返")
+  assert.deepEqual(seen, ["T1", "cron-teacher"])
+})
+
 test("集成·roster_search admin 闸·非 admin 拒：member 会话 → IdentityMismatch + 不触达 roster", async () => {
   const calls: RecordedCall[] = []
   const fetchImpl = mockFetch([

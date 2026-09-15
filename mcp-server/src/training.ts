@@ -726,6 +726,18 @@ export function searchUnavailableText(): string {
   return `检索服务暂时不可用，请稍后再试。`
 }
 
+/**
+ * plan_create 主管 override 目标预查 404 的正常返回文案（isError=false，同
+ * invalidAskPayloadText 口径：目标 userid 猜错是应用级输入问题不是服务故障，
+ * 抛错会进熔断器，3 次把整个服务器熔断 ~60s——主管流模型试错 userid 时尤其
+ * 致命）。文案引导回 roster_search 核实（SKILL §11 第 2 步的机器侧兜底）。
+ */
+function targetNotInRosterText(wecomUserid: string): string {
+  return `未创建学习任务：目标 wecom_userid「${wecomUserid}」不在名册中（查无档案或不在本团队）。`
+    + "为防止猜错的 userid 被误建为教师档案，本次调用已拒绝。"
+    + "请用 roster_search 重新核实 userid 后再试；若该教师从未开通过，请让教师先在企微里与 bot 对话完成开通。"
+}
+
 function jsonResult(value: unknown): ToolOutput {
   return textResult(JSON.stringify(value, null, 2))
 }
@@ -852,6 +864,26 @@ async function queryCallerRole(deps: SrcServerHandlerDeps, meta: MetaLike | unde
     // 404 = 会话者非本 team 成员 → 视同非 admin（ApiNotFoundError 由 client 统一抛）
     if (err instanceof ApiNotFoundError) return { kind: "non-admin" }
     return { kind: "unavailable" }
+  }
+}
+
+/**
+ * plan_create 主管 override 前的目标预查（终审 Rec-2 合并后跟进）：plan_create 是
+ * 唯一带 bind 写副作用的工具——猜错的 userid 会被服务端自动建脏档案（roster 污染/
+ * 计划误投，G7 已知残面）。member-role 404（查无档案或不在本 team，两形态不区分是
+ * 防探测口径）→ "missing"；网络失败/非 2xx 非 404/token 缺失 → "unavailable"
+ * （与 queryCallerRole 同款三臂 fail-closed）。只看存在性不看角色值。
+ */
+async function queryTargetRole(
+  deps: SrcServerHandlerDeps,
+  wecomUserid: string,
+): Promise<"ok" | "missing" | "unavailable"> {
+  try {
+    await deps.client.memberRole(wecomUserid, deps.store.getAdminToken())
+    return "ok"
+  } catch (err) {
+    if (err instanceof ApiNotFoundError) return "missing"
+    return "unavailable"
   }
 }
 
@@ -1009,6 +1041,17 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
 
   handlers.set("teacher_tutor_plan_create", async (args, meta) => {
     const ident = await resolveIdentityForTool(deps, "teacher_tutor_plan_create", meta, args)
+    // 主管 override 目标预查（终审 Rec-2）：仅 supervisor 路径预查目标存在性——
+    // user 模式（会话身份自带存在性）与 system 模式（cron/运维可信通道）零额外
+    // 往返。404 → 正常文本拒（防熔断，见 targetNotInRosterText）；查询失败 →
+    // 同 queryCallerRole 臂 fail-closed 抛错。
+    if (ident.identitySource === "supervisor") {
+      const target = await queryTargetRole(deps, ident.wecomUserid)
+      if (target === "missing") {
+        return withIdentitySource(textResult(targetNotInRosterText(ident.wecomUserid)), ident)
+      }
+      if (target === "unavailable") throw supervisionUnavailableError("teacher_tutor_plan_create")
+    }
     const body: Record<string, unknown> = {
       title: stringArg(args.title, "title"),
       origin: stringArg(args.origin, "origin"),
