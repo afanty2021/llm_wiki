@@ -108,19 +108,41 @@ else:
 - 开头称呼："<display_name>老师好"（display_name 取自 teacher_tutor_profile_get；为空时退"老师好"，勿编造名字）。
 - 正文直达教师本人：不得出现"周报任务"、job_id、cron、"系统"等任何后台痕迹；也不要附停止/管理任务的说明。
 周报短文由系统送达该教师本人。"""
+    # 错峰槽位分配（2026-09-13）：新教师槽位 = "{M} 19 * * 0" 的 0-59 中未被占用的
+    # 最小分钟，避免全员挤 19:00 同秒齐发（当日 7 任务同秒曾连吃 zai 并发 429、
+    # fallback omlx 又因 key 缺失秒 401）。巡检与手动两条路都经此处。
+    # ⚠ 读-算-写无锁：两笔开通并发会拿到同一 used 集合→同槽——单操作员串行用，禁并发。
+    used = set()
+    for j in cron_jobs.load_jobs():
+        if not str(j.get("name") or "").startswith("lt-tutor-weekly:"):
+            continue
+        if not j.get("enabled", True):
+            # 停用任务不占槽：复用其槽位后若该任务重新启用会同槽碰撞（低概率，人工排程兜底）
+            continue
+        sch = j.get("schedule") or {}
+        m = re.fullmatch(r"(\d+) 19 \* \* 0", str(sch.get("expr") or ""))
+        if sch.get("kind") == "cron" and m:
+            used.add(int(m.group(1)))
+    slot = next((i for i in range(60) if i not in used), None)
+    if slot is None:
+        print("[3/3] ⚠ 19:00-19:59 槽位已满——回落 0 19 * * 0（与既有 0 槽任务同槽碰撞，请手工调整排程）")
+        slot = 0
+    schedule = f"{slot} 19 * * 0"
     if dry_run:
-        print(f"[3/3] 将创建周报任务 {job_name}（周日 19:00，deliver wecom:{userid}，钉 5.3-flash）")
+        print(f"[3/3] 将创建周报任务 {job_name}（周日 19:{slot:02d}，deliver wecom:{userid}，钉 5.3-flash）")
     else:
+        if os.path.exists(cron_jobs.JOBS_FILE):
+            backup(cron_jobs.JOBS_FILE)  # 建前备份，与 ①② 两处 backup 纪律对齐
         job = cron_jobs.create_job(
             prompt=prompt,
-            schedule="0 19 * * 0",
+            schedule=schedule,
             name=job_name,
             deliver=f"wecom:{userid}",
             skills=["teacher-tutor"],
             provider="zai-coding-cn",
             model="glm-5.3-flash",
         )
-        print(f"[3/3] ✓ 周报任务已建：{job_name}（id={job['id']}，next={job.get('next_run_at')}）")
+        print(f"[3/3] ✓ 周报任务已建：{job_name}（id={job['id']}，schedule={schedule}，next={job.get('next_run_at')}）")
 
 print("=== 完成 ===")
 if platforms_block_added and not dry_run:
