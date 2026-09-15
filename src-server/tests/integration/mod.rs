@@ -118,15 +118,53 @@ pub fn ensure_test_storage_root() {
     }
 }
 
-/// 构建测试 app（连 live DB 5433 + Redis 6380，配置来自 config/default.json）。
+/// 测试 Redis 隔离：把 redis URL 的 DB 序号一律钉成 1。DB0 是 live 队列——launchd
+/// src-server 的 ingest/research worker 以无限超时 BRPOP `ingest:queue`/`research:queue`，
+/// 测试在 DB0 入队的 job 会被 live worker 抢走真跑（job 状态被并发改写 / 断言 LLEN 归零
+/// ——ingest_queue 集成测环境红定谳，2026-09-15 立项根修）。DB1 无任何消费者，测试自驱动。
+/// 与来源无关（default.json 无 DB 段 / REDIS_URL env 手工带段）一律压平：
+/// - 无 DB 段（redis://h:6380）→ 追加 /1；
+/// - 已带 DB 段（redis://h:6380/0 或 /N）→ 覆写为 /1（幂等，兼容旧「手工
+///   REDIS_URL=.../1」口径，ingest_concurrency_test 头注即此口径）。
+fn pin_test_redis_db(raw: &str) -> String {
+    let url = raw.trim_end_matches('/');
+    match url.rsplit_once('/') {
+        // 末段纯数字 = 显式 DB 序号 → 覆写；authority 段必含 ':'/'@'/'.',
+        // 不会误入此臂（redis://h:6380 的 rsplit 末段是 host:port）
+        Some((prefix, last))
+            if !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            format!("{prefix}/1")
+        }
+        _ => format!("{url}/1"),
+    }
+}
+
+#[test]
+fn pin_test_redis_db_cases() {
+    assert_eq!(pin_test_redis_db("redis://localhost:6380"), "redis://localhost:6380/1");
+    assert_eq!(pin_test_redis_db("redis://localhost:6380/"), "redis://localhost:6380/1");
+    assert_eq!(pin_test_redis_db("redis://localhost:6380/0"), "redis://localhost:6380/1");
+    assert_eq!(pin_test_redis_db("redis://localhost:6380/1"), "redis://localhost:6380/1");
+    assert_eq!(
+        pin_test_redis_db("redis://:pass@localhost:6380/2"),
+        "redis://:pass@localhost:6380/1"
+    );
+    // 多位 DB 序号（如 env 误指 DB 10-15）同样落入覆写臂
+    assert_eq!(pin_test_redis_db("redis://localhost:6380/12"), "redis://localhost:6380/1");
+}
+
+/// 构建测试 app（连 live DB 5433 + Redis 6380/DB1，配置来自 config/default.json）。
 /// default.json 已翻 registration_enabled=false（Task 6 r3 fail-closed；测试二进制
 /// 不读 .env——from_env 无 dotenv），故 from_env 后显式注入 true 再 create_app，
 /// 否则本文件 27 处 register_user 调用全 403。
+/// Redis DB1 钉死见 pin_test_redis_db（DB0=live 队列，worker 抢跑测试 job）。
 pub async fn setup_test_app() -> (Router, AppState) {
     ensure_test_jwt_secret();
     ensure_test_storage_root();
     let mut config = llm_wiki_server::AppConfig::from_env().expect("Failed to load test config");
     config.auth.registration_enabled = true;
+    config.redis_url = pin_test_redis_db(&config.redis_url);
     llm_wiki_server::create_app(config)
         .await
         .expect("Failed to create test app")
