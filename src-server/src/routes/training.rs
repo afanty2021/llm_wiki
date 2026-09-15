@@ -650,6 +650,8 @@ const ROSTER_MAX_LIMIT: i64 = 50;
 /// display_name NULLS LAST, wecom_userid（controller Ruling：确定性输出）。
 /// 查无命中 → 200 `[]`（检索语义，非 member-role 的点查 404）。
 /// q 缺失/空白 → 400；token 缺失/错 → 401。
+/// 全局口径与 overview 一致（teacher_profiles 全局表，无 team 过滤），
+/// 双重门控 = admin token + MCP 端工具级 admin 闸。
 async fn search_roster(
     State(state): State<AppState>,
     headers: HeaderMap,
