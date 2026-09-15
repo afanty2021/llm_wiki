@@ -48,12 +48,25 @@ use llm_wiki_server::AppState;
 ///   残留项目会挡住 users 删除，故最先删；wiki_pages/embeddings 等随项目级联）；
 /// - media_assets.slug：无 user FK，独立按 slug 清。
 /// teams/team_members/refresh_tokens/teacher_profiles/learning_plans/items/events/
-/// short_links/chat_* 均随 users ON DELETE CASCADE，无需单列。
+/// short_links/chat_* 均随 users ON DELETE CASCADE，无需单列。（2026-09-15 对 live
+/// PG 实证：引用 users 的 FK 共 13 条，11 条 CASCADE；仅两条例外——projects.created_by
+/// NO ACTION，由本函数第 1 条 sweep 先删 projects 化解；activity_logs.user_id NO
+/// ACTION，全表 0 行且 src-server 无写者。FK 冲突非残渣机理。）
 ///
 /// 并行安全：cargo 并行执行 #[tokio::test]，无条件按前缀删会误删其他在飞测试的行。
 /// cutoff 取「本测试二进制首次 teardown 时刻 - 60s」（DB/客户端钟差余量）——只清
 /// 历史残留；本次运行新建的行留给下一轮收尾（稳态：每轮清上一轮，不再无限累积）。
 /// 在飞测试的行 created_at > cutoff，永不被触碰。
+///
+/// 稳态边界（2026-09-15 残渣事故实证，详见 .superpowers/sdd/2026-09-12-video-share/
+/// task-6-sweeps-report.md）：上一轮行要被本轮清到，须本轮启动距其 created_at > 60s。
+/// 背靠背连跑（cargo test 无改动重跑，实测 10-22s 一轮）时整链互不清账——当日 4 轮
+/// 56 秒内连跑，280 users/88 teams/88 projects 全数幸存，直到 45 分钟后的下一轮才
+/// 被一次收清；bind 教师以假「王老师」暴露进新上线的 roster。三层防线就此立起：
+/// ① 各测试**开始处**（training_fixture_with_config_project 头部）也调本函数，>60s
+///   间隔后的第一轮即可收账，不等测试尾部；② training_test.rs 的 bind 造数测试
+///   末尾按精确 email **本轮内自清**教师账号（roster 可见面，cleanup_test_user_by_
+///   email，不受 cutoff 约束）；③ 既有测试尾部 sweep 保底 fixture 用户（不进 roster）。
 ///
 /// 范围边界（评审 F6）：SWEEPS 只覆盖 LT 域六前缀族（t3_/t6_/t7_/t8_/t9_/t10_）；同二进制
 /// 内 M1/M2 域测试（permissions/reviews/research/chat_sessions 等，tag 形如

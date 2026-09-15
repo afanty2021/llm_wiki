@@ -20,6 +20,25 @@ fn bearer(token: &str) -> String {
     format!("Bearer {}", token)
 }
 
+/// 测试自清（双保险第二层）：按精确 email 删除**本测试本轮**造出的用户——bind 的
+/// email 合成式恒为 `{wid}@wecom.local`（routes/training.rs，全量 wid 不截断），
+/// 精确匹配零误删面；DELETE users 级联带走 teacher_profiles/team_members/
+/// refresh_tokens/learning_plans/events 等（引用 users 的 13 条 FK 除
+/// projects.created_by 与 activity_logs 外全部 ON DELETE CASCADE，2026-09-15
+/// 对 live PG \d 逐一实证）。不受 SWEEPS 的 cutoff 约束——cutoff=本进程首次
+/// sweep-60s，背靠背连跑（无改动重跑 10-20s 一轮）时上一轮行永远新于 cutoff、
+/// 只能等 >60s 间隔的下一轮收账（2026-09-15 残渣事故机理：4 轮 56 秒内连跑，
+/// 280 users/88 teams/88 projects 全数幸存，bind 教师以假「王老师」暴露进 roster）。
+/// 教师行是 roster 可见面，本轮内立即自删不再等下一轮；t6_ fixture 用户
+/// （owner/admin/member，无 profile 不进 roster）仍走 SWEEPS 下一轮收尾。
+async fn cleanup_test_user_by_email(db: &sqlx::Pool<sqlx::Postgres>, email: String) {
+    sqlx::query("DELETE FROM users WHERE email = $1")
+        .bind(email)
+        .execute(db)
+        .await
+        .expect("cleanup_test_user_by_email sweep failed");
+}
+
 /// GET /users/me → user id（register 响应体被 mod.rs 助手丢弃，这里按 token 反查）。
 async fn user_id_of(server: &TestServer, token: &str) -> i64 {
     let resp = server
@@ -39,6 +58,11 @@ async fn training_fixture_with_config_project(
     tag: &str,
 ) -> (TestServer, llm_wiki_server::AppState, String, String) {
     let (app1, _state1) = crate::setup_test_app().await;
+    // 测试卫生（双保险第一层）：测试开始处先清上一轮残渣。SWEEPS 的 cutoff（首次
+    // sweep-60s）使 <60s 间隔的背靠背连跑整链互不清账（机理见 cleanup_test_user_by_email
+    // 注）；此处让每个测试开始时都尝试收账——>60s 间隔后的第一轮即可清掉，不再依赖
+    // 恰好有测试跑到末尾。cutoff 保护在飞测试，本轮自己的行不受影响。
+    crate::teardown_test_data(&_state1).await;
     let s1 = TestServer::new(app1).unwrap();
 
     let owner_name = unique(tag);
@@ -349,6 +373,8 @@ async fn bind_defaults_display_name_to_wecom_userid() {
     .await
     .unwrap();
     assert_eq!(dn.as_deref(), Some(wid.as_str()));
+    // 测试卫生：本轮内自清教师账号（本测试原无任何 teardown，事故残渣幸存路径之一）
+    cleanup_test_user_by_email(&state.db, format!("{wid}@wecom.local")).await;
 }
 
 // ============ Task 8：POST /api/v1/training/bind ============
@@ -471,6 +497,8 @@ async fn bind_lifecycle() {
     .await
     .unwrap();
     assert_eq!(full.as_deref(), Some("王老师"), "users.full_name likewise untouched");
+    // 测试卫生：本轮内自清教师账号（display_name「王老师」= 事故暴露的假教师类）
+    cleanup_test_user_by_email(&state.db, format!("{wid}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
@@ -506,6 +534,8 @@ async fn bind_truncates_long_wecom_userid_by_chars() {
         .await;
     assert_eq!(r2.status_code(), StatusCode::OK);
     assert_eq!(r2.json::<serde_json::Value>()["user"]["id"], v["user"]["id"]);
+    // 测试卫生：本轮内自清教师账号（CJK 截断分支：username 无 t6_ 锚点，唯 email 可精确清）
+    cleanup_test_user_by_email(&_state.db, format!("{wid}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&_state).await;
 }
@@ -524,11 +554,12 @@ async fn bind_conflict_409_message_stays_neutral() {
     // 冲突源 1：username 占用——users 已有行恰占 bind 合成 username（wecom_{wid}）
     // （直接 SQL 落历史占位用户；app2 未开注册，无法经 /auth/register 制造）
     let wid1 = unique("c1");
+    let c1u = unique("c1u"); // 占位用户 email 留柄：测试末自清定位键（下同 wid2）
     sqlx::query(
         "INSERT INTO users (username, email, password_hash, full_name) VALUES ($1, $2, $3, $4)",
     )
     .bind(format!("wecom_{wid1}"))
-    .bind(format!("{}@t6.com", unique("c1u")))
+    .bind(format!("{c1u}@t6.com"))
     .bind("placeholder-not-a-login-hash")
     .bind("占位用户")
     .execute(&state.db)
@@ -575,6 +606,9 @@ async fn bind_conflict_409_message_stays_neutral() {
                 .unwrap();
         assert_eq!(n, 0, "conflict bind must roll back (no profile for {wid})");
     }
+    // 测试卫生：本轮内自清两个占位用户（SQL 直插、无 profile，按精确 email 删）
+    cleanup_test_user_by_email(&state.db, format!("{c1u}@t6.com")).await;
+    cleanup_test_user_by_email(&state.db, format!("{wid2}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
@@ -671,6 +705,8 @@ async fn bind_concurrent_same_wecom_userid_converges_on_one_account() {
         .map(|a| a.len())
         .unwrap();
     assert_eq!(n, 1, "bound user must belong to exactly the LT team, no personal team");
+    // 测试卫生：本轮内自清教师账号（并发老师）
+    cleanup_test_user_by_email(&state.db, format!("{wid}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
@@ -719,6 +755,11 @@ async fn bind_length_validation_matrix() {
     assert_eq!(r.status_code(), StatusCode::OK);
     let uname = r.json::<serde_json::Value>()["user"]["username"].as_str().unwrap().to_string();
     assert!(uname.chars().count() <= 50, "synthesized username must fit VARCHAR(50)");
+    // 测试卫生：本轮内自清边界教师（edge_id 是跨轮固定字面量——上一轮残行在库时
+    // 本轮 bind 走幂等 200 复用，可过；但与并发 sweep 删行竞态时 SELECT-after-DELETE
+    // 后 INSERT 撞唯一索引 → 409 红，2026-09-15 16:45 瞬态失败的最可能身份。自清
+    // 让固定字面量每轮归零，竞态窗口随之消失）
+    cleanup_test_user_by_email(&state.db, format!("{edge_id}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
@@ -961,6 +1002,9 @@ async fn overview_aggregates_plans_items_events_per_teacher() {
     assert_eq!(tb["items_7d"], json!({"total": 0, "viewed": 0, "watched": 0, "completed": 0}));
     assert_eq!(tb["last_active_at"], serde_json::Value::Null);
     assert_eq!(tb["last_ask_at"], serde_json::Value::Null);
+    // 测试卫生：本轮内自清两名 t3_ 教师（t3_ 前缀同在 SWEEPS 域，自清逻辑一致）
+    cleanup_test_user_by_email(&state.db, format!("{wid_a}@wecom.local")).await;
+    cleanup_test_user_by_email(&state.db, format!("{wid_b}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
@@ -1076,6 +1120,8 @@ async fn weekly_plan_period_key_server_computed_and_validated() {
             .await
             .unwrap();
     assert_eq!(stored_chat.as_deref(), Some("1999-W01"), "chat passthrough unchanged");
+    // 测试卫生：本轮内自清 t3_ 教师账号（周老师）
+    cleanup_test_user_by_email(&state.db, format!("{wid}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
@@ -1117,6 +1163,8 @@ async fn bind_access_token_typ_isolation_smoke() {
         .add_header("authorization", bearer(&plan_link))
         .await;
     assert_eq!(denied.status_code(), StatusCode::UNAUTHORIZED, "plan_link token must not work as an API credential");
+    // 测试卫生：本轮内自清教师账号（冒烟老师）
+    cleanup_test_user_by_email(&state.db, format!("{wid}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
@@ -1196,6 +1244,8 @@ async fn member_role_returns_team_role_case_insensitively() {
             "endpoint role must equal team_members.role for {form}"
         );
     }
+    // 测试卫生：本轮内自清教师账号（角色老师）
+    cleanup_test_user_by_email(&state.db, format!("{wid}@wecom.local")).await;
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
