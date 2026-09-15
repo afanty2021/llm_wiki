@@ -2,6 +2,77 @@
 
 ## 📋变更记录 (Changelog)
 
+### 2026-09-15 - AGENTS.md 收编 + CHANGELOG 补账
+- ✅ **AGENTS.md(=CLAUDE.md)**：版本 0.6.10→0.6.11+fork、Last Updated 09-14、CI 门用例数实测刷新（2394+/174 文件）、快速入口补 safe_resolve 现行口径、硬约束新增 #8 摄取 license 红线（ECE CC BY-NC 禁商用不可整库摄取）（09b0f00d）
+- 📄 CHANGELOG 补齐 2026-08-23→09-14 缺口（本笔，13 笔战役）
+
+### 2026-09-14 - 降噪+去重防线（PR #8）+ CI 存量红修复（PR #9）+ LT 全库质检收官
+- ✅ **降噪+去重防线**：merge inflation watch 搬 merge_stats+阈值收紧 100%/20KB（51a8d06b）+ dedup-skip/零页源结构化计账+全跳过告警（67ba179b）+ 修复性重投 SOP（f32792d6/f6e91717/0fb49a06）+ succeeded_with_warnings 认终态三处齐改（1dff0b4b）——立项源自 1829 条虚增实锺分解（去重仅 999 页/45% 跨批重复）；计划评审三轮（2bfe8b7e/c69ad6cb/d6418bad）后 SDD 实施，PR #8 并 15dfdedc、双半边部署验证生效
+- ✅ **CI 存量红两簇修复（PR #9）**：safe_resolve 祖先上溯——缺失中间目录不再 500（85c620ae，base 自 ecb675a0 随项目创建落盘）+ transcriber 标点测试注入 deps.apiKey 破 CI key 门短路；跟进 8e1d7fd8 函数文档对齐两分支实现、ada7bd4e `..`叠缺失段 500→400 BadRequest + 穿越单测真踩上溯分支硬断言
+- 🔧 **三轮 launchd 重载均 live 冒烟实证**（手签 JWT 差分探针：list 缺失 /wiki 500→200+[]、DELETE wiki/none.md 500→404、sub/../../x 重载前后 500→400）；CI 含 PG+Redis job 全绿
+- ✅ **LT 全库质检+七项修复收官**（live 数据运维）：测试残渣 2123→1397、12 孤儿章闭合（重投先删 ingested_files 行），库终态 16,004 页
+- 🧪 safe_resolve 单测×4（缺失中间目录差分/穿越两形态 400 断言）；max 评审全部 Issues/Minors 关闭
+
+### 2026-09-13 - 概念合并清理闭合 + LOE 师训批 + Think 系列收官
+- ✅ **概念合并清理专项闭合**：touch-guard 触达守卫通用化——expected_pool 构造固化入工具（466b4b69，触达误报三连根修）
+- ✅ **LOE 师训批（21 源）**：240 页/零静默跳过（f3e2a04d）+ 检索别名 loe（223f827c）；Think 教材 2e 09-13 系列收官（剩余项不摄，回访信号=教师检索 miss）
+- ✅ /t/ 断点续播：play_progress 回读 data-resume 注入（290a972e）；Tier-2 See-Also 写入方 + P1.5 空页定题批（37b898fc）
+- 🔧 Hermes 上游 2948 切换：教师 MCP 工具三层根因全修 + 周报 cron 三关 + blocked_config 收口（跨仓，live 验收）
+
+### 2026-09-12 - 概念合并清理 S1/S2 甄别器 + /t/ 播放遥测部署 + 护栏 v2
+- ✅ **概念合并清理专项**：charter r2.1+put_page 空 fm 根治（5b6fabad）→ S1 甄别器（title 归组类型无关+双 prompt+plan-builder 桥 07a4ae12，评审跟修 c609785c）→ S2 Tier-1 跨命名空间甄别器（f5eb7360）+ cmd_merge 同形改写守卫（ef3e1c81）
+- ✅ **/t/ 播放遥测+watched 投影**：migration 020（4336997b）+ play_progress 事件面——看完/扫一眼可区分（0d45d322），09-12 部署 020 记账齐；计划评审三段 Approve（25e61e28）
+- ✅ 护栏 v2：incoming sources 只保路径形态 + citations 出口（801f9869）；relocate_citations 非数组标量 coerce 保原值（50d38c5b）
+- 📄 视频学习任务（主管分享）实施计划 40a2df1e 待评审；ECE 两 BookDir 入库随批（检索别名 ece/1000h 041e4de2）
+
+### 2026-09-11 - sources 归因修复大专项（§五~§十一全链）
+- ✅ **根因链**：step2 模板示例教出 source.md 占位符（81e81028）→ 写循环 sanitize_sources 兜底（5ce91986/1c4a7619）→ 存量 backfill-sources.py 三 tier 匹配回填（干跑/执行双模 5ae6167d，jsonb null 兼容 1a1cb394，备份批间换行 217ad544）
+- ✅ 未决批辅助 enrich-unresolved（rank-2 证据底稿 c4e7baba）+ 出生窗口约束解析器（CJK 感知评分 ccd52240）+ embed-attribution（771cc95a）；§五~§七 行动项收口（da80f45a/3162cc27/6bf05b05）
+- ✅ I9 显示名 sources 确定性映射 v1/v2（7e9c72e5/d831850e）+ v3/v4 四族收割（1ef49e33/39f12e0e/48a4a35e）；--verify 诚实分账+假通过洞封堵（11697142/5afc7a65）
+- 🔧 MCP read_file 双形态根修——search 返回的 wiki 虚拟路径可读（4cab471a，已部署）；学案/导图渲染 ENOTEMPTY 根修（进程组击杀 e1c77e2b）+ 教材缩写检索别名（7a949c52）
+- 📄 方案评审收口：C1/C2 阻断项+I1-I9+M1-M9 全核实并入（7cfa471c）
+
+### 2026-09-10 - 教师工具两件套：思维导图 v2 markmap + 学案海报
+- ✅ **teacher_tutor_mindmap**（12 号）：v1 graphviz→v2 markmap 渲染（graphviz 自动回落 1cf7f6eb）+ 两轮评审跟修（d0a09e7a/ca633f70）
+- ✅ **teacher_tutor_worksheet 学案海报**（13 号，混合路径 Chrome 截图 3074306b）+ 评审 C-1/I-* 跟修（14d16a91）+ 学案设计参考附件（b0cb0b4c）+ nature 主题视觉升级（e4ca5374）+ 标题/题号确定性清洗（6cd289f6/7ab360cb/cfddb87f）
+- 🔧 存量 HEVC 批转收官（教室 Win10 hvc1 事故兜底；全库 hvc1 零 hev1）
+
+### 2026-09-08/09 - 概念图谱红链根治 + /tmp 存储元数据死链根除 + 转写质量批
+- ✅ **红链根治**：wiki-cleanup 三批工具（红链回填/实体合并/迷你残渣，干跑+备份纪律 5ab5c542）+ 合并口同降级（557fdf6f）+ LLM 语义甄别 adjudicate-merge（thinking disabled 防截断+断点续跑 5e483074）+ scaffold-purge（95d47b3d）——红链回本底 0.01%，评审复验 Approve
+- ✅ **/tmp 存储元数据死链根除**（ecb675a0）：create 路由按 project_base 记录、default.json 指真实根——Mac 重启清 /tmp 事故系列收口；**此后项目 base 随创建即落盘**（files 端点语义前提变更点）
+- ✅ 转写：课例中文摘要跨语言检索锚（39ff42dc）+ abstract-backfill 38 页存量回填（b1362c77）+ 守门人工复核出口 TRANSCRIBER_GATE_ALLOW（b6e51322）+ 退化守门循环证据下限（fffa98b8）
+- ✅ embed 批次四件套加固（分批双帽+逐页回落+收官对账 aa1fadbe）+ embed-backfill 存量缺向量回填（7b0065be）
+- 🔧 bind 身份大小写归一——Wendy/wendy 双档案根修（bd8907bd）；put_page 形参 frontmatter 并集落库（f6bbb59a）
+
+### 2026-09-06/07 - LAN 双路径同 URL 分流 + llm-wiki-admin + 图片→听力音频 + admin-tool-guard
+- ✅ **校内直连/校外隧道同 URL 双路径**：dnsmasq 分支 spec（a16f5d43）→ 部署工件+runbook（f8be8bda）→ Caddy 转系统级 LaunchDaemon（特权端口 root 盲点 29f9ee94）→ Phase A/B 评审收口（8676c6a3）→ 真机验证回写（教师手机直连全链+蜂窝回归+延迟 A/B 数据 ae42bd69）+ dnsmasq bogus-priv（21b32931）——09-06 收官零遗留
+- ✅ **llm-wiki-admin 管理面 server**：training_overview 一跳答管理问题（7195fac2）+ 过滤器两边界+渲染清洗（727ad125）+ 总览时间戳 Asia/Shanghai 渲染（3317ae69）
+- ✅ **teacher_tutor_listening_audio**：图片→听力音频工具 + SKILL 流程 6（4776384d）；计划 r2 Approve with fixes 收口（e760dc18）
+- ✅ **admin-tool-guard**：pre_tool_call 守卫拦 terminal 直查师训管理数据（d4ed9f86）+ 评审五项收口（10f47906）
+- 🔧 SKILL 会话延续：快速路径 session_search+白名单 13（c18019b9/3d95bce7）；转写窗级退化守门+幻觉清单扩容（a87ac4a9/43808df9）
+
+### 2026-09-05 - 教师周报开办链 + 检索 rerank opt-out
+- ✅ **周报开办链**：开办脚本路由/platforms/任务三件事原子幂等（df8482de）+ 自动开办巡检+record_ask 校验（5f523b77）+ 排程周日 19:00（65b46a40）+ 去头尾包装/带名称呼（fd874222）+ display_name 回落 wecom_userid（67409cb3）+ 评审两轮跟修（14f766e1/6e9b7a81）+ 停发名单 N1 运营裁定（bf356afb）
+- ✅ search `?rerank=false` opt-out——教师 MCP 搜索砍 6s 延迟税（839b0a34）+ 评审 M1/M2（f658e226）
+
+### 2026-09-02 - 直播回放批两热修
+- 🔧 LLM 调用 900s 总超时兜底（e9e6fb8a）+ bigmodel thinking 关闭+step2 零块观测防线（d7378ed4）——直播回放批零页源根修
+
+### 2026-08-30 - ingest 并发化全案（设计→实施→终审，已并已部署）
+- ✅ **两段分离**：生成段 buffered(N)+channel 并发、归并段按源序串行（6b07a75e）+ Phase1Output/dispatch 去重进度计数不变量纯函数（12423bd5）+ 429/限流归 transient（8aeb1f85）+ 配置面/并发度 clamp（b82a9e7c）
+- 🧪 路由 stub 基建+并发正确性/确定性归并/N=1 等价/取消 drain 三用例/resume 隔离/429 瞬态（48575d36/acc4f919/05553b14）；web 摄取面板 stage 中文映射（5046319b）
+- 📄 设计 r1/r2 Approve（98a0a195/2b9c745e/b9b78601）+ 计划评审 4I+M-3 收口（12cd3077/de7b323b）；集成测 Redis DB1 隔离裁定（e40be6f9，live worker 共库抢跑实证）
+
+### 2026-08-27~29 - 转写管线强化批 + lt-tutor 问卷收敛
+- ✅ 标点/切章管线切 glm-5.3-flash（bf5802a5）+ 并发转写 --concurrency（e1d6c448）+ --dir 目录子串白名单（c3219ad6）+ Whisper 幻觉过滤（转写层+存量净化 ea6684a7）+ 回填 --base-url 绕行 contentFilter（c7b93abc）
+- 🔧 评审 Important+Minor 三项收口（467becf2）；lt-tutor 问卷三修：去任教科目题/年级多班问法/grade_levels 三学段枚举（59f169d5/ab46fd05/d80356fa）
+
+### 2026-08-24~26 - 视频语义重切 + web Files/Links 补齐 + 标点管线全链 + v0.6.11 上游合并
+- ✅ **语义重切 rechapter**：摄取链接入 LLM 话题切章、失败回落机械 300s 不阻塞（0ad6430a）+ 存量重切脚本（预检门逐字节一致才动 03a032c3）+ 评审两轮收口（cuts 快照持久化堵复活通道/90s 超时/50 章上限 f1a838df/e67c8b07）
+- ✅ **web 端 Files/Links 补齐批**：Sources 卡片解析并入存储 raw 清单（9ff5a6af）+ Links 面板可用三修（f85d3bbf/e15aaa02/1875630e）+ Files 树副标签显示衍生页标题（9cbfd68a/d422d72e/42e59c73/db291d09）+ list_dir 排序对齐桌面语义（3887f52d）+ 阅读区键盘滚动/中文首行缩进（8994b290/0e62e7ad）+ 存储源前缀读写同源（be62858d）
+- ✅ **标点管线全链**：转写正文标点恢复+语义分段与存量回填（ec3e689d）+ 块级密度门堵偷懒回显（c210a2b8/7e66e11a）+ 偷懒重试预算 2→4→8 枪（408b4efd/d7f133b7）+ 回填三处一致性缺口评审 I1-I5（104f547a/b8a5b914）——239 页回填放行
+- ✅ upstream v0.6.11 合并 + release（e8082119）；媒体签名严格三段式验签（M1 兼容回落移除 a6f69489）；embedding 端点 Bearer 鉴权（omlx 08-26 强制 b2d2d1a2）+ Debug 脱敏（5008e42b）；slug 规则中文化 CJK 进文件名（fe8f11d5）；MCP wecom_userid schema 隐去防弱模型抄示例值（d3612e73）
+
 ### 2026-08-22 - LT 师训系统 M3（身份会话级绑定 + overview + 周报 cron + 技术债收敛）
 - ✅ **身份会话级绑定（结构性根治 prompt 注入冒用）**：Hermes `_meta` 身份戳（tools/call 注入会话身份，agent 线程捕获 + strict 读取）+ mcp-server `resolveIdentity` 三态硬闸（用户模式/系统模式/两类硬拒 fail-closed，10 工具接闸，wecom_userid schema 放开可选）——三层 live 证实（meta 实弹/SKILL 4 拒/协议探针 S1-S3）
 - ✅ **GET /api/v1/training/overview**：管理总览（require_training_admin 常量时间比较、三预聚合子查询、items_7d 周报口径）+ weekly `period_key` 服务端自算（ISO 周收口，杜绝 LLM 手算；400 含 expected_period_key 改口重试）
