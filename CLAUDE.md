@@ -42,7 +42,7 @@
 2. **src-server 集成测试连 live PG**（docker 5433 = 生产库），跑集成测试前知情。
 3. **web 部署**：同源 :8080 必须 `npm run build:web`（dist 运行时读盘）——纯前端改动 build:web 即完成部署；web/desktop 双门控（WEB-1 型）别被桌面侧重构吞掉。
 4. **MCP 非热生效**：改 mcp-server 后必须 `npm run mcp:build`，消费方（Hermes 网关）重启才吃到新工具。
-5. **SKILL 热部署**：`docs/superpowers/hermes/lt-tutor/SKILL.md` 双份 cp 即生效（仓源 + `~/.hermes/profiles/lt-tutor/skills/teacher-tutor/SKILL.md` 运行副本），无需重启；live 副本以 `~/.hermes/profiles/lt-tutor/.skills_prompt_snapshot.json` 核验（manifest 指向即实际加载路径）。
+5. **SKILL 热部署**：`docs/superpowers/hermes/lt-tutor/SKILL.md` 双份 cp 即生效（仓源 + `~/.hermes/profiles/lt-tutor/skills/teacher-tutor/SKILL.md` 运行副本）——**正文**经 skill_view 每回合现读盘即生效，无需重启；**索引/description** 走进程内 LRU+磁盘 snapshot 两层缓存，随下一次会话 prompt 构建刷新，会话活跃期改 description/触发词需重启网关；live 副本以 `~/.hermes/profiles/lt-tutor/.skills_prompt_snapshot.json` 核验（manifest 指向即实际加载路径）。
 6. **git 纪律**：`git add` 禁 `-A`；提交前必查 `git branch --show-current`（本仓库有并行会话共存，分支会被切走）。
-7. **密钥不进仓不回显**（bootstrap.env / 各 .env / launchd plist 各有落点）；launchd 改动 bootout 完全退出后再 bootstrap；重启 src-server/Hermes 避开周日 19:00 教师周报窗。
+7. **密钥不进仓不回显**（bootstrap.env / 各 .env / launchd plist 各有落点）；launchd 改动 bootout 完全退出后再 bootstrap；重启 src-server/Hermes 避开周日 19:00-20:00 教师周报窗（错峰槽位：任务分布在 19:00-19:59 各分钟、随教师数增长）。
 8. **摄取红线**：ECE 语料（人人都能用英语）为 CC BY-NC——禁商用、不可整库摄取；其余外部语料摄取前先核 license。
