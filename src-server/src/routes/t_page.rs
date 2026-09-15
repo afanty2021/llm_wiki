@@ -484,8 +484,10 @@ fn beacon_js(token: &str) -> String {
     }}, {{ threshold: 0.4 }});
     Array.prototype.forEach.call(document.querySelectorAll('section.item'), function (el) {{ io.observe(el); }});
   }}
-  // 播放心跳（play_progress）：稀疏 ≤4 beacon/视频——25/50/75% 检查点各一次 +
-  // ended 一次。watched 口径=「累计真实播放时长 ≥90%」或自然播完（非「位置 ≥90%」）；
+  // 播放心跳（play_progress）：稀疏 ≤5 beacon/视频——首条早检点（10s 或 5% 时长
+  // 先到先发，仅 25% 前有效）+ 25/50/75% 检查点各一次 + ended 一次。早检点让
+  // 短观看（分钟级）也有续播点（2026-09-15 真机验收：13s 观看无续播点裁定为
+  // 体验缺口，用户拍板加密）。watched 口径=「累计真实播放时长 ≥90%」或自然播完（非「位置 ≥90%」）；
   // delta 按壁钟钳制：章节/时间戳跳转（currentTime 大幅前跳）不计入累计时长——
   // 否则两次章节跳转即可伪造「看完」（实现评审 Imp-1）；单 tick 回退置零。
   // duration 可能短暂为 NaN/Infinity（preload=metadata），一律 isFinite 守卫。
@@ -513,7 +515,7 @@ fn beacon_js(token: &str) -> String {
       if (player.readyState >= 1) {{ applyResume(); }}
       else {{ player.addEventListener('loadedmetadata', applyResume); }}
     }}
-    var acc = 0, lastT = null, lastWall = null, sentEnded = false;
+    var acc = 0, lastT = null, lastWall = null, sentEnded = false, earlySent = false;
     var marks = {{}};
     [25, 50, 75].forEach(function (m) {{ marks[m] = false; }});
     function pct() {{
@@ -532,6 +534,12 @@ fn beacon_js(token: &str) -> String {
       var d = player.duration;
       if (!isFinite(d) || !(d > 0)) return; // 等价于数值非正判断：JS 内不出现小于号（XSS 结构审计要求全文标签白名单）
       var p = pct();
+      // 首条早检点：10s 或 5% 时长先到先发，仅 25% 前有效——越过 25% 已有检查点
+      // 覆盖，且续播落点越过 25% 的会话不重复补发同位信标
+      if (!earlySent && 25 > p && player.currentTime >= Math.min(10, d * 0.05)) {{
+        earlySent = true;
+        beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'checkpoint', position_s: Math.round(player.currentTime), percent: p }}));
+      }}
       [25, 50, 75].forEach(function (m) {{
         if (!marks[m] && p >= m) {{
           marks[m] = true;
@@ -751,8 +759,9 @@ async fn get_t_page(
         };
 
     // 断点续播：各 media 项最新一条 play_progress 的位置（latest 口径——污染面
-    // 显著小于 max：max 被任意前跳 seek 无界抬高，latest 仅 marks 用尽后回退一隅
-    // 且受 25% 窗口钳制）。ended → 从头看；position_s < 5 → 误触噪声不注入。
+    // 显著小于 max：max 被任意前跳 seek 无界抬高，latest 为检查点/ended 序列的
+    // 末条，2026-09-15 起含 25% 前的早检点）。ended → 从头看；position_s < 5 →
+    // 误触噪声不注入。
     // user_id 谓词是跨用户安全隔离（item 索引 idx_events_item 已在位，非性能考量；
     // 勿再「补」item_id 索引=beacon 写路径重复索引）。cast 安全=单写者不变量。
     let media_item_ids: Vec<i32> = items
@@ -1112,6 +1121,10 @@ mod tests {
         assert!(js.contains("loadedmetadata"), "metadata-ready listener present");
         assert!(js.contains("readyState >= 1"), "dual-path immediate apply present");
         assert!(js.contains("currentTime === 0"), "manual-seek guard present");
+        // 早检点（2026-09-15：短观看续播——10s 或 5% 时长先到先发，仅 25% 前有效）
+        assert!(js.contains("Math.min(10, d * 0.05)"), "early checkpoint threshold present");
+        assert!(js.contains("25 > p"), "early checkpoint gated before 25% (no resume-session duplicate)");
+        assert!(js.contains("earlySent"), "early checkpoint once-flag present");
         assert!(
             !js.contains('<'),
             "inline JS must never contain `<` (XSS structural audit)"
