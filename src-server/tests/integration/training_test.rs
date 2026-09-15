@@ -1453,15 +1453,20 @@ async fn media_search_hits_slug_title_and_null_transcript_fallback() {
 /// 相关度排序钉子（T6 试跑 LOE 大水漫灌事故的回归防御，max 评审 Important）：
 /// q 同时命中「转录页标题」与「仅 slug」两行时，标题命中（tier 0）必须排在
 /// 仅 slug 命中（tier 1）之前——删掉 ORDER BY CASE 分层此断言即红。
+/// 关键前提：借行必须是**长标题**（标题键长于 F_slug 的 slug 键）——否则删 CASE
+/// 后 length() 次级键恰好给出同序、断言对整行删除变异假绿（跟进评审 Important 1
+/// 实证：旧首行「116. 如何准备公开课」len=12 < slug 键 ≈23，删 CASE 照样绿）。
 /// 夹具自造自清（SWEEPS media 前缀兜底），只引用现有 wiki_pages.path 不写该表。
 #[tokio::test]
 async fn media_search_orders_title_hits_before_slug_only_hits() {
     let (server, state, _admin, _member) = training_fixture_with_config_project("msord").await;
     let tok = "tok123";
 
-    // 借一行现有转录页作标题源（只读 path/title，不写 wiki_pages）
+    // 借一行现有转录页作标题源（只读 path/title，不写 wiki_pages）。
+    // 按 length DESC 取全库最长标题：键长余量最大（当前 104 字符），不依赖阈值魔法数
     let (page_path, title): (String, String) = sqlx::query_as(
-        "SELECT path, title FROM wiki_pages WHERE COALESCE(title, '') <> '' ORDER BY id LIMIT 1",
+        "SELECT path, title FROM wiki_pages WHERE COALESCE(title, '') <> '' \
+         ORDER BY length(title) DESC, id LIMIT 1",
     )
     .fetch_one(&state.db)
     .await
@@ -1473,6 +1478,15 @@ async fn media_search_orders_title_hits_before_slug_only_hits() {
     let base = unique("ord");
     let f_title = format!("{base}ttl");
     let f_slug = format!("{base}slu_{}", token);
+    // 结构性前提自检（假绿保险丝）：标题键必须长于 slug 键，删 CASE 后 length()
+    // 次级键才会把 F_slug 顶到前面。前提不成立时显式失败而非静默空转
+    assert!(
+        title.chars().count() > f_slug.chars().count(),
+        "borrowed title len {} must exceed slug-key len {} — otherwise the CASE-tier \
+         assertion is vacuous (length() secondary key reproduces the same order without CASE)",
+        title.chars().count(),
+        f_slug.chars().count(),
+    );
     for (slug, tp) in [(&f_title, Some(page_path.as_str())), (&f_slug, None)] {
         sqlx::query(
             "INSERT INTO media_assets (slug, media_ref, duration_s, kind, transcript_page_path) \
