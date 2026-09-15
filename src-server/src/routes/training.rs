@@ -15,6 +15,10 @@
 //! - M3 Task 3：GET /overview（管理总览逐教师聚合，require_training_admin）+
 //!   plans 创建 origin="weekly" 分支的 period_key 服务端自算（省略→自算落库；
 //!   格式合法但≠当周→400 含 expected_period_key；格式非法→400）。
+//! - 视频学习任务 T1（2026-09-12 feature，均 require_training_admin、只读）：
+//!   GET /member-role（企微 userid → TRAINING 项目所属 team 的成员角色，
+//!   projects.team_id 两跳 + lower 归一）、GET /media/search（slug / 转录页
+//!   标题模糊检索，media_assets 全局表不按 project 过滤）。
 
 use axum::{extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, routing::{get, post}, Json, Router};
 use chrono::{Datelike as _, Duration as ChronoDuration};
@@ -39,6 +43,8 @@ pub fn training_routes() -> Router<AppState> {
         .route("/plans/:id/link", post(regen_plan_link))
         .route("/items/:id/complete", post(complete_item))
         .route("/overview", get(get_overview))
+        .route("/member-role", get(get_member_role))
+        .route("/media/search", get(search_media))
 }
 
 #[derive(Deserialize)]
@@ -503,6 +509,117 @@ async fn get_overview(
         teachers,
         generated_at: chrono::Utc::now(),
     }))
+}
+
+// ============ 视频学习任务 T1：GET /member-role + GET /media/search（两只读端点） ============
+
+/// GET /api/v1/training/member-role?wecom_userid= — 查询企微 userid 在 TRAINING
+/// 项目所属 team 的成员角色（require_training_admin，同 /bind、/overview）。
+/// 两跳绑定（bind 同款先例）：TRAINING__PROJECT_ID → projects.team_id →
+/// teacher_profiles JOIN team_members。大小写归一在 SQL 侧按 lower()（与 019
+/// 迁移的 lower 唯一索引、bind 的查找同一语义，Rust 侧不二次折叠）。
+/// 响应 200 `{"role":"member"|"admin"|"owner"}`；该 wecom_userid 无
+/// teacher_profiles 行**或**无 team_members 行 → 404（不区分两种缺失，防探测）；
+/// 参数缺失/空白 → 400；token 缺失/错 → 401。
+/// 不收 username：超长 wecom_userid 的账号名走合成截断（wecom_<前30>_<sha256前8>，
+/// 见 bind），username 无法从 wecom_userid 拼出——调用方（MCP 主管门）只能持
+/// 企微 userid。
+#[derive(Deserialize)]
+pub struct MemberRoleQuery {
+    pub wecom_userid: Option<String>,
+}
+
+async fn get_member_role(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MemberRoleQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_training_admin(&state, &headers)?;
+    let wid = q.wecom_userid.as_deref().unwrap_or("").trim();
+    if wid.is_empty() {
+        return Err(AppError::BadRequest("wecom_userid is empty".into()));
+    }
+    let project_id = state
+        .config
+        .training
+        .project_id
+        .ok_or_else(|| AppError::InternalError("TRAINING__PROJECT_ID not configured".into()))?;
+    let team_id: i32 = sqlx::query_scalar("SELECT team_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::from)?;
+    // team_members PK (team_id, user_id)：无扇出，至多一行
+    let role: Option<String> =
+        sqlx::query_scalar(
+            "SELECT tm.role FROM teacher_profiles tp \
+             JOIN team_members tm ON tm.team_id = $1 AND tm.user_id = tp.user_id \
+             WHERE lower(tp.wecom_userid) = lower($2)",
+        )
+        .bind(team_id)
+        .bind(wid)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::from)?;
+    let role = role.ok_or_else(|| AppError::ResourceNotFound("Member not found".into()))?;
+    Ok(Json(serde_json::json!({ "role": role })))
+}
+
+/// media 检索行。title = COALESCE(wp.title, ma.slug)：transcript_page_path 为
+/// NULL 的行（013 允许）LEFT JOIN 后 wp 全 NULL，title 回落 slug。
+#[derive(Serialize, sqlx::FromRow)]
+pub struct MediaSearchItem {
+    pub slug: String,
+    pub title: String,
+    pub transcript_page_path: Option<String>,
+    pub duration_s: i32,
+}
+
+#[derive(Deserialize)]
+pub struct MediaSearchQuery {
+    pub q: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// limit 缺省 5；clamp 1..=20（上限 20，下限 1 纯防御——负值会让 PG LIMIT 报错
+/// 变 500，0 对检索无意义）。
+const MEDIA_SEARCH_DEFAULT_LIMIT: i64 = 5;
+const MEDIA_SEARCH_MAX_LIMIT: i64 = 20;
+
+/// GET /api/v1/training/media/search?q=<关键词>&limit=5 — 媒体检索
+/// （require_training_admin，视频学习任务主管分享面的找片入口）。
+/// 命中面：转录页标题（LEFT JOIN 等值 JOIN wiki_pages.path =
+/// transcript_page_path，t_page 生产先例）**或** ma.slug 模糊（ILIKE %q%）。
+/// **不按 project 过滤**（media_assets 全局表无 project_id，与 /t/ 媒体链全局
+/// slug 用法一致）；**不加 kind 过滤**（主管分享面由 SKILL 流程约束，不由端点
+/// 约束）。ORDER BY slug 仅求结果确定序。q 缺失/空白 → 400；token → 401。
+async fn search_media(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MediaSearchQuery>,
+) -> Result<Json<Vec<MediaSearchItem>>, AppError> {
+    require_training_admin(&state, &headers)?;
+    let kw = q.q.as_deref().unwrap_or("").trim();
+    if kw.is_empty() {
+        return Err(AppError::BadRequest("q is empty".into()));
+    }
+    let limit = q
+        .limit
+        .unwrap_or(MEDIA_SEARCH_DEFAULT_LIMIT)
+        .clamp(1, MEDIA_SEARCH_MAX_LIMIT);
+    let items = sqlx::query_as::<_, MediaSearchItem>(
+        "SELECT ma.slug, COALESCE(wp.title, ma.slug) AS title, ma.transcript_page_path, ma.duration_s \
+         FROM media_assets ma \
+         LEFT JOIN wiki_pages wp ON wp.path = ma.transcript_page_path \
+         WHERE wp.title ILIKE $1 OR ma.slug ILIKE $1 \
+         ORDER BY ma.slug \
+         LIMIT $2",
+    )
+    .bind(format!("%{kw}%"))
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(items))
 }
 
 // ============ Task 7（M2 批1）：profile / events(ask) / progress ============

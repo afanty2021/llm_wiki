@@ -1120,3 +1120,282 @@ async fn bind_access_token_typ_isolation_smoke() {
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&state).await;
 }
+
+// ============ 视频学习任务 T1：GET /member-role + GET /media/search（两只读端点）============
+
+/// 鉴权与参数校验矩阵：无 token → 401、错 token → 401（require_training_admin，
+/// 同 /bind、/overview）；参数缺失 / 空串 / 纯空白 wecom_userid → 400（token 正确时）。
+#[tokio::test]
+async fn member_role_auth_and_param_validation() {
+    let (server, _state, _admin, _member) = training_fixture_with_config_project("mrauth").await;
+
+    // 无 token → 401
+    let r = server.get("/api/v1/training/member-role?wecom_userid=whoever").await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    // 错 token → 401
+    let r = server
+        .get("/api/v1/training/member-role?wecom_userid=whoever")
+        .add_header("x-training-admin-token", "wrong")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    // 缺参 → 400
+    let r = server
+        .get("/api/v1/training/member-role")
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+
+    // 空串 / 纯空白 → 400
+    for bad in ["", "%20%20%20"] {
+        let r = server
+            .get(&format!("/api/v1/training/member-role?wecom_userid={bad}"))
+            .add_header("x-training-admin-token", "tok123")
+            .await;
+        assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "blank wecom_userid must 400: {bad:?}");
+    }
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
+}
+
+/// 200 面：bind 造一名教师（角色恒 'member'）→ 精确 / 小写 / 大写三种形态查询均
+/// 200，role 与 team_members 落库值一致（大小写归一 = SQL lower()，019 迁移/bind
+/// 同一语义——Wendy/wendy 双档案事故的回归锚）。动态比对 DB 值，不硬编码断言。
+#[tokio::test]
+async fn member_role_returns_team_role_case_insensitively() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("mrcase").await;
+    let wid = unique("mrl"); // 小写 canonical 形态落库（t6_ 前缀，SWEEPS 可清）
+    bind_t3_teacher(&server, &wid, "角色老师").await;
+
+    let db_role: String = sqlx::query_scalar(
+        "SELECT tm.role FROM teacher_profiles tp \
+         JOIN team_members tm ON tm.team_id = (SELECT team_id FROM projects WHERE id = $1) \
+           AND tm.user_id = tp.user_id \
+         WHERE lower(tp.wecom_userid) = lower($2)",
+    )
+    .bind(state.config.training.project_id.unwrap())
+    .bind(&wid)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+
+    for form in [wid.clone(), wid.to_uppercase()] {
+        let r = server
+            .get(&format!(
+                "/api/v1/training/member-role?wecom_userid={}",
+                form // 查询串 ASCII（unique() 产物），无需编码
+            ))
+            .add_header("x-training-admin-token", "tok123")
+            .await;
+        assert_eq!(r.status_code(), StatusCode::OK, "form={form}");
+        let v = r.json::<serde_json::Value>();
+        assert_eq!(
+            v["role"].as_str().unwrap(),
+            db_role,
+            "endpoint role must equal team_members.role for {form}"
+        );
+    }
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
+/// 404 面：从未绑定的 userid → 404；**有 teacher_profiles 行但不在 TRAINING
+/// 项目 team** 的真教师（fixture team 是新造的，生产库 27 条档案无一在列，纯
+/// 只读取一行）→ 同样 404——端点不区分两种缺失（防探测口径，同 get_plan）。
+#[tokio::test]
+async fn member_role_404_when_unbound_or_outside_team() {
+    let (server, state, _admin, _member) = training_fixture_with_config_project("mr404").await;
+    let team_id: i32 =
+        sqlx::query_scalar("SELECT team_id FROM projects WHERE id = $1")
+            .bind(state.config.training.project_id.unwrap())
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+
+    // 从未绑定 → 404
+    let r = server
+        .get(&format!(
+            "/api/v1/training/member-role?wecom_userid={}",
+            unique("ghost")
+        ))
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::NOT_FOUND);
+
+    // 档案存在但不在本 team（只读取生产库任一 team 外教师；无档案的空库跳过）
+    let outsider: Option<String> = sqlx::query_scalar(
+        "SELECT tp.wecom_userid FROM teacher_profiles tp \
+         WHERE NOT EXISTS (SELECT 1 FROM team_members tm \
+           WHERE tm.team_id = $1 AND tm.user_id = tp.user_id) \
+         ORDER BY tp.id LIMIT 1",
+    )
+    .bind(team_id)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap();
+    if let Some(wid) = outsider {
+        let r = server
+            .get(&format!(
+                "/api/v1/training/member-role?wecom_userid={}",
+                urlencoding_lite(&wid)
+            ))
+            .add_header("x-training-admin-token", "tok123")
+            .await;
+        assert_eq!(
+            r.status_code(),
+            StatusCode::NOT_FOUND,
+            "teacher outside the training team must 404: {wid}"
+        );
+    }
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&state).await;
+}
+
+/// 查询串百分比编码（仅测试用：wecom_userid 可能含非 ASCII，如 bind 截断测试的
+/// CJK 档案）。serde_urlencoded 形态足够——只需与 axum Query 的解码对称。
+fn urlencoding_lite(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// 鉴权与参数校验矩阵（media/search）：无/错 token → 401；q 缺失/空白 → 400；
+/// 无命中关键词 → 200 `[]`（空数组而非 404/null）。
+#[tokio::test]
+async fn media_search_auth_and_param_validation() {
+    let (server, _state, _admin, _member) = training_fixture_with_config_project("msauth").await;
+
+    let r = server.get("/api/v1/training/media/search?q=x").await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    let r = server
+        .get("/api/v1/training/media/search?q=x")
+        .add_header("x-training-admin-token", "wrong")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    // q 缺失 / 空白 → 400
+    let r = server
+        .get("/api/v1/training/media/search")
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+    for bad in ["", "%20%20"] {
+        let r = server
+            .get(&format!("/api/v1/training/media/search?q={bad}"))
+            .add_header("x-training-admin-token", "tok123")
+            .await;
+        assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "blank q must 400: {bad:?}");
+    }
+
+    // 无命中 → 200 []
+    let r = server
+        .get("/api/v1/training/media/search?q=no_such_media_keyword_zz9x")
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    assert_eq!(
+        r.json::<serde_json::Value>(),
+        serde_json::json!([]),
+        "no hit must be an empty array"
+    );
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
+}
+
+/// 命中面（生产库只读，~983 行 media）：slug 精确关键词命中（含字段回显）；
+/// 转录页标题关键词命中（LEFT JOIN 等值 JOIN，title 回显 wp.title）；
+/// transcript_page_path IS NULL 行 title 回落 slug（COALESCE 语义）。
+#[tokio::test]
+async fn media_search_hits_slug_title_and_null_transcript_fallback() {
+    let (server, _state, _admin, _member) = training_fixture_with_config_project("mshit").await;
+    let tok = "tok123";
+
+    // 1) slug 命中：取任一 media 行，q = 完整 slug（ILIKE %slug% 至少命中自身）
+    let (slug, tp_path, duration_s): (String, Option<String>, i32) = sqlx::query_as(
+        "SELECT slug, transcript_page_path, duration_s FROM media_assets ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&_state.db)
+    .await
+    .unwrap();
+    let r = server
+        .get(&format!(
+            "/api/v1/training/media/search?q={}",
+            urlencoding_lite(&slug)
+        ))
+        .add_header("x-training-admin-token", tok)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let items = r.json::<serde_json::Value>();
+    let arr = items.as_array().unwrap();
+    assert!(!arr.is_empty(), "slug '{slug}' must hit at least itself");
+    let hit = arr
+        .iter()
+        .find(|it| it["slug"] == slug)
+        .unwrap_or_else(|| panic!("slug '{slug}' missing from results"));
+    let expected_tp = match &tp_path {
+        Some(p) => serde_json::Value::from(p.as_str()),
+        None => serde_json::Value::Null,
+    };
+    assert_eq!(
+        hit["transcript_page_path"], expected_tp,
+        "transcript_page_path passthrough"
+    );
+    assert_eq!(hit["duration_s"].as_i64().unwrap(), duration_s as i64, "duration_s passthrough");
+    assert!(!hit["title"].as_str().unwrap_or_default().is_empty(), "title never null (COALESCE slug)");
+
+    // 2) 转录页标题命中：取任一 JOIN 得到非空标题的行，q = 完整标题
+    let (jslug, jtitle): (String, String) = sqlx::query_as(
+        "SELECT ma.slug, wp.title FROM media_assets ma \
+         JOIN wiki_pages wp ON wp.path = ma.transcript_page_path \
+         WHERE COALESCE(wp.title, '') <> '' ORDER BY ma.id LIMIT 1",
+    )
+    .fetch_one(&_state.db)
+    .await
+    .unwrap();
+    let r = server
+        .get("/api/v1/training/media/search")
+        .add_query_param("q", &jtitle) // add_query_param 走 serde_urlencoded，中文安全
+        .add_header("x-training-admin-token", tok)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let arr = r.json::<serde_json::Value>().as_array().unwrap().clone();
+    let hit = arr
+        .iter()
+        .find(|it| it["slug"] == jslug)
+        .unwrap_or_else(|| panic!("slug '{jslug}' missing from title '{jtitle}' hits"));
+    assert_eq!(hit["title"], jtitle, "title hit must echo the wiki page title");
+
+    // 3) NULL transcript 回落：任一 transcript_page_path IS NULL 行，title == slug
+    let nslug: String = sqlx::query_scalar(
+        "SELECT slug FROM media_assets WHERE transcript_page_path IS NULL ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&_state.db)
+    .await
+    .unwrap();
+    let r = server
+        .get(&format!(
+            "/api/v1/training/media/search?q={}",
+            urlencoding_lite(&nslug)
+        ))
+        .add_header("x-training-admin-token", tok)
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let arr = r.json::<serde_json::Value>().as_array().unwrap().clone();
+    let hit = arr
+        .iter()
+        .find(|it| it["slug"] == nslug)
+        .unwrap_or_else(|| panic!("null-transcript slug '{nslug}' missing from its own hits"));
+    assert_eq!(hit["title"], nslug, "title must fall back to slug when transcript page is NULL");
+    assert_eq!(hit["transcript_page_path"], serde_json::Value::Null);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
+}
