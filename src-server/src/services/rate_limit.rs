@@ -85,7 +85,8 @@ pub const BEACON_CAP_PER_MIN: usize = 60;
 /// PAGE_RATE_LIMITS__T_PER_MIN 可覆盖。**默认值单一真源在此**（同上）。
 pub const T_VIEW_CAP_PER_MIN: usize = 30;
 /// POST /t/:token/play 播放心跳限流默认规格：60 次/分钟/plan（**独立桶**——心跳
-/// 洪峰不得饿死 seen/complete 共桶；客户端稀疏化 ≤4 beacon/视频，60 为 >10× 余量）。
+/// 洪峰不得饿死 seen/complete 共桶；2026-09-15 心跳化后客户端约 1 beacon/分钟/
+/// 播放器（每视频 ≈时长/60+2 条），60/min 覆盖数十路并发播放器）。
 /// env PAGE_RATE_LIMITS__PLAY_PER_MIN 可覆盖。**默认值单一真源在此**（同上）。
 pub const PLAY_CAP_PER_MIN: usize = 60;
 

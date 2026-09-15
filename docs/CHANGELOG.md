@@ -2,6 +2,10 @@
 
 ## 📋变更记录 (Changelog)
 
+### 2026-09-15 - /t/ 播放检查点心跳化 + max 评审 fix-forward
+- ✅ **心跳化**：早检点（10s 或 5% 时长先到先发、仅 25% 前有效，36a31efb）+ 每 60s 真实播放一条检查点（acc 口径——seek 前跳不触发、暂停不计时）+ ended；25/50/75% 稀疏 marks 撤除（352bc749）——续播粒度 25% → 1 分钟，预算≈时长/60+2 条（/play 独立桶 60/min 实占 ~1/min）；已部署 live 并真机验收。动机：真机验收 13s 短观看无续播点、5 分钟观看只能续到 25%（36a31efb 曾只垫地板检点，用户复核指正未达「加密」本意）
+- 🔧 **max 评审（Ready: Yes，0C/1I/5M）fix-forward**：I-1 早检点地板对齐——客户端阈值改 `Math.min(10, Math.max(5, d*0.05))`，与服务端 resume 噪声过滤 `pos >= PLAY_CHECKPOINT_FLOOR_S` 双端共用一常量（此前 ≲90s 短视频早检点取整 <5 落库即被吞、观看 <60s 无心跳=零续播点）；M-3 阈值常量 format! 注入模板+数值断言单测（跨端阈值交互不再只靠形状断言）；M-1 rate_limit /play 注释旧「≤4 beacon」口径更新为心跳化实况；M-5 模块头补 /play 端点与限流条目（M-4 卸载尾段 visibilitychange flush 留档不修）
+
 ### 2026-09-15 - ingest_queue 环境红定谳根修：集成测 Redis 钉 DB1
 - ✅ **集成测 Redis 隔离根治**：setup_test_app 统一压平 redis_url DB 序号为 /1（pin_test_redis_db 无段追加/带段覆写幂等 + 6 断言守卫单测，c9e7c2c1）——定谳根因=DB0 是 live 队列，launchd src-server 的 ingest/research worker 无限超时 BRPOP `ingest:queue`/`research:queue`，测试入队 job 被抢真跑/断言 LLEN 归零即环境红；ingest_concurrency_test 旧「手工 REDIS_URL=.../1 必守」口径收编进代码不再依赖 env
 - 🧪 全量验证绿：ingest_queue 3 连×2 + 全套件 lib 377+集成 127 + ignored ingest_reliability 8 + ingest_concurrency 11 零失败；跑测全程 DB0 LLEN 恒 0 live 无扰；DB1 无消费者，残留条目跨轮无害累积（文档化已知取舍）
