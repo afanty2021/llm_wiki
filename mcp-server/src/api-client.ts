@@ -176,6 +176,20 @@ export interface ApiAuthResponse {
   user: ApiAuthUser
 }
 
+/** src-server media/search 行（T1）：title = COALESCE(转录页 title, slug)，无转录页行回落 slug。 */
+export interface ApiMediaSearchItem {
+  slug: string
+  title: string
+  transcript_page_path: string | null
+  duration_s: number
+}
+
+/** src-server roster 行（T1）：**仅此两键**——反 overview 泄漏硬契约；display_name 原样 nullable。 */
+export interface ApiRosterItem {
+  wecom_userid: string
+  display_name: string | null
+}
+
 /**
  * API 404（应用级"未找到"，如文件不存在）——单独分流的类型化错误。
  * read_file 捕获后转为正常返回（isError=false）引导模型纠正 path，避免 MCP 客户端
@@ -520,6 +534,42 @@ export class LlmWikiApiClient {
     const token = adminToken.trim()
     if (!token) throw new Error("TRAINING__ADMIN_TOKEN is required for training overview")
     return this.requestObject("/api/v1/training/overview", { adminToken: token, auth: false })
+  }
+
+  // ── 视频学习任务 T2：主管门三只读端点（全部 x-training-admin-token，同 bind/overview）──
+
+  /** GET /api/v1/training/member-role?wecom_userid= → {role}（主管门 role 查询）。
+   * 404 = 查无此人/非本 team 成员（ApiNotFoundError，调用方视同非 admin）；400 缺参；401 token。 */
+  async memberRole(wecomUserid: string, adminToken: string): Promise<{ role: string }> {
+    const token = adminToken.trim()
+    if (!token) throw new Error("TRAINING__ADMIN_TOKEN is required for member role query")
+    const params = new URLSearchParams({ wecom_userid: wecomUserid })
+    const json = await this.requestObject(`/api/v1/training/member-role?${params.toString()}`, { adminToken: token, auth: false })
+    return { role: typeof json.role === "string" ? json.role : "" }
+  }
+
+  /** GET /api/v1/training/media/search?q=&limit= → 媒体检索行数组（查无命中 → 200 []）。
+   * 条目 {slug,title,transcript_page_path,duration_s} 原样透传（limit 服务端缺省 5、clamp 1..20）。 */
+  async mediaSearch(q: string, limit?: number, adminToken?: string): Promise<ApiMediaSearchItem[]> {
+    const token = (adminToken ?? "").trim()
+    if (!token) throw new Error("TRAINING__ADMIN_TOKEN is required for training media search")
+    const params = new URLSearchParams({ q })
+    if (limit !== undefined) params.set("limit", String(limit))
+    const json = await this.doFetch(`/api/v1/training/media/search?${params.toString()}`, { adminToken: token, auth: false })
+    if (!Array.isArray(json)) throw new Error("LLM Wiki API response: expected JSON array (media search)")
+    return json as ApiMediaSearchItem[]
+  }
+
+  /** GET /api/v1/training/roster?q=&limit= → 教师名册行数组（查无命中 → 200 []）。
+   * 条目仅 {wecom_userid,display_name} 两键原样透传（limit 服务端缺省 10、clamp 1..50）。 */
+  async rosterSearch(q: string, limit?: number, adminToken?: string): Promise<ApiRosterItem[]> {
+    const token = (adminToken ?? "").trim()
+    if (!token) throw new Error("TRAINING__ADMIN_TOKEN is required for training roster search")
+    const params = new URLSearchParams({ q })
+    if (limit !== undefined) params.set("limit", String(limit))
+    const json = await this.doFetch(`/api/v1/training/roster?${params.toString()}`, { adminToken: token, auth: false })
+    if (!Array.isArray(json)) throw new Error("LLM Wiki API response: expected JSON array (roster search)")
+    return json as ApiRosterItem[]
   }
 
   private async requestObject(path: string, options: RequestOptions = {}): Promise<Record<string, unknown>> {

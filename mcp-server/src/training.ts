@@ -5,15 +5,20 @@
  *   {wecom_userid: {refreshToken, userId}}；内存 access 缓存提前 60s 过期；
  *   miss → POST /api/v1/auth/refresh（single-flight：并发同 userid 只发一次）；
  *   refresh 失败 → POST /api/v1/training/bind（TRAINING__ADMIN_TOKEN）重建/轮换。
- * - 13 个 src-server 工具：11 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
+ * - 15 个 src-server 工具：13 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
  *   为本地 TTS 合成、teacher_tutor_mindmap 为本地 graphviz/markmap 渲染、
- *   teacher_tutor_worksheet 为本地 Chrome 截图渲染，均不经 src-server API）
+ *   teacher_tutor_worksheet 为本地 Chrome 截图渲染，均不经 src-server API；
+ *   teacher_tutor_video_search / teacher_tutor_roster_search 为 T2 主管检索工具）
  *   + 重写的 llm_wiki_search /
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
  *   project_id 取 env TRAINING__PROJECT_ID；token 全部由 store 注入，绝不进工具返回值。
- * - 身份硬闸（M3 T2）：10 工具统一入口先 resolveIdentity(meta, args.wecom_userid)——
- *   wecom 会话身份（Hermes 注入的 _meta）优先，参数身份仅系统模式可用；返回值追加
- *   identity_source（"user"|"system"）。详见 identity.ts。
+ * - 身份硬闸（M3 T2）：13 工具统一入口 resolveIdentityForTool（分发层包装）——先走
+ *   identity.ts 的 resolveIdentity 三出口；T2 起白名单工具（SUPERVISION_TOOLS）在
+ *   wecom 会话身份与 args wecom_userid 冲突时先查会话者角色（member-role），
+ *   admin/owner 会话经 resolveIdentityWithSupervision 代目标教师执行，非 admin/
+ *   404/查询失败三臂全部照拒（fail-closed）；roster_search 另设工具级 admin 闸。
+ *   同步纯判定全在 identity.ts（白名单常量在分发层，决策③），返回值尾部追加
+ *   identity_source（"user"|"system"|"supervisor"）。
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
@@ -26,9 +31,13 @@ import {
   type ApiSearchResult,
 } from "./api-client.js"
 import {
-  IdentityMode,
+  hasWecomSessionIdentity,
+  IdentityMismatchError,
   MetaLike,
   resolveIdentity,
+  resolveIdentityWithSupervision,
+  type ResolvedIdentity,
+  sessionWecomUserid,
   ToolArgumentError,
 } from "./identity.js"
 import {
@@ -67,6 +76,20 @@ const ACCESS_EARLY_EXPIRY_MS = 60_000
 export const LISTENING_MAX_LINES = 60
 export const LISTENING_MAX_TOTAL_CHARS = 3000
 export const LISTENING_MAX_LINE_CHARS = 600
+
+// ── 主管越权门（T2 视频学习任务，计划 §2.1/§2.2）──
+
+/** 主管 override 白名单（决策③：白名单常量在分发层，identity.ts 不持有工具名概念）。
+ * 仅这三个工具在「wecom 会话身份 ≠ args wecom_userid」冲突时先查会话者角色
+ * （member-role），admin/owner 会话可代目标教师执行；其余工具冲突照旧硬拒，
+ * 且无身份冲突（正常教师流量）零额外查询（决策②：仅 mismatch 才查）。 */
+export const SUPERVISION_TOOLS: readonly string[] = [
+  "teacher_tutor_plan_create",
+  "teacher_tutor_plan_list",
+  "teacher_tutor_video_search",
+]
+
+const ROSTER_SEARCH_TOOL = "teacher_tutor_roster_search"
 
 // ── TeacherCredentialStore ──
 
@@ -136,6 +159,12 @@ export class TeacherCredentialStore {
   /** 丢弃内存 access 缓存（如 API 401 后强制重取）。 */
   invalidate(wecomUserid: string): void {
     this.accessCache.delete(wecomUserid.trim())
+  }
+
+  /** x-training-admin-token 只读出口（T2 主管门：member-role / media/search /
+   * roster 查询与 bind 回落同源同 token；测试 stub 仅主管门路径需要实现它）。 */
+  getAdminToken(): string {
+    return this.adminToken
   }
 
   private async refreshOrBind(userid: string): Promise<CachedAccess> {
@@ -315,11 +344,11 @@ export function trainingToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "teacher_tutor_plan_create",
-      description: "创建学习计划（返回 {plan, items, link}，link 为可直接分享的完整 /s/ 短链——短链永活，点开时系统现签短期凭证）。period_key 幂等：同 (user, origin, period_key) 重复创建返回既有计划。",
+      description: "创建学习计划（返回 {plan, items, link}，link 为可直接分享的完整 /s/ 短链——短链永活，点开时系统现签短期凭证）。period_key 幂等：同 (user, origin, period_key) 重复创建返回既有计划。管理员（admin）会话可带 wecom_userid 指定目标教师（为谁建清单）。",
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+          wecom_userid: { type: "string", description: "默认本人（admin 主管会话可传目标教师企微 id 为其建计划）；系统/cron 回合必填；非 admin 会话传他人 id 会被拒。" },
           title: { type: "string", description: "计划标题（非空，≤200 chars）" },
           reason: { type: "string", description: "创建理由" },
           origin: { type: "string", enum: ["chat", "weekly"] },
@@ -347,11 +376,11 @@ export function trainingToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "teacher_tutor_plan_list",
-      description: "列出教师的全部学习计划（created_at DESC，含 items 计数）。",
+      description: "列出教师的全部学习计划（created_at DESC，含 items 计数）。默认本人；主管（admin）会话可传 wecom_userid 查指定教师的清单。",
       inputSchema: {
         type: "object",
         properties: {
-          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+          wecom_userid: { type: "string", description: "默认本人（admin 主管会话可传目标教师企微 id 查其清单）；系统/cron 回合必填；非 admin 会话传他人 id 会被拒。" },
           status: { type: "string", enum: ["active", "archived"] },
         },
         additionalProperties: false,
@@ -597,6 +626,36 @@ export function trainingToolDefinitions(): ToolDefinition[] {
         additionalProperties: false,
       },
     },
+    {
+      // T2 视频学习任务（计划 §2.2）：只读不限角色。白名单内但无 wecom_userid 身份
+      // 参数，supervisor override 路径天然不触发（身份=会话者；端点鉴权用本进程
+      // 持有的 x-training-admin-token，与会话角色无关）。
+      name: "teacher_tutor_video_search",
+      description: "按关键词检索学习视频库（返回候选数组 [{slug, title, transcript_page_path, duration_s}]，slug 可作 plan_create 的 media target_ref）。只读、不限角色。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          q: { type: "string", description: "检索关键词（非空白；匹配视频 slug 或转录页标题）" },
+          limit: { type: "number", description: "返回上限（服务端缺省 5，clamp 1..20）" },
+        },
+        required: ["q"],
+        additionalProperties: false,
+      },
+    },
+    {
+      // T2 工具级 admin 闸（计划 §2.2）：限 admin 会话，分发层一律先查会话者角色。
+      name: "teacher_tutor_roster_search",
+      description: "按姓名/企微 id 检索教师名册（返回 [{wecom_userid, display_name}]）。限管理员（admin）会话——非 admin 会话一律被拒。为目标教师建学习任务时，目标教师的 wecom_userid 只准取自本工具的返回，绝不猜测。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          q: { type: "string", description: "检索关键词（非空白；匹配显示名或企微 id）" },
+          limit: { type: "number", description: "返回上限（服务端缺省 10，clamp 1..50）" },
+        },
+        required: ["q"],
+        additionalProperties: false,
+      },
+    },
   ]
 }
 
@@ -664,11 +723,45 @@ function jsonResult(value: unknown): ToolOutput {
  * 工具返回值追加 identity_source（content 数组追加一块 text，文本 `identity_source: "user"`）。
  * 其余形状不变：原 content[0] 逐字节保留（JSON 载荷可照常解析；文本工具原文不动），
  * 顶层数组载荷（plan_list）也无需改形状。客户端按 MCP 惯例拼接 text 块即对模型可见。
+ * T2：supervisor override 的调用如实标 "supervisor"（controller Ruling，审计可辨）；
+ * 无 identitySource 的既有判定回落 mode（行为与旧版逐字节等价）。
  */
-function withIdentitySource(result: ToolOutput, mode: IdentityMode): ToolOutput {
+function withIdentitySource(result: ToolOutput, ident: ResolvedIdentity): ToolOutput {
+  const source = ident.identitySource ?? ident.mode
   return {
-    content: [...result.content, { type: "text" as const, text: `identity_source: ${JSON.stringify(mode)}` }],
+    content: [...result.content, { type: "text" as const, text: `identity_source: ${JSON.stringify(source)}` }],
   }
+}
+
+/**
+ * 案 B pending 提示（计划 §2.5）：返回尾部附 active 计划计数提示（教师回合模型可
+ * 顺带告知；SKILL 侧指引由 T3 落）。数据取自既有 plan 查询的列表行（plan 字段
+ * flatten + items:{total,viewed,watched,completed}），不加新端点；行形状意外 →
+ * 不附（尽力而为，提示绝不倒打主负载）；0 个 active → 不附（零值噪音）。
+ */
+export function pendingHintText(plans: unknown[]): string | undefined {
+  let active = 0
+  let incomplete = 0
+  for (const row of plans) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return undefined
+    const plan = row as Record<string, unknown>
+    if (plan.status !== "active") continue
+    const items = plan.items
+    if (!items || typeof items !== "object" || Array.isArray(items)) return undefined
+    const total = (items as Record<string, unknown>).total
+    const completed = (items as Record<string, unknown>).completed
+    if (typeof total !== "number" || typeof completed !== "number") return undefined
+    active += 1
+    incomplete += Math.max(0, total - completed)
+  }
+  if (active === 0) return undefined
+  return `pending_hint: 有 ${active} 个 active 学习计划（${incomplete} 项未完成）`
+}
+
+function withPendingHint(result: ToolOutput, plans: unknown[]): ToolOutput {
+  const hint = pendingHintText(plans)
+  if (hint === undefined) return result
+  return { content: [...result.content, { type: "text" as const, text: hint }] }
 }
 
 function stringArg(value: unknown, name: string): string {
@@ -724,11 +817,94 @@ async function callWithAccess<T>(
   }
 }
 
+// ── 分发层身份包装（T2 主管越权门，计划 §2.1/§2.2；同步纯判定全在 identity.ts）──
+
+/** 会话者角色查询三臂判定（评审 I3 fail-closed + 复审 Minor-2）：
+ * - admin：role ∈ {admin, owner}（controller Ruling：与 src-server role_meets Admin 级对齐）；
+ * - non-admin：role=member，或 member-role 404（查无此人/非本 team 成员——走非 admin
+ *   语义，不进「查询失败」臂）；
+ * - unavailable：网络失败/非 2xx/超时/token 缺失（文案单独成臂，运维可辨）。 */
+type RoleVerdict = { kind: "admin" } | { kind: "non-admin" } | { kind: "unavailable" }
+
+function supervisionUnavailableError(toolName: string): IdentityMismatchError {
+  return new IdentityMismatchError(
+    `${toolName}: supervisor identity check temporarily unavailable (member-role query failed) `
+    + "— refusing call fail-closed (distinct from a normal identity mismatch)",
+  )
+}
+
+async function queryCallerRole(deps: SrcServerHandlerDeps, meta: MetaLike | undefined): Promise<RoleVerdict> {
+  try {
+    const { role } = await deps.client.memberRole(sessionWecomUserid(meta), deps.store.getAdminToken())
+    return role === "admin" || role === "owner" ? { kind: "admin" } : { kind: "non-admin" }
+  } catch (err) {
+    // 404 = 会话者非本 team 成员 → 视同非 admin（ApiNotFoundError 由 client 统一抛）
+    if (err instanceof ApiNotFoundError) return { kind: "non-admin" }
+    return { kind: "unavailable" }
+  }
+}
+
+/** roster_search 工具级 admin 闸（§2.2：低频主管专用，一律先查会话者角色，不受
+ * 决策②「仅 mismatch 才查」约束）。非 admin（含 404/unavailable 臂）按
+ * IdentityMismatch 照拒；非 wecom 会话（系统/cron 可信通道）不适用会话闸，
+ * 落回显式 wecom_userid 的既有判定。 */
+async function resolveRosterSearchIdentity(
+  deps: SrcServerHandlerDeps,
+  meta: MetaLike | undefined,
+  argsWecomUserid: string | undefined,
+): Promise<ResolvedIdentity> {
+  if (hasWecomSessionIdentity(meta)) {
+    const verdict = await queryCallerRole(deps, meta)
+    if (verdict.kind === "unavailable") throw supervisionUnavailableError(ROSTER_SEARCH_TOOL)
+    if (verdict.kind !== "admin") {
+      throw new IdentityMismatchError(
+        `${ROSTER_SEARCH_TOOL} is admin-gated: refusing call for non-admin wecom session `
+        + `"${sessionWecomUserid(meta)}" (roster exposure is restricted to admin/owner callers)`,
+      )
+    }
+  }
+  return resolveIdentity(meta, argsWecomUserid)
+}
+
+/**
+ * 全部 handler 统一身份入口（取代各 handler 第一行的裸 resolveIdentity）：
+ * - roster_search → 工具级 admin 闸（见上）；
+ * - 白名单工具 + wecom 会话身份 ≠ args wecom_userid（仅此冲突路径，决策②）→
+ *   先查会话者角色，再交 resolveIdentityWithSupervision 判定（admin/owner →
+ *   代目标教师执行；非 admin / 404 / 查询失败三臂全部照拒）；
+ * - 其余（非白名单工具、无身份冲突、系统模式）→ resolveIdentity 现行为直查，
+ *   零额外网络调用，既有行为逐字节等价。
+ */
+async function resolveIdentityForTool(
+  deps: SrcServerHandlerDeps,
+  toolName: string,
+  meta: MetaLike | undefined,
+  args: Record<string, unknown>,
+): Promise<ResolvedIdentity> {
+  const argsWecomUserid = optionalStringArg(args.wecom_userid, "wecom_userid")
+  if (toolName === ROSTER_SEARCH_TOOL) {
+    return resolveRosterSearchIdentity(deps, meta, argsWecomUserid)
+  }
+  try {
+    return resolveIdentity(meta, argsWecomUserid)
+  } catch (err) {
+    if (!(err instanceof IdentityMismatchError) || !SUPERVISION_TOOLS.includes(toolName)) {
+      throw err
+    }
+    const verdict = await queryCallerRole(deps, meta)
+    if (verdict.kind === "unavailable") throw supervisionUnavailableError(toolName)
+    return resolveIdentityWithSupervision(meta, argsWecomUserid, {
+      toolName,
+      isCallerAdmin: verdict.kind === "admin",
+    })
+  }
+}
+
 export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string, SrcToolHandler> {
   const handlers = new Map<string, SrcToolHandler>()
 
   handlers.set("llm_wiki_search", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "llm_wiki_search", meta, args)
     const query = stringArg(args.query, "query")
     const limit = optionalNumberArg(args.limit, "limit")
     // rerank=false：教师会话每回合 3-5 次搜索，LLM 精排 ~6s/次的延迟税不可接受，
@@ -737,11 +913,11 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     // DEFAULT_RESULTS=20，上下文膨胀 ~4 倍部分抵消延迟收益（评审 M1）。
     const search = await callWithAccess(deps, ident.wecomUserid, (token) =>
       deps.client.searchSrc(deps.getProjectId(), query, { limit: limit ?? 5, rerank: false, token }))
-    return withIdentitySource(textResult(formatSearchResults(query, search)), ident.mode)
+    return withIdentitySource(textResult(formatSearchResults(query, search)), ident)
   })
 
   handlers.set("llm_wiki_read_file", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "llm_wiki_read_file", meta, args)
     const relPath = stringArg(args.path, "path")
     // ① 先查 wiki 页（DB）：search 返回的 path 是 wiki_pages 空间的（concepts/…、
     //    transcripts/…），storage 里没有对应文件——旧实现直读 storage 对页路径恒 404，
@@ -749,7 +925,7 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     try {
       const page = await callWithAccess(deps, ident.wecomUserid, (token) =>
         deps.client.readPageSrc(deps.getProjectId(), relPath, { token }))
-      return withIdentitySource(textResult(formatWikiPageRead(relPath, page)), ident.mode)
+      return withIdentitySource(textResult(formatWikiPageRead(relPath, page)), ident)
     } catch (err) {
       if (!(err instanceof ApiNotFoundError)) throw err
     }
@@ -759,26 +935,36 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
         deps.client.readFileSrc(deps.getProjectId(), relPath, { token }))
       return withIdentitySource(
         textResult(`# ${filePath}\n\n${truncateText(content, MAX_TEXT_BYTES)}`),
-        ident.mode,
+        ident,
       )
     } catch (err) {
       // 404 = 应用级"未找到" → 正常返回（isError=false），熔断器不被触发；
       // 其他错误形态（5xx/网络）保持抛错上抛。
       if (err instanceof ApiNotFoundError) {
-        return withIdentitySource(textResult(fileNotFoundText(relPath)), ident.mode)
+        return withIdentitySource(textResult(fileNotFoundText(relPath)), ident)
       }
       throw err
     }
   })
 
   handlers.set("teacher_tutor_profile_get", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
-    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.trainingProfileGet(token))), ident.mode)
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_profile_get", meta, args)
+    const profile = await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingProfileGet(token))
+    // 案 B pending 提示（计划 §2.5）：档案建立成功才附（404 分支自然不带——直接抛错）；
+    // 提示取数尽力而为，失败不倒打主负载。
+    let plans: unknown[] = []
+    try {
+      plans = await callWithAccess(deps, ident.wecomUserid, (token) =>
+        deps.client.trainingPlanList(token))
+    } catch {
+      // 取不到计划计数就不附提示
+    }
+    return withIdentitySource(withPendingHint(jsonResult(profile), plans), ident)
   })
 
   handlers.set("teacher_tutor_profile_put", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_profile_put", meta, args)
     const body: Record<string, unknown> = {}
     const display_name = optionalStringArg(args.display_name, "display_name")
     const subject = optionalStringArg(args.subject, "subject")
@@ -796,22 +982,22 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       throw new ToolArgumentError("at least one profile field is required")
     }
     return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.trainingProfilePut(token, body))), ident.mode)
+      deps.client.trainingProfilePut(token, body))), ident)
   })
 
   handlers.set("teacher_tutor_record_ask", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_record_ask", meta, args)
     const payload = args.payload !== undefined ? args.payload : {}
     if (!payloadHasQuestionText(payload)) {
       // 拒绝走正常返回而非 -32602（跟进修 A）：应用级输入问题不进熔断器
-      return withIdentitySource(textResult(invalidAskPayloadText()), ident.mode)
+      return withIdentitySource(textResult(invalidAskPayloadText()), ident)
     }
     return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.trainingEventAsk(token, payload))), ident.mode)
+      deps.client.trainingEventAsk(token, payload))), ident)
   })
 
   handlers.set("teacher_tutor_plan_create", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_plan_create", meta, args)
     const body: Record<string, unknown> = {
       title: stringArg(args.title, "title"),
       origin: stringArg(args.origin, "origin"),
@@ -843,26 +1029,29 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     if (typeof response.link === "string" && response.link !== "") {
       response.link = joinTLink(deps.getPublicTBase(), response.link)
     }
-    return withIdentitySource(jsonResult(response), ident.mode)
+    return withIdentitySource(jsonResult(response), ident)
   })
 
   handlers.set("teacher_tutor_plan_list", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_plan_list", meta, args)
     const status = optionalStringArg(args.status, "status")
-    return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.trainingPlanList(token, status))), ident.mode)
+    const plans = await callWithAccess(deps, ident.wecomUserid, (token) =>
+      deps.client.trainingPlanList(token, status))
+    // 案 B pending 提示（计划 §2.5）：计数取自本次返回的列表行（status=archived 时
+    // active 计数为 0 → 自然不附提示）。
+    return withIdentitySource(withPendingHint(jsonResult(plans), plans), ident)
   })
 
   handlers.set("teacher_tutor_item_complete", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_item_complete", meta, args)
     const itemId = optionalNumberArg(args.item_id, "item_id")
     if (itemId === undefined) throw new ToolArgumentError("item_id is required")
     return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.trainingItemComplete(token, itemId))), ident.mode)
+      deps.client.trainingItemComplete(token, itemId))), ident)
   })
 
   handlers.set("teacher_tutor_plan_link", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_plan_link", meta, args)
     const planId = optionalNumberArg(args.plan_id, "plan_id")
     if (planId === undefined) throw new ToolArgumentError("plan_id is required")
     const response = await callWithAccess(deps, ident.wecomUserid, (token) =>
@@ -874,17 +1063,17 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
         `teacher_tutor_plan_link: server returned no link for plan ${planId} (got ${JSON.stringify(response)})`,
       )
     }
-    return withIdentitySource(jsonResult({ link: joinTLink(deps.getPublicTBase(), response.link) }), ident.mode)
+    return withIdentitySource(jsonResult({ link: joinTLink(deps.getPublicTBase(), response.link) }), ident)
   })
 
   handlers.set("teacher_tutor_progress", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_progress", meta, args)
     return withIdentitySource(jsonResult(await callWithAccess(deps, ident.wecomUserid, (token) =>
-      deps.client.trainingProgress(token))), ident.mode)
+      deps.client.trainingProgress(token))), ident)
   })
 
   handlers.set("teacher_tutor_listening_audio", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_listening_audio", meta, args)
     const rawDialogue = requiredArrayArg(args.dialogue, "dialogue")
     const lines: DialogueLine[] = rawDialogue.map((item, i) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -901,22 +1090,22 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     // 量级超限走正常文本引导（应用级输入问题不进熔断器，同 record_ask 前例）。
     if (lines.length > LISTENING_MAX_LINES) {
       return withIdentitySource(textResult(
-        `未生成音频：对话 ${lines.length} 行超过上限 ${LISTENING_MAX_LINES} 行。请分段生成（每段 ≤${LISTENING_MAX_LINES} 行），或与教师确认精简后再合成。`), ident.mode)
+        `未生成音频：对话 ${lines.length} 行超过上限 ${LISTENING_MAX_LINES} 行。请分段生成（每段 ≤${LISTENING_MAX_LINES} 行），或与教师确认精简后再合成。`), ident)
     }
     const totalChars = lines.reduce((n, line) => n + line.text.length, 0)
     if (totalChars > LISTENING_MAX_TOTAL_CHARS) {
       return withIdentitySource(textResult(
-        `未生成音频：对话总字符 ${totalChars} 超过上限 ${LISTENING_MAX_TOTAL_CHARS}。请分段生成，或与教师确认精简后再合成。`), ident.mode)
+        `未生成音频：对话总字符 ${totalChars} 超过上限 ${LISTENING_MAX_TOTAL_CHARS}。请分段生成，或与教师确认精简后再合成。`), ident)
     }
     const overlongIndex = lines.findIndex((line) => line.text.length > LISTENING_MAX_LINE_CHARS)
     if (overlongIndex >= 0) {
       return withIdentitySource(textResult(
-        `未生成音频：第 ${overlongIndex + 1} 行超过单行上限 ${LISTENING_MAX_LINE_CHARS} 字符。请把该行拆成多行（同一说话人可连续多行）后再合成。`), ident.mode)
+        `未生成音频：第 ${overlongIndex + 1} 行超过单行上限 ${LISTENING_MAX_LINE_CHARS} 字符。请把该行拆成多行（同一说话人可连续多行）后再合成。`), ident)
     }
     const speed = optionalNumberArg(args.speed, "speed") ?? 1.0
     if (speed < 0.5 || speed > 1.5) {
       return withIdentitySource(textResult(
-        `未生成音频：speed ${speed} 超出范围 0.5-1.5（慢速听力版用 0.85）。请调整后重试。`), ident.mode)
+        `未生成音频：speed ${speed} 超出范围 0.5-1.5（慢速听力版用 0.85）。请调整后重试。`), ident)
     }
     const title = optionalStringArg(args.title, "title")
 
@@ -924,17 +1113,17 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const result = await synth(lines, { speed, title })
     if (!result.ok || !result.path) {
       return withIdentitySource(textResult(
-        `听力音频生成失败：${result.error ?? "未知错误"}。请向教师说明并稍后重试，或先以文字材料继续答疑。`), ident.mode)
+        `听力音频生成失败：${result.error ?? "未知错误"}。请向教师说明并稍后重试，或先以文字材料继续答疑。`), ident)
     }
     return withIdentitySource(textResult([
       `听力音频已生成（引擎 ${result.engine}；${result.note ?? ""}；共 ${lines.length} 行；语速 ${speed}）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，音频才能送达。`,
-    ].join("\n")), ident.mode)
+    ].join("\n")), ident)
   })
 
   handlers.set("teacher_tutor_mindmap", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_mindmap", meta, args)
     let outline: MindmapOutline
     try {
       outline = normalizeOutline({ title: args.title, root: args.root })
@@ -947,7 +1136,7 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const capError = outlineCapsError(outline)
     if (capError) {
       return withIdentitySource(textResult(
-        `未生成导图：${capError}。请拆成多张（按章节），或与教师确认精简后再生成。`), ident.mode)
+        `未生成导图：${capError}。请拆成多张（按章节），或与教师确认精简后再生成。`), ident)
     }
     // v2 自动链：markmap（Chrome 截图）首选，失败回落 graphviz；deps.renderMindmap
     // 仍为测试注入点（注入则完全绕过自动链，既有测试语义不变）。
@@ -955,18 +1144,18 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const result = await render(outline)
     if (!result.ok || !result.path) {
       return withIdentitySource(textResult(
-        `思维导图生成失败：${result.error ?? "未知错误"}。可先给教师文字版大纲（层级列表），或稍后重试。`), ident.mode)
+        `思维导图生成失败：${result.error ?? "未知错误"}。可先给教师文字版大纲（层级列表），或稍后重试。`), ident)
     }
     return withIdentitySource(textResult([
       // M3'（2026-09-10 评审）：引擎名不进教师可见摘要——SKILL §1「呈现结果而非过程」。
       `思维导图已生成（${result.nodes} 个节点 / ${result.depth} 层）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
-    ].join("\n")), ident.mode)
+    ].join("\n")), ident)
   })
 
   handlers.set("teacher_tutor_worksheet", async (args, meta) => {
-    const ident = resolveIdentity(meta, optionalStringArg(args.wecom_userid, "wecom_userid"))
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_worksheet", meta, args)
     let doc: WorksheetDoc
     try {
       doc = normalizeWorksheet({
@@ -985,20 +1174,38 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const capError = worksheetCapsError(doc)
     if (capError) {
       return withIdentitySource(textResult(
-        `未生成学案：${capError}。请精简内容或与教师确认后拆成多张。`), ident.mode)
+        `未生成学案：${capError}。请精简内容或与教师确认后拆成多张。`), ident)
     }
     const render = deps.renderWorksheet ?? renderWorksheet
     const result = await render(doc)
     if (!result.ok || !result.path) {
       return withIdentitySource(textResult(
-        `学案海报生成失败：${result.error ?? "未知错误"}。环境性故障请勿反复重试——可先给教师文字版学案（按板块层级列出），图片稍后再生成。`), ident.mode)
+        `学案海报生成失败：${result.error ?? "未知错误"}。环境性故障请勿反复重试——可先给教师文字版学案（按板块层级列出），图片稍后再生成。`), ident)
     }
     return withIdentitySource(textResult([
       // M3'/I-6：引擎名不进教师可见摘要——SKILL §1「呈现结果而非过程」。
       `学案海报已生成（${result.sections} 个板块 / ${result.blocks} 个内容块）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
-    ].join("\n")), ident.mode)
+    ].join("\n")), ident)
+  })
+
+  // ── T2 视频学习任务：两检索工具（计划 §2.2）──
+
+  handlers.set("teacher_tutor_video_search", async (args, meta) => {
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_video_search", meta, args)
+    const q = stringArg(args.q, "q")
+    const limit = optionalNumberArg(args.limit, "limit")
+    const items = await deps.client.mediaSearch(q, limit, deps.store.getAdminToken())
+    return withIdentitySource(jsonResult(items), ident)
+  })
+
+  handlers.set("teacher_tutor_roster_search", async (args, meta) => {
+    const ident = await resolveIdentityForTool(deps, ROSTER_SEARCH_TOOL, meta, args)
+    const q = stringArg(args.q, "q")
+    const limit = optionalNumberArg(args.limit, "limit")
+    const items = await deps.client.rosterSearch(q, limit, deps.store.getAdminToken())
+    return withIdentitySource(jsonResult(items), ident)
   })
 
   return handlers

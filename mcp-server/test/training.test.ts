@@ -5,7 +5,7 @@ import path from "node:path"
 import { test } from "node:test"
 
 import { LlmWikiApiClient, resolveApiForm } from "../src/api-client.js"
-import { TeacherCredentialStore, createSrcServerHandlers, joinTLink } from "../src/training.js"
+import { TeacherCredentialStore, ToolArgumentError, createSrcServerHandlers, joinTLink } from "../src/training.js"
 import { assertSrcServerEnv, buildTools } from "../src/index.js"
 
 // 全部 mock 驱动：不依赖任何 live src-server。
@@ -79,6 +79,7 @@ function stubStore(): TeacherCredentialStore {
   return {
     getAccess: async () => "acc-tool",
     invalidate: () => {},
+    getAdminToken: () => "adm-secret",
   } as unknown as TeacherCredentialStore
 }
 
@@ -510,6 +511,7 @@ test("teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、it
     { when: (c) => c.url === `${BASE}/api/v1/training/profile` && c.method === "PUT", then: () => ({ body: { ...profileBody, onboarding_state: "surveyed" } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/events`, then: () => ({ body: { id: 9 } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/plans?status=active`, then: () => ({ body: [] }) },
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: [] }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/plans/3/link`, then: () => ({ body: { link: "/s/abcdefghij" } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/items/12/complete`, then: () => ({ body: { item_id: 12, status: "completed" } }) },
     { when: (c) => c.url === `${BASE}/api/v1/training/progress`, then: () => ({ body: { plans: [], recent_events: [] } }) },
@@ -646,7 +648,7 @@ test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {
 
 // ── 形态注册过滤 ──
 
-test("src-server 形态：只注册 12 工具，9 个桌面工具不在 ListTools", () => {
+test("src-server 形态：只注册 15 工具（13 teacher_tutor_* + 2 llm_wiki），9 个桌面工具不在 ListTools", () => {
   const names = buildTools("src-server").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
     "llm_wiki_read_file",
@@ -655,6 +657,8 @@ test("src-server 形态：只注册 12 工具，9 个桌面工具不在 ListTool
     "teacher_tutor_listening_audio",
     "teacher_tutor_mindmap",
     "teacher_tutor_plan_create",
+    "teacher_tutor_roster_search",
+    "teacher_tutor_video_search",
     "teacher_tutor_worksheet",
     "teacher_tutor_plan_link",
     "teacher_tutor_plan_list",
@@ -963,4 +967,118 @@ test("worksheet: 渲染失败 → 环境性故障引导文字版（I-7b 不刷�
   assert.ok(text.includes("勿反复重试"))
   assert.ok(text.includes("文字版学案"))
   assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
+})
+
+// ── T2 视频学习任务：两检索工具透传形状（闸行为在 identity.test.ts 分发层组）──
+
+test("video_search: GET /api/v1/training/media/search?q&limit + admin header，候选数组原样透传", async () => {
+  const media = [
+    { slug: "past-simple-song", title: "一般过去时儿歌", transcript_page_path: "transcripts/past-simple-song.md", duration_s: 754 },
+    { slug: "modal-verbs-clip", title: "modal-verbs-clip", transcript_page_path: null, duration_s: 320 },
+  ]
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/media/search?${new URLSearchParams({ q: "过去时", limit: "3" })}`, then: () => ({ body: media }) },
+  ], calls)
+
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("teacher_tutor_video_search")!({ wecom_userid: "t1", q: "过去时", limit: 3 })
+
+  const call = calls.find((c) => c.url.includes("/api/v1/training/media/search"))!
+  assert.equal(call.method, "GET")
+  assert.equal(call.headers["x-training-admin-token"], "adm-secret", "media/search 走 x-training-admin-token（同 bind/overview）")
+  assert.deepEqual(JSON.parse(toolText(result)), media, "候选原样（null transcript_page_path 不被改写）")
+})
+
+test("video_search: 空白 q → ToolArgumentError 且零请求（schema 必填非空白的服务端前置闸）", async () => {
+  const calls: RecordedCall[] = []
+  const handlers = makeHandlers(mockFetch([], calls))
+  await assert.rejects(
+    handlers.get("teacher_tutor_video_search")!({ wecom_userid: "t1", q: "   " }),
+    (err: unknown) => err instanceof ToolArgumentError && /q is required/.test(err.message),
+  )
+  await assert.rejects(handlers.get("teacher_tutor_video_search")!({ wecom_userid: "t1" }), /q is required/)
+  assert.deepEqual(calls, [])
+})
+
+test("roster_search: GET /api/v1/training/roster?q + admin header，两键名册原样透传（系统模式不触发会话闸）", async () => {
+  const roster = [{ wecom_userid: "t9", display_name: "钱老师" }]
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/roster?${new URLSearchParams({ q: "钱" })}`, then: () => ({ body: roster }) },
+  ], calls)
+
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("teacher_tutor_roster_search")!({ wecom_userid: "t1", q: "钱" })
+
+  const call = calls.find((c) => c.url.includes("/api/v1/training/roster"))!
+  assert.equal(call.headers["x-training-admin-token"], "adm-secret")
+  assert.equal(calls.some((c) => c.url.includes("member-role")), false, "系统模式无会话身份可查，闸不适用")
+  assert.deepEqual(JSON.parse(toolText(result)), roster)
+})
+
+// ── 案 B pending 提示（计划 §2.5）：plan_list / profile_get 尾部附带计数提示 ──
+
+test("pending 提示：plan_list 有 active 计划 → 尾块 pending_hint（N active / M 未完成），主负载原样在前", async () => {
+  const plans = [
+    { id: 1, title: "第一周", status: "active", items: { total: 3, viewed: 1, watched: 0, completed: 1 } },
+    { id: 2, title: "旧计划", status: "archived", items: { total: 2, viewed: 2, watched: 2, completed: 2 } },
+  ]
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: plans }) },
+  ], [])
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("teacher_tutor_plan_list")!({ wecom_userid: "t1" })
+
+  assert.deepEqual(JSON.parse(toolText(result)), plans, "主负载逐字节保留在首块")
+  assert.deepEqual(
+    result.content.slice(1).map((block) => block.text),
+    ["pending_hint: 有 1 个 active 学习计划（2 项未完成）", 'identity_source: "system"'],
+  )
+})
+
+test("pending 提示：plan_list 零 active / 行形状意外 → 不附提示块（尽力而为，不倒打主负载）", async () => {
+  for (const body of [
+    [],
+    [{ id: 2, title: "旧计划", status: "archived", items: { total: 2, viewed: 2, watched: 2, completed: 2 } }],
+    [{ id: 3, status: "active" }], // items 缺失 → 形状意外 → 无提示
+  ]) {
+    const fetchImpl = mockFetch([
+      { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body }) },
+    ], [])
+    const handlers = makeHandlers(fetchImpl)
+    const result = await handlers.get("teacher_tutor_plan_list")!({ wecom_userid: "t1" })
+    assert.deepEqual(JSON.parse(toolText(result)), body)
+    assert.deepEqual(result.content.slice(1).map((block) => block.text), ['identity_source: "system"'], "无 pending_hint 块")
+  }
+})
+
+test("pending 提示：profile_get 成功 → 额外取 plans 附提示；404（档案未建）→ 抛错无提示", async () => {
+  const plans = [
+    { id: 1, title: "第一周", status: "active", items: { total: 4, viewed: 0, watched: 1, completed: 1 } },
+  ]
+  const profileBody = { wecom_userid: "t1", display_name: "t", subject: null, grade_levels: [], goals: [], interests: [], onboarding_state: "surveyed" }
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/profile` && c.method === "GET", then: () => ({ body: profileBody }) },
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: plans }) },
+  ], calls)
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("teacher_tutor_profile_get")!({ wecom_userid: "t1" })
+
+  assert.deepEqual(JSON.parse(toolText(result)), profileBody)
+  assert.deepEqual(
+    result.content.slice(1).map((block) => block.text),
+    ["pending_hint: 有 1 个 active 学习计划（3 项未完成）", 'identity_source: "system"'],
+  )
+
+  // 404 分支：直接抛 ApiNotFoundError，不带提示
+  const notFoundFetch = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/profile` && c.method === "GET", then: () => ({ status: 404, body: { error: { code: "NOT_FOUND", message: "Teacher profile not found" } } }) },
+  ], [])
+  const notFoundHandlers = makeHandlers(notFoundFetch)
+  await assert.rejects(
+    notFoundHandlers.get("teacher_tutor_profile_get")!({ wecom_userid: "t1" }),
+    /LLM Wiki API 404/,
+  )
 })

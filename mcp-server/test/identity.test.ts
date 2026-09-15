@@ -7,10 +7,14 @@ import {
   IdentityUnavailableError,
   ToolArgumentError,
   extractRequestMeta,
+  hasWecomSessionIdentity,
   resolveIdentity,
+  resolveIdentityWithSupervision,
+  sessionWecomUserid,
   type MetaLike,
 } from "../src/identity.js"
 import {
+  SUPERVISION_TOOLS,
   TeacherCredentialStore,
   createSrcServerHandlers,
   srcServerToolDefinitions,
@@ -145,6 +149,69 @@ test("对抗补遗（评审 S4）：platform 非字符串（如数字）归一�
   )
 })
 
+// ── T2 主管越权门：resolveIdentityWithSupervision 纯判定（identity.ts 保持零 IO，
+//    白名单常量在 training.ts 分发层——这里以 SUPERVISION_TOOLS 成员名作输入，
+//    只验纯函数语义，不验白名单本身）──
+
+test("supervisor·冲突+admin → 目标身份 + identitySource:'supervisor'", () => {
+  assert.deepEqual(
+    resolveIdentityWithSupervision(META_WECOM_T1, "T2", { toolName: "teacher_tutor_plan_create", isCallerAdmin: true }),
+    { mode: "user", wecomUserid: "T2", identitySource: "supervisor" },
+  )
+})
+
+test("supervisor·冲突+非 admin → IdentityMismatch（非 admin 语义文案，照拒不降级）", () => {
+  assert.throws(
+    () => resolveIdentityWithSupervision(META_WECOM_T1, "T2", { toolName: "teacher_tutor_plan_list", isCallerAdmin: false }),
+    (err: unknown) =>
+      err instanceof IdentityMismatchError
+      && /requires an admin\/owner session/.test(err.message)
+      && /teacher_tutor_plan_list/.test(err.message),
+  )
+})
+
+test("supervisor·args 空白/等于会话 → 现行为（返回会话身份，无 identitySource 标记）", () => {
+  assert.deepEqual(
+    resolveIdentityWithSupervision(META_WECOM_T1, undefined, { toolName: "teacher_tutor_plan_create", isCallerAdmin: true }),
+    { mode: "user", wecomUserid: "T1" },
+  )
+  assert.deepEqual(
+    resolveIdentityWithSupervision(META_WECOM_T1, "  ", { toolName: "teacher_tutor_plan_create", isCallerAdmin: true }),
+    { mode: "user", wecomUserid: "T1" },
+  )
+  assert.deepEqual(
+    resolveIdentityWithSupervision(META_WECOM_T1, "T1", { toolName: "teacher_tutor_plan_create", isCallerAdmin: true }),
+    { mode: "user", wecomUserid: "T1" },
+  )
+})
+
+test("supervisor·系统模式 → 现行为（显式 wecom_userid 直通；缺参 ToolArgumentError 不受 admin 标志影响）", () => {
+  assert.deepEqual(
+    resolveIdentityWithSupervision(undefined, "T1", { toolName: "teacher_tutor_plan_create", isCallerAdmin: false }),
+    { mode: "system", wecomUserid: "T1" },
+  )
+  assert.throws(
+    () => resolveIdentityWithSupervision(undefined, undefined, { toolName: "teacher_tutor_plan_create", isCallerAdmin: true }),
+    ToolArgumentError,
+  )
+})
+
+test("supervisor·wecom 会话身份缺失 → IdentityUnavailable 照旧透传（admin 标志不救，fail-closed）", () => {
+  assert.throws(
+    () => resolveIdentityWithSupervision({ hermes_platform: "wecom" }, "T2", { toolName: "teacher_tutor_plan_create", isCallerAdmin: true }),
+    IdentityUnavailableError,
+  )
+})
+
+test("supervisor·闸辅助谓词：hasWecomSessionIdentity / sessionWecomUserid 归一与 resolveIdentity 同源", () => {
+  assert.equal(hasWecomSessionIdentity(META_WECOM_T1), true)
+  assert.equal(sessionWecomUserid(META_WECOM_T1), "T1")
+  assert.equal(hasWecomSessionIdentity({ hermes_platform: "wecom" }), false, "wecom 但无身份 → 闸不适用（落 IdentityUnavailable）")
+  assert.equal(hasWecomSessionIdentity({ hermes_platform: " WECOM ", hermes_user_id: " T1 " }), true, "platform/身份归一")
+  assert.equal(hasWecomSessionIdentity(undefined), false)
+  assert.equal(sessionWecomUserid(undefined), "")
+})
+
 test("extractRequestMeta：对象直通，非对象/数组归 undefined", () => {
   assert.deepEqual(extractRequestMeta({ hermes_platform: "wecom" }), { hermes_platform: "wecom" })
   assert.equal(extractRequestMeta(undefined), undefined)
@@ -155,7 +222,7 @@ test("extractRequestMeta：对象直通，非对象/数组归 undefined", () => 
 
 // ── 集成位：training 工具三态（user 通畅 / mismatch 拒 / wecom-空-身份拒）──
 
-/** 记录 getAccess 收到的 userid（凭证层身份）的 stub store。 */
+/** 记录 getAccess 收到的 userid（凭证层身份）的 stub store（含主管门 admin token 出口）。 */
 function recordingStore(seen: string[]): TeacherCredentialStore {
   return {
     getAccess: async (userid: string) => {
@@ -163,6 +230,7 @@ function recordingStore(seen: string[]): TeacherCredentialStore {
       return "acc-tool"
     },
     invalidate: () => {},
+    getAdminToken: () => "adm-secret",
   } as unknown as TeacherCredentialStore
 }
 
@@ -267,16 +335,193 @@ test("集成·system 模式缺 wecom_userid：无 meta 且省略 → ToolArgumen
   assert.deepEqual(seen, [])
 })
 
+// ── 集成：T2 主管越权门分发层（member-role 查询注入，计划 §2.1/§2.2）──
+
+const MEMBER_ROLE_URL_T1 = `${BASE}/api/v1/training/member-role?${new URLSearchParams({ wecom_userid: "T1" })}`
+
+test("集成·主管 override 放行：admin 会话 plan_list 带 T2 → member-role 后放行，凭证层用 T2 + identity_source:'supervisor'", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "admin" } }) },
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: [{ id: 1, status: "active" }] }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  const result = await handlers.get("teacher_tutor_plan_list")!({ wecom_userid: "T2" }, META_WECOM_T1)
+
+  const roleCall = calls.find((c) => c.url === MEMBER_ROLE_URL_T1)!
+  assert.ok(roleCall, "member-role must be queried on identity conflict")
+  assert.equal(roleCall.method, "GET")
+  assert.equal(roleCall.headers["x-training-admin-token"], "adm-secret", "member-role uses x-training-admin-token (同 bind/overview)")
+  assert.equal(roleCall.headers.Authorization, undefined, "member-role 不带教师 Bearer")
+  assert.deepEqual(seen, ["T2"], "credential store must receive the target teacher id")
+  assert.ok(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`), "放行后触达 plans（api-client 放行到端点）")
+  assert.deepEqual(identityBlocks(result).slice(1), ['identity_source: "supervisor"'], "主管调用尾块如实标 supervisor")
+})
+
+test("集成·owner 视同 admin：role=owner → override 放行（controller Ruling 与 role_meets Admin 级对齐）", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "owner" } }) },
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: [] }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await handlers.get("teacher_tutor_plan_list")!({ wecom_userid: "T2" }, META_WECOM_T1)
+  assert.deepEqual(seen, ["T2"])
+  assert.ok(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`))
+})
+
+test("集成·必补① 非 admin 传他人 userid 照拒：member 会话 plan_list 带 T2 → IdentityMismatch（非 admin 语义）+ 不触达 plans/凭证", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "member" } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await assert.rejects(
+    handlers.get("teacher_tutor_plan_list")!({ wecom_userid: "T2" }, META_WECOM_T1),
+    (err: unknown) =>
+      err instanceof IdentityMismatchError
+      && /requires an admin\/owner session/.test(err.message)
+      && !/temporarily unavailable/.test(err.message),
+  )
+  assert.ok(calls.some((c) => c.url === MEMBER_ROLE_URL_T1), "role 查询发生了")
+  assert.equal(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`), false, "拒绝后不得触达 plans")
+  assert.deepEqual(seen, [], "拒绝后不得取凭证")
+})
+
+test("集成·必补② role 查询失败照拒（文案区分）：member-role 500 → IdentityMismatch（unavailable 语义，区别于普通 mismatch）", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ status: 500, body: { error: { code: "INTERNAL", message: "boom" } } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await assert.rejects(
+    handlers.get("teacher_tutor_plan_list")!({ wecom_userid: "T2" }, META_WECOM_T1),
+    (err: unknown) =>
+      err instanceof IdentityMismatchError
+      && /temporarily unavailable/.test(err.message)
+      && !/requires an admin\/owner session/.test(err.message),
+  )
+  assert.equal(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`), false)
+  assert.deepEqual(seen, [])
+})
+
+test("集成·member-role 404（会话者非本 team 成员）→ 非 admin 臂照拒，文案走「非 admin」语义（复审 Minor-2）", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ status: 404, body: { error: { code: "NOT_FOUND", message: "Member not found" } } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await assert.rejects(
+    handlers.get("teacher_tutor_plan_create")!({ wecom_userid: "T2", title: "t", origin: "chat", items: [] }, META_WECOM_T1),
+    (err: unknown) =>
+      err instanceof IdentityMismatchError
+      && /requires an admin\/owner session/.test(err.message)
+      && !/temporarily unavailable/.test(err.message),
+  )
+  assert.ok(calls.some((c) => c.url === MEMBER_ROLE_URL_T1))
+  assert.equal(calls.some((c) => c.url === `${BASE}/api/v1/training/plans`), false)
+  assert.deepEqual(seen, [])
+})
+
+test("集成·决策② 仅 mismatch 才查：白名单工具本人调用（无冲突）→ member-role 零调用", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === `${BASE}/api/v1/training/plans`, then: () => ({ body: [] }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await handlers.get("teacher_tutor_plan_list")!({}, META_WECOM_T1)
+  assert.equal(calls.some((c) => c.url.includes("member-role")), false, "正常教师流量零额外延迟（不查角色）")
+  assert.deepEqual(seen, ["T1"])
+})
+
+test("集成·roster_search admin 闸·非 admin 拒：member 会话 → IdentityMismatch + 不触达 roster", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "member" } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await assert.rejects(
+    handlers.get("teacher_tutor_roster_search")!({ q: "张" }, META_WECOM_T1),
+    (err: unknown) =>
+      err instanceof IdentityMismatchError
+      && /admin-gated/.test(err.message)
+      && !/temporarily unavailable/.test(err.message),
+  )
+  assert.ok(calls.some((c) => c.url === MEMBER_ROLE_URL_T1), "工具级闸一律先查角色（不受决策②约束）")
+  assert.equal(calls.some((c) => c.url.includes("/api/v1/training/roster")), false)
+  assert.deepEqual(seen, [])
+})
+
+test("集成·roster_search admin 闸·admin 过：→ roster 透传 + identity_source:'user'", async () => {
+  const roster = [{ wecom_userid: "t9", display_name: "钱老师" }]
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ body: { role: "admin" } }) },
+    { when: (c) => c.url === `${BASE}/api/v1/training/roster?${new URLSearchParams({ q: "钱" })}`, then: () => ({ body: roster }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  const result = await handlers.get("teacher_tutor_roster_search")!({ q: "钱" }, META_WECOM_T1)
+  const rosterCall = calls.find((c) => c.url.includes("/api/v1/training/roster"))!
+  assert.equal(rosterCall.headers["x-training-admin-token"], "adm-secret")
+  assert.deepEqual(JSON.parse(result.content[0]!.text), roster, "名册两键原样透传")
+  assert.deepEqual(identityBlocks(result).slice(1), ['identity_source: "user"'])
+})
+
+test("集成·roster_search 核验不可用 → unavailable 臂照拒（文案区分）+ 不触达 roster", async () => {
+  const calls: RecordedCall[] = []
+  const fetchImpl = mockFetch([
+    { when: (c) => c.url === MEMBER_ROLE_URL_T1, then: () => ({ status: 503, body: { error: { code: "UNAVAILABLE", message: "down" } } }) },
+  ], calls)
+  const seen: string[] = []
+  const handlers = identityHandlers(fetchImpl, seen)
+
+  await assert.rejects(
+    handlers.get("teacher_tutor_roster_search")!({ q: "张" }, META_WECOM_T1),
+    (err: unknown) =>
+      err instanceof IdentityMismatchError
+      && /temporarily unavailable/.test(err.message),
+  )
+  assert.equal(calls.some((c) => c.url.includes("/api/v1/training/roster")), false)
+  assert.deepEqual(seen, [])
+})
+
+test("集成·SUPERVISION_TOOLS 白名单钉桩（决策③：常量在分发层）：恰好三工具、record_ask/search 等不在列", () => {
+  assert.deepEqual([...SUPERVISION_TOOLS], [
+    "teacher_tutor_plan_create",
+    "teacher_tutor_plan_list",
+    "teacher_tutor_video_search",
+  ])
+})
+
 // ── schema：wecom_userid 可选声明（2026-09-05 修订 2026-08-24 加固）──
 // 旧设计（schema 完全隐藏 + prompt 指示 cron 回合传未声明参数）在 glm-5.3-flash
 // 上失效：模型严格遵循 schema，不 emit 未声明字段 → cron 系统回合全链 -32602
 // （周报任务 ca270c3a5a58 2026-09-05 实锺）。新契约：可选声明（系统/cron 通道
 // 显式化）；用户会话防冒名不变——identity 锁对不匹配参数照常硬拒。
 
-test("schema：全部 13 个 src-server 工具可选声明 wecom_userid，不进 required", () => {
+test("schema：15 个 src-server 工具——既有 13 个可选声明 wecom_userid；两个 T2 检索工具不声明（brief §4：无身份参数，supervisor 路径天然不触发）", () => {
   const tools = [...srcServerToolDefinitions(), ...trainingToolDefinitions()]
-  assert.equal(tools.length, 13)
-  for (const tool of tools) {
+  assert.equal(tools.length, 15)
+  const newSearchTools = ["teacher_tutor_video_search", "teacher_tutor_roster_search"]
+  const declaringTools = tools.filter((tool) => !newSearchTools.includes(tool.name))
+  assert.equal(declaringTools.length, 13)
+  for (const tool of declaringTools) {
     const props = (tool.inputSchema.properties ?? {}) as Record<string, unknown>
     assert.ok(
       typeof props.wecom_userid === "object" && props.wecom_userid !== null,
@@ -287,6 +532,16 @@ test("schema：全部 13 个 src-server 工具可选声明 wecom_userid，不进
       false,
       `${tool.name}: wecom_userid must stay optional (wecom user sessions never pass it; identity comes from _meta)`,
     )
+  }
+  // 两个新检索工具：q 必填非空白、limit 可选、不声明 wecom_userid（系统/cron 回合
+  // 本就不该用它们——主管找片/点名是交互会话流量）
+  for (const name of newSearchTools) {
+    const tool = tools.find((t) => t.name === name)!
+    assert.ok(tool, `${name} must be defined`)
+    const props = tool.inputSchema.properties as Record<string, unknown>
+    assert.equal(props.wecom_userid, undefined, `${name}: 不声明 wecom_userid`)
+    assert.deepEqual(tool.inputSchema.required, ["q"])
+    assert.ok(typeof props.limit === "object", `${name}: limit 可选声明`)
   }
   // 其余必填位不受牵连
   const search = tools.find((t) => t.name === "llm_wiki_search")!
