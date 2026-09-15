@@ -484,10 +484,12 @@ fn beacon_js(token: &str) -> String {
     }}, {{ threshold: 0.4 }});
     Array.prototype.forEach.call(document.querySelectorAll('section.item'), function (el) {{ io.observe(el); }});
   }}
-  // 播放心跳（play_progress）：稀疏 ≤5 beacon/视频——首条早检点（10s 或 5% 时长
-  // 先到先发，仅 25% 前有效）+ 25/50/75% 检查点各一次 + ended 一次。早检点让
-  // 短观看（分钟级）也有续播点（2026-09-15 真机验收：13s 观看无续播点裁定为
-  // 体验缺口，用户拍板加密）。watched 口径=「累计真实播放时长 ≥90%」或自然播完（非「位置 ≥90%」）；
+  // 播放心跳（play_progress）：首条早检点（10s 或 5% 时长先到先发，仅 25% 前
+  // 有效）+ 每 60s 真实播放一条检查点 + ended——检查点仅供断点续播（续播粒度
+  // 1 分钟），预算≈时长/60+2 条，/play 独立限流桶 60/min 余量充足。
+  // （2026-09-15 用户拍板心跳化：真机验收 13s/5min 短观看无近期续播点，原
+  // 25/50/75% 稀疏 marks 撤除。）
+  // watched 口径=「累计真实播放时长 ≥90%」或自然播完（非「位置 ≥90%」）；
   // delta 按壁钟钳制：章节/时间戳跳转（currentTime 大幅前跳）不计入累计时长——
   // 否则两次章节跳转即可伪造「看完」（实现评审 Imp-1）；单 tick 回退置零。
   // duration 可能短暂为 NaN/Infinity（preload=metadata），一律 isFinite 守卫。
@@ -515,9 +517,7 @@ fn beacon_js(token: &str) -> String {
       if (player.readyState >= 1) {{ applyResume(); }}
       else {{ player.addEventListener('loadedmetadata', applyResume); }}
     }}
-    var acc = 0, lastT = null, lastWall = null, sentEnded = false, earlySent = false;
-    var marks = {{}};
-    [25, 50, 75].forEach(function (m) {{ marks[m] = false; }});
+    var acc = 0, lastT = null, lastWall = null, sentEnded = false, earlySent = false, nextBeatAt = 60;
     function pct() {{
       var d = player.duration;
       return (isFinite(d) && d > 0) ? Math.min(100, Math.round(player.currentTime / d * 100)) : 0;
@@ -534,18 +534,18 @@ fn beacon_js(token: &str) -> String {
       var d = player.duration;
       if (!isFinite(d) || !(d > 0)) return; // 等价于数值非正判断：JS 内不出现小于号（XSS 结构审计要求全文标签白名单）
       var p = pct();
-      // 首条早检点：10s 或 5% 时长先到先发，仅 25% 前有效——越过 25% 已有检查点
-      // 覆盖，且续播落点越过 25% 的会话不重复补发同位信标
+      // 首条早检点：10s 或 5% 时长先到先发，仅 25% 前有效——续播落点越过 25%
+      // 的会话不重复补发同位信标
       if (!earlySent && 25 > p && player.currentTime >= Math.min(10, d * 0.05)) {{
         earlySent = true;
         beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'checkpoint', position_s: Math.round(player.currentTime), percent: p }}));
       }}
-      [25, 50, 75].forEach(function (m) {{
-        if (!marks[m] && p >= m) {{
-          marks[m] = true;
-          beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'checkpoint', position_s: Math.round(player.currentTime), percent: p }}));
-        }}
-      }});
+      // 心跳检查点：每 60s 真实播放一条（acc 口径——seek 前跳不触发、暂停不计
+      // 时），续播粒度 1 分钟
+      if (acc >= nextBeatAt) {{
+        nextBeatAt = acc + 60;
+        beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'checkpoint', position_s: Math.round(player.currentTime), percent: p }}));
+      }}
       if (!sentEnded && acc >= d * 0.9) {{
         sentEnded = true;
         beacon('/play', JSON.stringify({{ item_id: itemId, phase: 'ended', position_s: Math.round(player.currentTime), percent: p }}));
@@ -1125,6 +1125,9 @@ mod tests {
         assert!(js.contains("Math.min(10, d * 0.05)"), "early checkpoint threshold present");
         assert!(js.contains("25 > p"), "early checkpoint gated before 25% (no resume-session duplicate)");
         assert!(js.contains("earlySent"), "early checkpoint once-flag present");
+        // 心跳检查点（2026-09-15 用户拍板加密：每 60s 真实播放一条，百分比 marks 撤除）
+        assert!(js.contains("nextBeatAt"), "60s playback heartbeat present");
+        assert!(!js.contains("[25, 50, 75]"), "sparse percent marks removed (subsumed by heartbeat)");
         assert!(
             !js.contains('<'),
             "inline JS must never contain `<` (XSS structural audit)"
