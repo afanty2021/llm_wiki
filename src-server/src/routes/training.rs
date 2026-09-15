@@ -18,7 +18,8 @@
 //! - 视频学习任务 T1（2026-09-12 feature，均 require_training_admin、只读）：
 //!   GET /member-role（企微 userid → TRAINING 项目所属 team 的成员角色，
 //!   projects.team_id 两跳 + lower 归一）、GET /media/search（slug / 转录页
-//!   标题模糊检索，media_assets 全局表不按 project 过滤）。
+//!   标题模糊检索，media_assets 全局表不按 project 过滤）、GET /roster
+//!   （教师名册检索，仅吐 wecom_userid + display_name 两键——反 overview 泄漏）。
 
 use axum::{extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, routing::{get, post}, Json, Router};
 use chrono::{Datelike as _, Duration as ChronoDuration};
@@ -45,6 +46,7 @@ pub fn training_routes() -> Router<AppState> {
         .route("/overview", get(get_overview))
         .route("/member-role", get(get_member_role))
         .route("/media/search", get(search_media))
+        .route("/roster", get(search_roster))
 }
 
 #[derive(Deserialize)]
@@ -613,6 +615,59 @@ async fn search_media(
          LEFT JOIN wiki_pages wp ON wp.path = ma.transcript_page_path \
          WHERE wp.title ILIKE $1 OR ma.slug ILIKE $1 \
          ORDER BY ma.slug \
+         LIMIT $2",
+    )
+    .bind(format!("%{kw}%"))
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(items))
+}
+
+/// roster 检索行。**仅此两键**——反 overview 泄漏的硬契约：不给 progress /
+/// 计数 / role 任何额外字段。display_name 原样返回（nullable，不 COALESCE——
+/// bind 侧本就回填 wecom_userid 缺省值）。
+#[derive(Serialize, sqlx::FromRow)]
+pub struct RosterItem {
+    pub wecom_userid: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RosterQuery {
+    pub q: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// limit 缺省 10；clamp 1..=50（上限按契约，下限防 PG LIMIT 负值 500，
+/// media/search 同款）。
+const ROSTER_DEFAULT_LIMIT: i64 = 10;
+const ROSTER_MAX_LIMIT: i64 = 50;
+
+/// GET /api/v1/training/roster?q=<关键词>&limit=10 — 教师名册检索
+/// （require_training_admin，视频学习任务主管分享面的点名入口）。
+/// 命中面：display_name **或** wecom_userid ILIKE %q%；ORDER BY
+/// display_name NULLS LAST, wecom_userid（controller Ruling：确定性输出）。
+/// 查无命中 → 200 `[]`（检索语义，非 member-role 的点查 404）。
+/// q 缺失/空白 → 400；token 缺失/错 → 401。
+async fn search_roster(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RosterQuery>,
+) -> Result<Json<Vec<RosterItem>>, AppError> {
+    require_training_admin(&state, &headers)?;
+    let kw = q.q.as_deref().unwrap_or("").trim();
+    if kw.is_empty() {
+        return Err(AppError::BadRequest("q is empty".into()));
+    }
+    let limit = q
+        .limit
+        .unwrap_or(ROSTER_DEFAULT_LIMIT)
+        .clamp(1, ROSTER_MAX_LIMIT);
+    let items = sqlx::query_as::<_, RosterItem>(
+        "SELECT wecom_userid, display_name FROM teacher_profiles \
+         WHERE display_name ILIKE $1 OR wecom_userid ILIKE $1 \
+         ORDER BY display_name NULLS LAST, wecom_userid \
          LIMIT $2",
     )
     .bind(format!("%{kw}%"))

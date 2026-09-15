@@ -1399,3 +1399,128 @@ async fn media_search_hits_slug_title_and_null_transcript_fallback() {
     // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
     crate::teardown_test_data(&_state).await;
 }
+
+// ============ T1b 补遗：GET /training/roster（教师名册检索，仅两键）============
+
+/// 反泄漏硬契约钉子：响应条目的键**恰好** {wecom_userid, display_name}——
+/// 任何人往 RosterItem 加 progress/计数/role 等额外字段即红（overview 的
+/// 逐教师聚合不进主管分享面）。
+fn assert_roster_keys_exact(item: &serde_json::Value) {
+    let keys = item.as_object().expect("roster item must be an object");
+    assert_eq!(
+        keys.len(),
+        2,
+        "roster item must have exactly 2 keys (anti-leak contract): {:?}",
+        keys.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        keys.contains_key("wecom_userid") && keys.contains_key("display_name"),
+        "roster keys must be exactly {{wecom_userid, display_name}}: {:?}",
+        keys.keys().collect::<Vec<_>>()
+    );
+}
+
+/// 鉴权与参数校验矩阵：无/错 token → 401；q 缺失/空白 → 400；无命中 → 200 `[]`
+/// （检索语义，非 member-role 的点查 404）。
+#[tokio::test]
+async fn roster_auth_and_param_validation() {
+    let (server, _state, _admin, _member) = training_fixture_with_config_project("rauth").await;
+
+    // 无 token → 401
+    let r = server.get("/api/v1/training/roster?q=x").await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    // 错 token → 401
+    let r = server
+        .get("/api/v1/training/roster?q=x")
+        .add_header("x-training-admin-token", "wrong")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::UNAUTHORIZED);
+
+    // q 缺失 / 空白 → 400
+    let r = server
+        .get("/api/v1/training/roster")
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::BAD_REQUEST);
+    for bad in ["", "%20%20"] {
+        let r = server
+            .get(&format!("/api/v1/training/roster?q={bad}"))
+            .add_header("x-training-admin-token", "tok123")
+            .await;
+        assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "blank q must 400: {bad:?}");
+    }
+
+    // 无命中 → 200 []
+    let r = server
+        .get("/api/v1/training/roster?q=no_such_teacher_keyword_zz9x")
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    assert_eq!(
+        r.json::<serde_json::Value>(),
+        serde_json::json!([]),
+        "no hit must be an empty array"
+    );
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
+}
+
+/// 命中面（生产库只读）：display_name 完整命中；wecom_userid 子串命中
+/// （取 display_name ≠ wecom_userid 的教师，隔离出 wecom_userid ILIKE 分支——
+/// bind 缺省回填的教师两字段同值，两分支不可分辨）；两命中条目均钉两键契约。
+#[tokio::test]
+async fn roster_hits_display_name_and_wecom_userid_with_exact_keys() {
+    let (server, _state, _admin, _member) = training_fixture_with_config_project("rhit").await;
+
+    // 动态取一名 display_name 非空且 ≠ wecom_userid 的既有教师（生产 51 行满足）
+    let (wid, dn): (String, String) = sqlx::query_as(
+        "SELECT wecom_userid, display_name FROM teacher_profiles \
+         WHERE COALESCE(display_name, '') <> '' AND display_name IS DISTINCT FROM wecom_userid \
+         ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&_state.db)
+    .await
+    .unwrap();
+
+    // 1) display_name 命中：q = 完整 display_name（add_query_param 中文安全编码）
+    let r = server
+        .get("/api/v1/training/roster")
+        .add_query_param("q", &dn)
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let arr = r.json::<serde_json::Value>().as_array().unwrap().clone();
+    assert!(!arr.is_empty(), "display_name '{dn}' must hit at least itself");
+    let hit = arr
+        .iter()
+        .find(|it| it["wecom_userid"] == wid)
+        .unwrap_or_else(|| panic!("teacher '{wid}' missing from display_name '{dn}' hits"));
+    assert_eq!(hit["display_name"], dn, "display_name must be echoed as stored");
+    assert_roster_keys_exact(hit);
+
+    // 2) wecom_userid 子串命中：display_name ≠ wid ⇒ 命中只能来自 wecom_userid 分支
+    // （取中段子串，纯 ASCII 段；若含 '_' 仅放宽 LIKE 匹配，contains 断言不受影响）
+    let sub = if wid.chars().count() > 12 {
+        wid.chars().skip(2).take(8).collect::<String>()
+    } else {
+        wid.clone()
+    };
+    let r = server
+        .get(&format!(
+            "/api/v1/training/roster?q={}",
+            urlencoding_lite(&sub)
+        ))
+        .add_header("x-training-admin-token", "tok123")
+        .await;
+    assert_eq!(r.status_code(), StatusCode::OK);
+    let arr = r.json::<serde_json::Value>().as_array().unwrap().clone();
+    let hit = arr
+        .iter()
+        .find(|it| it["wecom_userid"] == wid)
+        .unwrap_or_else(|| panic!("teacher '{wid}' missing from wecom_userid substring '{sub}' hits"));
+    assert_eq!(hit["display_name"], dn);
+    assert_roster_keys_exact(hit);
+    // 测试卫生：清理上一轮残留（cutoff 保护在飞测试，见 mod.rs）
+    crate::teardown_test_data(&_state).await;
+}
