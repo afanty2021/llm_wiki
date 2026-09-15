@@ -68,10 +68,13 @@ use llm_wiki_server::AppState;
 ///   末尾按精确 email **本轮内自清**教师账号（roster 可见面，cleanup_test_user_by_
 ///   email，不受 cutoff 约束）；③ 既有测试尾部 sweep 保底 fixture 用户（不进 roster）。
 ///
-/// 范围边界（评审 F6）：SWEEPS 只覆盖 LT 域六前缀族（t3_/t6_/t7_/t8_/t9_/t10_）；同二进制
-/// 内 M1/M2 域测试（permissions/reviews/research/chat_sessions 等，tag 形如
-/// `rev-insert`/`perm-mgmt`）不经本函数清理，每轮净积累——已知取舍，勿误以为
-/// 本函数是全二进制卫生机制；如需收口可为那些文件统一前缀并入 SWEEPS。
+/// 范围边界（评审 F6）：SWEEPS 覆盖 LT 域六前缀族（t3_/t6_/t7_/t8_/t9_/t10_）+
+/// t6gate_（2026-09-15 收编：registration_gate_test.rs 的注册残留——成功用例每轮
+/// +1 user 不自清、失败用例 403 无行，存量 12 行同轮收清；username/email 均按构造
+/// 以 t6gate_ 起始，起始锚定即可）；同二进制内 M1/M2 域测试（permissions/reviews/
+/// research/chat_sessions 等，tag 形如 `rev-insert`/`perm-mgmt`）不经本函数清理，
+/// 每轮净积累——已知取舍，勿误以为本函数是全二进制卫生机制；如需收口可为那些
+/// 文件统一前缀并入 SWEEPS。
 pub async fn teardown_test_data(state: &AppState) {
     use std::sync::OnceLock;
     static CUTOFF: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
@@ -87,15 +90,19 @@ pub async fn teardown_test_data(state: &AppState) {
         //    email 非锚定 '%t*\_%'：bind 截断分支 email = {全量 wid}@wecom.local，起始可能是
         //    任意业务串（无 t*_ 锚点），起始锚定漏删；测试 email 域仅 @t*.com/@wecom.local，
         //    真实用户不含 t3_/t6_ 等测试前缀串，非锚定无误删面（详见函数头注释）。
+        //    t6gate_（registration_gate_test 注册残留，2026-09-15 收编）按构造 username
+        //    与 email 均以 t6gate_ 起始，起始锚定即可，非锚定无必要。
         "DELETE FROM users WHERE created_at < $1 AND (\
              username LIKE 't3\\_%' OR username LIKE 't6\\_%' \
              OR username LIKE 't7\\_%' OR username LIKE 't9\\_%' \
              OR username LIKE 't8\\_%' OR username LIKE 't10\\_%' \
+             OR username LIKE 't6gate\\_%' \
              OR username LIKE 'wecom_t3\\_%' OR username LIKE 'wecom_t6\\_%' \
              OR username LIKE 'wecom_t7\\_%' OR username LIKE 'wecom_t9\\_%' \
              OR email LIKE '%t3\\_%' OR email LIKE '%t6\\_%' \
              OR email LIKE '%t7\\_%' OR email LIKE '%t9\\_%' \
-             OR email LIKE '%t8\\_%' OR email LIKE '%t10\\_%')",
+             OR email LIKE '%t8\\_%' OR email LIKE '%t10\\_%' \
+             OR email LIKE 't6gate\\_%')",
         // 3) media_assets：无 user FK，按 slug 清
         "DELETE FROM media_assets WHERE created_at < $1 AND (\
              slug LIKE 't3\\_%' OR slug LIKE 't6\\_%' OR slug LIKE 't7\\_%' OR slug LIKE 't9\\_%' \
