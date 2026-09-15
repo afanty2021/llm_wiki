@@ -1017,6 +1017,57 @@ test("roster_search: GET /api/v1/training/roster?q + admin header，两键名册
   assert.deepEqual(JSON.parse(toolText(result)), roster)
 })
 
+// ── 终审 I-1：检索端点 404 → 正常文本返回，防 3 次熔断整 server（read_file 前例）──
+
+test("video_search 端点 404 → 正常返回（isError=false）+「检索服务暂时不可用」文案，不抛错", async () => {
+  const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url.includes("/api/v1/training/media/search"),
+      then: () => ({ status: 404, body: { error: { code: "NOT_FOUND", message: "route not ready" } } }),
+    },
+  ], [])
+
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("teacher_tutor_video_search")!({ wecom_userid: "t1", q: "过去时" })
+
+  assert.notEqual((result as { isError?: boolean }).isError, true, "正常返回 → 熔断器不计数")
+  const text = toolText(result)
+  assert.ok(text.includes("检索服务暂时不可用"), text)
+  assert.ok(!text.includes("route not ready") && !text.includes("404"), "不带内部细节（§1 保密口径）")
+  assert.deepEqual(result.content.slice(1).map((block) => block.text), ['identity_source: "system"'])
+})
+
+test("roster_search 端点 404 → 正常返回（isError=false）+ 同款文案，不抛错", async () => {
+  const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url.includes("/api/v1/training/roster"),
+      then: () => ({ status: 404, body: { error: { code: "NOT_FOUND", message: "route not ready" } } }),
+    },
+  ], [])
+
+  const handlers = makeHandlers(fetchImpl)
+  const result = await handlers.get("teacher_tutor_roster_search")!({ wecom_userid: "t1", q: "钱" })
+
+  assert.notEqual((result as { isError?: boolean }).isError, true)
+  assert.ok(toolText(result).includes("检索服务暂时不可用"), toolText(result))
+  assert.deepEqual(result.content.slice(1).map((block) => block.text), ['identity_source: "system"'])
+})
+
+test("检索端点 500 → 仍抛错（服务故障照常计熔断，404 臂不吞服务故障）", async () => {
+  const fetchImpl = mockFetch([
+    {
+      when: (c) => c.url.includes("/api/v1/training/media/search"),
+      then: () => ({ status: 500, body: { error: { code: "INTERNAL", message: "boom" } } }),
+    },
+  ], [])
+
+  const handlers = makeHandlers(fetchImpl)
+  await assert.rejects(
+    handlers.get("teacher_tutor_video_search")!({ wecom_userid: "t1", q: "过去时" }),
+    /LLM Wiki API 500: boom/,
+  )
+})
+
 // ── 案 B pending 提示（计划 §2.5）：plan_list / profile_get 尾部附带计数提示 ──
 
 test("pending 提示：plan_list 有 active 计划 → 尾块 pending_hint（N active / M 未完成），主负载原样在前", async () => {

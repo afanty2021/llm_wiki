@@ -715,6 +715,17 @@ export function invalidAskPayloadText(): string {
   return `未记录该提问事件：payload 未含提问文本（需任一字符串值 ≥2 字符，如 {question: "…"}）。请补全 payload 后重试，或跳过记录继续当前任务。`
 }
 
+/**
+ * 两主管检索工具（video_search / roster_search）端点 404 的正常返回文案
+ * （isError=false）：终审 I-1——检索端点 404 是应用级"未就绪/未找到"不是服务
+ * 故障，抛 ApiNotFoundError 会进 Hermes 客户端熔断器，3 次即把整个服务器熔断
+ * ~60s（同 read_file 404 前例，见上）。转正常文本引导主管稍后再试；不带内部
+ * 细节（§1 保密口径）。其余错误形态（5xx/网络）保持抛错上抛照常计熔断。
+ */
+export function searchUnavailableText(): string {
+  return `检索服务暂时不可用，请稍后再试。`
+}
+
 function jsonResult(value: unknown): ToolOutput {
   return textResult(JSON.stringify(value, null, 2))
 }
@@ -739,7 +750,7 @@ function withIdentitySource(result: ToolOutput, ident: ResolvedIdentity): ToolOu
  * flatten + items:{total,viewed,watched,completed}），不加新端点；行形状意外 →
  * 不附（尽力而为，提示绝不倒打主负载）；0 个 active → 不附（零值噪音）。
  */
-export function pendingHintText(plans: unknown[]): string | undefined {
+function pendingHintText(plans: unknown[]): string | undefined {
   let active = 0
   let incomplete = 0
   for (const row of plans) {
@@ -1196,7 +1207,15 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const ident = await resolveIdentityForTool(deps, "teacher_tutor_video_search", meta, args)
     const q = stringArg(args.q, "q")
     const limit = optionalNumberArg(args.limit, "limit")
-    const items = await deps.client.mediaSearch(q, limit, deps.store.getAdminToken())
+    let items: unknown
+    try {
+      items = await deps.client.mediaSearch(q, limit, deps.store.getAdminToken())
+    } catch (err) {
+      // 终审 I-1：端点 404（应用级未就绪）转正常文本，防 3 次熔断整 server；
+      // 其余错误形态（5xx/网络）保持抛错照常计熔断。
+      if (!(err instanceof ApiNotFoundError)) throw err
+      return withIdentitySource(textResult(searchUnavailableText()), ident)
+    }
     return withIdentitySource(jsonResult(items), ident)
   })
 
@@ -1204,7 +1223,14 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
     const ident = await resolveIdentityForTool(deps, ROSTER_SEARCH_TOOL, meta, args)
     const q = stringArg(args.q, "q")
     const limit = optionalNumberArg(args.limit, "limit")
-    const items = await deps.client.rosterSearch(q, limit, deps.store.getAdminToken())
+    let items: unknown
+    try {
+      items = await deps.client.rosterSearch(q, limit, deps.store.getAdminToken())
+    } catch (err) {
+      // 终审 I-1：同 video_search——404 转正常文本防熔断；5xx/网络照常上抛。
+      if (!(err instanceof ApiNotFoundError)) throw err
+      return withIdentitySource(textResult(searchUnavailableText()), ident)
+    }
     return withIdentitySource(jsonResult(items), ident)
   })
 
