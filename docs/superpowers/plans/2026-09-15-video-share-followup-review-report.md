@@ -105,3 +105,5 @@
 验收证据：借行标题 len=12（评审主张复核实锚）、全库 2078 行 >26 字符、最长 104；变异跑 `cargo test --test integration media_search_orders` 删 CASE=FAILED / 恢复=ok；`cargo test --test integration training` 24/24（7.52s）。
 
 **Assessment 更新**：With fixes 的唯一 fix 已交付并实证，Issue 1（终审）至此真闭环。
+
+**闭环确认（同日）**：原评审员闭环复审 b4eac867..402a4b7a（报告=2026-09-15-video-share-closure-review-report.md）判定 Important 1 **真闭环、Ready=Yes**——只读仿真换新借行实跑反转上轮假绿机理（删 CASE 后 F_SLUG 跳 pos1 断言必红）、保险丝余量 4 倍+、变异实跑获 pid 9895 夹具残留物理佐证（跑红 panic 跳过自清的形态）、production 零残留、24/24 复跑确认。新增一条记档级 Minor（token 命中 ≥5 条 tier-0 行退化响亮失败，非假绿）与 Minor 2 维持原判，均录处置表。
