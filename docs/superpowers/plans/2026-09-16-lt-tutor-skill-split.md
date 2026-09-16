@@ -89,7 +89,7 @@
 | 模型不读引用文件凭骨架自由发挥 | 两步式行内①②；§8 听力行骨架带「先分块」事故线索；桩指路；skill_view 自带 usage_hint；**手动 fire 活体验证**（§6.6） |
 | 多步流中途被压缩（r2 新增） | 降级摘要无 file_path→自愈靠两跳指针链：核心 `[SKILL_PRUNED]` 重注入→重读核心→桩/快速路径指路重读引用；去重桩压缩后自动重置（§1.6） |
 | 并行会话踩踏 | 工作树已 clean；实施为单笔快速提交 |
-| 回滚 | SKILL.md 备份回写即回滚（纯文件操作）；孤儿 references/ 保留无害 |
+| 回滚 | git revert 仓源拆分提交 + 备份回写 SKILL.md（两处必须同步，见 §6.4）；孤儿 references/ 保留无害 |
 
 ## 8. 验收清单
 
@@ -105,3 +105,5 @@
 - ~~调用纪律豁免句字面只覆盖 `references/`~~ ✅ 已改为「读本技能文件（references/ 流程与根目录笔记等）除外」，SKILL.md+references 已双份 cp 部署。
 - ~~flow-weekly-report 头部映射行缺 §0/§1/§2 三锚~~ ✅ 已对齐为四锚（身份/输出硬规则/工具白名单/清单生成手法），已部署。
 - ~~插件 `_resolve_gateway_api_key` 单测~~ ✅ 源仓新增 test_gateway_api_key.py 九用例（env 优先/namespaced>legacy/dotenv 兜底/空白值视为未设/credential_pool 缺失降级/无钥+client 无 Authorization 头），stub 树补 credential_pool 假件；插件全量 79 passed。轮换陷阱已落插件 docstring（见 401 任务档案）。
+- ~~复查 N1：§7 风险表「回滚」行仍写「备份回写即回滚」，与 §6.4 两处同步口径自相矛盾~~ ✅ 本行已改为「git revert 仓源拆分提交 + 备份回写 SKILL.md（两处必须同步，见 §6.4）」。
+- ~~插件残余 Minor：非 ImportError 异常穿透 `_resolve_gateway_api_key`（与 `is_available` never-throw 注册契约张力）+「日志无钥」缺 caplog 级断言~~ ✅ 源仓 per-var try 隔离（helper 单变量失败 warning+exc_info 降级至次变量，ImportError 降级逐字保留，resolver 永不 raise）+ 四路径日志无钥断言；套件 9→11 用例，插件全量 81 passed, 2 skipped。
