@@ -14,7 +14,7 @@
 
 | 输入 | 来源 | 内容提取路径 | 素材嵌入 |
 |------|------|-------------|---------|
-| 视频 | 教师上传（WeCom video ≤10MB / file ≤20MB） | **v2 新增**：ffmpeg 抽帧拼 contact sheet + 音轨 whisper 转写 | 帧图可作图片页；音频可嵌封面；**视频本体不嵌**（体积红线，§十一） |
+| 视频 | 教师上传（视频消息压缩后常 ≤10MB 级 / **文件消息可达 20MB**，§三-4） | **v2 新增**：ffmpeg 抽帧拼 contact sheet + 音轨 whisper 转写 | 帧图可作图片页；音频可嵌封面；**视频本体不嵌**（体积红线，§十一） |
 | 音频 | 教师上传（voice ≤2MB / file ≤20MB） | **v2 新增**：ffmpeg 转 16k wav + whisper 转写 | 音频可嵌封面 |
 | 图片 | 教师上传 / 库内 | v1 既有：vision_analyze（整页密集图 region 分块先例） | 可作图片页 |
 | 文本 | 教师口述/粘贴 | v1 既有：直接构造 | — |
@@ -25,7 +25,7 @@
 1. **whisper.cpp 在位且快**：`/opt/homebrew/bin/whisper-cli`（Metal 加速，M 系芯片）；transcriber 模型 `tools/transcriber/models/ggml-large-v3-turbo.bin`（另有 silero VAD、~/.cache/whisper 下 base/medium/large-v3 备选）。库管线实测 **15.9x 实时**——15 分钟音频转写约 60s。`-l auto` 自动检测语言（参照会话教训已固化：**勿强制 --language**，英文旁白被强转中文的事故在案）。
 2. **幻觉过滤有成熟纯函数**：transcriber whisper.ts 的 `HALLUCINATION_TOKENS` + `stripHallucinationSegments`（字幕组署名/BGM 水印垃圾段零误杀过滤）+ 窗级退化守门——库内 552 页战役验证过，纯函数可直接拷贝复用。
 3. **入站媒体通道现成**：WeCom 适配器把教师发的视频/音频/文件缓存为本地文件（`doc_{uuid12}_{原名}` 落 `~/.hermes/cache/` 系目录），agent 消息上下文带注记行 `[video 'xxx.mp4' saved at: /path]`——v1 流程 6 的图片路径就是这么被 vision_analyze 消费的。**缓存 24h 过期清理**（cleanup max_age_hours=24）——中间产物不得跨会话引用。
-4. **入站体积上限**：video 消息 10MB / voice 2MB / file 20MB（media.py:29-33）——直接决定素材时长帽（WeCom 压缩视频 10MB ≈ 数分钟低清）。
+4. **入站/出站限额是两套（09-17 追正，勿混淆）**：media.py:29-33 的类型限额表（image 10MB / video 10MB / voice 2MB / file 20MB）镜像企微 API 临时素材经典限额，**只作用于出站**——超类型限额不拒发、自动降级为文件消息，绝对帽 20MB（协议硬顶）。**入站下载帽 = `_inbound_max_bytes` 默认 20MB**（adapter.py:138，`ABSOLUTE_MAX_BYTES`，config `inbound_max_bytes` 旋钮可调，zops patch 0003）；教师侧大视频不受 10MB 约束（企微手机端压缩视频消息常 ≤10MB 级，但**以文件消息发送可到几十 MB**，PC 端文件上限 GB 级）。v2 素材体积预算按 20MB 入站帽计（压缩视频约 3-10 分钟），flow 话术引导「大视频用文件形式发送」。
 5. **MCP 工具超时 300s**（mcp_tool_common.py:41 `_DEFAULT_TOOL_TIMEOUT = 300`）——同步单调用预算硬顶；时延预算表见 §五-5。
 6. **pptxgenjs 嵌入 API 在位**：`addImage(options)`（types:2637）、`addMedia(options)`（types:2643）。**已知坑**（参照会话实证）：音频经 addMedia 写成 `<a:videoFile>`，需 zip 后处理改 `<a:audioFile r:link>`（rels 指向 audio 类型）——每次 build 后都要重做，故必须固化进 renderPptx 内部而非外挂脚本。
 7. **PATH 风险**：网关 launchd 环境的 PATH 未必含 `/opt/homebrew/bin`（node 能解析说明部分在位，但不可依赖）——二进制备探测解析（候选路径表 + 环境变量覆盖），缺件透传友好文案（graphviz ENOENT 文案先例）。
