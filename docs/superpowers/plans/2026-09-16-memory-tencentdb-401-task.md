@@ -1,34 +1,33 @@
-# 小任务：lt-tutor 档案 memory-tencentdb 插件 401 噪音
+# 小任务【已修复】：lt-tutor 档案 memory-tencentdb 401——客户端钥未进服务进程
 
-**日期**：2026-09-16 · **状态**：待办（非急迫——纯日志噪音，无功能性损害）
-**来源**：SKILL 拆分实施后复审（.superpowers/reviews/2026-09-16-skill-split-impl/report.md Minor 6）顺带登记。
+**日期**：2026-09-16 · **状态**：✅ 已修复并 live 验证（本档案留作根因记录）
+**更正说明**：本档案初版曾误判为「插件配置缺口、倾向关插件」——错误。memory-tencentdb 是 2026-09-15 刚完成多用户改造的主体功能（多用户 stores、provider identity chain、api-key enforcement，源仓 /Users/berton/Github/AI-Infra/TencentDB-Agent-Memory），401 的真实根因是**客户端钥没有进到服务进程的取钥路径**，修复方向=补齐取钥链，插件必须保留。
 
-## 现象
+## 根因（三层叠加）
 
-lt-tutor 档案每次会话结束（含 cron fire）时，后台记忆插件向 Hermes Gateway 打 /capture、/session/end，双双 401：
+1. **Gateway 侧**：09-15 多用户改造落地了 api-key enforcement（服务端要求 Bearer，缺失即 401 `missing Bearer token`）——这是新行为，之前无鉴权所以从未暴露。
+2. **插件侧缺陷（主因）**：`_resolve_gateway_api_key()` 只读 `os.environ`，**无视 Hermes 凭证惯例的 `~/.hermes/.env`**（Hermes 其他凭证全走 `get_env_prefer_dotenv` 会查 .env）。而 launchd 网关与 cron CLI 会话进程都不经 shell，`.zshrc` 的 export 进不去。
+3. **钥副本缺口**：钥当时只落在 `~/.hermes/.env`（全局）与 `~/.zshrc`——shell 里手工测试通过（.zshrc 生效）掩盖了缺口；lt-tutor 档案 `.env`（profile 会话的取钥文件）里没有。
 
-```
-WARNING plugins.memory.memory_tencentdb.client: memory-tencentdb Gateway /capture returned 401: {"error":"Unauthorized: missing Bearer token"}
-WARNING plugins.memory.memory_tencentdb: memory-tencentdb sync failed: HTTP Error 401: Unauthorized
-WARNING plugins.memory.memory_tencentdb.client: memory-tencentdb Gateway /session/end returned 401: {"error":"Unauthorized: missing Bearer token"}
-```
+典型的「客户端钥多副本轮换要同步」陷阱的变体：这次不是漏同步某一份，而是**消费代码不读 .env**，同步了也白搭。
 
-随后紧跟 "Gateway is reachable again; restoring provider state" + "recovery succeeded"（可达性探测通过，仅鉴权失败）。
+## 修复（两件，均已落地）
 
-## 背景
+1. **插件补 dotenv 回落**（源仓 TencentDB-Agent-Memory commit `6bb69f0`，main 分支）：os.environ 未命中时回落 `agent.credential_pool.get_env_prefer_dotenv`（查 .env + 1P scope，不查 environ——与上面循环互补不重复）。Hermes-agent 的 `plugins/memory/memory_tencentdb` 是指向源仓的**符号链接**，改源即改 live 代码。
+2. **钥同步进 lt-tutor 档案 `.env`**：`TDAI_GATEWAY_API_KEY` 从全局 `.env` 程序化复制（2026-09-16）。此后三份钥落点（全局 .env / .zshrc / lt-tutor .env）轮换时需同步。
+3. 网关 `launchctl kickstart -k` 重载新代码（10:02:56，新 PID 91853）。
 
-- agent.log 同回合可见：`Memory provider(s) ['memory_tencentdb'] configured but the 'memory' toolset is gated off for this session (platform_toolsets / agent.disabled_toolsets) — provider tools and system-prompt block are both withheld.`——lt-tutor 的 platform_toolsets（wecom/cron）本就未开 memory 工具面，但插件后台 sync/capture 链路不受该门控，仍在发起调用。
-- 错误语义是「missing Bearer token」：插件配置缺网关凭证，非网关不可达。
+## 验证（三轮 fire 时间线，同一 ggtms 任务）
 
-## 影响面
+| 轮次 | 状态 | 证据 |
+|---|---|---|
+| 08:47 | 401 ×4（/capture、/session/end） | agent.log；Gateway 无该会话 store 条目 |
+| 10:03（补丁生效、档案 .env 未补） | 仍 401（/recall、/capture、/session/end）——暴露第二层缺口（profile .env 缺钥） | agent.log |
+| 10:06（档案 .env 补齐后） | **全程零 401**；Gateway `gateway.out.log` 持久化状态出现该会话 store 条目（`cron_ca270c3a5a58_20260916_100632`）——服务端接受建档，端到端通 | agent.log + gateway.out.log |
 
-教师/周报会话日志持续出现 401 WARNING 噪音（每次会话 2-4 条）；记忆功能在该档案本就被工具面门控关闭，**无数据损失**。危害=日志可读性与告警可信度（真 401 故障会被淹没）。
+`Ran now: failed` 与 delivery_outcome=failed 均为手动 fire 不投递的常态标记，非故障。
 
-## 修复方向（二选一，实施时定）
+## 遗留
 
-1. **补凭证**：若 lt-tutor 需要后台记忆采集——给插件配置注入 Gateway Bearer token（钥源落点遵循密钥纪律：settings.json/.env，不进仓不回显）。
-2. **关插件**：若该档案不需要（当前工具面已关，倾向此项）——在 lt-tutor 档案配置禁用 memory_tencentdb 插件，消除调用与噪音。
-
-## 验收
-
-agent.log 连续两日（含一次周报 cron fire）零 `memory_tencentdb` 401 WARNING；若选补凭证，另验证 /capture 返回 2xx 且 Gateway 侧能收到 capture 数据。
+- 钥三副本轮换同步义务（全局 .env / .zshrc / lt-tutor .env）——下次轮换时执行。
+- 观察点：周日 19:00-20:00 周报窗实跑后，agent.log 应保持零 401；Gateway 侧应新增各教师会话 store 条目。
