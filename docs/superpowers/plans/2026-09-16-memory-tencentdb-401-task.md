@@ -12,7 +12,7 @@
 | 服务端 | sidecar（node 9780，09-15 20:35 起）带 `TDAI_GATEWAY_API_KEY`（start-gateway.sh 从 .zshrc/.env 取）→ 对所有请求强制 Bearer | `ps -wwE` count=1；server.ts:512 checkAuth（opt-in，配了就全量强制） |
 | 守护进程路径 | daemon（home=全局）启动时把全局 .env 灌进 environ；全局 .env 09-15 07:09 已写入该钥 → **默认档案会话一直有钥，从未 401** | 默认档案 agent.log 全史零 401；05:00 会话 capture 被 sidecar 接受落库 2 条消息 |
 | 档案会话路径 | `cron run --profile lt-tutor` 的 CLI 进程读**档案 .env**——里面没有该钥 → 插件（当时只读 os.environ）取空 → 不带 Bearer → 401 | 08:47 fire 四连 401；我的工具 shell 实测 UNSET |
-| 时间线 | 「昨天好好的」=昨天测通的是默认档案/shell 路径（钥都在）；「今天坏」=今天第一次出现**lt-tutor 档案带记忆的会话**（周报任务首跑要等周日 09-20，手动 fire 是该档案史上第一次），而档案 .env 从未配过钥 | lt-tutor log 401 全史仅 8 条、全部今日；gateway.out.log 无 08:47 会话 store 建档、有 10:06 会话建档 |
+| 时间线 | 「昨天好好的」=昨天两条路径钥都在：ggtms 老师昨晚 20:50 与 lt-tutor 聊天经**守护进程**（全局 .env 域）成功建档 `users/ggtms`（persona.md 都已生成）；shell 手测走 .zshrc。「今天坏」=手动 `cron run --profile lt-tutor` 走 **CLI 进程（档案 .env 域）**，该路径此前从未被走过、档案 .env 从未配钥 → 首跑即 401 | users/ggtms 建档 09-15 20:50-20:54；gateway.out.log 无 08:47 会话 store 建档、有 10:06 会话建档；档案 .env 在本次补钥前 mtime 停在 08-22 |
 
 **不是「昨天到今天之间坏了什么」——是 lt-tutor 档案路径此前从未被走过， provisioning 缺口在首次实跑时暴露。** 用户的判断成立：启动方式（全局 home vs 档案 home）决定了取哪个 .env。
 
