@@ -600,12 +600,12 @@ test("集成·SUPERVISION_TOOLS 白名单钉桩（决策③：常量在分发层
 // （周报任务 ca270c3a5a58 2026-09-05 实锺）。新契约：可选声明（系统/cron 通道
 // 显式化）；用户会话防冒名不变——identity 锁对不匹配参数照常硬拒。
 
-test("schema：15 个 src-server 工具——既有 13 个可选声明 wecom_userid；两个 T2 检索工具不声明（brief §4：无身份参数，supervisor 路径天然不触发）", () => {
+test("schema：16 个 src-server 工具——14 个可选声明 wecom_userid；两个 T2 检索工具不声明（brief §4：无身份参数，supervisor 路径天然不触发）", () => {
   const tools = [...srcServerToolDefinitions(), ...trainingToolDefinitions()]
-  assert.equal(tools.length, 15)
+  assert.equal(tools.length, 16)
   const newSearchTools = ["teacher_tutor_video_search", "teacher_tutor_roster_search"]
   const declaringTools = tools.filter((tool) => !newSearchTools.includes(tool.name))
-  assert.equal(declaringTools.length, 13)
+  assert.equal(declaringTools.length, 14)
   for (const tool of declaringTools) {
     const props = (tool.inputSchema.properties ?? {}) as Record<string, unknown>
     assert.ok(

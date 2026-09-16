@@ -90,6 +90,7 @@ function makeHandlers(
     synthesize?: Parameters<typeof createSrcServerHandlers>[0]["synthesize"]
     renderMindmap?: Parameters<typeof createSrcServerHandlers>[0]["renderMindmap"]
     renderWorksheet?: Parameters<typeof createSrcServerHandlers>[0]["renderWorksheet"]
+    renderPptx?: Parameters<typeof createSrcServerHandlers>[0]["renderPptx"]
   } = {},
 ) {
   const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
@@ -101,6 +102,7 @@ function makeHandlers(
     synthesize: opts.synthesize,
     renderMindmap: opts.renderMindmap,
     renderWorksheet: opts.renderWorksheet,
+    renderPptx: opts.renderPptx,
   })
 }
 
@@ -648,7 +650,7 @@ test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {
 
 // ── 形态注册过滤 ──
 
-test("src-server 形态：只注册 15 工具（13 teacher_tutor_* + 2 llm_wiki），9 个桌面工具不在 ListTools", () => {
+test("src-server 形态：只注册 16 工具（14 teacher_tutor_* + 2 llm_wiki），9 个桌面工具不在 ListTools", () => {
   const names = buildTools("src-server").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
     "llm_wiki_read_file",
@@ -657,6 +659,7 @@ test("src-server 形态：只注册 15 工具（13 teacher_tutor_* + 2 llm_wiki�
     "teacher_tutor_listening_audio",
     "teacher_tutor_mindmap",
     "teacher_tutor_plan_create",
+    "teacher_tutor_pptx",
     "teacher_tutor_roster_search",
     "teacher_tutor_video_search",
     "teacher_tutor_worksheet",
@@ -966,6 +969,93 @@ test("worksheet: 渲染失败 → 环境性故障引导文字版（I-7b 不刷�
   assert.ok(text.includes("生成失败"))
   assert.ok(text.includes("勿反复重试"))
   assert.ok(text.includes("文字版学案"))
+  assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
+})
+
+// ── teacher_tutor_pptx（2026-09-16 课件工具，方案 plans/2026-09-16-ltutor-pptx-tool.md）──
+
+test("pptx: 渲染成功 → MEDIA 行 + 页数含封面 + identity_source（无引擎字样）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderPptx: async (doc) => {
+      assert.equal(doc.title, "一般过去时", "标题剥「课件」后入渲染")
+      assert.equal(doc.slides.length, 3)
+      assert.equal(doc.theme, "warm", "theme 缺省归一为 warm")
+      return { ok: true, path: "/cache/pptx-abc123.pptx", slides: 3 }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_pptx")!({
+    wecom_userid: "t1",
+    title: "一般过去时课件",
+    slides: [
+      { heading: "When", bullets: ["finished actions"] },
+      { heading: "Forms", bullets: ["add -ed"] },
+      { heading: "Practice", bullets: ["fill in blanks"] },
+    ],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("\nMEDIA:/cache/pptx-abc123.pptx\n"), "MEDIA 行必须独立成行")
+  assert.ok(text.includes("4 页，含封面"), "页数 = slides+1（封面自动生成）")
+  assert.ok(text.includes("原样保留"))
+  assert.ok(!text.includes("引擎"), "引擎名不进教师可见摘要")
+  assert.ok(result.content.some((c) => c.text.includes('identity_source: "system"')))
+})
+
+test("pptx: slides 少于 3 → 正常文本引导、不调渲染（不进熔断器）", async () => {
+  let called = false
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderPptx: async () => {
+      called = true
+      return { ok: true, path: "/x.pptx", slides: 1 }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_pptx")!({
+    wecom_userid: "t1",
+    title: "t",
+    slides: [{ heading: "h", bullets: ["b"] }],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("未生成课件"))
+  assert.ok(text.includes("少于下限 3"))
+  assert.equal(called, false)
+})
+
+test("pptx: 形状非法 → ToolArgumentError（缺 bullets/坏类型）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") })
+  await assert.rejects(
+    handlers.get("teacher_tutor_pptx")!({
+      wecom_userid: "t1",
+      title: "t",
+      slides: [{ heading: "h" }],
+    }),
+    /bullets must be an array/,
+  )
+  await assert.rejects(
+    handlers.get("teacher_tutor_pptx")!({
+      wecom_userid: "t1",
+      title: "课件",
+      slides: [{ heading: "h", bullets: ["b"] }],
+    }),
+    /不能只含「课件\/PPT」/,
+  )
+})
+
+test("pptx: 渲染失败 → 环境性故障引导文字版大纲（勿刷屏）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    renderPptx: async () => ({ ok: false, error: "磁盘空间不足" }),
+  })
+  const result = await handlers.get("teacher_tutor_pptx")!({
+    wecom_userid: "t1",
+    title: "t",
+    slides: [
+      { heading: "a", bullets: ["x"] },
+      { heading: "b", bullets: ["x"] },
+      { heading: "c", bullets: ["x"] },
+    ],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("生成失败"))
+  assert.ok(text.includes("勿反复重试"))
+  assert.ok(text.includes("文字版课件大纲"))
   assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
 })
 

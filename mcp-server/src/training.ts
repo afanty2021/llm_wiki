@@ -5,9 +5,10 @@
  *   {wecom_userid: {refreshToken, userId}}；内存 access 缓存提前 60s 过期；
  *   miss → POST /api/v1/auth/refresh（single-flight：并发同 userid 只发一次）；
  *   refresh 失败 → POST /api/v1/training/bind（TRAINING__ADMIN_TOKEN）重建/轮换。
- * - 15 个 src-server 工具：13 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
+ * - 16 个 src-server 工具：14 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
  *   为本地 TTS 合成、teacher_tutor_mindmap 为本地 graphviz/markmap 渲染、
- *   teacher_tutor_worksheet 为本地 Chrome 截图渲染，均不经 src-server API；
+ *   teacher_tutor_worksheet 为本地 Chrome 截图渲染、teacher_tutor_pptx 为本地
+ *   pptxgenjs 渲染，均不经 src-server API；
  *   teacher_tutor_video_search / teacher_tutor_roster_search 为 T2 主管检索工具）
  *   + 重写的 llm_wiki_search /
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
@@ -61,6 +62,14 @@ import {
   type WorksheetDoc,
   type WorksheetRenderResult,
 } from "./worksheet.js"
+import {
+  normalizePptx,
+  pptxCapsError,
+  PptxFormatError,
+  renderPptx,
+  type PptxDoc,
+  type PptxRenderResult,
+} from "./pptx.js"
 
 // ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
 // 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
@@ -254,6 +263,8 @@ export interface SrcServerHandlerDeps {
   renderMindmap?: (outline: MindmapOutline) => Promise<MindmapRenderResult>
   /** 学案海报渲染（本地 Chrome 截图管线；可注入 mock 供测试）。 */
   renderWorksheet?: (doc: WorksheetDoc) => Promise<WorksheetRenderResult>
+  /** 课件 PPT 渲染（本地 pptxgenjs 管线；可注入 mock 供测试）。 */
+  renderPptx?: (doc: PptxDoc, outDir?: string) => Promise<PptxRenderResult>
 }
 
 // wecom_userid 在 schema 可选声明、不进 required（2026-09-05 修订 08-24 加固）：
@@ -623,6 +634,39 @@ export function trainingToolDefinitions(): ToolDefinition[] {
           },
         },
         required: ["title", "sections"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "teacher_tutor_pptx",
+      description: "把知识点做成可编辑的课件 PPT 文件（16:9，暖色版式，中文完好；封面自动生成，总页数=内容页+1；每页可带讲稿备注进演讲者备注栏）。返回含 MEDIA: 行——最终回复必须原样回显该行，文件才会送达教师（.pptx 文件消息，点击下载后可用 Office/WPS 打开编辑）。内容必须基于 search/read_file 取到的真实材料构造，勿编造材料外内容。老师发来视频/音频文件要求转课件、或要求 PPT 内嵌音频时：当前暂不支持，礼貌说明并引导改出文字版课件大纲。用于教师要求做课件/出 PPT/幻灯片的场景。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+          title: { type: "string", description: "课件标题（1-40 字符）：直接用主题名（如「一般过去时 The Past Simple Tense」），勿带「课件/PPT」等文档类型字样" },
+          subtitle: { type: "string", description: "副标题（≤60 字符，可选，如适用学段/单元）" },
+          theme: { type: "string", enum: ["warm"], description: "视觉主题，v1 仅 warm（缺省即 warm）" },
+          slides: {
+            type: "array",
+            description: "内容页 3-10 页（封面页自动生成不算配额；典型 5-8 页即可，每页要点 2-5 条为宜）",
+            items: {
+              type: "object",
+              properties: {
+                heading: { type: "string", description: "页标题（1-30 字符）" },
+                bullets: {
+                  type: "array",
+                  description: "要点 1-6 条",
+                  items: { type: "string", description: "要点文本（1-80 字符）" },
+                },
+                note: { type: "string", description: "讲稿备注（≤120 字符，可选，进演讲者备注栏不打上幻灯片）" },
+              },
+              required: ["heading", "bullets"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["title", "slides"],
         additionalProperties: false,
       },
     },
@@ -1241,6 +1285,41 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       `学案海报已生成（${result.sections} 个板块 / ${result.blocks} 个内容块）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，图片才能送达。`,
+    ].join("\n")), ident)
+  })
+
+  handlers.set("teacher_tutor_pptx", async (args, meta) => {
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_pptx", meta, args)
+    let doc: PptxDoc
+    try {
+      doc = normalizePptx({
+        title: args.title,
+        subtitle: args.subtitle,
+        theme: args.theme,
+        slides: args.slides,
+      })
+    } catch (err) {
+      // 形状错误对齐 worksheet 先例走 ToolArgumentError（schema 已约束、罕见）。
+      if (err instanceof PptxFormatError) throw new ToolArgumentError(err.message)
+      throw err
+    }
+    // 量级超限走正常文本引导（应用级输入问题不进熔断器，同 worksheet 先例）。
+    const capError = pptxCapsError(doc)
+    if (capError) {
+      return withIdentitySource(textResult(
+        `未生成课件：${capError}。请精简内容或与教师确认后拆成两份。`), ident)
+    }
+    const render = deps.renderPptx ?? renderPptx
+    const result = await render(doc)
+    if (!result.ok || !result.path) {
+      return withIdentitySource(textResult(
+        `课件生成失败：${result.error ?? "未知错误"}。环境性故障请勿反复重试——可先给教师文字版课件大纲（逐页标题+要点），文件稍后再生成。`), ident)
+    }
+    return withIdentitySource(textResult([
+      // 引擎名不进教师可见摘要（worksheet M-3'/I-6 先例）；页数含自动生成的封面。
+      `课件已生成（${result.slides! + 1} 页，含封面）。`,
+      `MEDIA:${result.path}`,
+      `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，文件才会送达。`,
     ].join("\n")), ident)
   })
 
