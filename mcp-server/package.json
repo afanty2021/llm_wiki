@@ -26,10 +26,12 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "d3": "^7.9.0",
     "markmap-lib": "^0.18.12",
-    "markmap-view": "^0.18.12"
+    "markmap-view": "^0.18.12",
+    "pptxgenjs": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "jszip": "^3.10.2",
     "typescript": "^5.7.3"
   }
 }
