@@ -102,7 +102,13 @@ export function normalizePptx(raw: {
   // 标题剥「课件/PPT」字样（worksheet 剥「学案」先例：标题=主题名本身；指引在
   // schema/flow，此处兜底保证规则恒成立）。剥空则拒。
   let title = scrubControlChars(requireText(raw.title, "title"))
-  title = title.replace(/课件|[Pp][Pp][Tt]/g, "").trim()
+  // 剥文档类型字样（评审 M-5 边角）：课件 + 半/全角 ppt/pptx（含前后悬挂点空）。
+  title = title
+    .replace(/课件/g, "")
+    .replace(/[.\s]*[PpＰｐ][PpＰｐ][TtＴｔ][XxＸｘ]?[.\s]*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[.。．]+$/, "")
+    .trim()
   if (title === "") {
     throw new PptxFormatError('title 不能只含「课件/PPT」等文档类型字样——请直接用主题名，如「一般过去时 The Past Simple Tense」')
   }
@@ -243,9 +249,9 @@ function buildPresentation(doc: PptxDoc): PptxInstance {
       x: 0.7, y: 0.45, w: 11.9, h: 0.9,
       fontFace: FONT, fontSize: 30, bold: true, color: INK_TITLE,
     })
-    s.addText(ACCENT_GOLD, {
-      shape: "rect", x: 0.7, y: 1.4, w: 1.6, h: 0.06, fill: { color: ACCENT_GOLD },
-    })
+    // 金色装饰条（评审 I-1 根修）：纯形状无文本——addText 首参是文本内容，
+    // 旧写法把色值常量 "C9973B" 渲染成每页可见字串。
+    s.addShape("rect", { x: 0.7, y: 1.4, w: 1.6, h: 0.06, fill: { color: ACCENT_GOLD } })
     s.addText(
       slide.bullets.map(text => ({
         text,
@@ -274,9 +280,10 @@ export async function renderPptx(
     return { ok: true, path: finalPath, slides: doc.slides.length }
   } catch (err) {
     // I-7b：自带最小透传（勿用 mindmap friendlyRenderError——graphviz 专属文案误导）。
-    // M-3：绝对路径不进模型视野。
+    // M-3：绝对路径不进模型视野（含 macOS 真实 tmpdir /var/folders 与 /private 前缀——
+    // mkdtempSync(tmpdir()) 的错误消息走解析后路径，只有 /tmp 前缀剥不干净）。
     const raw = String(err)
-    const stripped = raw.replace(/\/(?:Users|tmp|home)\/[^\s'"]+/g, "<路径>")
+    const stripped = raw.replace(/\/(?:Users|tmp|home|var\/folders|private)\/[^\s'"]+/g, "<路径>")
     return { ok: false, error: stripped === raw ? raw : stripped }
   }
 }

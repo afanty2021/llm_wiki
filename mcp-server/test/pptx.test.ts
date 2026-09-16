@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { test } from "node:test"
@@ -39,6 +39,15 @@ test("normalizePptx: 标题剥「课件/PPT」字样（worksheet 剥「学案」
   assert.equal(doc.title, "一般过去时")
   const doc2 = normalizePptx({ title: "Past Simple PPT", slides: [{ heading: "h", bullets: ["b"] }] })
   assert.equal(doc2.title, "Past Simple")
+})
+
+test("normalizePptx: 剥除边角——全角 ＰＰＴ 与尾点（评审 M-5）", () => {
+  const doc = normalizePptx({ title: "一般过去时ＰＰＴ", slides: [{ heading: "h", bullets: ["b"] }] })
+  assert.equal(doc.title, "一般过去时", "全角 ＰＰＴ 也要剥")
+  const doc2 = normalizePptx({ title: "一般过去时.ppt", slides: [{ heading: "h", bullets: ["b"] }] })
+  assert.equal(doc2.title, "一般过去时", "剥后悬挂尾点清掉")
+  const doc3 = normalizePptx({ title: "Past Simple. pptx.", slides: [{ heading: "h", bullets: ["b"] }] })
+  assert.equal(doc3.title, "Past Simple", "大小写+多段尾点")
 })
 
 test("normalizePptx: 标题只剩「课件/PPT」→ 拒", () => {
@@ -192,7 +201,23 @@ test("文件名幂等: 同内容两次渲染同 sha1 名 + 键序漂移不影响
 
 // ── 真渲染 + zip 解包断言（jszip 显式 devDependency，评审 I-5）──
 
-test("真渲染: slide 数=slides+1（封面）/ YaHei 在 slide XML / CJK 完好 / note 在 notesSlide / <script> 被转义", async () => {
+/** 收集一张 slide XML 的全部 <a:t> 文本（严格清单断言用——只查存在性查不出多出来的东西，评审 I-1）。
+ * XML 实体反解后比对（&amp; 最后还原，防双重转义）。 */
+type PptxZip = Awaited<ReturnType<typeof JSZip.loadAsync>>
+function unescapeXml(text: string): string {
+  return text
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+}
+async function slideTexts(zip: PptxZip, n: number): Promise<string[]> {
+  const xml = await zip.file(`ppt/slides/slide${n}.xml`)!.async("string")
+  return [...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map(m => unescapeXml(m[1]!))
+}
+
+test("真渲染: slide 数=slides+1（封面）/ CJK 完好 / note 在 notesSlide / <script> 被转义 / 严格 <a:t> 清单无多余文本", async () => {
   const dir = mkdtempSync(joinTmp())
   try {
     const result = await renderPptx(
@@ -213,9 +238,12 @@ test("真渲染: slide 数=slides+1（封面）/ YaHei 在 slide XML / CJK 完�
     assert.equal(slideNames.length, 5, "封面自动生成，总页数 = slides+1")
     const slide1 = await zip.file("ppt/slides/slide1.xml")!.async("string")
     assert.ok(slide1.includes("Microsoft YaHei"), "封面字体钉 YaHei")
-    // CJK 文本完好进 <a:t>
-    const slide2 = await zip.file("ppt/slides/slide2.xml")!.async("string")
-    assert.ok(slide2.includes("The Past Simple Tense") || slide2.includes("When do we use it?"))
+    // CJK 完好（评审 M-1：断言真 CJK 子串，非英文串）
+    const slide2Texts = await slideTexts(zip, 2)
+    assert.ok(
+      slide2Texts.some(t => t.includes("过去已完成的动作")),
+      `CJK 要点须原样进 <a:t>，实得 ${JSON.stringify(slide2Texts)}`,
+    )
     // 注入字面进 <a:t> 后必须是转义形态（pptxgenjs encodeXmlEntities）
     const slide5 = await zip.file("ppt/slides/slide5.xml")!.async("string")
     assert.ok(!slide5.includes("<script>alert"), "script 标签不可原样存在")
@@ -223,6 +251,43 @@ test("真渲染: slide 数=slides+1（封面）/ YaHei 在 slide XML / CJK 完�
     // note 在 notesSlide（pptxgenjs addNotes）
     const notes = Object.keys(zip.files).filter(n => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(n))
     assert.ok(notes.length >= 2, "有备注的页生成 notesSlide")
+    // 严格清单（评审 I-1 根修配套）：每张内容页的 <a:t> 集合恰 = heading + bullets，
+    // 无任何实现常量（旧缺陷形态：装饰条把色值 "C9973B" 渲染成可见文本）。
+    const expected: string[][] = [
+      ...PPTX_FIXTURE.slides.map(s => [s.heading, ...s.bullets]),
+      ["Injection probe", "<script>alert(1)</script> & 'quote'"],
+    ]
+    for (let i = 0; i < expected.length; i++) {
+      const texts = await slideTexts(zip, i + 2)
+      assert.deepEqual(
+        [...texts].sort(),
+        [...expected[i]!].sort(),
+        `slide${i + 2} 文本清单必须恰等于 heading+bullets（无多余文本）`,
+      )
+    }
+    const coverTexts = await slideTexts(zip, 1)
+    assert.deepEqual(
+      [...coverTexts].sort(),
+      [...[PPTX_FIXTURE.title, PPTX_FIXTURE.subtitle!, "— LT 师训 · 课堂课件 —"]].sort(),
+      "封面文本清单恰 = title+subtitle+页脚行",
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("真渲染: 引擎自身错误路径——outDir 指向普通文件 → ok:false、绝对路径剥除（评审 M-2）", async () => {
+  const tmp = joinTmp() + "catch-probe-"
+  const dir = mkdtempSync(tmp)
+  try {
+    const filePath = path.join(dir, "a-file") // 普通文件占位，mkdirSync 会 ENOTDIR/EEXIST
+    writeFileSync(filePath, "x")
+    const result = await renderPptx(PPTX_FIXTURE, filePath)
+    assert.equal(result.ok, false)
+    assert.equal(result.path, undefined)
+    assert.ok(!result.error!.includes("/private/tmp") && !result.error!.includes("/var/folders"),
+      "绝对路径不进模型视野：" + result.error!)
+    assert.ok(result.error!.length > 0, "错误文案非空")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
