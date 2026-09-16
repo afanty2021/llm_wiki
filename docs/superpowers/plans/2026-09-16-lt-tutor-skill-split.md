@@ -106,4 +106,5 @@
 - ~~flow-weekly-report 头部映射行缺 §0/§1/§2 三锚~~ ✅ 已对齐为四锚（身份/输出硬规则/工具白名单/清单生成手法），已部署。
 - ~~插件 `_resolve_gateway_api_key` 单测~~ ✅ 源仓新增 test_gateway_api_key.py 九用例（env 优先/namespaced>legacy/dotenv 兜底/空白值视为未设/credential_pool 缺失降级/无钥+client 无 Authorization 头），stub 树补 credential_pool 假件；插件全量 79 passed。轮换陷阱已落插件 docstring（见 401 任务档案）。
 - ~~复查 N1：§7 风险表「回滚」行仍写「备份回写即回滚」，与 §6.4 两处同步口径自相矛盾~~ ✅ 本行已改为「git revert 仓源拆分提交 + 备份回写 SKILL.md（两处必须同步，见 §6.4）」。
-- ~~插件残余 Minor：非 ImportError 异常穿透 `_resolve_gateway_api_key`（与 `is_available` never-throw 注册契约张力）+「日志无钥」缺 caplog 级断言~~ ✅ 源仓 per-var try 隔离（helper 单变量失败 warning+exc_info 降级至次变量，ImportError 降级逐字保留，resolver 永不 raise）+ 四路径日志无钥断言；套件 9→11 用例，插件全量 81 passed, 2 skipped。
+- ~~插件残余 Minor：非 ImportError 异常穿透 `_resolve_gateway_api_key`（与 `is_available` never-throw 注册契约张力）+「日志无钥」缺 caplog 级断言~~ ✅ 源仓 per-var try 隔离（helper 单变量失败 warning 降级至次变量，ImportError 降级逐字保留，resolver 永不 raise）+ 四路径日志无钥断言；套件 9→11 用例，插件全量 81 passed, 2 skipped。
+- ~~第二轮复查 Important：「日志无钥」断言的 fake 消息是良性的，而 warning 带 `exc_info=True` 会把含钥异常消息写进日志——契约弱于口径~~ ✅ 源仓 `d095a18` 红绿收口：新用例 `test_helper_exception_message_not_logged` 让 fake 异常消息嵌钥（修复前实跑红——traceback 带钥材料进 caplog）；实现改为只记异常类名+变量名（归因足够、钥材料结构性排除出日志通道）；import 从 ImportError 放宽为 Exception（类名级 debug），「resolver 永不 raise」契约无保留闭合；套件 11→12 用例，插件全量 82 passed, 2 skipped。
