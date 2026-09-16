@@ -19,7 +19,7 @@
 ## 修复与各改动必要性复盘
 
 1. **钥同步进 lt-tutor 档案 `.env`（09-16，必要且充分）**——多用户设计下各档案凭据本就应各自携带（`build_profile_secret_scope`：全局变量不进档案 scope），这是正路，与 zai 钥多副本惯例同构。
-2. **插件 dotenv 回落**（TencentDB-Agent-Memory `6bb69f0`，防御纵深非本次必需）：Hermes 启动已把 .env 灌 environ，本 patch 对「进程启动后才改 .env」的长驻进程（免重启拾取）有真实价值，且与 Hermes 凭证惯例一致；经符号链接提交于源仓。
+2. **插件 dotenv 回落**（TencentDB-Agent-Memory `6bb69f0`，防御纵深非本次必需）：对「启动时缺钥」的长驻进程免重启拾取有真实价值，且与 Hermes 凭证惯例一致；经符号链接提交于源仓。**钥轮换不适用此免重启**：daemon 的 os.environ 在启动时已钉住旧钥，dotenv 仅在完全缺钥时才被咨询——轮换 = 三副本 .env 同步 **+ 守护进程重启**，否则以迷惑性 401 复现本事故（收口评审轮换陷阱，已落插件 docstring）。
 3. **网关 kickstart 重载**：对 CLI fire 路径非必需（每次 fire 都是新鲜进程），良性。
 
 ## 验证（三轮 fire 时间线）

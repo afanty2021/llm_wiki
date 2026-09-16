@@ -76,7 +76,7 @@
 1. **实施前基线检查**：git status clean + live=仓源 md5 一致 + 重读当前文件。
 2. **双备份**：live `SKILL.md.bak-<ts>`（既有惯例）；references 为新增目录。
 3. **部署前干验证（不动 live）**：python harness 直调 editable Hermes `_skill_linked_files` 对**仓源技能目录**：linked_files **恰为 5 文件**（不多不少，评审 Minor 2）、逐文件可读、核心含五桩不含外移正文。
-4. **部署 = 双份 cp（本次扩展）**：live references/ 为新建（无残留合并问题）；`cp SKILL.md` + `cp references/*.md` 至 live。回滚=备份回写 SKILL.md；孤儿 references/ 保留无害（核心不再指向，linked_files 仍广告但不被引用——runbook 明示此态）。
+4. **部署 = 双份 cp（本次扩展）**：live references/ 为新建（无残留合并问题）；`cp SKILL.md` + `cp references/*.md` 至 live。回滚 = **git revert 仓源拆分提交 + 备份回写 SKILL.md（两处必须同步）**——只回写 live 的话，任何后续会话按约束 5 做例行双份 cp 都会把拆分版静默打回（收口评审 I1）；孤儿 references/ 保留无害（核心不再指向，linked_files 仍广告但不被引用——runbook 明示此态）。
 5. **部署后核验**：live harness 复跑（恰 5 文件）；core 字节数 ≤20KB；snapshot manifest 的 SKILL.md 指纹更新（manifest 不含 references——§1.7，非验收项）。
 6. **周报 cron 手动 fire（必做，评审 I4 升级）**：首个周日窗（09-20 19:00-20:00）前完成；选一个 `lt-tutor-weekly:*` 任务手动 fire（`--profile lt-tutor`，既证口径：验内容不投递），核验模型走「核心→§7 桩→读 flow-weekly-report.md→执行」全链；观察日志确认引用文件被读取。副作用知情：手动 fire 会幂等创建本周 weekly 计划（period_key 服务端幂等，周日实跑时按 §7-6 改口「已生成」并正常投递）。
 7. **AGENTS.md 口径同步**（编辑落点=CLAUDE.md）：dede178 已含缓存语义与 19:00-20:00 窗口径——**仅剩一项**：热部署条款补「references/ 目录一并双份 cp」。
@@ -99,3 +99,9 @@
 - [ ] §2 白名单完整 17 工具；豁免单点收口句在位；骨架承重短语五项核对通过。
 - [ ] CLAUDE.md 补 references/ 双份 cp 一句。
 - [ ] 周报 cron 手动 fire 全链实证（读引用文件），在 09-20 周报窗前完成。
+
+## 9. 收口评审遗留记档（09-16，均为 Minor 记档级）
+
+- 调用纪律豁免句字面只覆盖 `references/`，未覆盖技能根目录的 `worksheet-lesson-notes.md`（§10/flow-worksheet 引导 skill_view 读取它）——下次触碰 §2 时把豁免句改为「读本技能文件（references/ 流程与根目录笔记等）除外」。
+- flow-weekly-report 头部映射行只有「清单生成手法=主文件 §5」一条，缺其余四文件都有的 §0/§1/§2 三锚——下次触碰该文件时对齐。
+- 插件侧两条：`_resolve_gateway_api_key` 单测四用例（env 优先/dotenv 兜底/缺文件降级/无钥）在下次动该函数前补；轮换陷阱已落插件 docstring（见 401 任务档案）。
