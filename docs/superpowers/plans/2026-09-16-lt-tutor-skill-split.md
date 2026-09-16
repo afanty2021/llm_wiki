@@ -100,8 +100,8 @@
 - [ ] CLAUDE.md 补 references/ 双份 cp 一句。
 - [ ] 周报 cron 手动 fire 全链实证（读引用文件），在 09-20 周报窗前完成。
 
-## 9. 收口评审遗留记档（09-16，均为 Minor 记档级）
+## 9. 收口评审遗留记档（09-16 → 当日全部清零）
 
-- 调用纪律豁免句字面只覆盖 `references/`，未覆盖技能根目录的 `worksheet-lesson-notes.md`（§10/flow-worksheet 引导 skill_view 读取它）——下次触碰 §2 时把豁免句改为「读本技能文件（references/ 流程与根目录笔记等）除外」。
-- flow-weekly-report 头部映射行只有「清单生成手法=主文件 §5」一条，缺其余四文件都有的 §0/§1/§2 三锚——下次触碰该文件时对齐。
-- 插件侧两条：`_resolve_gateway_api_key` 单测四用例（env 优先/dotenv 兜底/缺文件降级/无钥）在下次动该函数前补；轮换陷阱已落插件 docstring（见 401 任务档案）。
+- ~~调用纪律豁免句字面只覆盖 `references/`~~ ✅ 已改为「读本技能文件（references/ 流程与根目录笔记等）除外」，SKILL.md+references 已双份 cp 部署。
+- ~~flow-weekly-report 头部映射行缺 §0/§1/§2 三锚~~ ✅ 已对齐为四锚（身份/输出硬规则/工具白名单/清单生成手法），已部署。
+- ~~插件 `_resolve_gateway_api_key` 单测~~ ✅ 源仓新增 test_gateway_api_key.py 九用例（env 优先/namespaced>legacy/dotenv 兜底/空白值视为未设/credential_pool 缺失降级/无钥+client 无 Authorization 头），stub 树补 credential_pool 假件；插件全量 79 passed。轮换陷阱已落插件 docstring（见 401 任务档案）。

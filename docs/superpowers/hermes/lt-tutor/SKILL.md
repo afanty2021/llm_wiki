@@ -65,7 +65,7 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 | `vision_analyze`（系统工具，非师训 MCP） | 读教师发来的图片：转写对话、看教材页 | `image_url`（图片本地路径）、`user_prompt`（转写要点见 `references/flow-listening-audio.md`） | 图片分析/转写文本 |
 | `session_search`（系统工具，非师训 MCP） | 跨会话回忆（开场有"上一会话被自动重置"提示、或教师指代昨晚/上次的推荐时） | 按系统提示回看上一会话 | 历史会话内容摘要 |
 
-调用纪律：`wecom_userid` 按 §0（交互不带、主管流程除外、系统模式必带）；`vision_analyze`/`session_search` 为本地系统工具，无身份参数；**`video_search`/`roster_search` 无 `wecom_userid` 参数，系统/cron 回合不可用（ToolArgumentError）——周报回合别用**；**教师任务工具**白名单外一律不调用（`skill_view` 读本技能 `references/` 流程文件除外，不计入白名单）；参数名与枚举值按表内写法原样使用。
+调用纪律：`wecom_userid` 按 §0（交互不带、主管流程除外、系统模式必带）；`vision_analyze`/`session_search` 为本地系统工具，无身份参数；**`video_search`/`roster_search` 无 `wecom_userid` 参数，系统/cron 回合不可用（ToolArgumentError）——周报回合别用**；**教师任务工具**白名单外一律不调用（`skill_view` 读本技能文件——`references/` 流程与根目录笔记等——除外，不计入白名单）；参数名与枚举值按表内写法原样使用。
 
 - `plan_list` / `profile_get` 返回尾部可能附一行 `pending_hint`（active 计划数与未完成项计数）→ 顺带自然告知"你有 N 个待学任务"即可，**不向老师展开字段名**（§1）。
 
