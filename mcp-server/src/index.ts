@@ -213,8 +213,8 @@ function desktopToolDefinitions(): ToolDefinition[] {
 /**
  * ListTools 工具集（按形态过滤）：
  * - desktop：11 个桌面工具（上游 v0.6.10 起 + set_project/chat/embed_page）
- * - src-server：15 个 teacher_tutor_* + 重写的 llm_wiki_search / llm_wiki_read_file（计
- *   数由 training.test.ts「只注册 16 工具」钉住）；其余桌面工具（status/projects/
+ * - src-server：17 个 teacher_tutor_* + 重写的 llm_wiki_search / llm_wiki_read_file（计
+ *   数由 training.test.ts「只注册 17 工具」钉住）；其余桌面工具（status/projects/
  *   set_project/files/reviews/chat/graph/rescan/embed）不注册。
  */
 export function buildTools(form: ApiForm = apiForm): ToolDefinition[] {

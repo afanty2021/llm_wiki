@@ -124,6 +124,17 @@ export function isAllowedMediaPath(p: string, roots: string[] = MEDIA_ALLOW_ROOT
     } else {
       if (pLex === rLex || pLex.startsWith(rLex + sep)) return true
       if (rReal !== null && (pLex === rReal || pLex.startsWith(rReal + sep))) return true
+      // macOS 同根双写互认（评审 Minor 7 对称象限）：/var/X 与 /private/var/X 是同一
+      // 目录（symlink）——不存在的路径词面停留 /var 形时也要对上 /private/var 形的根
+      const pAlt = pLex.startsWith("/var/")
+        ? "/private/var" + pLex.slice(4)
+        : pLex.startsWith("/private/var/")
+          ? "/var" + pLex.slice(12)
+          : null
+      if (pAlt !== null) {
+        if (pAlt === rLex || pAlt.startsWith(rLex + sep)) return true
+        if (rReal !== null && (pAlt === rReal || pAlt.startsWith(rReal + sep))) return true
+      }
     }
   }
   return false
@@ -476,7 +487,13 @@ async function runPipeline(
     return { ok: false, error: `素材 ${Math.round(probe.durationS / 60)} 分钟超过 15 分钟上限——请老师截取片段，或将素材入库后从库内取材` }
   }
 
-  const sha12 = (await mediaSha1(mediaPath)).slice(0, 12)
+  let sha12: string
+  try {
+    sha12 = (await mediaSha1(mediaPath)).slice(0, 12)
+  } catch {
+    // probe 与提取之间文件被清（24h 缓存清理竞态）——文本引导不抛错（评审 Minor 9）
+    return { ok: false, error: "素材文件不可读——缓存可能刚被清理，请让老师重新发送素材" }
+  }
   const outDir = join(outRoot, sha12)
   const wavPath = join(outDir, "audio.wav")
   const mp3Path = join(outDir, "audio.mp3")

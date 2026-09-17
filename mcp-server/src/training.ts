@@ -1378,7 +1378,7 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       parts.push("未识别到有效语音内容。")
     }
     if (result.audio_mp3_path) {
-      parts.push(`音频文件已备：${result.audio_mp3_path}（可作为课件封面音频，构计入 teacher_tutor_pptx 的 audio_path）`)
+      parts.push(`音频文件已备：${result.audio_mp3_path}（可作为课件封面音频，构造时传入 teacher_tutor_pptx 的 audio_path）`)
     }
     return withIdentitySource(textResult(parts.join("\n")), ident)
   })

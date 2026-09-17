@@ -57,6 +57,31 @@ test("isAllowedMediaPath: 允许根内真/出根假/../逃逸假/符号链接出
   }
 })
 
+test("isAllowedMediaPath: 不存在路径 /var↔/private/var 同根双写互认（评审 Minor 7 回归钉）", () => {
+  // 合成根（本机不存在 → rReal=null，纯词法比较）——四象限里原实现缺「路径 /var 形 ×
+  // 根 /private/var 形」，/var 是指向 /private/var 的 symlink，同根双写必须互认
+  assert.equal(
+    isAllowedMediaPath("/var/w/root/doc_abc_video.mp4", ["/private/var/w/root"]),
+    true,
+    "路径 /var 形 × 根 /private/var 形（原实现假阴性象限）",
+  )
+  assert.equal(
+    isAllowedMediaPath("/private/var/w/root/doc_abc_video.mp4", ["/var/w/root"]),
+    true,
+    "路径 /private/var 形 × 根 /var 形",
+  )
+  assert.equal(
+    isAllowedMediaPath("/var/w/rootX/doc_abc_video.mp4", ["/private/var/w/root"]),
+    false,
+    "前缀非段界（rootX）不得放行",
+  )
+  assert.equal(
+    isAllowedMediaPath("/var/w/other/doc_abc_video.mp4", ["/private/var/w/root"]),
+    false,
+    "同前缀异子目录仍拒",
+  )
+})
+
 test("mediaSha1: 流式哈希与内容对应", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "media-sha-"))
   try {
