@@ -27,7 +27,7 @@
 3. **入站媒体通道现成**：WeCom 适配器把教师发的视频/音频/文件缓存为本地文件（`doc_{uuid12}_{原名}` 落 `~/.hermes/cache/` 系目录），agent 消息上下文带注记行 `[video 'xxx.mp4' saved at: /path]`——v1 流程 6 的图片路径就是这么被 vision_analyze 消费的。**缓存 24h 过期清理**（cleanup max_age_hours=24）——中间产物不得跨会话引用。
 4. **入站/出站限额是两套（09-17 追正，勿混淆）**：media.py:29-33 的类型限额表（image 10MB / video 10MB / voice 2MB / file 20MB）镜像企微 API 临时素材经典限额，**只作用于出站**——超类型限额不拒发、自动降级为文件消息，绝对帽 20MB（协议硬顶）。**入站下载帽 = `_inbound_max_bytes` 默认 20MB**（adapter.py:138，`ABSOLUTE_MAX_BYTES`，config `inbound_max_bytes` 旋钮可调，zops patch 0003）；教师侧大视频不受 10MB 约束（企微手机端压缩视频消息常 ≤10MB 级，但**以文件消息发送可到几十 MB**，PC 端文件上限 GB 级）。v2 素材体积预算按 20MB 入站帽计（压缩视频约 3-10 分钟），flow 话术引导「大视频用文件形式发送」。
    **素材大小 ≠ 信息量（09-17 追补，参照会话 272MB 素材对照）**：参照会话的 272MB 原片 = 132 秒 @17.2Mbps 4K 级竖屏（zcode 直读本地文件系统，无通道约束）；**同一内容以视频消息形态发企微会被客户端压缩到 ~10-20MB（132s @0.5-1Mbps），照样过 20MB 入站帽**——提取管线吃的是内容（音轨+画面文字）不吃码率，压缩对课件素材近乎无损。故 v2 的真实约束是**时长（15min whisper 预算）而非体积**；>20MB 的原文件（文件消息不压缩）或 >15min 长素材走入库路（transcriber→带 [mm:ss] 锚点转写页→v1 库内取材），那条链路已存在且是 16,004 页语料的既成管线。
-5. **MCP 工具超时 300s**（mcp_tool_common.py:41 `_DEFAULT_TOOL_TIMEOUT = 300`）——同步单调用预算硬顶；时延预算表见 §五-5。
+5. **MCP 工具超时 300s**（mcp_tool_common.py:41 `_DEFAULT_TOOL_TIMEOUT = 300`）——同步单调用预算硬顶；时延预算表见 §五-3。
 6. **pptxgenjs 嵌入 API 在位**：`addImage(options)`（types:2637）、`addMedia(options)`（types:2643）。**已知坑**（评审 dist 源码逐行坐实）：音频经 addMedia 在 slide XML 无条件写 `<a:videoFile r:link>`（pptxgen.cjs.js:5605/5623）——需 zip 后处理改 `<a:audioFile r:link>`；**但 rels 一半是好的**（:5761-5767 对 type:'audio' 已正确写 audio/media 双 rel）——**后处理只改 slide XML，rels 无需重写**。固化进 renderPptx 内部而非外挂脚本。
 7. **PATH 风险**：网关 launchd 环境的 PATH 未必含 `/opt/homebrew/bin`（node 能解析说明部分在位，但不可依赖）——二进制备探测解析（候选路径表 + 环境变量覆盖），缺件透传友好文案（graphviz ENOENT 文案先例）。
 
@@ -130,7 +130,7 @@
 
 | 风险 | 预案 |
 |------|------|
-| whisper 幻觉污染课件内容 | transcriber 过滤原语 + `-l auto`；turbo 质量不足时 env 切 large-v3（慢 3-4x，预算仍够） |
+| whisper 幻觉污染课件内容 | transcriber 过滤原语 + `-l auto`；turbo 质量不足时立项落 ggml-large-v3.bin 后再切换（后续可选，§三-1；届时需重排分段预算） |
 | 竖屏视频 contact sheet 可读性 | scale=480 宽度下 3×3 竖屏 tile 可读（9:16 帧高 ~853px）；真发目检不达 → 改 2×2 四帧 |
 | 嵌入后 pptx 超 20MB 投递上限 | 嵌入总量帽 8MB + 渲染后实测文件 size 断言超帽即拒嵌并降级出纯文本课件 + 提示 |
 | 网关 PATH 缺 /opt/homebrew/bin | 启动探测候选表 + `LTUTOR_MEDIA__FFMPEG/FFPROBE/WHISPER_CLI` env 覆盖（评审 M-10 补 FFPROBE）；缺件友好文案 |
