@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { test } from "node:test"
@@ -171,7 +171,7 @@ test("cleanupMediaRoot: >7 天自清扫 + 1GB LRU 淘汰最旧", () => {
   }
 })
 
-test("cleanupMediaRoot: LRU 分支——超帽按 mtime 淘汰最旧", () => {
+test("cleanupMediaRoot: LRU 分支——超帽按 mtime 淘汰最旧（cap 注入触发真实淘汰，评审 I-5）", () => {
   const root = mkdtempSync(path.join(tmpdir(), "media-lru-"))
   try {
     const now = Date.now()
@@ -181,11 +181,14 @@ test("cleanupMediaRoot: LRU 分支——超帽按 mtime 淘汰最旧", () => {
       writeFileSync(path.join(d, "f.bin"), Buffer.alloc(size))
       utimesSync(d, new Date(now - ageMs), new Date(now - ageMs))
     }
-    // 帽在源码是 1GB 常量——本用例改走「>7 天」之外路径验证排序不误删：两目录均新，不触发淘汰
-    const r = cleanupMediaRoot(root, { now: () => now })
-    assert.equal(r.lruEvicted, 0)
-    assert.ok(statSync(path.join(root, "a")).isDirectory())
-    assert.ok(statSync(path.join(root, "b")).isDirectory())
+    // 帽注入 1024：总量 2048 超帽 → 淘汰最旧的 a，剩 b 恰好达标（1024 ≤ 1024）不再淘汰
+    const r = cleanupMediaRoot(root, { now: () => now, totalCapBytes: 1024 })
+    assert.equal(r.lruEvicted, 1, "真实触发 LRU 淘汰")
+    assert.ok(!existsSync(path.join(root, "a")), "最旧目录被淘汰")
+    assert.ok(existsSync(path.join(root, "b")), "最新目录保留")
+    // 缺省 1GB 帽不淘汰（生产行为不变）
+    const r2 = cleanupMediaRoot(root, { now: () => now })
+    assert.equal(r2.lruEvicted, 0)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -339,7 +342,9 @@ test("extractMedia: 无音轨视频 → transcript 空数组、无 mp3、sheet �
 test("extractMedia: 时长超 15min → 引导截片段/入库", async () => {
   const { root, mediaPath } = setupFakeMedia()
   const exec = makeFakeExec({ probe: { durationS: MEDIA_MAX_DURATION_S + 60, hasVideo: true, hasAudio: true } })
-  const result = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec, allowRoots: [root] })
+  // outRoot 必须注入临时目录——缺省会落生产缓存根 ~/.hermes/cache/ltutor-media（评审 I-3）
+  const outRoot = mkdtempSync(path.join(tmpdir(), "media-out-"))
+  const result = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec, outRoot, allowRoots: [root] })
   assert.equal(result.ok, false)
   assert.match(result.error!, /超过 15 分钟/)
 })
@@ -352,7 +357,8 @@ test("extractMedia: 转写退化（coverage ≥0.4）→ ok:false 质量异常",
       { offsets: { from: i * 10_000, to: i * 10_000 + 10_000 }, text: unit.repeat(3) }
     )) },
   })
-  const result = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec, allowRoots: [root] })
+  const outRoot = mkdtempSync(path.join(tmpdir(), "media-out-"))
+  const result = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec, outRoot, allowRoots: [root] })
   assert.equal(result.ok, false)
   assert.match(result.error!, /转写质量异常/)
 })
@@ -364,7 +370,8 @@ test("extractMedia: 段数 >400 截断并置 transcript_truncated", async () => 
       { offsets: { from: i * 1000, to: i * 1000 + 1000 }, text: `Line ${i}` }
     )) },
   })
-  const result = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec, allowRoots: [root] })
+  const outRoot = mkdtempSync(path.join(tmpdir(), "media-out-"))
+  const result = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec, outRoot, allowRoots: [root] })
   assert.equal(result.ok, true)
   assert.equal(result.transcript!.length, MEDIA_TRANSCRIPT_MAX_SEGMENTS)
   assert.equal(result.transcript_truncated, true)
@@ -376,9 +383,10 @@ test("extractMedia: 互斥在跑即拒（D9 排队深度=1）", async () => {
   const gate = new Promise<void>(res => { release = res })
   const calls = { n: 0 }
   const slowExec = makeFakeExec({ callCount: calls, delayFirst: gate })
-  const first = extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec: slowExec, allowRoots: [root] })
+  const outRoot = mkdtempSync(path.join(tmpdir(), "media-out-"))
+  const first = extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec: slowExec, outRoot, allowRoots: [root] })
   await new Promise(r => setTimeout(r, 30)) // 让首调用进入 in-flight
-  const second = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec: slowExec, allowRoots: [root] })
+  const second = await extractMedia({ media_path: mediaPath }, { env: fakeEnv(root), exec: slowExec, outRoot, allowRoots: [root] })
   assert.equal(second.ok, false)
   assert.match(second.error!, /稍后再试/)
   release()
@@ -390,7 +398,8 @@ test("extractMedia: 二进制缺失 → 环境故障文案（勿重试）", asyn
   const { root, mediaPath } = setupFakeMedia()
   const env = fakeEnv(root)
   rmSync(env["LTUTOR_MEDIA__WHISPER_CLI"]!)
-  const result = await extractMedia({ media_path: mediaPath }, { env, allowRoots: [root] })
+  const outRoot = mkdtempSync(path.join(tmpdir(), "media-out-"))
+  const result = await extractMedia({ media_path: mediaPath }, { env, outRoot, allowRoots: [root] })
   assert.equal(result.ok, false)
   assert.match(result.error!, /未安装/)
 })
@@ -399,7 +408,8 @@ test("extractMedia: 模型缺失 → 同款友好文案", async () => {
   const { root, mediaPath } = setupFakeMedia()
   const env = fakeEnv(root)
   rmSync(env["LTUTOR_MEDIA__WHISPER_MODEL"]!)
-  const result = await extractMedia({ media_path: mediaPath }, { env, exec: makeFakeExec({}), allowRoots: [root] })
+  const outRoot = mkdtempSync(path.join(tmpdir(), "media-out-"))
+  const result = await extractMedia({ media_path: mediaPath }, { env, exec: makeFakeExec({}), outRoot, allowRoots: [root] })
   assert.equal(result.ok, false)
   assert.match(result.error!, /模型未就绪/)
 })

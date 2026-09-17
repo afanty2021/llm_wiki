@@ -1340,13 +1340,15 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       return withIdentitySource(textResult(
         `课件生成失败：${result.error ?? "未知错误"}。环境性故障请勿反复重试——可先给教师文字版课件大纲（逐页标题+要点），文件稍后再生成。`), ident)
     }
-    // v2：嵌入状态如实呈现（配图/音频），无引擎字样（M-3'/I-6 先例）。
+    // v2：嵌入状态如实呈现（配图/音频），无引擎字样（M-3'/I-6 先例）；
+    // 降级（渲染后实测超投递帽，计划 §八兜底）同样如实声明。
+    const degradedNote = result.degraded ? "；嵌入素材过大已自动降级为纯文字版，如需配图/音频请压缩素材后重试" : ""
     const embedNote = [
       result.images ? `含 ${result.images} 张配图` : "",
       result.hasAudio ? "含封面音频" : "",
     ].filter(Boolean).join("、")
     return withIdentitySource(textResult([
-      `课件已生成（${result.slides! + 1} 页，含封面${embedNote ? "，" + embedNote : ""}）。`,
+      `课件已生成（${result.slides! + 1} 页，含封面${embedNote ? "，" + embedNote : ""}）。${degradedNote}`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，文件才会送达。`,
     ].join("\n")), ident)

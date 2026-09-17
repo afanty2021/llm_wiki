@@ -62,6 +62,7 @@ export const PPTX_MAX_IMAGE_SLIDES = 4          // 图片页 ≤4
 export const PPTX_MAX_IMAGE_BYTES = 5 * 1024 * 1024   // 单图 ≤5MB
 export const PPTX_MAX_AUDIO_BYTES = 6 * 1024 * 1024   // 封面音频 ≤6MB
 export const PPTX_MAX_EMBED_BYTES = 8 * 1024 * 1024   // 嵌入总量 ≤8MB（投递 20MB 留余量）
+export const PPTX_MAX_DELIVERY_BYTES = 20 * 1024 * 1024 // 企微出站绝对帽——渲染后实测兜底（计划 §三-2/§八）
 
 export interface PptxSlide {
   heading: string
@@ -86,6 +87,8 @@ export interface PptxRenderResult {
   slides?: number
   images?: number
   hasAudio?: boolean
+  /** v2：嵌入素材致产物超投递帽，已自动降级为纯文字版（handler 文案如实声明）。 */
+  degraded?: boolean
   error?: string
 }
 
@@ -387,20 +390,54 @@ async function fixAudioMediaTags(pptxPath: string): Promise<void> {
   writeFileSync(pptxPath, buf)
 }
 
+/** 单文档写盘（buildPresentation + writeFile + 音频 zip 后处理），返回产物路径。 */
+async function writeDocFile(doc: PptxDoc, outDir: string): Promise<string> {
+  mkdirSync(outDir, { recursive: true })
+  const pptx = buildPresentation(doc)
+  const finalPath = join(outDir, `pptx-${hashDoc(doc)}.pptx`)
+  await pptx.writeFile({ fileName: finalPath })
+  if (doc.audio_path !== undefined) await fixAudioMediaTags(finalPath)
+  return finalPath
+}
+
+/** 超投递帽时的降级形：剥全部嵌入（配图/音频）的纯文字版。 */
+function stripEmbeds(doc: PptxDoc): PptxDoc {
+  return {
+    ...doc,
+    audio_path: undefined,
+    slides: doc.slides.map(({ image: _image, ...rest }) => rest),
+  }
+}
+
 /**
  * 渲染课件 .pptx。成功 { ok, path, slides }；任何失败（依赖/磁盘异常）{ ok:false, error }
  * 绝不抛错——环境故障走文本引导不进熔断器（renderWorksheet 先例）。
+ * v2 渲染后实测产物 size（计划 §三-2/§八 兜底）：超投递帽且带嵌入 → 剥嵌入重渲降级
+ * 纯文字版（degraded:true，handler 如实声明）；纯文字版仍超帽（理论不可达）→ ok:false。
  */
 export async function renderPptx(
   doc: PptxDoc,
   outDir: string = DEFAULT_PPTX_OUT_DIR,
+  opts: { maxDeliveryBytes?: number } = {},
 ): Promise<PptxRenderResult> {
-  const finalPath = join(outDir, `pptx-${hashDoc(doc)}.pptx`)
   try {
-    mkdirSync(outDir, { recursive: true })
-    const pptx = buildPresentation(doc)
-    await pptx.writeFile({ fileName: finalPath })
-    if (doc.audio_path !== undefined) await fixAudioMediaTags(finalPath)
+    const finalPath = await writeDocFile(doc, outDir)
+    const maxBytes = opts.maxDeliveryBytes ?? PPTX_MAX_DELIVERY_BYTES
+    let size = statSync(finalPath).size
+    if (size > maxBytes) {
+      const hasEmbeds = doc.audio_path !== undefined || doc.slides.some(s => s.image !== undefined)
+      if (!hasEmbeds) {
+        return { ok: false, error: `课件文件 ${(size / 1024 / 1024).toFixed(1)}MB 超过投递上限 20MB` }
+      }
+      const degradedDoc = stripEmbeds(doc)
+      const degradedPath = await writeDocFile(degradedDoc, outDir)
+      size = statSync(degradedPath).size
+      if (size > maxBytes) {
+        return { ok: false, error: `课件文件 ${(size / 1024 / 1024).toFixed(1)}MB 超过投递上限 20MB` }
+      }
+      const images = degradedDoc.slides.filter(s => s.image !== undefined).length
+      return { ok: true, path: degradedPath, slides: degradedDoc.slides.length, images, hasAudio: false, degraded: true }
+    }
     const images = doc.slides.filter(s => s.image !== undefined).length
     return { ok: true, path: finalPath, slides: doc.slides.length, images, hasAudio: doc.audio_path !== undefined }
   } catch (err) {

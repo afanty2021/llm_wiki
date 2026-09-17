@@ -313,14 +313,16 @@ function dirSize(p: string): number {
   return n
 }
 
-/** 入口自清扫：>7 天 <sha12> 目录删除 + 总量帽 1GB 按 mtime LRU 淘汰。best-effort 不外抛。 */
+/** 入口自清扫：>7 天 <sha12> 目录删除 + 总量帽 1GB 按 mtime LRU 淘汰。best-effort 不外抛。
+ * totalCapBytes 注入仅供测试触发真实淘汰分支（实施评审 I-5：1GB 常量不可达=零覆盖）。 */
 export function cleanupMediaRoot(
   root: string,
-  opts: { now?: () => number } = {},
+  opts: { now?: () => number; totalCapBytes?: number } = {},
 ): { removedDirs: number; lruEvicted: number } {
   const result = { removedDirs: 0, lruEvicted: 0 }
   if (!existsSync(root)) return result
   const now = (opts.now ?? Date.now)()
+  const totalCapBytes = opts.totalCapBytes ?? MEDIA_TOTAL_CAP_BYTES
   const cutoff = now - MEDIA_RETENTION_DAYS * 86400_000
   const dirs = readdirSync(root, { withFileTypes: true })
     .filter(e => e.isDirectory())
@@ -341,7 +343,7 @@ export function cleanupMediaRoot(
     .sort((a, b) => a.mtimeMs - b.mtimeMs)
   let total = survivors.reduce((n, d) => n + d.size, 0)
   for (const d of survivors) {
-    if (total <= MEDIA_TOTAL_CAP_BYTES) break
+    if (total <= totalCapBytes) break
     try {
       rmSync(d.p, { recursive: true, force: true })
       total -= d.size
