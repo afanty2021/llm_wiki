@@ -5,7 +5,7 @@
  *   {wecom_userid: {refreshToken, userId}}；内存 access 缓存提前 60s 过期；
  *   miss → POST /api/v1/auth/refresh（single-flight：并发同 userid 只发一次）；
  *   refresh 失败 → POST /api/v1/training/bind（TRAINING__ADMIN_TOKEN）重建/轮换。
- * - 16 个 src-server 工具：14 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
+ * - 17 个 src-server 工具：15 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
  *   为本地 TTS 合成、teacher_tutor_mindmap 为本地 graphviz/markmap 渲染、
  *   teacher_tutor_worksheet 为本地 Chrome 截图渲染、teacher_tutor_pptx 为本地
  *   pptxgenjs 渲染，均不经 src-server API；
@@ -70,6 +70,11 @@ import {
   type PptxDoc,
   type PptxRenderResult,
 } from "./pptx.js"
+import {
+  extractMedia,
+  isAllowedMediaPath,
+  type MediaExtractResult,
+} from "./media-extract.js"
 
 // ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
 // 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
@@ -265,6 +270,8 @@ export interface SrcServerHandlerDeps {
   renderWorksheet?: (doc: WorksheetDoc) => Promise<WorksheetRenderResult>
   /** 课件 PPT 渲染（本地 pptxgenjs 管线；可注入 mock 供测试）。 */
   renderPptx?: (doc: PptxDoc, outDir?: string) => Promise<PptxRenderResult>
+  /** 素材提取（本地 ffmpeg/whisper 管线；可注入 mock 供测试）。 */
+  mediaExtract?: (raw: { media_path: unknown; want?: unknown }) => Promise<MediaExtractResult>
 }
 
 // wecom_userid 在 schema 可选声明、不进 required（2026-09-05 修订 08-24 加固）：
@@ -639,7 +646,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "teacher_tutor_pptx",
-      description: "把知识点做成可编辑的课件 PPT 文件（16:9，暖色版式，中文完好；封面自动生成，总页数=内容页+1；每页可带讲稿备注进演讲者备注栏）。返回含 MEDIA: 行——最终回复必须原样回显该行，文件才会送达教师（.pptx 文件消息，点击下载后可用 Office/WPS 打开编辑）。内容必须基于 search/read_file 取到的真实材料构造，勿编造材料外内容。老师发来视频/音频文件要求转课件、或要求 PPT 内嵌音频时：当前暂不支持，礼貌说明并引导改出文字版课件大纲。用于教师要求做课件/出 PPT/幻灯片的场景。",
+      description: "把知识点做成可编辑的课件 PPT 文件（16:9，暖色版式，中文完好；封面自动生成，总页数=内容页+1；每页可带讲稿备注进演讲者备注栏；支持整幅配图页与封面音频播放器——素材路径取自 media_extract 提取产物或系统素材注记行）。返回含 MEDIA: 行——最终回复必须原样回显该行，文件才会送达教师（.pptx 文件消息，点击下载后可用 Office/WPS 打开编辑）。内容必须基于 search/read_file 取到的真实材料构造，勿编造材料外内容。老师发来的视频/音频素材：先用 teacher_tutor_media_extract 提取内容（≤15 分钟，超长请引导截片段或入库），再基于提取结果构造本工具入参。用于教师要求做课件/出 PPT/幻灯片的场景。",
       inputSchema: {
         type: "object",
         properties: {
@@ -660,13 +667,29 @@ export function trainingToolDefinitions(): ToolDefinition[] {
                   items: { type: "string", description: "要点文本（1-80 字符）" },
                 },
                 note: { type: "string", description: "讲稿备注（≤120 字符，可选，进演讲者备注栏不打上幻灯片）" },
+                image: { type: "string", description: "本页整幅配图的本地路径（可选，≤5MB jpg/png；有配图的页为「标题+整幅图」版式；路径取自素材注记行或 media_extract 产物）" },
               },
               required: ["heading", "bullets"],
               additionalProperties: false,
             },
           },
+          audio_path: { type: "string", description: "封面音频播放器的 mp3 本地路径（可选，≤6MB，通常取 media_extract 产物的 audio_mp3_path；下载后点封面喇叭图标播放）" },
         },
         required: ["title", "slides"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "teacher_tutor_media_extract",
+      description: "从教师发来的视频/音频素材中提取课件素材（本地管线：ffmpeg 抽 3×3 画面缩略帧 + whisper 转写文字 + mp3）。返回结构化内容（帧缩略图路径、带时间戳的转写文本、mp3 路径）——不发 MEDIA 行、路径仅供后续工具消费（帧缩略图用 vision_analyze 读、mp3 可作课件封面音频）。素材路径取自消息里的系统注记行（[video '…' saved at: 路径] 形态）。约束：≤15 分钟、常见视频/音频格式；提取约 1-2 分钟。用于教师发来音视频素材要求做课件/整理内容的场景。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
+          media_path: { type: "string", description: "素材本地路径（必填）：取消息里系统注记行的完整路径，勿自行拼凑" },
+          want: { type: "string", enum: ["auto", "transcript_only"], description: "缺省 auto：视频=帧缩略图+转写+mp3、音频=转写+mp3；transcript_only 跳过抽帧（只要文字时更快）" },
+        },
+        required: ["media_path"],
         additionalProperties: false,
       },
     },
@@ -1297,7 +1320,8 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
         subtitle: args.subtitle,
         theme: args.theme,
         slides: args.slides,
-      })
+        audio_path: args.audio_path,
+      }, { isAllowedPath: isAllowedMediaPath })
     } catch (err) {
       // 形状错误对齐 worksheet 先例走 ToolArgumentError（schema 已约束、罕见）。
       if (err instanceof PptxFormatError) throw new ToolArgumentError(err.message)
@@ -1315,12 +1339,45 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       return withIdentitySource(textResult(
         `课件生成失败：${result.error ?? "未知错误"}。环境性故障请勿反复重试——可先给教师文字版课件大纲（逐页标题+要点），文件稍后再生成。`), ident)
     }
+    // v2：嵌入状态如实呈现（配图/音频），无引擎字样（M-3'/I-6 先例）。
+    const embedNote = [
+      result.images ? `含 ${result.images} 张配图` : "",
+      result.hasAudio ? "含封面音频" : "",
+    ].filter(Boolean).join("、")
     return withIdentitySource(textResult([
-      // 引擎名不进教师可见摘要（worksheet M-3'/I-6 先例）；页数含自动生成的封面。
-      `课件已生成（${result.slides! + 1} 页，含封面）。`,
+      `课件已生成（${result.slides! + 1} 页，含封面${embedNote ? "，" + embedNote : ""}）。`,
       `MEDIA:${result.path}`,
       `给教师的最终回复必须原样保留上面 MEDIA: 开头那一行，文件才会送达。`,
     ].join("\n")), ident)
+  })
+
+  handlers.set("teacher_tutor_media_extract", async (args, meta) => {
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_media_extract", meta, args)
+    // 全失败面正常文本（计划评审 C3：media_path 由模型转写注记行、抄错 3 次即熔断
+    // 整服务器——勿抛 ToolArgumentError）；成功载荷保留绝对路径（agent 后续消费）。
+    const extract = deps.mediaExtract ?? extractMedia
+    const result = await extract({ media_path: args.media_path, want: args.want })
+    if (!result.ok) {
+      return withIdentitySource(textResult(
+        `未能提取素材：${result.error ?? "未知错误"}`), ident)
+    }
+    const parts = [`素材提取完成（${result.kind === "video" ? "视频" : "音频"}，${result.duration_s ?? "?"} 秒）。`]
+    if (result.sheet_path) {
+      parts.push(`画面缩略图已生成：${result.sheet_path}`, "请用 vision_analyze 读取该缩略图了解画面内容，再据此构造课件。")
+    }
+    if (result.transcript && result.transcript.length > 0) {
+      const lines = result.transcript.map(s => `[${Math.floor(s.start_s / 60)}:${String(Math.round(s.start_s % 60)).padStart(2, "0")}] ${s.text}`)
+      parts.push(`转写文本（${lines.length} 段）：`, ...lines)
+      if (result.transcript_truncated) {
+        parts.push("（转写较长已截断——素材重点如在后半段，请让老师截取片段后重新提取）")
+      }
+    } else if (result.kind === "audio" || !result.sheet_path) {
+      parts.push("未识别到有效语音内容。")
+    }
+    if (result.audio_mp3_path) {
+      parts.push(`音频文件已备：${result.audio_mp3_path}（可作为课件封面音频，构计入 teacher_tutor_pptx 的 audio_path）`)
+    }
+    return withIdentitySource(textResult(parts.join("\n")), ident)
   })
 
   // ── T2 视频学习任务：两检索工具（计划 §2.2）──
