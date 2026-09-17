@@ -308,3 +308,129 @@ test("真渲染: 字节级不保证确定（docProps 时间戳）——只断言
 function joinTmp(): string {
   return path.join(tmpdir(), "pptx-test-")
 }
+
+// ── v2 嵌入扩展（计划 Task 2）──
+
+import { PptxDoc } from "../src/pptx.js"
+
+function fakeStat(sizes: Record<string, number>) {
+  return (p: string) => {
+    if (sizes[p] === undefined) throw new Error("ENOENT " + p)
+    return { size: sizes[p] }
+  }
+}
+
+test("v2 caps: image 页数 ≤4 / 单图 5MB / 音频 6MB / 嵌入总量 8MB", () => {
+  const sizes: Record<string, number> = {}
+  for (let i = 1; i <= 5; i++) sizes[`/img${i}.jpg`] = 1024
+  sizes["/audio.mp3"] = 1024
+  const mkDoc = (nImages: number): PptxDoc => ({
+    title: "t", theme: "warm",
+    audio_path: "/audio.mp3",
+    slides: [
+      ...Array.from({ length: nImages }, (_, i) => ({ heading: `h${i}`, bullets: ["b"], image: `/img${i + 1}.jpg` })),
+      { heading: "h", bullets: ["b"] },
+      { heading: "h2", bullets: ["b"] },
+    ],
+  })
+  assert.match(pptxCapsError(mkDoc(5), { stat: fakeStat(sizes) })!, /配图页 5 页超过上限 4/)
+  assert.equal(pptxCapsError(mkDoc(4), { stat: fakeStat(sizes) }), null)
+  // 单图超限
+  sizes["/img1.jpg"] = 5 * 1024 * 1024 + 1
+  assert.match(pptxCapsError(mkDoc(4), { stat: fakeStat(sizes) })!, /超过单图上限 5MB/)
+  sizes["/img1.jpg"] = 1024
+  // 音频超限
+  sizes["/audio.mp3"] = 6 * 1024 * 1024 + 1
+  assert.match(pptxCapsError(mkDoc(4), { stat: fakeStat(sizes) })!, /封面音频 .* 超过上限 6MB/)
+  sizes["/audio.mp3"] = 1024
+  // 总量超限：4 图各 2MB = 8MB+音频
+  for (let i = 1; i <= 4; i++) sizes[`/img${i}.jpg`] = 2 * 1024 * 1024
+  assert.match(pptxCapsError(mkDoc(4), { stat: fakeStat(sizes) })!, /嵌入素材总量 .* 超过上限 8MB/)
+  // 文件不可读 → 引导
+  assert.match(pptxCapsError(mkDoc(4), { stat: fakeStat({}) })!, /配图文件不可读/)
+})
+
+test("v2 normalize: image/audio_path 允许根校验（isAllowedPath 注入）", () => {
+  const allow = (p: string) => p.startsWith("/cache/")
+  const doc = normalizePptx({
+    title: "t",
+    audio_path: "/cache/audio.mp3",
+    slides: [{ heading: "h", bullets: ["b"], image: "/cache/pic.jpg" }],
+  }, { isAllowedPath: allow })
+  assert.equal(doc.audio_path, "/cache/audio.mp3")
+  assert.equal(doc.slides[0]!.image, "/cache/pic.jpg")
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", bullets: ["b"], image: "/etc/x.jpg" }] }, { isAllowedPath: allow }),
+    /不在允许范围/,
+  )
+  assert.throws(
+    () => normalizePptx({ title: "t", audio_path: "/etc/a.mp3", slides: [{ heading: "h", bullets: ["b"] }] }, { isAllowedPath: allow }),
+    /不在允许范围/,
+  )
+})
+
+test("v2 幂等: 媒体内容 sha1 进规范形——同内容异路径同文件名、异内容异文件名", async () => {
+  const dir = mkdtempSync(joinTmp())
+  try {
+    const imgA = path.join(dir, "a.jpg")
+    const imgB = path.join(dir, "b.jpg")
+    writeFileSync(imgA, Buffer.from("same-image-bytes"))
+    writeFileSync(imgB, Buffer.from("same-image-bytes"))
+    const base = { title: "t", slides: [
+      { heading: "h1", bullets: ["b"], image: imgA },
+      { heading: "h2", bullets: ["b"] },
+      { heading: "h3", bullets: ["b"] },
+    ] }
+    const r1 = await renderPptx(normalizePptx(base), dir)
+    const r2 = await renderPptx(normalizePptx({ ...base, slides: [
+      { heading: "h1", bullets: ["b"], image: imgB },
+      { heading: "h2", bullets: ["b"] },
+      { heading: "h3", bullets: ["b"] },
+    ] }), dir)
+    assert.equal(r1.path, r2.path, "路径不同内容相同 → 同文件名（D8）")
+    writeFileSync(imgB, Buffer.from("different-bytes"))
+    const r3 = await renderPptx(normalizePptx({ ...base, slides: [
+      { heading: "h1", bullets: ["b"], image: imgB },
+      { heading: "h2", bullets: ["b"] },
+      { heading: "h3", bullets: ["b"] },
+    ] }), dir)
+    assert.notEqual(r1.path, r3.path, "内容不同 → 文件名轮换")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("v2 真渲染: 图片页 <a:blip> / 封面音频 <a:audioFile>（zip 后处理）/ rels 不动对偶断言", async () => {
+  const dir = mkdtempSync(joinTmp())
+  try {
+    const img = path.join(dir, "pic.jpg")
+    // 1×1 JPEG（最小合法图）
+    writeFileSync(img, Buffer.from("/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwcJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==", "base64"))
+    const mp3 = path.join(dir, "a.mp3")
+    writeFileSync(mp3, Buffer.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])) // ID3 头
+    const result = await renderPptx(normalizePptx({
+      title: "t", audio_path: mp3,
+      slides: [
+        { heading: "Pic page", bullets: ["see picture"], image: img },
+        { heading: "b", bullets: ["x"] },
+        { heading: "c", bullets: ["y"] },
+      ],
+    }), dir)
+    assert.equal(result.ok, true)
+    assert.equal(result.images, 1)
+    assert.equal(result.hasAudio, true)
+    const zip = await JSZip.loadAsync(readFileSync(result.path!))
+    // 图片页：<a:blip> 引用在；该页无 bullets 文本面板（整幅图版式）——文本清单只有 heading
+    const slide2 = await zip.file("ppt/slides/slide2.xml")!.async("string")
+    assert.ok(slide2.includes("<a:blip"), "配图页含 blip 引用")
+    // 封面：audioFile 形态（zip 后处理生效）、无 videoFile 残留
+    const slide1 = await zip.file("ppt/slides/slide1.xml")!.async("string")
+    assert.ok(slide1.includes("<a:audioFile"), "封面音频为 audioFile 形态（后处理已改）")
+    assert.ok(!slide1.includes("<a:videoFile"), "无 videoFile 残留")
+    // rels 不动对偶断言（评审 M-9）：封面 rels 含 audio 关系（pptxgenjs 本就写对）
+    const rels = await zip.file("ppt/slides/_rels/slide1.xml.rels")!.async("string")
+    assert.ok(rels.includes("audio"), "rels 含 audio 关系（未被后处理破坏）")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
