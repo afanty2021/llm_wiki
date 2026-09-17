@@ -1321,16 +1321,25 @@ test("pptx v2: 嵌入状态进成功文案（N 张配图/封面音频）+ image 
   }
 })
 
-test("pptx v2: image 越界路径 → ToolArgumentError（schema 层形状错误，v1 先例）", async () => {
-  // normalizePptx 默认无 isAllowedPath 时不过根校验——handler 接线 isAllowedMediaPath，
-  // /etc 路径在 normalize 阶段被拒（形状错误通道，schema 已约束的场景）
+test("pptx v2: image 越界路径 → ok:false 文本、不抛 ToolArgumentError（实施评审 C1）", async () => {
+  // image/audio_path 是模型转写的自由串（同 media_path）——越界走 caps 文本通道，
+  // 勿抛 ToolArgumentError（-32602 进熔断器，抄错 3 次即整服务器 60s 假故障）。
   const handlers = makeHandlers(async () => { throw new Error("no fetch") })
-  await assert.rejects(
-    handlers.get("teacher_tutor_pptx")!({
-      wecom_userid: "t1",
-      title: "t",
-      slides: [{ heading: "a", bullets: ["x"], image: "/etc/evil.jpg" }, { heading: "b", bullets: ["x"] }, { heading: "c", bullets: ["y"] }],
-    }),
-    /不在允许范围/,
-  )
+  const result = await handlers.get("teacher_tutor_pptx")!({
+    wecom_userid: "t1",
+    title: "t",
+    slides: [{ heading: "a", bullets: ["x"], image: "/etc/evil.jpg" }, { heading: "b", bullets: ["x"] }, { heading: "c", bullets: ["y"] }],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("未生成课件"), "路径越界返回文本引导而非抛错")
+  assert.ok(text.includes("不在允许范围"))
+  assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
+  // 音频路径同通道
+  const result2 = await handlers.get("teacher_tutor_pptx")!({
+    wecom_userid: "t1",
+    title: "t",
+    audio_path: "/etc/evil.mp3",
+    slides: [{ heading: "a", bullets: ["x"] }, { heading: "b", bullets: ["x"] }, { heading: "c", bullets: ["y"] }],
+  })
+  assert.ok(toolText(result2).includes("audio_path 不在允许范围"))
 })

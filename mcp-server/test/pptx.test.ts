@@ -350,23 +350,39 @@ test("v2 caps: image 页数 ≤4 / 单图 5MB / 音频 6MB / 嵌入总量 8MB", 
   assert.match(pptxCapsError(mkDoc(4), { stat: fakeStat({}) })!, /配图文件不可读/)
 })
 
-test("v2 normalize: image/audio_path 允许根校验（isAllowedPath 注入）", () => {
+test("v2 允许根校验走 caps 文本通道（实施评审 C1：勿进熔断器）", () => {
   const allow = (p: string) => p.startsWith("/cache/")
+  // 归一不再做路径校验（只留形状）——越界路径原样通过 normalize
   const doc = normalizePptx({
     title: "t",
+    audio_path: "/etc/a.mp3",
+    slides: [{ heading: "h", bullets: ["b"], image: "/etc/x.jpg" }],
+  })
+  assert.equal(doc.audio_path, "/etc/a.mp3")
+  assert.equal(doc.slides[0]!.image, "/etc/x.jpg")
+  // 允许根校验在 pptxCapsError：返回文本原因而非抛错（handler 包成 ok:false 文本）
+  assert.match(
+    pptxCapsError(doc, { stat: fakeStat({}) , isAllowedPath: allow })!,
+    /audio_path 不在允许范围/,
+  )
+  assert.match(
+    pptxCapsError({ ...doc, audio_path: undefined }, { stat: fakeStat({}), isAllowedPath: allow })!,
+    /配图路径不在允许范围/,
+  )
+  // 允许根内的路径无 caps 报错
+  const okDoc = normalizePptx({
+    title: "t",
     audio_path: "/cache/audio.mp3",
-    slides: [{ heading: "h", bullets: ["b"], image: "/cache/pic.jpg" }],
-  }, { isAllowedPath: allow })
-  assert.equal(doc.audio_path, "/cache/audio.mp3")
-  assert.equal(doc.slides[0]!.image, "/cache/pic.jpg")
-  assert.throws(
-    () => normalizePptx({ title: "t", slides: [{ heading: "h", bullets: ["b"], image: "/etc/x.jpg" }] }, { isAllowedPath: allow }),
-    /不在允许范围/,
-  )
-  assert.throws(
-    () => normalizePptx({ title: "t", audio_path: "/etc/a.mp3", slides: [{ heading: "h", bullets: ["b"] }] }, { isAllowedPath: allow }),
-    /不在允许范围/,
-  )
+    slides: [
+      { heading: "h1", bullets: ["b"], image: "/cache/pic.jpg" },
+      { heading: "h2", bullets: ["b"] },
+      { heading: "h3", bullets: ["b"] },
+    ],
+  })
+  assert.equal(pptxCapsError(okDoc, { stat: fakeStat({ "/cache/audio.mp3": 10, "/cache/pic.jpg": 10 }), isAllowedPath: allow }), null)
+  // 未注入 isAllowedPath 时跳过路径校验（既有 caps 用例不受影响）
+  const noAllow = pptxCapsError(doc, { stat: fakeStat({}) })
+  assert.ok(noAllow === null || !noAllow.includes("不在允许范围"), "未注入 isAllowedPath 时跳过路径校验")
 })
 
 test("v2 幂等: 媒体内容 sha1 进规范形——同内容异路径同文件名、异内容异文件名", async () => {

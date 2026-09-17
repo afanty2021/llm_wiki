@@ -1321,14 +1321,15 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
         theme: args.theme,
         slides: args.slides,
         audio_path: args.audio_path,
-      }, { isAllowedPath: isAllowedMediaPath })
+      })
     } catch (err) {
       // 形状错误对齐 worksheet 先例走 ToolArgumentError（schema 已约束、罕见）。
       if (err instanceof PptxFormatError) throw new ToolArgumentError(err.message)
       throw err
     }
-    // 量级超限走正常文本引导（应用级输入问题不进熔断器，同 worksheet 先例）。
-    const capError = pptxCapsError(doc)
+    // 量级超限与路径越界走正常文本引导（实施评审 C1：image/audio_path 是模型转写
+    // 自由串，越界进熔断器即 3 次假故障整服务器——同 media_path 文本通道）。
+    const capError = pptxCapsError(doc, { isAllowedPath: isAllowedMediaPath })
     if (capError) {
       return withIdentitySource(textResult(
         `未生成课件：${capError}。请精简内容或与教师确认后拆成两份。`), ident)

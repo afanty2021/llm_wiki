@@ -9,6 +9,8 @@
  *
  * 纪律沿袭 worksheet：
  * - caps 超限→文本引导不进熔断器；结构非法（PptxFormatError）handler 转 ToolArgumentError；
+ *   **路径越界走 caps 文本通道不抛错**（实施评审 C1：image/audio_path 与 media_path 同为
+ *   模型转写的自由字符串，抄错 3 次即整服务器熔断——计划评审 C3 姊妹路径）；
  * - 文件名 sha1(规范形 JSON)前 12（有意选择：哈希输入规范形而非渲染产物——模板/主题
  *   升级不轮换文件名，同内容静默覆盖（渲染不跳过已存在文件，覆盖无害）；需强制轮换时
  *   在规范形加模板版本常量。评审 M-3 明写）。v2：嵌入媒体以**内容 sha1** 进规范形（D8）
@@ -112,7 +114,8 @@ function scrubControlChars(text: string): string {
 }
 
 /** 结构校验+归一（trim 语义，normalizeWorksheet 先例）；长度/数量帽归 pptxCapsError。
- * v2：image/audio_path 只做形状与允许根校验（存在/体积在 caps 阶段查——归一保持纯函数）。 */
+ * v2：image/audio_path 只做形状校验保持纯函数——**允许根校验在 pptxCapsError 文本通道**
+ * （实施评审 C1：路径是模型转写自由串，走抛错通道会进熔断器）。 */
 export function normalizePptx(
   raw: {
     title: unknown
@@ -121,7 +124,6 @@ export function normalizePptx(
     slides: unknown
     audio_path?: unknown
   },
-  opts: { isAllowedPath?: (p: string) => boolean } = {},
 ): PptxDoc {
   // 标题剥「课件/PPT」字样（worksheet 剥「学案」先例：标题=主题名本身；指引在
   // schema/flow，此处兜底保证规则恒成立）。剥空则拒。
@@ -144,15 +146,7 @@ export function normalizePptx(
   }
 
   if (!Array.isArray(raw.slides)) throw new PptxFormatError("slides must be an array")
-  const allow = opts.isAllowedPath
-  const checkPath = (p: string, at: string): string => {
-    if (allow && !allow(p)) {
-      throw new PptxFormatError(`${at} 不在允许范围——只能引用系统素材注记行或提取产物给出的路径`)
-    }
-    return p
-  }
-  const audioPathRaw = optionalText(raw.audio_path, "audio_path")
-  const audio_path = audioPathRaw === undefined ? undefined : checkPath(audioPathRaw, "audio_path")
+  const audio_path = optionalText(raw.audio_path, "audio_path")
   const slides = raw.slides.map((item, i): PptxSlide => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new PptxFormatError(`slides[${i}] must be an object`)
@@ -167,8 +161,7 @@ export function normalizePptx(
       scrubControlChars(requireText(b, `slides[${i}].bullets[${j}]`)))
     const noteRaw = optionalText(rec.note, `slides[${i}].note`)
     const note = noteRaw === undefined ? undefined : scrubControlChars(noteRaw)
-    const imageRaw = optionalText(rec.image, `slides[${i}].image`)
-    const image = imageRaw === undefined ? undefined : checkPath(imageRaw, `slides[${i}].image`)
+    const image = optionalText(rec.image, `slides[${i}].image`)
     const base: PptxSlide = note === undefined ? { heading, bullets } : { heading, bullets, note }
     return image === undefined ? base : { ...base, image }
   })
@@ -189,12 +182,25 @@ function totalChars(doc: PptxDoc): number {
 }
 
 /** 量级闸（超限返回人类可读原因，handler 包裹成文本引导；字段级优先于页数/页级/总量）。
- * v2：opts.stat 注入文件大小检查（缺省 statSync）——image 页数/单图/音频/嵌入总量帽。 */
+ * v2：opts.stat 注入文件大小检查（缺省 statSync）——image 页数/单图/音频/嵌入总量帽。
+ * **允许根校验也在此文本通道**（实施评审 C1：路径越界勿走 PptxFormatError→熔断器），
+ * 且置于一切量级检查之前（安全卫门先行，media-extract 同款次序）。 */
 export function pptxCapsError(
   doc: PptxDoc,
-  opts: { stat?: (p: string) => { size: number } } = {},
+  opts: { stat?: (p: string) => { size: number }; isAllowedPath?: (p: string) => boolean } = {},
 ): string | null {
   const stat = opts.stat ?? ((p: string) => statSync(p))
+  if (opts.isAllowedPath !== undefined) {
+    const allow = opts.isAllowedPath
+    if (doc.audio_path !== undefined && !allow(doc.audio_path)) {
+      return "audio_path 不在允许范围——只能引用系统素材注记行或提取产物给出的路径"
+    }
+    for (const [i, s] of doc.slides.entries()) {
+      if (s.image !== undefined && !allow(s.image)) {
+        return `第 ${i + 1} 页配图路径不在允许范围——只能引用系统素材注记行或提取产物给出的路径`
+      }
+    }
+  }
   if (doc.title.length > PPTX_MAX_TITLE_CHARS) {
     return `标题 ${doc.title.length} 字符超过上限 ${PPTX_MAX_TITLE_CHARS}`
   }
