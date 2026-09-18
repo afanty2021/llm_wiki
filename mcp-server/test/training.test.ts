@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import { test } from "node:test"
 
@@ -91,6 +91,7 @@ function makeHandlers(
     renderMindmap?: Parameters<typeof createSrcServerHandlers>[0]["renderMindmap"]
     renderWorksheet?: Parameters<typeof createSrcServerHandlers>[0]["renderWorksheet"]
     renderPptx?: Parameters<typeof createSrcServerHandlers>[0]["renderPptx"]
+    mediaExtract?: Parameters<typeof createSrcServerHandlers>[0]["mediaExtract"]
   } = {},
 ) {
   const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
@@ -103,6 +104,7 @@ function makeHandlers(
     renderMindmap: opts.renderMindmap,
     renderWorksheet: opts.renderWorksheet,
     renderPptx: opts.renderPptx,
+    mediaExtract: opts.mediaExtract,
   })
 }
 
@@ -650,7 +652,7 @@ test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {
 
 // ── 形态注册过滤 ──
 
-test("src-server 形态：只注册 16 工具（14 teacher_tutor_* + 2 llm_wiki），9 个桌面工具不在 ListTools", () => {
+test("src-server 形态：只注册 17 工具（15 teacher_tutor_* + 2 llm_wiki），9 个桌面工具不在 ListTools", () => {
   const names = buildTools("src-server").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
     "llm_wiki_read_file",
@@ -658,6 +660,7 @@ test("src-server 形态：只注册 16 工具（14 teacher_tutor_* + 2 llm_wiki�
     "teacher_tutor_item_complete",
     "teacher_tutor_listening_audio",
     "teacher_tutor_mindmap",
+    "teacher_tutor_media_extract",
     "teacher_tutor_plan_create",
     "teacher_tutor_pptx",
     "teacher_tutor_roster_search",
@@ -1222,4 +1225,121 @@ test("pending 提示：profile_get 成功 → 额外取 plans 附提示；404（
     notFoundHandlers.get("teacher_tutor_profile_get")!({ wecom_userid: "t1" }),
     /LLM Wiki API 404/,
   )
+})
+
+// ── teacher_tutor_media_extract（2026-09-17 v2，计划 plans/2026-09-17-ltutor-pptx-v2-tool.md Task 3）──
+
+test("media_extract: 提取成功 → 结构化内容无 MEDIA 行 + identity_source", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    mediaExtract: async (raw) => {
+      assert.equal(raw.media_path, "/cache/doc_ab_video.mp4")
+      return {
+        ok: true, kind: "video" as const, duration_s: 132.5,
+        sheet_path: "/cache/ltutor-media/abc123/sheet.jpg",
+        transcript: [{ start_s: 0, end_s: 2, text: "Hello class" }],
+        audio_mp3_path: "/cache/ltutor-media/abc123/audio.mp3",
+      }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_media_extract")!({
+    wecom_userid: "t1",
+    media_path: "/cache/doc_ab_video.mp4",
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("素材提取完成（视频，132.5 秒）"))
+  assert.ok(text.includes("/cache/ltutor-media/abc123/sheet.jpg"))
+  assert.ok(text.includes("[0:00] Hello class"))
+  assert.ok(text.includes("vision_analyze"), "须指路帧读取工具")
+  assert.ok(!text.includes("MEDIA:"), "中间产物不发 MEDIA 行")
+  assert.ok(result.content.some((c) => c.text.includes('identity_source: "system"')))
+})
+
+test("media_extract: 路径越界 → 正常文本返回、勿抛 ToolArgumentError（计划评审 C3 负向断言）", async () => {
+  let called = false
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    mediaExtract: async () => {
+      called = true
+      return { ok: false, error: "素材路径不在允许范围——请使用消息里系统提供的素材路径" }
+    },
+  })
+  const result = await handlers.get("teacher_tutor_media_extract")!({
+    wecom_userid: "t1",
+    media_path: "/etc/passwd",
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("未能提取素材"))
+  assert.ok(text.includes("不在允许范围"))
+  assert.equal(called, true, "引擎被调（卫门在引擎层）")
+  assert.ok(!text.includes("MEDIA:"))
+})
+
+test("media_extract: 截断标记如实透出（transcript_truncated）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    mediaExtract: async () => ({
+      ok: true, kind: "audio" as const, duration_s: 900,
+      transcript: [{ start_s: 0, end_s: 1, text: "x" }],
+      transcript_truncated: true,
+    }),
+  })
+  const text = toolText(await handlers.get("teacher_tutor_media_extract")!({
+    wecom_userid: "t1", media_path: "/cache/a.mp3",
+  }))
+  assert.ok(text.includes("已截断"))
+})
+
+test("pptx v2: 嵌入状态进成功文案（N 张配图/封面音频）+ image 传入渲染", async () => {
+  // 素材放真实允许根（~/.hermes/cache）下——handler 接线 isAllowedMediaPath 真根校验
+  const realCacheRoot = path.join(homedir(), ".hermes", "cache")
+  mkdirSync(realCacheRoot, { recursive: true })
+  const tmpCache = mkdtempSync(path.join(realCacheRoot, "pptx-v2-test-"))
+  // caps 阶段 stat 真实文件——嵌入素材须真实存在
+  writeFileSync(path.join(tmpCache, "a.mp3"), "mp3")
+  writeFileSync(path.join(tmpCache, "pic.jpg"), "jpg")
+  try {
+    const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+      renderPptx: async (doc) => {
+        assert.equal(doc.audio_path, path.join(tmpCache, "a.mp3"))
+        assert.equal(doc.slides[0]!.image, path.join(tmpCache, "pic.jpg"))
+        return { ok: true, path: "/cache/pptx-embed.pptx", slides: 3, images: 1, hasAudio: true }
+      },
+    })
+    const result = await handlers.get("teacher_tutor_pptx")!({
+      wecom_userid: "t1",
+      title: "t",
+      audio_path: path.join(tmpCache, "a.mp3"),
+      slides: [
+        { heading: "a", bullets: ["x"], image: path.join(tmpCache, "pic.jpg") },
+        { heading: "b", bullets: ["x"] },
+        { heading: "c", bullets: ["y"] },
+      ],
+    })
+    const text = toolText(result)
+    assert.ok(text.includes("4 页，含封面，含 1 张配图、含封面音频"))
+    assert.ok(text.includes("\nMEDIA:/cache/pptx-embed.pptx\n"))
+  } finally {
+    rmSync(tmpCache, { recursive: true, force: true })
+  }
+})
+
+test("pptx v2: image 越界路径 → ok:false 文本、不抛 ToolArgumentError（实施评审 C1）", async () => {
+  // image/audio_path 是模型转写的自由串（同 media_path）——越界走 caps 文本通道，
+  // 勿抛 ToolArgumentError（-32602 进熔断器，抄错 3 次即整服务器 60s 假故障）。
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") })
+  const result = await handlers.get("teacher_tutor_pptx")!({
+    wecom_userid: "t1",
+    title: "t",
+    slides: [{ heading: "a", bullets: ["x"], image: "/etc/evil.jpg" }, { heading: "b", bullets: ["x"] }, { heading: "c", bullets: ["y"] }],
+  })
+  const text = toolText(result)
+  assert.ok(text.includes("未生成课件"), "路径越界返回文本引导而非抛错")
+  assert.ok(text.includes("不在允许范围"))
+  assert.ok(!text.includes("MEDIA:"), "失败时不得出现 MEDIA 行")
+  // 音频路径同通道
+  const result2 = await handlers.get("teacher_tutor_pptx")!({
+    wecom_userid: "t1",
+    title: "t",
+    audio_path: "/etc/evil.mp3",
+    slides: [{ heading: "a", bullets: ["x"] }, { heading: "b", bullets: ["x"] }, { heading: "c", bullets: ["y"] }],
+  })
+  assert.ok(toolText(result2).includes("audio_path 不在允许范围"))
 })
