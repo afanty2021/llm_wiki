@@ -6,6 +6,13 @@ use uuid::Uuid;
 use crate::{AppError, AppState};
 use crate::services::ingest_queue::IngestJob;
 
+/// job 级消费者数收敛 1..=8（镜像 ingest_pipeline::clamp_source_concurrency；
+/// config 侧只存原始值，消费点读取时统一过本函数，集成测试直接改
+/// state.config.ingest.worker_concurrency 后无需自行 clamp）。
+fn clamp_worker_concurrency(n: usize) -> usize {
+    n.clamp(1, 8)
+}
+
 /// server 启动时调用一次：recover_pending 后 spawn N 个 worker_loop 竞争消费。
 pub fn spawn_worker(state: AppState) {
     tokio::spawn(async move {
@@ -17,9 +24,12 @@ pub fn spawn_worker(state: AppState) {
             Err(e) => tracing::error!("recover_pending error: {}", e),
         }
 
-        // recover 必须先于消费者起跑：stale running job 靠重投入队，先 BRPOP 的消费者
-        // 抢不到它们。N 个消费者竞争 BRPOP 天然各领各的 job（job 级并发 = worker_concurrency）。
-        let consumers = state.config.ingest.worker_concurrency.max(1);
+        // recover 必须先于消费者起跑：消费者会把领取到的 job 标成 running，若 recover
+        // 晚于消费者，会把在飞 job 当 stale 再投回队列——N≥2 时重复副本可能被第二个
+        // 消费者并发弹出双跑。N 个消费者竞争 BRPOP 天然各领各的 job（job 级并发 =
+        // worker_concurrency，上界 1..=8 镜像 source 级 clamp——BRPOP 阻塞任务各占一条
+        // 共享池连接，无界 env 手滑会饿死同池 research worker，评审 I-2）。
+        let consumers = clamp_worker_concurrency(state.config.ingest.worker_concurrency);
         tracing::info!("ingest worker consumers: {}", consumers);
         for _ in 0..consumers {
             let st = state.clone();
@@ -83,8 +93,20 @@ async fn worker_loop(state: AppState) {
             }
         };
 
-        // 标记 running（pending→running + started_at + 发 job_running 事件，#2：经 mark_job_running 统一发事件）
-        let _ = crate::services::ingest_queue::mark_job_running(&state, job_id).await;
+        // 条件认领（I-1）：0 行 = recover 叠加的重复队列副本或已终态陈旧副本——跳过
+        // 不跑，同 job 永远只被一个消费者真执行。认领查询出错同样跳过：DB 不健康时
+        // run_ingest_job 也活不成，pending 行留待下次重启 recover_pending 重投。
+        match crate::services::ingest_queue::mark_job_running(&state, job_id).await {
+            Ok(1) => {}
+            Ok(n) => {
+                tracing::warn!("job {} claim skipped (rows_affected={}): 重复队列副本或已终态", job_id, n);
+                continue;
+            }
+            Err(e) => {
+                tracing::error!("claim job {}: {}——skip, 留待 recover", job_id, e);
+                continue;
+            }
+        }
 
         // D (ingest_pipeline) 已就绪：执行 job，按结果标记 succeeded/failed。
         match crate::services::ingest_pipeline::run_ingest_job(&state, &job).await {
@@ -155,4 +177,19 @@ async fn recover_pending(state: &AppState) -> Result<usize, AppError> {
             });
     }
     Ok(pending.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_worker_concurrency;
+
+    #[test]
+    fn clamp_worker_concurrency_bounds() {
+        assert_eq!(clamp_worker_concurrency(0), 1);
+        assert_eq!(clamp_worker_concurrency(1), 1);
+        assert_eq!(clamp_worker_concurrency(2), 2);
+        assert_eq!(clamp_worker_concurrency(8), 8);
+        assert_eq!(clamp_worker_concurrency(9), 8);
+        assert_eq!(clamp_worker_concurrency(usize::MAX), 8);
+    }
 }

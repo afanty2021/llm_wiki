@@ -179,7 +179,8 @@ fn default_log_level() -> String { "INFO".to_string() }
 /// transcriber 侧裁定），env INGEST__SOURCE_CONCURRENCY 覆盖；消费侧经
 /// ingest_pipeline::clamp_source_concurrency 收敛到 1..=8。
 /// worker_concurrency = job 级消费者数（ingest_worker 多任务竞争 BRPOP），默认 1
-/// 即单消费者；env INGEST__WORKER_CONCURRENCY 覆盖。
+/// 即单消费者；env INGEST__WORKER_CONCURRENCY 覆盖；消费侧经
+/// ingest_worker::clamp_worker_concurrency 收敛到 1..=8。
 #[derive(Debug, Clone, Deserialize)]
 pub struct IngestConfig {
     #[serde(default = "default_source_concurrency")]

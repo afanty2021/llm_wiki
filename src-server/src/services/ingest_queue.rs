@@ -255,15 +255,22 @@ pub async fn update_job_stage(
     Ok(())
 }
 
-/// 标记 running（pending→running + started_at + 发 job_running 事件）。
-/// worker 取到 job 后调（#2：经此函数统一发事件，替代既存内联 UPDATE）。
-pub async fn mark_job_running(state: &AppState, job_id: Uuid) -> Result<(), AppError> {
-    sqlx::query("UPDATE ingest_jobs SET status='running', started_at=NOW() WHERE id=$1")
-        .bind(job_id)
-        .execute(&state.db)
-        .await?;
-    emit_job_event(state, job_id, "job_running", serde_json::json!({}));
-    Ok(())
+/// 条件认领：pending→running（+started_at），带 status 守卫并返回 rows_affected。
+/// worker 侧 0 行即跳过——双消费者 + recover 重复入队（重启叠副本）时，同一 job
+/// 只会被一个消费者真跑，重复弹出/陈旧已终态副本都降级为 no-op（worker-concurrency
+/// 评审 I-1；先例=manual_retry 的条件 UPDATE+rows_affected）。
+pub async fn mark_job_running(state: &AppState, job_id: Uuid) -> Result<u64, AppError> {
+    let affected = sqlx::query(
+        "UPDATE ingest_jobs SET status='running', started_at=NOW() WHERE id=$1 AND status='pending'",
+    )
+    .bind(job_id)
+    .execute(&state.db)
+    .await?
+    .rows_affected();
+    if affected > 0 {
+        emit_job_event(state, job_id, "job_running", serde_json::json!({}));
+    }
+    Ok(affected)
 }
 
 pub async fn mark_job_failed(
