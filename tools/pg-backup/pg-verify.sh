@@ -18,7 +18,7 @@ CONTAINER="${CONTAINER:-src-server-postgres-1}"
 DB_USER="llmwiki"
 DB_NAME="llmwiki"
 VERIFY_DB="llmwiki_verify"
-BACKUP_DIR="$HOME/kb-dumps/src-server-pg"
+BACKUP_DIR="${PG_BACKUP_DIR:-$HOME/kb-dumps/src-server-pg}"
 LOG="$BACKUP_DIR/verify.log"
 
 mkdir -p "$BACKUP_DIR"
@@ -53,15 +53,16 @@ done
 log "verify start: $(basename "$LATEST")"
 TMP_IN="/tmp/verify-$(basename "$LATEST")"
 
-# PG16 WITH (FORCE)：孤儿 pg_restore 残留连接不再卡死每周演练（评审 M1）
-docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -c "DROP DATABASE IF EXISTS $VERIFY_DB WITH (FORCE)" >/dev/null
-docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -c "CREATE DATABASE $VERIFY_DB OWNER $DB_USER" >/dev/null
-docker cp "$LATEST" "$CONTAINER:$TMP_IN" || fail "docker cp failed"
-
 cleanup_db() {
   docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -c "DROP DATABASE IF EXISTS $VERIFY_DB WITH (FORCE)" >/dev/null 2>&1 || true
   docker exec "$CONTAINER" rm -f "$TMP_IN" 2>/dev/null || true
 }
+
+# PG16 WITH (FORCE)：孤儿 pg_restore 残留连接不再卡死每周演练（评审 M1）；
+# NOTICE 重定向进 verify.log，launchd err 日志保持空=健康信号
+docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -c "DROP DATABASE IF EXISTS $VERIFY_DB WITH (FORCE)" >/dev/null 2>> "$LOG"
+docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -c "CREATE DATABASE $VERIFY_DB OWNER $DB_USER" >/dev/null 2>> "$LOG"
+docker cp "$LATEST" "$CONTAINER:$TMP_IN" || { cleanup_db; fail "docker cp failed"; }
 
 RESTORE_OK=1
 docker exec "$CONTAINER" pg_restore -U "$DB_USER" -d "$VERIFY_DB" --no-owner --exit-on-error -j2 "$TMP_IN" || RESTORE_OK=0
@@ -89,7 +90,7 @@ cmp_all() {
   n=0
   while [ "$n" -lt 4 ]; do
     lv=${L%%,*}; vv=${V%%,*}
-    [ "$vv" -gt 0 ] || return 1
+    if [ "$lv" -gt 0 ]; then [ "$vv" -gt 0 ] || return 1; fi   # 空表(0行)不判假失败（评审2：再生表全空的库）
     [ "$vv" -ge $((lv * 9 / 10)) ] || return 1
     if [ "$n" -eq 3 ]; then return 0; fi
     L="${L#*,}"; V="${V#*,}"

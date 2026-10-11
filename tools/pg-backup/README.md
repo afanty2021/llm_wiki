@@ -11,7 +11,7 @@
 |---|---|---|
 | `pg-backup.sh` | 容器内 `pg_dump -Fc` → 归档校验 → 原子发布 → 尺寸护栏 → 轮转 → 存储镜像 → 第二副本 | `wiki.pg-backup` 每日 04:30 |
 | `pg-verify.sh` | 最新 dump 真恢复进 scratch 库 `llmwiki_verify`，十表对账后 drop | `wiki.pg-verify` 每周日 05:00 |
-| `pg-watchdog.sh` | 停摆自愈+告警（备份 >26h / 第二副本 / 体积下限 / 演练 >8d） | `wiki.pg-watchdog` 每日 09:00 |
+| `pg-watchdog.sh` | 停摆自愈+告警（备份 >26h / 第二副本 / 存储镜像心跳 / 体积下限 / 演练 >8d） | `wiki.pg-watchdog` 每日 09:00 |
 
 - **双份部署**（同 SKILL 双份 cp 纪律）：**仓 `tools/pg-backup/` = 版本化源**；launchd 实跑
   `~/kb-ops/pg-backup/`（仓外稳定路径——本仓有并行会话切分支/git clean 的先例，仓内路径不可作运行时依赖）。
@@ -71,19 +71,29 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/wiki.pg-backup.plist
 # 停用：plist 改名防自动加载
 mv ~/Library/LaunchAgents/wiki.pg-backup.plist{,.disabled}
 
-# 看门手动跑一次（正常 <5s；备份陈旧时会先自愈重试 4 分钟）
+# 看门手动跑一次（正常 <5s；备份陈旧时会先自愈重试，轮询最多 8 分钟）
 ~/kb-ops/pg-backup/pg-watchdog.sh
+
+# 沙箱演练（PG_* 旋钮重定向落点，不碰真实备份）——安全分支必须离线实测：
+# 例：护栏 trip→ack→自愈放行三态（假 prev 200MB 触发 trip，真 dump 连续小尺寸触发放行）
+T=/tmp/pgbak-test && rm -rf $T /tmp/pgbak-mirror /tmp/pgbak-storage && mkdir -p $T
+dd if=/dev/zero of=$T/llmwiki-20261010-043000-6.dump bs=1048576 count=200
+PG_BACKUP_DIR=$T PG_MIRROR_DIR=/tmp/pgbak-mirror PG_STORAGE_DST=/tmp/pgbak-storage \
+  ~/kb-ops/pg-backup/pg-backup.sh   # 第 1 次 exit 1（trip+ack），第 2 次放行 exit 0
+rm -rf $T /tmp/pgbak-mirror /tmp/pgbak-storage
 ```
 
 ## 已验证
 
 - 2026-10-11 v1：首备 77MB + 恢复演练三表与 live 全等；演练抓出两坑修入库（`pg_restore -d` 只连不建库须先 CREATE DATABASE；launchd PATH 无 /usr/local/bin）。
 - 2026-10-11 v2（评审修复后）：backup / verify / watchdog 三脚本 bash -n + 实跑通过；verify 在 launchd 下 kickstart 首跑 exit 0；十表对账（6 状态表精确相等 + 4 再生表 ≥90%）实跑通过。
+- 2026-10-11 v2.1（评审2 C-1 修复后）：护栏 ack 自愈死代码修复（`stat -f%z "$ACK"` 取的是 ack 文件自身字节数→改 `cat`）；ack 分支本体沙箱突变实测通过（trip→ack→放行三态）；N-1 存储镜像心跳入看门；launchd 三任务 kickstart 全 exit 0。**教训：未演练的安全路径=未验证的声明——首版 ack 分支从未被执行过，一行死代码躲过了全部实跑。**
 
 ## 头号开放风险（诚实清单）
 
 1. **无跨盘/跨机第二副本**（2026-10-11 实测 `tmutil destinationinfo` 无目标）：原件+22 份 dump+镜像全在 /dev/disk3s5。`/Users/Shared` 副本只防「误删」类事故（10-10 就是这类），**不防盘损**。本周内应配 Time Machine（需目标盘）或云副本（rclone，钥另管）。
 2. **RPO ≤ 24h**：事故前最后一次 04:30 备份之后的教师消息/播放遥测真丢（wiki 内容可由源文件重摄兜底）。收紧：plist StartCalendarInterval 改数组 `[04:30, 12:30]`。
 3. **kids_vocab_postgres 不在覆盖范围**（另一项目）；需要时照抄本目录模板。
+3a. **对账清单口径**：十表之外今日全零的表（教师 chat/learning 等尚未落库）不在对账内——这些表开始有数据时，须把状态表清单扩进 pg-verify.sh 的 COUNTS_SQL。
 4. 脚本内容器名 `src-server-postgres-1`、`/Users/Shared` 镜像路径为硬编码；compose 改名须同步。
 5. 覆盖口径：plist 无 Nice/LowPriorityIO、日志不轮转（年增几 KB，观感项，记档）。

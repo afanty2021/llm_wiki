@@ -19,10 +19,12 @@ PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 CONTAINER="${CONTAINER:-src-server-postgres-1}"
 DB_USER="llmwiki"
 DB_NAME="llmwiki"
-BACKUP_DIR="$HOME/kb-dumps/src-server-pg"
+# 沙箱旋钮：PG_* 环境变量把落点重定向到沙箱目录——安全分支（护栏 trip/ack、锁争用）
+# 必须能离线实测；「未演练的安全路径=未验证的声明」（评审2 C-1 教训）
+BACKUP_DIR="${PG_BACKUP_DIR:-$HOME/kb-dumps/src-server-pg}"
 STORAGE_SRC="$HOME/kb-storage"
-STORAGE_DST="$HOME/kb-dumps/src-server-storage"
-MIRROR_DIR="/Users/Shared/kb-pg-backup-mirror"   # 同机第二副本：防家目录/备份目录误删，不防盘损
+STORAGE_DST="${PG_STORAGE_DST:-$HOME/kb-dumps/src-server-storage}"
+MIRROR_DIR="${PG_MIRROR_DIR:-/Users/Shared/kb-pg-backup-mirror}"   # 同机第二副本：防家目录/备份目录误删，不防盘损
 DAILY_KEEP=14
 WEEKLY_KEEP=8
 LOG="$BACKUP_DIR/backup.log"
@@ -85,10 +87,10 @@ if [ -n "$PREV" ]; then
   PREV_SIZE=$(stat -f%z "$PREV")
   if [ "$SIZE" -lt $((PREV_SIZE / 2)) ]; then
     if [ -f "$ACK" ]; then
-      A=$(stat -f%z "$ACK")
+      A=$(cat "$ACK")   # ack 内容=首拦尺寸数字；stat 取的是文件自身字节数（C-1 死代码根因，勿改回）
       if [ "$SIZE" -ge $((10 * 1024 * 1024)) ] \
          && [ "$SIZE" -ge $((A * 3 / 4)) ] && [ "$SIZE" -le $((A * 5 / 4)) ]; then
-        log "WARN→OK: 合法缩库确认（连续小尺寸），放行 $SIZE（旧基线 $PREV_SIZE）"
+        log "WARN→OK: 合法缩库确认（连续小尺寸），放行 ${SIZE}（旧基线 ${PREV_SIZE}）"   # bash3.2：$VAR 后跟全角字符会把高位字节并入变量名，必须 ${VAR}
         rm -f "$ACK"
       else
         TRIP=1
@@ -132,6 +134,8 @@ done
 if [ -d "$STORAGE_SRC" ]; then
   mkdir -p "$STORAGE_DST"
   if rsync -a "$STORAGE_SRC/" "$STORAGE_DST/" >> "$LOG" 2>&1; then
+    printf '%s\n' "$(date '+%F %T')" > "$STORAGE_DST/.mirror-ok.tmp"
+    mv "$STORAGE_DST/.mirror-ok.tmp" "$STORAGE_DST/.mirror-ok"
     log "OK storage mirror -> $STORAGE_DST"
   else
     log "WARN: storage mirror rsync failed（非致命，下日重试）"
