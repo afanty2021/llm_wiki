@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{AppError, AppState};
 use crate::services::ingest_queue::IngestJob;
 
-/// server 启动时调用一次。spawn tokio task → recover_pending → worker_loop。
+/// server 启动时调用一次：recover_pending 后 spawn N 个 worker_loop 竞争消费。
 pub fn spawn_worker(state: AppState) {
     tokio::spawn(async move {
         tracing::info!("ingest worker started");
@@ -17,9 +17,14 @@ pub fn spawn_worker(state: AppState) {
             Err(e) => tracing::error!("recover_pending error: {}", e),
         }
 
-        worker_loop(state).await;
-
-        tracing::info!("ingest worker stopped");
+        // recover 必须先于消费者起跑：stale running job 靠重投入队，先 BRPOP 的消费者
+        // 抢不到它们。N 个消费者竞争 BRPOP 天然各领各的 job（job 级并发 = worker_concurrency）。
+        let consumers = state.config.ingest.worker_concurrency.max(1);
+        tracing::info!("ingest worker consumers: {}", consumers);
+        for _ in 0..consumers {
+            let st = state.clone();
+            tokio::spawn(worker_loop(st));
+        }
     });
 }
 

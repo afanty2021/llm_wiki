@@ -178,20 +178,29 @@ fn default_log_level() -> String { "INFO".to_string() }
 /// ingest 并发配置（spec 2026-08-29 §4）：source 级生成并发度，默认 3（对齐
 /// transcriber 侧裁定），env INGEST__SOURCE_CONCURRENCY 覆盖；消费侧经
 /// ingest_pipeline::clamp_source_concurrency 收敛到 1..=8。
+/// worker_concurrency = job 级消费者数（ingest_worker 多任务竞争 BRPOP），默认 1
+/// 即单消费者；env INGEST__WORKER_CONCURRENCY 覆盖。
 #[derive(Debug, Clone, Deserialize)]
 pub struct IngestConfig {
     #[serde(default = "default_source_concurrency")]
     pub source_concurrency: usize,
+    #[serde(default = "default_worker_concurrency")]
+    pub worker_concurrency: usize,
 }
 
 fn default_source_concurrency() -> usize {
     3
 }
 
+fn default_worker_concurrency() -> usize {
+    1
+}
+
 impl Default for IngestConfig {
     fn default() -> Self {
         Self {
             source_concurrency: default_source_concurrency(),
+            worker_concurrency: default_worker_concurrency(),
         }
     }
 }
