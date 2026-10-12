@@ -183,6 +183,13 @@ pub async fn embed_and_store(
         }
         let all_vecs = if all_texts.is_empty() {
             Ok(Vec::new())
+        } else if all_texts.len() > EMBED_REQ_MAX_CHUNKS {
+            // 单页超帽独占组（group_pages_for_embed 的 alone 分支）：不先烧一次注定超时的
+            // 巨型请求，直接走既有逐页回落路径（embed_page_pieces 内部子批）。
+            Err(AppError::LlmApiError(format!(
+                "oversized group ({} chunks) routed to per-page sub-batching",
+                all_texts.len()
+            )))
         } else {
             embed_batch(cfg, client, &all_texts).await
         };
@@ -228,11 +235,14 @@ async fn embed_page_pieces(
     path: &str,
     pieces: &[String],
 ) -> Result<(), AppError> {
-    let all_vecs = if pieces.is_empty() {
-        Vec::new()
-    } else {
-        embed_batch(cfg, client, pieces).await?
-    };
+    // 子批 ≤EMBED_REQ_MAX_CHUNKS：单页超帽（如 wiki/index.md ~2.8k chunk）一杆子单请求
+    // 必超 embed_batch 的 timeout_secs 帽——2026-10-12 实锺：PUT 重嵌静默失败、页写成功
+    // 而向量零更新。页原子性在 store 层（upsert 事务内删后插）保持，子批只切请求。
+    let mut all_vecs = Vec::with_capacity(pieces.len());
+    for sub in pieces.chunks(EMBED_REQ_MAX_CHUNKS) {
+        let mut vs = embed_batch(cfg, client, sub).await?;
+        all_vecs.append(&mut vs);
+    }
     let chunks: Vec<PageChunk> = pieces
         .iter()
         .enumerate()

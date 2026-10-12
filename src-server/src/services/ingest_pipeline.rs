@@ -2332,6 +2332,20 @@ async fn update_merged_page(
     .bind(&fm)
     .execute(&state.db)
     .await?;
+    // merge 口重嵌（2026-10-12 QC ②根修）：API PUT 路径有 embed 钩子而本口裸 UPDATE——
+    // 合并页向量停在合并前内容（32 页滞后实锺）。best-effort 同 pages.rs：失败只 log。
+    if let Err(e) = crate::services::embedding::embed_page(
+        &*state.vector_store,
+        state.config.embedding.as_ref(),
+        &state.http,
+        project_id,
+        path,
+        merged_content,
+    )
+    .await
+    {
+        tracing::warn!("embed merged page {} failed (search degraded): {}", path, e);
+    }
     Ok(())
 }
 
