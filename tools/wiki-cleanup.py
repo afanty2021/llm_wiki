@@ -65,8 +65,9 @@ def api(token, method, path, body=None, if_match=None):
         headers=hdrs, method=method)
     # 大页（如 wiki/index.md ~2.8k chunk）PUT 内联重嵌远超 60s；客户端超时断连会
     # 取消 axum handler 连带 embed 中途蒸发（10-12 实锺：页写成功、向量零更新）。
-    # 走环境变量放宽，与 WIKI_TOKEN 同款约定。
-    timeout = float(os.environ.get("WIKI_API_TIMEOUT", "60"))
+    # 走环境变量放宽，与 WIKI_TOKEN 同款约定；默认 300s——旗舰操作（trim-index 重嵌
+    # index 实测 72s+）在旧默认 60s 下不设 env 即静默重现原 bug（commits-review-20261012）。
+    timeout = float(os.environ.get("WIKI_API_TIMEOUT", "300"))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = r.read()
@@ -459,6 +460,12 @@ def cmd_merge(args):
     if not args.execute:
         for g in plan["groups"]:
             print(f"  {g['key']}: keep={g['keep_path']} del={g['losers']}")
+        # 收尾步预览（评审 Minor：dry-run 应含 index 裁剪面）
+        idx = pages.get(INDEX_PATH)
+        if idx and losers_all:
+            live = {p["path"] for p in pages.values()} - set(losers_all)
+            _, dropped = trim_index_lines(idx["content"], live)
+            print(f"  index 收尾预览：将裁掉 {len(dropped)} 条死链行")
         return
     backup("entity-merge",
            [pages[lp] for lp in losers_all if lp in pages]
@@ -478,23 +485,27 @@ def cmd_merge(args):
         fm_changed = sorted(fm.get("sources") or []) != sorted(fm_sources)
         fm["sources"] = fm_sources
         put_page(token, kp["path"], new_content, fm, skip_if_same=not fm_changed)
-    ok = fail = 0
+    fail = 0
+    deleted = []  # 确认 204/404 的 loser——收尾步 live 集只减这些（评审 Minor：删除失败者
+    # 仍是活页，误减会让 index 预裁掉指向它的行=人为死链）
     for lp in losers_all:
         try:
             st = delete_page(token, lp)
-            ok += 1 if st == 204 else 0
+            if st in (204, 404):
+                deleted.append(lp)
             if st == 404:
                 print(f"  [404] {lp}（本就不存在）")
         except Exception as e:
             fail += 1
             print(f"  [FAIL] {lp}: {e}")
-    print(f"批②完成：改写 {len(rewrites)} 页、合并 {len(merges)} canonical、删除 {ok} loser（{fail} 失败）")
+    print(f"批②完成：改写 {len(rewrites)} 页、合并 {len(merges)} canonical、删除 {len(deleted)} loser（{fail} 失败）")
     # 收尾步（QC ①根修）：删 loser 后同步裁首页索引死链行，防 API 删页不触发 index 再生
     idx = pages.get(INDEX_PATH)
-    if idx and losers_all:
-        live = {p["path"] for p in pages.values()} - set(losers_all)
+    if idx and deleted:
+        live = {p["path"] for p in pages.values()} - set(deleted)
         new_idx, dropped = trim_index_lines(idx["content"], live)
         if dropped:
+            backup("index-trim", [idx], f"merge 收尾步：裁掉 {len(dropped)} 条死链行前原文")
             put_page(token, INDEX_PATH, new_idx,
                      json.loads(idx["frontmatter"]) if idx["frontmatter"] else None)
             print(f"index 收尾：裁掉 {len(dropped)} 条死链行")
