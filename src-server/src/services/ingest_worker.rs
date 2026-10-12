@@ -160,6 +160,9 @@ async fn worker_loop(state: AppState) {
 /// failed/cancelled），唯一出路=直接改库（commits-review-20261012 Critical）。
 /// 本函数在消费者 spawn 前跑完（spawn_worker :21-36 顺序），重置与认领无竞态；
 /// 守卫不放宽到两态——那会重开并发双跑洞。
+/// 【多进程边记档（复审 Minor）】全仓无单实例锁且 spawn_worker 先于 TcpListener::bind
+/// （main.rs :26/:35）——手滑起的第二实例会在 bind 失败死亡前跑本函数，把第一实例
+/// 在飞 job 重置+重投＝跨进程双跑。触发需运维错误，launchd 单 label 兜底，接受现状。
 async fn recover_pending(state: &AppState) -> Result<usize, AppError> {
     let reset = sqlx::query("UPDATE ingest_jobs SET status='pending' WHERE status='running'")
         .execute(&state.db)

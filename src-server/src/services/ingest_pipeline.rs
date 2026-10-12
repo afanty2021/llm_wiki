@@ -1879,9 +1879,13 @@ pub async fn run_ingest_job(
                                         if !merged_content.trim().is_empty() {
                                             collected.push((page.path.clone(), merged_content));
                                         } else {
-                                            // 空 merged 内容不进收尾批嵌入——向量须随页清空，
-                                            // 否则残留合并前内容（QC ②窄缝；收尾批覆盖主路径，
-                                            // 勿在 update_merged_page 内再加内联钩子=双重嵌入）。
+                                            // 防御分支（复审记档）：当前不可达——merge_pages_via
+                                            // 对空内容直接 Err 走 fallback，合并成功永不返回空。
+                                            // 留守是防上游语义变化时静默漏删向量。
+                                            // 真窄缝=check_cancel（:2016）恰在收尾批嵌入前——
+                                            // cancel/中途 Err 会丢 collected 批，合并页向量停在
+                                            // 合并前内容（32 页沉淀同类）＝已知重开，QC 战役
+                                            // staleness 检查+PUT 重嵌兜底；勿加内联钩子（双重嵌入）。
                                             let _ = crate::services::embedding::delete_embedding(
                                                 &*state.vector_store, job.project_id, &page.path,
                                             )
