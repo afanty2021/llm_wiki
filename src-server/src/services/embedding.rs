@@ -181,15 +181,25 @@ pub async fn embed_and_store(
             all_texts.extend(page_pieces[pi].iter().cloned());
             spans.push((seq, start, page_pieces[pi].len()));
         }
+        let oversized = all_texts.len() > EMBED_REQ_MAX_CHUNKS;
+        if oversized {
+            // 单页超帽独占组（group_pages_for_embed 的 alone 分支）：不先烧一次注定超时的
+            // 巨型请求，直接逐页走子批（embed_page_pieces 内部 ≤cap 切请求）。info 级——
+            // 设计内路由非失败，勿借道下方 warn 的「failed:」措辞污染失败 grep。
+            tracing::info!(
+                "embed oversized lone group ({} chunks): per-page sub-batch route",
+                all_texts.len()
+            );
+            for &pi in &group {
+                match embed_page_pieces(store, cfg, client, project_id, &pages[pi].0, &page_pieces[pi]).await {
+                    Ok(()) => outcome.stored += 1,
+                    Err(e) => outcome.failures.push((pages[pi].0.clone(), e.to_string())),
+                }
+            }
+            continue;
+        }
         let all_vecs = if all_texts.is_empty() {
             Ok(Vec::new())
-        } else if all_texts.len() > EMBED_REQ_MAX_CHUNKS {
-            // 单页超帽独占组（group_pages_for_embed 的 alone 分支）：不先烧一次注定超时的
-            // 巨型请求，直接走既有逐页回落路径（embed_page_pieces 内部子批）。
-            Err(AppError::LlmApiError(format!(
-                "oversized group ({} chunks) routed to per-page sub-batching",
-                all_texts.len()
-            )))
         } else {
             embed_batch(cfg, client, &all_texts).await
         };

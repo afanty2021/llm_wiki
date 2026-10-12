@@ -155,7 +155,19 @@ async fn worker_loop(state: AppState) {
 
 /// 启动时扫描 PG 中未完成的 job（pending + running）→ 重新 LPUSH 到队列。
 /// "running" 的 job 是上次崩溃/重启前正在处理的——pipeline 内缓存+幂等 upsert 保证重投安全。
+/// LPUSH 前须先 running→pending 重置：条件认领守卫（mark_job_running 只认 pending）下，
+/// 未重置的 running 副本弹出必得 0 行跳过——job 永卡 running（manual_retry 只救
+/// failed/cancelled），唯一出路=直接改库（commits-review-20261012 Critical）。
+/// 本函数在消费者 spawn 前跑完（spawn_worker :21-36 顺序），重置与认领无竞态；
+/// 守卫不放宽到两态——那会重开并发双跑洞。
 async fn recover_pending(state: &AppState) -> Result<usize, AppError> {
+    let reset = sqlx::query("UPDATE ingest_jobs SET status='pending' WHERE status='running'")
+        .execute(&state.db)
+        .await?
+        .rows_affected();
+    if reset > 0 {
+        tracing::info!("recover: {} running job(s) → pending（崩溃/重启残留）", reset);
+    }
     let pending: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM ingest_jobs WHERE status IN ('pending', 'running')"
     )

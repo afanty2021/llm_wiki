@@ -1878,6 +1878,14 @@ pub async fn run_ingest_job(
                                         }
                                         if !merged_content.trim().is_empty() {
                                             collected.push((page.path.clone(), merged_content));
+                                        } else {
+                                            // 空 merged 内容不进收尾批嵌入——向量须随页清空，
+                                            // 否则残留合并前内容（QC ②窄缝；收尾批覆盖主路径，
+                                            // 勿在 update_merged_page 内再加内联钩子=双重嵌入）。
+                                            let _ = crate::services::embedding::delete_embedding(
+                                                &*state.vector_store, job.project_id, &page.path,
+                                            )
+                                            .await;
                                         }
                                         outcomes.push(PageWriteOutcome::Upserted);
                                     }
@@ -2332,20 +2340,6 @@ async fn update_merged_page(
     .bind(&fm)
     .execute(&state.db)
     .await?;
-    // merge 口重嵌（2026-10-12 QC ②根修）：API PUT 路径有 embed 钩子而本口裸 UPDATE——
-    // 合并页向量停在合并前内容（32 页滞后实锺）。best-effort 同 pages.rs：失败只 log。
-    if let Err(e) = crate::services::embedding::embed_page(
-        &*state.vector_store,
-        state.config.embedding.as_ref(),
-        &state.http,
-        project_id,
-        path,
-        merged_content,
-    )
-    .await
-    {
-        tracing::warn!("embed merged page {} failed (search degraded): {}", path, e);
-    }
     Ok(())
 }
 
