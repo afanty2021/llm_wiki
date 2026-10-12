@@ -63,8 +63,12 @@ def api(token, method, path, body=None, if_match=None):
         f"{BASE}/api/v1/projects/{PROJECT_ID}{path}",
         data=json.dumps(body).encode() if body is not None else None,
         headers=hdrs, method=method)
+    # 大页（如 wiki/index.md ~2.8k chunk）PUT 内联重嵌远超 60s；客户端超时断连会
+    # 取消 axum handler 连带 embed 中途蒸发（10-12 实锺：页写成功、向量零更新）。
+    # 走环境变量放宽，与 WIKI_TOKEN 同款约定。
+    timeout = float(os.environ.get("WIKI_API_TIMEOUT", "60"))
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             data = r.read()
             return r.status, json.loads(data) if data else None
     except urllib.error.HTTPError as e:
@@ -117,6 +121,47 @@ def delete_page(token, path):
     if st in (204, 404):
         return st
     raise RuntimeError(f"DELETE {path} -> {st} {resp}")
+
+
+INDEX_PATH = "wiki/index.md"
+RE_INDEX_LINE = re.compile(r"^\s*-\s*\[[^\]]*\]\(([^)]+\.md)\)\s*$")
+
+
+def trim_index_lines(content, live_paths):
+    """裁掉首页索引中指向已不存在页的列表行（index 为单 H1+扁平列表、每行恰一 .md 链接）。
+    2026-10-12 QC ①根修：API 删页不触发管线侧的 index 再生，删 loser 后须同步裁剪，
+    否则首页挂死链（当日实锺 197 条=合并 loser 全集）。"""
+    out, dropped = [], []
+    for ln in content.split("\n"):
+        m = RE_INDEX_LINE.match(ln)
+        if m and m.group(1) not in live_paths:
+            dropped.append(m.group(1))
+            continue
+        out.append(ln)
+    return "\n".join(out), dropped
+
+
+def cmd_trim_index(args):
+    fresh_dump()
+    pages = {p["path"]: p for p in load_pages()}
+    idx = pages.get(INDEX_PATH)
+    if not idx:
+        print(f"{INDEX_PATH} 不存在，跳过")
+        return
+    live = {p["path"] for p in pages.values()}
+    new_idx, dropped = trim_index_lines(idx["content"], live)
+    print(f"[{'EXECUTE' if args.execute else 'DRY-RUN'}] index 死链行 {len(dropped)}")
+    for d in dropped[:10]:
+        print("  ", d)
+    if len(dropped) > 10:
+        print(f"   …共 {len(dropped)} 条")
+    if not dropped or not args.execute:
+        return
+    backup("index-trim", [idx], f"裁掉 {len(dropped)} 条死链行前原文")
+    token = os.environ.get("WIKI_TOKEN") or login_default()
+    put_page(token, INDEX_PATH, new_idx,
+             json.loads(idx["frontmatter"]) if idx["frontmatter"] else None)
+    print(f"index 裁剪完成：-{len(dropped)} 行")
 
 
 def fresh_dump():
@@ -444,6 +489,15 @@ def cmd_merge(args):
             fail += 1
             print(f"  [FAIL] {lp}: {e}")
     print(f"批②完成：改写 {len(rewrites)} 页、合并 {len(merges)} canonical、删除 {ok} loser（{fail} 失败）")
+    # 收尾步（QC ①根修）：删 loser 后同步裁首页索引死链行，防 API 删页不触发 index 再生
+    idx = pages.get(INDEX_PATH)
+    if idx and losers_all:
+        live = {p["path"] for p in pages.values()} - set(losers_all)
+        new_idx, dropped = trim_index_lines(idx["content"], live)
+        if dropped:
+            put_page(token, INDEX_PATH, new_idx,
+                     json.loads(idx["frontmatter"]) if idx["frontmatter"] else None)
+            print(f"index 收尾：裁掉 {len(dropped)} 条死链行")
 
 
 # ---------------- 批③ ----------------
@@ -503,11 +557,12 @@ def main():
     b = sub.add_parser("backfill-links"); b.add_argument("--execute", action="store_true")
     sub.add_parser("plan-merge")
     m = sub.add_parser("merge"); m.add_argument("--plan", required=True); m.add_argument("--execute", action="store_true")
+    ti = sub.add_parser("trim-index"); ti.add_argument("--execute", action="store_true")
     mi = sub.add_parser("plan-mini"); mi.add_argument("--execute", action="store_true")
     pu = sub.add_parser("purge"); pu.add_argument("--list", required=True); pu.add_argument("--execute", action="store_true")
     args = ap.parse_args()
     {"backfill-links": cmd_backfill, "plan-merge": cmd_plan_merge, "merge": cmd_merge,
-     "plan-mini": cmd_plan_mini, "purge": cmd_purge}[args.cmd](args)
+     "trim-index": cmd_trim_index, "plan-mini": cmd_plan_mini, "purge": cmd_purge}[args.cmd](args)
 
 
 if __name__ == "__main__":
