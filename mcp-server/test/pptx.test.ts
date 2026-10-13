@@ -134,9 +134,19 @@ test("caps: 字段长度帽（title/subtitle/heading/bullet/note）", () => {
     pptxCapsError(normalizePptx({ title: "t", slides: [{ heading: "h", bullets: [long] }] }))!,
     /要点 81 字符超过上限 80/,
   )
+  // v3：note 上限 120→200（结构化讲稿契约）；200 过、201 拒。
+  const noteSlides = (note: string) => [
+    { heading: "h", bullets: ["b"], note },
+    { heading: "h2", bullets: ["b"] },
+    { heading: "h3", bullets: ["b"] },
+  ]
+  assert.equal(
+    pptxCapsError(normalizePptx({ title: "t", slides: noteSlides("n".repeat(200)) })),
+    null,
+  )
   assert.match(
-    pptxCapsError(normalizePptx({ title: "t", slides: [{ heading: "h", bullets: ["b"], note: "n".repeat(121) }] }))!,
-    /备注 121 字符超过上限 120/,
+    pptxCapsError(normalizePptx({ title: "t", slides: noteSlides("n".repeat(201)) }))!,
+    /备注 201 字符超过上限 200/,
   )
 })
 
@@ -488,6 +498,163 @@ test("v2 渲染后实测超投递帽 → 剥嵌入降级纯文字版（实施评
     const failed = await renderPptx(normalizePptx(plain), dir, { maxDeliveryBytes: 1 })
     assert.equal(failed.ok, false)
     assert.match(failed.error!, /超过投递上限/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── v3 版式系统（锁定版式 + 预设主题 + note 200；guizang 方法论自研实现）──
+
+import { effectiveLayout } from "../src/pptx.js"
+
+test("v3 版式推断: image > compare > layout > 缺省 bullets（effectiveLayout 单一事实）", () => {
+  assert.equal(effectiveLayout({ image: "/x.png" }), "image")
+  assert.equal(effectiveLayout({ image: "/x.png", compare: { left: { heading: "a", bullets: ["b"] }, right: { heading: "c", bullets: ["d"] } } }), "image", "image 优先")
+  assert.equal(effectiveLayout({ compare: { left: { heading: "a", bullets: ["b"] }, right: { heading: "c", bullets: ["d"] } } }), "compare", "compare 字段即对比页（layout 可省）")
+  assert.equal(effectiveLayout({ layout: "section" }), "section")
+  assert.equal(effectiveLayout({}), "bullets", "缺省要点页")
+})
+
+test("v3 normalize: compare/section 归一 + bullets 按版式分化", () => {
+  const doc = normalizePptx({
+    title: "t",
+    theme: "ink",
+    slides: [
+      { heading: "环节二 · 操练", layout: "section", bullets: [] },
+      { heading: "ed 还是 d？", bullets: [], compare: { left: { heading: "加 -ed", bullets: ["play → played"] }, right: { heading: "只加 -d", bullets: ["like → liked"] } } },
+      { heading: "h", bullets: ["b"] },
+    ],
+  })
+  assert.equal(doc.theme, "ink")
+  assert.deepEqual(doc.slides[0]!.bullets, [], "section 空 bullets 归一 []")
+  assert.deepEqual(doc.slides[1]!.compare!.left.heading, "加 -ed", "compare 两栏归一")
+})
+
+test("v3 normalize: 矛盾/非法组合 fail-fast（PptxFormatError）", () => {
+  const col = { heading: "a", bullets: ["b"] }
+  const compare = { left: col, right: col }
+  // layout:"image" 无 image 字段
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", layout: "image", bullets: [] }] }),
+    /layout:"image" 需带 image/,
+  )
+  // section 带 compare
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", layout: "section", bullets: [], compare }] }),
+    /section 版式不能带 compare/,
+  )
+  // compare 与 image 同页
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", bullets: [], compare, image: "/x.png" }] }),
+    /compare 与 image 不能同页/,
+  )
+  // compare 版式顶层 bullets
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", bullets: ["b"], compare }] }),
+    /顶层不带 bullets/,
+  )
+  // 非法 layout 值
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", layout: "quote", bullets: [] }] }),
+    /不是合法版式/,
+  )
+  // compare 栏缺 bullets
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", bullets: [], compare: { left: { heading: "a" }, right: col } }] }),
+    /left.bullets 至少 1 条/,
+  )
+})
+
+test("v3 caps: section 副句 ≤2 条 ×60 字 / compare 栏 ≤4 条 ×60 字 + 栏标题 ≤12", () => {
+  const withSlide = (slide: Record<string, unknown>) =>
+    pptxCapsError(normalizePptx({ title: "t", slides: [slide, { heading: "h", bullets: ["b"] }, { heading: "h2", bullets: ["b"] }] }))
+  assert.match(
+    withSlide({ heading: "s", layout: "section", bullets: ["a", "b", "c"] })!,
+    /3 条超过上限 2——section 版式副句最多 2 条/,
+  )
+  assert.match(
+    withSlide({ heading: "s", layout: "section", bullets: ["x".repeat(61)] })!,
+    /61 字符超过上限 60/,
+  )
+  assert.equal(
+    withSlide({ heading: "s", layout: "section", bullets: ["x".repeat(60), "y"] }),
+    null,
+    "section 满编 2×60 合法",
+  )
+  const col5 = { heading: "c", bullets: Array.from({ length: 5 }, () => "b") }
+  assert.match(
+    withSlide({ heading: "c", bullets: [], compare: { left: col5, right: { heading: "r", bullets: ["b"] } } })!,
+    /左栏 5 条要点超过上限 4/,
+  )
+  assert.match(
+    withSlide({ heading: "c", bullets: [], compare: { left: { heading: "x".repeat(13), bullets: ["b"] }, right: { heading: "r", bullets: ["b"] } } })!,
+    /左栏小标题 13 字符超过上限 12/,
+  )
+  const colFull = { heading: "c", bullets: Array.from({ length: 4 }, () => "x".repeat(60)) }
+  assert.equal(
+    withSlide({ heading: "c", bullets: [], compare: { left: colFull, right: colFull } }),
+    null,
+    "compare 满编 2×(4×60) 合法",
+  )
+})
+
+test("v3 真渲染: 混合版式清单断言——section 居中/compare 两栏文本恰等于入参、无多余文本", async () => {
+  const dir = mkdtempSync(joinTmp())
+  try {
+    const doc = normalizePptx({
+      title: "一般过去时",
+      theme: "ink",
+      slides: [
+        { heading: "环节二 · 课堂操练", layout: "section", bullets: ["口头操练 2 分钟，抽三组对答案"] },
+        { heading: "ed 还是 d？", bullets: [], compare: { left: { heading: "加 -ed", bullets: ["play → played", "watch → watched"] }, right: { heading: "只加 -d", bullets: ["like → liked"] } } },
+        { heading: "小结", bullets: ["昨天的事用过去式"] },
+      ],
+    })
+    const result = await renderPptx(doc, dir)
+    assert.equal(result.ok, true)
+    const zip = await JSZip.loadAsync(readFileSync(result.path!))
+    // section 页：清单恰 = heading+副句，且居中对齐（algn ctr）
+    const sectionXml = await zip.file("ppt/slides/slide2.xml")!.async("string")
+    assert.deepEqual(
+      [...(await slideTexts(zip, 2))].sort(),
+      ["环节二 · 课堂操练", "口头操练 2 分钟，抽三组对答案"].sort(),
+      "section 页文本清单恰 = heading+副句",
+    )
+    assert.ok(sectionXml.includes('algn="ctr"'), "section 页大字居中")
+    // compare 页：清单恰 = heading+两栏全部；两栏小标题同色同字重
+    assert.deepEqual(
+      [...(await slideTexts(zip, 3))].sort(),
+      ["ed 还是 d？", "加 -ed", "play → played", "watch → watched", "只加 -d", "like → liked"].sort(),
+      "compare 页文本清单恰 = heading+两栏（无多余文本）",
+    )
+    // ink 主题色进 srgbClr（纵深：非默认 warm 色生效）
+    const slide2 = await zip.file("ppt/slides/slide2.xml")!.async("string")
+    assert.ok(slide2.includes("1F2A44"), "ink 主题标题色渲染")
+    assert.ok(!slide2.includes("FBF7EF"), "warm 底色不得残留")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("v3 哈希: 版式与 compare 内容进规范形——改 compare 一条要点即轮换文件名", async () => {
+  const dir = mkdtempSync(joinTmp())
+  try {
+    const base = {
+      title: "t",
+      slides: [
+        { heading: "c", bullets: [], compare: { left: { heading: "L", bullets: ["a"] }, right: { heading: "R", bullets: ["b"] } } },
+        { heading: "h", bullets: ["b"] },
+        { heading: "h2", bullets: ["b2"] },
+      ],
+    }
+    const r1 = await renderPptx(normalizePptx(base), dir)
+    const r2 = await renderPptx(normalizePptx(base), dir)
+    assert.equal(r1.path, r2.path, "同内容同文件名（幂等）")
+    const changed = structuredClone(base)
+    const changedSlide = changed.slides[0] as { compare: { right: { bullets: string[] } } }
+    changedSlide.compare.right.bullets = ["changed"]
+    const r3 = await renderPptx(normalizePptx(changed), dir)
+    assert.notEqual(r1.path, r3.path, "compare 内容变化必须轮换文件名")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

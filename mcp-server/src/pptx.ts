@@ -2,6 +2,10 @@
  * 教师课件 PPT 渲染引擎（2026-09-16 方案
  * docs/superpowers/plans/2026-09-16-ltutor-pptx-tool.md，max 评审 5I/7M 已并入；
  * 2026-09-17 v2 扩展：图片页/封面音频嵌入——plans/2026-09-17-ltutor-pptx-v2-tool.md Task 2）。
+ * 2026-10-13 v3 版式系统（guizang-ppt-skill 方法论借鉴、零代码搬运）：锁定四种
+ * 版式（bullets/section/compare/image——坐标由渲染器钉死，LLM 只选版式名不发明
+ * 结构）+ 预设主题 warm/ink（色板锁定不可自定义 hex）+ note 上限 200 配结构化
+ * 讲稿契约（目的｜讲解｜提问，契约文案在 schema/flow）。
  *
  * 混合路径（worksheet 同构，但无 Chrome 链路、更轻）：LLM 只产 slides JSON →
  * pptxgenjs 确定性渲染 16:9 .pptx → MEDIA: 投递链（网关 MEDIA_DELIVERY_EXTS 含 .pptx，
@@ -51,12 +55,19 @@ export const PPTX_MAX_TITLE_CHARS = 40
 export const PPTX_MAX_SUBTITLE_CHARS = 60
 export const PPTX_MAX_HEADING_CHARS = 30
 export const PPTX_MAX_BULLET_CHARS = 80
-export const PPTX_MAX_NOTE_CHARS = 120
+// v3：结构化讲稿契约（目的｜讲解｜提问）需要空间，120→200（文案模板在 schema/flow）。
+export const PPTX_MAX_NOTE_CHARS = 200
 export const PPTX_MAX_BULLETS_PER_SLIDE = 6
 export const PPTX_MIN_SLIDES = 3
 export const PPTX_MAX_SLIDES = 10
 export const PPTX_MAX_PAGE_CHARS = 550
 export const PPTX_MAX_TOTAL_CHARS = 2500
+// v3 版式 caps（字号预算：section 副句 20pt 居中 ≤2 条；compare 栏 16pt 半栏宽
+// ~5.5in 每行 ~24 字，4 条 ×60 字 ≈12 行 ×0.27in ≈3.3in + 栏标题 0.6in ≤ 版心 5.4in）：
+export const PPTX_MAX_SECTION_BULLETS = 2          // section 页副句 ≤2 条
+export const PPTX_MAX_COMPACT_BULLET_CHARS = 60    // section 副句 / compare 栏要点共用
+export const PPTX_MAX_COMPARE_BULLETS = 4          // compare 每栏要点 ≤4 条
+export const PPTX_MAX_COMPARE_HEADING_CHARS = 12   // compare 栏小标题（半栏宽 20pt）
 // v2 嵌入 caps（计划 §三-1）：
 export const PPTX_MAX_IMAGE_SLIDES = 4          // 图片页 ≤4
 export const PPTX_MAX_IMAGE_BYTES = 5 * 1024 * 1024   // 单图 ≤5MB
@@ -64,18 +75,33 @@ export const PPTX_MAX_AUDIO_BYTES = 6 * 1024 * 1024   // 封面音频 ≤6MB
 export const PPTX_MAX_EMBED_BYTES = 8 * 1024 * 1024   // 嵌入总量 ≤8MB（投递 20MB 留余量）
 export const PPTX_MAX_DELIVERY_BYTES = 20 * 1024 * 1024 // 企微出站绝对帽——渲染后实测兜底（计划 §三-2/§八）
 
+/** v3 锁定版式集——渲染器按版式分发坐标，LLM 不发明页面结构（guizang 锁定版式方法论）。 */
+export type PptxLayout = "bullets" | "section" | "compare" | "image"
+
+export interface PptxCompareColumn {
+  heading: string
+  bullets: string[]
+}
+
 export interface PptxSlide {
   heading: string
   bullets: string[]
+  /** v3：显式版式；缺省按内容推断（见 effectiveLayout）——归一不固化，手写 doc 免填。 */
+  layout?: PptxLayout
+  /** v3：compare 版式两栏（有此字段即 compare 版式，layout 可省）。 */
+  compare?: { left: PptxCompareColumn; right: PptxCompareColumn }
   note?: string
-  /** v2：本页整幅配图（允许根内路径；内容 sha1 进规范形）。 */
+  /** v2：本页整幅配图（允许根内路径；内容 sha1 进规范形）；有此字段即 image 版式。 */
   image?: string
 }
+
+/** v3 预设主题（色板锁定——只可选不可自定义 hex，guizang 主题纪律）。 */
+export type PptxTheme = "warm" | "ink"
 
 export interface PptxDoc {
   title: string
   subtitle?: string
-  theme: "warm"
+  theme: PptxTheme
   slides: PptxSlide[]
   /** v2：封面音频播放器（mp3 ≤6MB，允许根内路径）。 */
   audio_path?: string
@@ -92,10 +118,44 @@ export interface PptxRenderResult {
   error?: string
 }
 
+/** compare 两栏形状解析（v3）；数量/长度帽归 caps 文本通道（对齐顶层 bullets 先例）。 */
+function parseCompare(value: unknown, slideIdx: number): { left: PptxCompareColumn; right: PptxCompareColumn } | undefined {
+  if (value === undefined) return undefined
+  const parseColumn = (v: unknown, at: string): PptxCompareColumn => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) {
+      throw new PptxFormatError(`${at} must be an object`)
+    }
+    const col = v as Record<string, unknown>
+    const heading = scrubControlChars(requireText(col.heading, `${at}.heading`))
+    if (!Array.isArray(col.bullets) || col.bullets.length < 1) {
+      throw new PptxFormatError(`${at}.bullets 至少 1 条（compare 每栏都要有内容）`)
+    }
+    const bullets = col.bullets.map((b, j) =>
+      scrubControlChars(requireText(b, `${at}.bullets[${j}]`)))
+    return { heading, bullets }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new PptxFormatError(`slides[${slideIdx}].compare must be an object（含 left/right 两栏）`)
+  }
+  const rec = value as Record<string, unknown>
+  return {
+    left: parseColumn(rec.left, `slides[${slideIdx}].compare.left`),
+    right: parseColumn(rec.right, `slides[${slideIdx}].compare.right`),
+  }
+}
+
 /** 结构非法（类型/缺字段/空串）：handler 转 ToolArgumentError（WorksheetFormatError 先例）。 */
 export class PptxFormatError extends Error {}
 
 // ── 校验与归一 ──
+
+/** 版式判定（v3）：嵌入字段优先于显式 layout——image > compare > layout > 缺省 bullets。
+ * normalize 已保证矛盾组合到不了这里（渲染前哨），本函数是渲染/哈希/帽三处共用的单一事实。 */
+export function effectiveLayout(slide: Pick<PptxSlide, "layout" | "image" | "compare">): PptxLayout {
+  if (slide.image !== undefined) return "image"
+  if (slide.compare !== undefined) return "compare"
+  return slide.layout ?? "bullets"
+}
 
 function requireText(value: unknown, at: string): string {
   if (typeof value !== "string" || value.trim() === "") {
@@ -143,7 +203,7 @@ export function normalizePptx(
   }
   const subtitleRaw = optionalText(raw.subtitle, "subtitle")
   const subtitle = subtitleRaw === undefined ? undefined : scrubControlChars(subtitleRaw)
-  // theme：非字符串 fail-fast；字符串值非 warm 回落 warm（schema enum 已限，纵深防御）。
+  // theme：非字符串 fail-fast；字符串值非预设回落 warm（schema enum 已限，纵深防御）。
   if (raw.theme !== undefined && typeof raw.theme !== "string") {
     throw new PptxFormatError("theme must be a string")
   }
@@ -156,27 +216,63 @@ export function normalizePptx(
     }
     const rec = item as Record<string, unknown>
     const heading = scrubControlChars(requireText(rec.heading, `slides[${i}].heading`))
-    if (!Array.isArray(rec.bullets)) throw new PptxFormatError(`slides[${i}].bullets must be an array`)
-    if (rec.bullets.length < 1) {
+    // v3 版式三件：layout（可选枚举）/ compare（可选两栏）/ image（v2 沿用）。
+    const layoutRaw = optionalText(rec.layout, `slides[${i}].layout`)
+    if (layoutRaw !== undefined && !["bullets", "section", "compare", "image"].includes(layoutRaw)) {
+      throw new PptxFormatError(`slides[${i}].layout "${layoutRaw}" 不是合法版式（bullets/section/compare）`)
+    }
+    const image = optionalText(rec.image, `slides[${i}].image`)
+    const compare = parseCompare(rec.compare, i)
+    // 矛盾组合 fail-fast（结构非法走 ToolArgumentError，非模型自由串路径）：
+    if (layoutRaw === "image" && image === undefined) {
+      throw new PptxFormatError(`slides[${i}] layout:"image" 需带 image 字段——配图页直接传 image 即可，不必传 layout`)
+    }
+    if (layoutRaw === "section" && compare !== undefined) {
+      throw new PptxFormatError(`slides[${i}] section 版式不能带 compare`)
+    }
+    if (compare !== undefined && image !== undefined) {
+      throw new PptxFormatError(`slides[${i}] compare 与 image 不能同页`)
+    }
+    const layout = effectiveLayout({ layout: layoutRaw as PptxLayout | undefined, image, compare })
+    // bullets 按版式分化：section 可空（归一 []）；compare 顶层要点一律进两栏（容忍空数组）；
+    // bullets/image 版式保持 v1/v2 必填 ≥1。
+    const bulletsRaw: unknown[] = Array.isArray(rec.bullets) ? rec.bullets : []
+    if (!Array.isArray(rec.bullets) && layout !== "section" && layout !== "compare") {
+      throw new PptxFormatError(`slides[${i}].bullets must be an array`)
+    }
+    if (bulletsRaw.length < 1 && layout === "bullets") {
       throw new PptxFormatError(`slides[${i}].bullets 不能为空——每页至少 1 条要点，如 ["过去式表示过去发生的动作"]`)
     }
-    const bullets = rec.bullets.map((b, j) =>
+    if (bulletsRaw.length >= 1 && layout === "compare") {
+      throw new PptxFormatError(`slides[${i}] compare 版式顶层不带 bullets——要点请放进 compare.left/right`)
+    }
+    const bullets = bulletsRaw.map((b, j) =>
       scrubControlChars(requireText(b, `slides[${i}].bullets[${j}]`)))
     const noteRaw = optionalText(rec.note, `slides[${i}].note`)
     const note = noteRaw === undefined ? undefined : scrubControlChars(noteRaw)
-    const image = optionalText(rec.image, `slides[${i}].image`)
-    const base: PptxSlide = note === undefined ? { heading, bullets } : { heading, bullets, note }
+    const base: PptxSlide = { heading, bullets }
+    if (layoutRaw !== undefined) base.layout = layoutRaw as PptxLayout
+    if (compare !== undefined) base.compare = compare
+    if (note !== undefined) base.note = note
     return image === undefined ? base : { ...base, image }
   })
+  // theme 值域收敛：预设外一律回落 warm（schema enum 已限，纵深防御）。
+  const theme: PptxTheme = raw.theme === "ink" ? "ink" : "warm"
   return audio_path === undefined
-    ? { title, subtitle, theme: "warm", slides }
-    : { title, subtitle, theme: "warm", slides, audio_path }
+    ? { title, subtitle, theme, slides }
+    : { title, subtitle, theme, slides, audio_path }
 }
 
 // ── caps ──
 
 function pageChars(slide: PptxSlide): number {
-  return slide.heading.length + slide.bullets.reduce((n, b) => n + b.length, 0)
+  let n = slide.heading.length + slide.bullets.reduce((m, b) => m + b.length, 0)
+  if (slide.compare !== undefined) {
+    for (const col of [slide.compare.left, slide.compare.right]) {
+      n += col.heading.length + col.bullets.reduce((m, b) => m + b.length, 0)
+    }
+  }
+  return n
 }
 
 function totalChars(doc: PptxDoc): number {
@@ -214,12 +310,36 @@ export function pptxCapsError(
     if (s.heading.length > PPTX_MAX_HEADING_CHARS) {
       return `第 ${i + 1} 页标题 ${s.heading.length} 字符超过上限 ${PPTX_MAX_HEADING_CHARS}`
     }
-    if (s.bullets.length > PPTX_MAX_BULLETS_PER_SLIDE) {
-      return `第 ${i + 1} 页有 ${s.bullets.length} 条要点超过上限 ${PPTX_MAX_BULLETS_PER_SLIDE}`
+    // v3：要点数量/长度帽按版式分化（section 副句 ≤2 条、compare 栏 ≤4 条 ×60 字；
+    // compare 页顶层 bullets 已在 normalize 拦截，此处恒为空数组）。
+    const layout = effectiveLayout(s)
+    const bulletCap = layout === "section" ? PPTX_MAX_SECTION_BULLETS
+      : layout === "compare" ? PPTX_MAX_COMPARE_BULLETS
+      : PPTX_MAX_BULLETS_PER_SLIDE
+    const charCap = layout === "section" || layout === "compare"
+      ? PPTX_MAX_COMPACT_BULLET_CHARS
+      : PPTX_MAX_BULLET_CHARS
+    if (s.bullets.length > bulletCap) {
+      return `第 ${i + 1} 页要点 ${s.bullets.length} 条超过上限 ${bulletCap}——${layout === "section" ? "section 版式副句最多 2 条" : "请精简该页要点"}`
     }
     for (const [j, b] of s.bullets.entries()) {
-      if (b.length > PPTX_MAX_BULLET_CHARS) {
-        return `第 ${i + 1} 页第 ${j + 1} 条要点 ${b.length} 字符超过上限 ${PPTX_MAX_BULLET_CHARS}`
+      if (b.length > charCap) {
+        return `第 ${i + 1} 页第 ${j + 1} 条要点 ${b.length} 字符超过上限 ${charCap}`
+      }
+    }
+    if (s.compare !== undefined) {
+      for (const [side, col] of [["左", s.compare.left], ["右", s.compare.right]] as const) {
+        if (col.heading.length > PPTX_MAX_COMPARE_HEADING_CHARS) {
+          return `第 ${i + 1} 页${side}栏小标题 ${col.heading.length} 字符超过上限 ${PPTX_MAX_COMPARE_HEADING_CHARS}`
+        }
+        if (col.bullets.length > PPTX_MAX_COMPARE_BULLETS) {
+          return `第 ${i + 1} 页${side}栏 ${col.bullets.length} 条要点超过上限 ${PPTX_MAX_COMPARE_BULLETS}`
+        }
+        for (const [j, b] of col.bullets.entries()) {
+          if (b.length > PPTX_MAX_COMPACT_BULLET_CHARS) {
+            return `第 ${i + 1} 页${side}栏第 ${j + 1} 条要点 ${b.length} 字符超过上限 ${PPTX_MAX_COMPACT_BULLET_CHARS}`
+          }
+        }
       }
     }
     if ((s.note?.length ?? 0) > PPTX_MAX_NOTE_CHARS) {
@@ -280,10 +400,12 @@ export function pptxCapsError(
 // ── 渲染 ──
 
 const FONT = "Microsoft YaHei"
-const BG_WARM = "FBF7EF"      // 暖纸浅底（worksheet nature 家族感）
-const INK_TITLE = "1F3A5F"    // 深蓝标题
-const ACCENT_GOLD = "C9973B"  // 金色强调
-const INK_BODY = "333333"
+/** v3 预设主题色板（锁定 hex——只可选主题不可自定义颜色；warm=worksheet 暖纸家族感原色，
+ * ink=冷静蓝灰纸，rule=compare 中缝发丝线）。 */
+const PPTX_THEMES: Record<PptxTheme, { bg: string; title: string; accent: string; body: string; rule: string }> = {
+  warm: { bg: "FBF7EF", title: "1F3A5F", accent: "C9973B", body: "333333", rule: "E3D5BB" },
+  ink: { bg: "F6F8FA", title: "1F2A44", accent: "2F5ACF", body: "333333", rule: "D7DEE8" },
+}
 
 function fileSha1(p: string): string {
   return createHash("sha1").update(readFileSync(p)).digest("hex")
@@ -298,8 +420,14 @@ function canonicalJson(doc: PptxDoc, mediaSha: (p: string) => string): string {
     subtitle: doc.subtitle ?? "",
     audio_sha1: doc.audio_path === undefined ? "" : mediaSha(doc.audio_path),
     slides: doc.slides.map(s => ({
+      // v3：推断后的版式 + compare 内容进规范形——版式/两栏内容变化必须轮换文件名。
+      layout: effectiveLayout(s),
       heading: s.heading,
       bullets: s.bullets,
+      compare: s.compare === undefined ? null : {
+        left: { heading: s.compare.left.heading, bullets: s.compare.left.bullets },
+        right: { heading: s.compare.right.heading, bullets: s.compare.right.bullets },
+      },
       note: s.note ?? "",
       image_sha1: s.image === undefined ? "" : mediaSha(s.image),
     })),
@@ -315,18 +443,19 @@ function buildPresentation(doc: PptxDoc): PptxInstance {
   pptx.layout = "LAYOUT_WIDE"
   pptx.theme = { headFontFace: FONT, bodyFontFace: FONT }
   pptx.author = "LT 师训学习助手"
+  const t = PPTX_THEMES[doc.theme]
 
   // 封面页（渲染器自动生成，不算 slides 配额，总页数 = slides+1）。v2：音频播放器。
   const cover = pptx.addSlide()
-  cover.background = { color: BG_WARM }
+  cover.background = { color: t.bg }
   cover.addText(doc.title, {
     x: 0.8, y: 2.5, w: 11.7, h: 1.4,
-    fontFace: FONT, fontSize: 40, bold: true, color: INK_TITLE, align: "center",
+    fontFace: FONT, fontSize: 40, bold: true, color: t.title, align: "center",
   })
   if (doc.subtitle) {
     cover.addText(doc.subtitle, {
       x: 0.8, y: 4.0, w: 11.7, h: 0.8,
-      fontFace: FONT, fontSize: 20, color: INK_BODY, align: "center",
+      fontFace: FONT, fontSize: 20, color: t.body, align: "center",
     })
   }
   if (doc.audio_path !== undefined) {
@@ -336,35 +465,77 @@ function buildPresentation(doc: PptxDoc): PptxInstance {
   }
   cover.addText("— LT 师训 · 课堂课件 —", {
     x: 0.8, y: 6.3, w: 11.7, h: 0.5,
-    fontFace: FONT, fontSize: 14, color: ACCENT_GOLD, align: "center",
+    fontFace: FONT, fontSize: 14, color: t.accent, align: "center",
   })
 
-  // 内容页：heading 30pt + bullets 18pt / 行距 1.25（字号预算见文件头）。v2：整幅配图页。
+  // 内容页按锁定版式分发（v3；字号预算见文件头/caps 常量注释）：
+  // bullets=heading 30pt+bullets 18pt；section=大字居中过渡页；compare=左右两栏；
+  // image=标题+整幅配图（v2 沿用）。
   for (const slide of doc.slides) {
     const s = pptx.addSlide()
-    s.background = { color: BG_WARM }
-    s.addText(slide.heading, {
-      x: 0.7, y: 0.45, w: 11.9, h: 0.9,
-      fontFace: FONT, fontSize: 30, bold: true, color: INK_TITLE,
-    })
-    // 金色装饰条（评审 I-1 根修）：纯形状无文本——addText 首参是文本内容，
-    // 旧写法把色值常量 "C9973B" 渲染成每页可见字串。
-    s.addShape("rect", { x: 0.7, y: 1.4, w: 1.6, h: 0.06, fill: { color: ACCENT_GOLD } })
-    if (slide.image !== undefined) {
-      // 整幅配图：内容区 letterbox contain（13.33×7.5 版心，标题带下方 ~5.4in 高）。
-      s.addImage({
-        path: slide.image,
-        x: 1.17, y: 1.7, w: 11.0, h: 5.3,
-        sizing: { type: "contain", w: 11.0, h: 5.3 },
+    s.background = { color: t.bg }
+    const layout = effectiveLayout(slide)
+    if (layout === "section") {
+      // 章节过渡/金句页：大标题居中 + 强调条居中 + 可选短副句（≤2 条）。
+      s.addText(slide.heading, {
+        x: 0.8, y: 2.3, w: 11.73, h: 1.3,
+        fontFace: FONT, fontSize: 36, bold: true, color: t.title, align: "center",
       })
+      // 纯形状无文本（评审 I-1：色值常量绝不可见——addShape 而非 addText）。
+      s.addShape("rect", { x: 5.87, y: 3.75, w: 1.6, h: 0.06, fill: { color: t.accent } })
+      if (slide.bullets.length > 0) {
+        s.addText(
+          slide.bullets.map(text => ({
+            text,
+            options: { fontFace: FONT, fontSize: 20, color: t.body, breakLine: true },
+          })),
+          { x: 1.5, y: 4.15, w: 10.33, h: 1.8, align: "center", lineSpacingMultiple: 1.4, valign: "top" },
+        )
+      }
     } else {
-      s.addText(
-        slide.bullets.map(text => ({
-          text,
-          options: { fontFace: FONT, fontSize: 18, color: INK_BODY, bullet: { characterCode: "2022" }, breakLine: true },
-        })),
-        { x: 0.9, y: 1.9, w: 11.5, h: 5.0, lineSpacingMultiple: 1.25, valign: "top" },
-      )
+      // 通用页眉：heading 30pt + 金色装饰条（评审 I-1 根修：纯形状无文本——
+      // 旧写法把色值常量渲染成每页可见字串）。
+      s.addText(slide.heading, {
+        x: 0.7, y: 0.45, w: 11.9, h: 0.9,
+        fontFace: FONT, fontSize: 30, bold: true, color: t.title,
+      })
+      s.addShape("rect", { x: 0.7, y: 1.4, w: 1.6, h: 0.06, fill: { color: t.accent } })
+      if (layout === "compare" && slide.compare !== undefined) {
+        // 对比页：左右两栏（栏小标题 20pt + 栏要点 16pt）+ 中缝发丝线；行高预算见 caps。
+        const columns: Array<[PptxCompareColumn, number, number, number]> = [
+          [slide.compare.left, 0.7, 0.9, 5.5],
+          [slide.compare.right, 6.83, 7.03, 5.6],
+        ]
+        s.addShape("rect", { x: 6.645, y: 1.85, w: 0.012, h: 4.8, fill: { color: t.rule } })
+        for (const [col, headX, bodyX, bodyW] of columns) {
+          s.addText(col.heading, {
+            x: headX, y: 1.7, w: 5.8, h: 0.6,
+            fontFace: FONT, fontSize: 20, bold: true, color: t.title,
+          })
+          s.addText(
+            col.bullets.map(text => ({
+              text,
+              options: { fontFace: FONT, fontSize: 16, color: t.body, bullet: { characterCode: "2022" }, breakLine: true },
+            })),
+            { x: bodyX, y: 2.45, w: bodyW, h: 4.4, lineSpacingMultiple: 1.25, valign: "top" },
+          )
+        }
+      } else if (slide.image !== undefined) {
+        // 整幅配图：内容区 letterbox contain（13.33×7.5 版心，标题带下方 ~5.4in 高）。
+        s.addImage({
+          path: slide.image,
+          x: 1.17, y: 1.7, w: 11.0, h: 5.3,
+          sizing: { type: "contain", w: 11.0, h: 5.3 },
+        })
+      } else {
+        s.addText(
+          slide.bullets.map(text => ({
+            text,
+            options: { fontFace: FONT, fontSize: 18, color: t.body, bullet: { characterCode: "2022" }, breakLine: true },
+          })),
+          { x: 0.9, y: 1.9, w: 11.5, h: 5.0, lineSpacingMultiple: 1.25, valign: "top" },
+        )
+      }
     }
     if (slide.note) s.addNotes(slide.note)
   }

@@ -646,28 +646,55 @@ export function trainingToolDefinitions(): ToolDefinition[] {
     },
     {
       name: "teacher_tutor_pptx",
-      description: "把知识点做成可编辑的课件 PPT 文件（16:9，暖色版式，中文完好；封面自动生成，总页数=内容页+1；每页可带讲稿备注进演讲者备注栏；支持整幅配图页与封面音频播放器——素材路径取自 media_extract 提取产物或系统素材注记行）。返回含 MEDIA: 行——最终回复必须原样回显该行，文件才会送达教师（.pptx 文件消息，点击下载后可用 Office/WPS 打开编辑）。内容必须基于 search/read_file 取到的真实材料构造，勿编造材料外内容。老师发来的视频/音频素材：先用 teacher_tutor_media_extract 提取内容（≤15 分钟，超长请引导截片段或入库），再基于提取结果构造本工具入参。用于教师要求做课件/出 PPT/幻灯片的场景。",
+      description: "把知识点做成可编辑的课件 PPT 文件（16:9，中文完好；封面自动生成，总页数=内容页+1；四种锁定版式：要点页/章节过渡页/左右对比页/整幅配图页；warm/ink 两套预设主题；每页可带结构化讲稿备注进演讲者备注栏；支持封面音频播放器——素材路径取自 media_extract 提取产物或系统素材注记行）。返回含 MEDIA: 行——最终回复必须原样回显该行，文件才会送达教师（.pptx 文件消息，点击下载后可用 Office/WPS 打开编辑）。内容必须基于 search/read_file 取到的真实材料构造，勿编造材料外内容。老师发来的视频/音频素材：先用 teacher_tutor_media_extract 提取内容（≤15 分钟，超长请引导截片段或入库），再基于提取结果构造本工具入参。用于教师要求做课件/出 PPT/幻灯片的场景。",
       inputSchema: {
         type: "object",
         properties: {
           wecom_userid: { type: "string", description: "系统/cron 回合必填（目标教师企微 id）；wecom 教师会话勿传——身份已由会话锁定，传错会被拒。" },
           title: { type: "string", description: "课件标题（1-40 字符）：直接用主题名（如「一般过去时 The Past Simple Tense」），勿带「课件/PPT」等文档类型字样" },
           subtitle: { type: "string", description: "副标题（≤60 字符，可选，如适用学段/单元）" },
-          theme: { type: "string", enum: ["warm"], description: "视觉主题，v1 仅 warm（缺省即 warm）" },
+          theme: { type: "string", enum: ["warm", "ink"], description: "视觉主题（预设锁定，不可自定义颜色）：warm=暖纸金（默认，通用）；ink=冷静蓝灰（语法/学术/高段向）。整份课件统一，勿逐页换" },
           slides: {
             type: "array",
             description: "内容页 3-10 页（封面页自动生成不算配额；典型 5-8 页即可，每页要点 2-5 条为宜）",
             items: {
               type: "object",
               properties: {
+                layout: { type: "string", enum: ["bullets", "section", "compare"], description: "版式（可选，缺省按内容推断：带 image=配图页、带 compare=对比页）：bullets=标题+要点列表（默认）；section=章节过渡/金句页（大字居中，bullets 变可选短副句 ≤2 条）；compare=左右两栏对比页（须带 compare 字段）。配图页勿传 layout" },
                 heading: { type: "string", description: "页标题（1-30 字符）" },
                 bullets: {
                   type: "array",
-                  description: "要点 1-6 条",
-                  items: { type: "string", description: "要点文本（1-80 字符）" },
+                  description: "要点 1-6 条（section 版式传 [] 或 ≤2 条短副句；compare 版式传 []，要点放进 compare 两栏）",
+                  items: { type: "string", description: "要点文本（1-80 字符；section/compare 栏内 1-60 字符）" },
                 },
-                note: { type: "string", description: "讲稿备注（≤120 字符，可选，进演讲者备注栏不打上幻灯片）" },
-                image: { type: "string", description: "本页整幅配图的本地路径（可选，≤5MB jpg/png；有配图的页为「标题+整幅图」版式；路径取自素材注记行或 media_extract 产物）" },
+                compare: {
+                  type: "object",
+                  description: "compare 版式两栏内容（如「规则 vs 例外」「正确 vs 常见错误」）；带此字段即对比页",
+                  properties: {
+                    left: {
+                      type: "object",
+                      properties: {
+                        heading: { type: "string", description: "左栏小标题（1-12 字符）" },
+                        bullets: { type: "array", description: "左栏要点 1-4 条", items: { type: "string", description: "要点文本（1-60 字符）" } },
+                      },
+                      required: ["heading", "bullets"],
+                      additionalProperties: false,
+                    },
+                    right: {
+                      type: "object",
+                      properties: {
+                        heading: { type: "string", description: "右栏小标题（1-12 字符）" },
+                        bullets: { type: "array", description: "右栏要点 1-4 条", items: { type: "string", description: "要点文本（1-60 字符）" } },
+                      },
+                      required: ["heading", "bullets"],
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["left", "right"],
+                  additionalProperties: false,
+                },
+                note: { type: "string", description: "讲稿备注（≤200 字符，可选，进演讲者备注栏不打上幻灯片）。建议结构化：目的：…｜讲解：…｜提问：…（提问互动可选）" },
+                image: { type: "string", description: "本页整幅配图的本地路径（可选，≤5MB jpg/png；有配图的页为「标题+整幅图」版式；路径取自素材注记行、media_extract 产物或 image_generate 生成产物）" },
               },
               required: ["heading", "bullets"],
               additionalProperties: false,
