@@ -538,6 +538,16 @@ test("v3 normalize: 矛盾/非法组合 fail-fast（PptxFormatError）", () => {
     () => normalizePptx({ title: "t", slides: [{ heading: "h", layout: "image", bullets: [] }] }),
     /layout:"image" 需带 image/,
   )
+  // layout:"compare" 无 compare 字段（收口评审 I-1：曾漏网产出仅标题的近空白页）
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", layout: "compare", bullets: [] }] }),
+    /layout:"compare" 需带 compare/,
+  )
+  // section 带 image（收口评审 M-1：副句曾被静默丢弃）
+  assert.throws(
+    () => normalizePptx({ title: "t", slides: [{ heading: "h", layout: "section", bullets: [], image: "/x.png" }] }),
+    /section 版式不能带 image/,
+  )
   // section 带 compare
   assert.throws(
     () => normalizePptx({ title: "t", slides: [{ heading: "h", layout: "section", bullets: [], compare }] }),

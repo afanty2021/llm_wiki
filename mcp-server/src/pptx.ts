@@ -223,12 +223,19 @@ export function normalizePptx(
     }
     const image = optionalText(rec.image, `slides[${i}].image`)
     const compare = parseCompare(rec.compare, i)
-    // 矛盾组合 fail-fast（结构非法走 ToolArgumentError，非模型自由串路径）：
+    // 矛盾组合 fail-fast（结构非法走 ToolArgumentError，非模型自由串路径；
+    // 收口评审 I-1：layout:"compare" 无 compare 漏网曾产出仅标题的近空白页并照常投递）：
     if (layoutRaw === "image" && image === undefined) {
       throw new PptxFormatError(`slides[${i}] layout:"image" 需带 image 字段——配图页直接传 image 即可，不必传 layout`)
     }
+    if (layoutRaw === "compare" && compare === undefined) {
+      throw new PptxFormatError(`slides[${i}] layout:"compare" 需带 compare 字段——两栏要点请放进 compare.left/right`)
+    }
     if (layoutRaw === "section" && compare !== undefined) {
       throw new PptxFormatError(`slides[${i}] section 版式不能带 compare`)
+    }
+    if (layoutRaw === "section" && image !== undefined) {
+      throw new PptxFormatError(`slides[${i}] section 版式不能带 image——配图页直接传 image 即可，不必传 layout`)
     }
     if (compare !== undefined && image !== undefined) {
       throw new PptxFormatError(`slides[${i}] compare 与 image 不能同页`)

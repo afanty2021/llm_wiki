@@ -664,7 +664,7 @@ export function trainingToolDefinitions(): ToolDefinition[] {
                 heading: { type: "string", description: "页标题（1-30 字符）" },
                 bullets: {
                   type: "array",
-                  description: "要点 1-6 条（section 版式传 [] 或 ≤2 条短副句；compare 版式传 []，要点放进 compare 两栏）",
+                  description: "要点 1-6 条（section 版式传 [] 或 ≤2 条短副句；compare 版式传 []——要点放进 compare 两栏；image 版式传 []——整幅图版式不显要点）",
                   items: { type: "string", description: "要点文本（1-80 字符；section/compare 栏内 1-60 字符）" },
                 },
                 compare: {

@@ -66,10 +66,10 @@ description: LT 师训学习助手（企业微信 lt-tutor 通道专用）。收
 | `llm_wiki_search` | 答疑、生成清单前检索 | `query`、可选 `limit`（建议 5） | `path`/`title`/`snippet`/`score` 列表。**教材缩写先展开再查**：look1/look2/lookS→Look-Teachers-Level1/2/Starter（lookL2 同 look2）、think2e→Think2e-Teaching-Notes、thinkL0-L3→Think-Teachers-L0-L3、TKT→TKT-Course-* / TKT-Young-Learners-Handbook、ece/1000h→ECE-1000-Hours/Everyone-Can-Use-English（《人人都能用英语》，学习者侧方法论/发音/跟读）、loe→Logic of English 拼读全家桶（Uncovering-Logic-of-English 规则书/Foundations-A·B-Teachers-Manual 4-7 岁教案/Reading-Spelling-Teacher-Training 培训视频页）；直查不中→换目录全名或「书名+单元主题词」再试一轮 |
 | `llm_wiki_read_file` | 取页面全文 | `path`（只传 search 返回的原样 path） | 页面全文；path 不存在返回"未找到文件：…"（正常结果非报错，核对或换源即可） |
 | `vision_analyze`（系统工具，非师训 MCP） | 读教师发来的图片：转写对话、看教材页 | `image_url`（图片本地路径）、`user_prompt`（转写要点见 `references/flow-listening-audio.md`） | 图片分析/转写文本 |
-| `image_generate`（系统工具，非师训 MCP） | 本机生图（ComfyUI）——课件配图用（**流程 10 第 4 步**：先征得老师同意，横图 16:9） | `prompt`、`width`/`height`（课件配图用 1344×768） | 生成图的本地路径（作 `teacher_tutor_pptx` 的 `slides[].image`）；每张约 2 分钟 |
+| `image_generate`（系统工具，非师训 MCP） | 本机生图（ComfyUI）——课件配图用（**流程 10 第 4 步**：先征得老师同意，横图 16:9） | `prompt`、`width`/`height`（课件配图用 1376×768） | 生成图的本地路径（作 `teacher_tutor_pptx` 的 `slides[].image`）；每张约 2 分钟 |
 | `session_search`（系统工具，非师训 MCP） | 跨会话回忆（开场有"上一会话被自动重置"提示、或教师指代昨晚/上次的推荐时） | 按系统提示回看上一会话 | 历史会话内容摘要 |
 
-调用纪律：`wecom_userid` 按 §0（交互不带、主管流程除外、系统模式必带）；`vision_analyze`/`session_search` 为本地系统工具，无身份参数；**`video_search`/`roster_search` 无 `wecom_userid` 参数，系统/cron 回合不可用（ToolArgumentError）——周报回合别用**；**教师任务工具**白名单外一律不调用（`skill_view` 读本技能文件——`references/` 流程与根目录笔记等——除外，不计入白名单）；参数名与枚举值按表内写法原样使用。
+调用纪律：`wecom_userid` 按 §0（交互不带、主管流程除外、系统模式必带）；`vision_analyze`/`session_search`/`image_generate` 为本地系统工具，无身份参数；**`video_search`/`roster_search` 无 `wecom_userid` 参数，系统/cron 回合不可用（ToolArgumentError）——周报回合别用**；**教师任务工具**白名单外一律不调用（`skill_view` 读本技能文件——`references/` 流程与根目录笔记等——除外，不计入白名单）；参数名与枚举值按表内写法原样使用。
 
 - `plan_list` / `profile_get` 返回尾部可能附一行 `pending_hint`（active 计划数与未完成项计数）→ 顺带自然告知"你有 N 个待学任务"即可，**不向老师展开字段名**（§1）。
 
