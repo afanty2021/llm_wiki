@@ -6,10 +6,13 @@
 //  - 存储转写源正文（含 `## [mm:ss]` 语义章头+标点+课例摘要）盘上幸存；
 //  - out/chapters/<slug>.json cuts 快照（919 份 = 全部 done）盘上幸存；
 //  - out/transcripts/<slug>.json whisper segments 盘上幸存。
-// 因此 chapters 走 buildTranscriptForReuse 同款路径确定性重建（loadCuts→chaptersFor，
-// 与误删前字节一致），**绝不调 LLM**。重跑 rechapter 既无必要也必然全 skip——其预检门
-// 要求 DB 页 = 机械重建版，而我们的页是语义终版。无快照/快照非法 → 机械 300s 窗章
-// （buildTranscriptMd().chapters，与摄取链回落语义一致）。
+// 因此 chapters 以 **md 章头为配对真值**（页面即老师所见，建页时与同一份 cuts/segments
+// 配对渲染），cuts 快照与机械回落各按原始/剥除两组数组推导，取与 md 章头
+// （章数 + floor(起点) + 标题逐字节）吻合者；无一吻合 → 计问题，**绝不静默回落**。
+// （10-15 ggtms 案根修：08-28 strip 进管线前转写的视频 cuts 按原始数组编号，黑名单
+// 扩容后剥除数组大幅缩短 → 索引出界回落机械垃圾章 / 早段被剥时间漂移 / 空章跳过计数变少。）
+// 重跑 rechapter 无必要且必全 skip（其预检门要求 DB 页=机械重建版）。无快照/快照非法
+// 且机械也不吻合 → 问题（04-…-953eec43 走 md 章头回填专用路径）。
 //
 // 写入通道 = 摄取链同款：upsertTranscriptPage（POST→409→sha 比→PUT 幂等；页写入
 // 服务端内联 embed）+ registerMediaAssets（ON CONFLICT slug：chapters 全覆盖，
@@ -23,14 +26,15 @@
 // 用法：
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/media-rebuild.ts --check     # 零写入
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/media-rebuild.ts --execute [--concurrency 3]
+//   SVC_PASSWORD=... npx tsx ... --execute --only slug1,slug2                        # 定点修复子集
 // 审计落 ~/kb-dumps/20261015-media-rebuild-batch2/；报告落 out/media-rebuild-report.json。
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs"
 import { join, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ApiClient, type MediaAssetItem } from "../src/api-client"
-import { parseWhisperJson } from "../src/whisper"
-import { buildTranscriptMd, type TranscriptInput } from "../src/transcript"
-import { loadCuts, chaptersFor } from "../src/chaptering"
+import { parseWhisperJson, type Segment } from "../src/whisper"
+import { buildTranscriptMd } from "../src/transcript"
+import { validateCuts, chaptersFor, type ChapterCut } from "../src/chaptering"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const outDir = join(here, "../out")
@@ -55,8 +59,15 @@ const byRel = new Map(manifest.rows.map((r) => [r.relPath, r]))
 
 const stateLines = readFileSync(join(outDir, "state.jsonl"), "utf-8")
   .trim().split("\n").map((l) => JSON.parse(l) as { slug: string; status: string; relPath: string })
-const targets = stateLines.filter((l) => l.status === "done")
-console.log(`模式=${EXECUTE ? "EXECUTE" : "check"} 目标=${targets.length}（state done）并发=${CONCURRENCY}`)
+let targets = stateLines.filter((l) => l.status === "done")
+{
+  const want = new Set(opt("--only", "").split(",").map((s) => s.trim()).filter(Boolean))
+  if (want.size) {
+    targets = targets.filter((l) => want.has(l.slug))
+    if (targets.length === 0) { console.error(`--only 未命中任何 slug（state done）`); process.exit(1) }
+  }
+}
+console.log(`模式=${EXECUTE ? "EXECUTE" : "check"} 目标=${targets.length}（state done${targets.length < stateLines.length ? "，--only 定点" : ""}）并发=${CONCURRENCY}`)
 
 interface Problem { slug: string; reason: string }
 const problems: Problem[] = []
@@ -99,14 +110,37 @@ for (const { slug, relPath } of targets) {
     problems.push({ slug, reason: `whisper json 缺失且 md 章头(${heads.length})≠快照(${snapN})` }); continue
   }
 
-  const segments = parseWhisperJson(JSON.parse(readFileSync(jsonPath, "utf-8")))
-  const input: TranscriptInput = {
-    title: titleOf(relPath), segments, sourcePath, mediaSlug: slug, durationS: row.durationS,
+  const rawJson = JSON.parse(readFileSync(jsonPath, "utf-8"))
+  const rawSegs = parseWhisperJson(rawJson, { strip: false })
+  const stripSegs = parseWhisperJson(rawJson)
+  const mdDisk = readFileSync(join(STORAGE_TR, `${slug}.md`), "utf-8")
+  const heads = [...mdDisk.matchAll(/^## \[(\d+):(\d+)\] (.+)$/gm)]
+    .map((m) => ({ t: Number(m[1]) * 60 + Number(m[2]), label: m[3] }))
+  const matchHeads = (chs: Array<{ start_s: number; label: string }> | null): chs is Array<{ start_s: number; end_s: number; label: string }> =>
+    chs !== null && chs.length === heads.length &&
+    heads.every((h, i) => Math.floor(chs[i].start_s) === h.t && chs[i].label === h.label)
+  let cuts: ChapterCut[] | null = null
+  try { cuts = JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8")) } catch { /* 无快照 */ }
+  const mkInput = (segs: Segment[]) => ({
+    title: titleOf(relPath), segments: segs, sourcePath, mediaSlug: slug, durationS: row.durationS,
+  })
+  let chapters: Array<{ start_s: number; end_s: number; label: string }> | null = null
+  if (cuts) {
+    for (const segs of [rawSegs, stripSegs]) {
+      const v = validateCuts(cuts, segs.length)
+      if (!v) continue
+      const chs = chaptersFor(segs, v)
+      if (matchHeads(chs)) { chapters = chs; semantic++; break }
+    }
   }
-  // cuts 快照 → 语义章（与误删前一致）；无/非法快照 → 机械窗章（摄取链回落语义）
-  const cuts = loadCuts(outDir, slug, segments.length)
-  const chapters = cuts ? chaptersFor(segments, cuts) : buildTranscriptMd(input).chapters
-  if (cuts) semantic++; else if (chapters.length > 0) mechanical++; else emptyChapters++
+  if (!chapters) {
+    for (const segs of [rawSegs, stripSegs]) {
+      const chs = buildTranscriptMd(mkInput(segs)).chapters
+      if (matchHeads(chs)) { chapters = chs; mechanical++; break }
+    }
+  }
+  if (!chapters) { problems.push({ slug, reason: `cuts/机械×原始|剥除数组均与 md 章头(${heads.length})不吻合` }); continue }
+  if (chapters.length === 0) emptyChapters++
 
   items.push({
     slug, media_ref: mediaRef, playback_path: null,
