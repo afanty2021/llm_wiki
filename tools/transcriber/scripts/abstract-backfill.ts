@@ -13,7 +13,7 @@
 // out/abstract-backfill-pending.json，重跑先对清单幂等补写——否则页已有摘要而
 // 源未写时重跑按「已有摘要跳过」，源与页静默漂移（源 md 是下次 wipe-rebuild 的
 // 真值来源）。insertAbstract 天然幂等（已有摘要块原位替换）。
-import { writeFileSync, existsSync, readFileSync } from "node:fs"
+import { writeFileSync, existsSync, readFileSync, renameSync, rmSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ApiClient } from "../src/api-client"
@@ -58,10 +58,21 @@ const pages = ((await r.json()) as Array<{ path: string }>).filter(p => p.path.s
 //    快照也丢才重调 LLM）——
 const pendingPath = join(outDir, "abstract-backfill-pending.json")
 const loadPendingMap = (): Record<string, string> => {
-  try { return JSON.parse(readFileSync(pendingPath, "utf-8")) } catch { return {} }
+  if (!existsSync(pendingPath)) return {}
+  try { return JSON.parse(readFileSync(pendingPath, "utf-8")) } catch (e) {
+    // 损坏拒绝静默清零（复查 2026-10-16 Minor）：半写文件被当空清单，下次落盘即覆盖丢账
+    console.error(`pending 清单损坏：${String(e).slice(0, 80)}——人工核查 ${pendingPath} 后删除再跑`)
+    process.exit(1)
+  }
 }
 let pending = loadPendingMap()
-const savePending = () => writeFileSync(pendingPath, JSON.stringify(pending, null, 1))
+// 原子写 tmp+rename（saveState 同款）且空清单不落 {} 噪音文件（复查 2026-10-16 Minor）
+const savePending = () => {
+  if (Object.keys(pending).length === 0) { try { rmSync(pendingPath) } catch { /* 本就不存在 */ } return }
+  const tmp = `${pendingPath}.tmp`
+  writeFileSync(tmp, JSON.stringify(pending, null, 1))
+  renameSync(tmp, pendingPath)
+}
 
 if (!DRY && Object.keys(pending).length > 0) {
   console.log(`发现未完成写清单 ${Object.keys(pending).length} 条，幂等补写…`)
@@ -124,6 +135,6 @@ for (const p of pages) {
 }
 console.log(`完成：目标 ${targets} 页，成功 ${done}，失败 ${failed}，已有摘要跳过 ${skipped}${DRY ? "（DRY-RUN 未写入）" : ""}`)
 if (Object.keys(pending).length > 0) {
-  console.error(`${Object.keys(pending).length} 条未完成写留存 ${pendingPath}（重跑本脚本对账补写）`)
+  console.error(`${Object.keys(pending).length} 条未完成写留存 ${pendingPath}（去 --dry-run 重跑本脚本对账补写，干跑不执行重放）`)
   process.exit(1)
 }

@@ -13,7 +13,7 @@
 // 用法：
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/title-backfill.ts            # 干跑（列目标+系列，无 LLM）
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/title-backfill.ts --execute  # 实跑（LLM+四写）
-import { readFileSync, writeFileSync, existsSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ApiClient } from "../src/api-client"
@@ -82,10 +82,21 @@ function replaceTitle(md: string, neu: string): string | null {
 //    源覆盖写、index old 链接找不到 = 已刷过跳过）——
 const pendingPath = join(outDir, "title-backfill-pending.json")
 const loadPending = (): Record<string, { path: string; old: string; neu: string }> => {
-  try { return JSON.parse(readFileSync(pendingPath, "utf-8")) } catch { return {} }
+  if (!existsSync(pendingPath)) return {}
+  try { return JSON.parse(readFileSync(pendingPath, "utf-8")) } catch (e) {
+    // 损坏拒绝静默清零（复查 2026-10-16 Minor）：半写文件被当空清单，下次落盘即覆盖丢账
+    console.error(`pending 清单损坏：${String(e).slice(0, 80)}——人工核查 ${pendingPath} 后删除再跑`)
+    process.exit(1)
+  }
 }
 let pending = loadPending()
-const savePending = () => writeFileSync(pendingPath, JSON.stringify(pending, null, 1))
+// 原子写 tmp+rename（saveState 同款）且空清单不落 {} 噪音文件（复查 2026-10-16 Minor）
+const savePending = () => {
+  if (Object.keys(pending).length === 0) { try { rmSync(pendingPath) } catch { /* 本就不存在 */ } return }
+  const tmp = `${pendingPath}.tmp`
+  writeFileSync(tmp, JSON.stringify(pending, null, 1))
+  renameSync(tmp, pendingPath)
+}
 
 // 上次未完成写：先对账补写再进主扫描（页 GET 现值 → replaceTitle 幂等出 next → 三写）
 const replayLinks: Array<{ old: string; neu: string; path: string }> = []
@@ -102,7 +113,8 @@ if (EXECUTE && Object.keys(pending).length > 0) {
       const punctPath = join(outDir, "punct", `${slug}.md`)
       if (existsSync(punctPath)) {
         const snapNeu = replaceTitle(readFileSync(punctPath, "utf-8"), info.neu)
-        if (snapNeu !== null) writeFileSync(punctPath, snapNeu)
+        if (snapNeu === null) throw new Error("punct 快照 title 行异常") // 与主循环同口径（复查 Minor）
+        writeFileSync(punctPath, snapNeu)
       }
       replayLinks.push({ old: info.old, neu: info.neu, path: info.path })
       delete pending[slug]; savePending()
@@ -184,7 +196,7 @@ if (indexTargets.length > 0) {
   if (EXECUTE && hits > 0) await api.upsertTranscriptPage(idxPath, content)
 }
 if (Object.keys(pending).length > 0) {
-  console.error(`${Object.keys(pending).length} 条未完成写留存 ${pendingPath}（重跑本脚本对账补写）`)
+  console.error(`${Object.keys(pending).length} 条未完成写留存 ${pendingPath}（加 --execute 重跑本脚本对账补写，干跑不执行重放）`)
   process.exit(1)
 }
 if (failed) { console.error(`${failed} 个失败/跳过`); process.exit(1) }

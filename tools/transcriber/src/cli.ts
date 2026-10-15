@@ -577,8 +577,14 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
 
     // 已 done 且 segments 落盘 → 复用（按原 title/duration 重建 md，hash 与写入时一致），不重转写
     const line = byRel.get(entry.relPath);
-    // tries 上限（M1 评审 #4，接 nextPending 语义）：failed/running 且 tries≥2 → 跳过不重试
+    // tries 上限（M1 评审 #4，接 nextPending 语义）：failed/running 且 tries≥2 → 跳过不重试；
+    // deduped 是去重败者终态而非重试耗尽（复查 2026-10-16 Minor），单独提示、不进
+    // exhaustedRetries 计账（tries:9 是人工标记不是真实尝试数）
     if (line && !lineEligible(line)) {
+      if (line.status === "deduped") {
+        console.log(`[${i + 1}/${targets.length}] ${entry.relPath} — deduped（2026-10-15 去重败者，页/向量/media 已删），跳过且 --force 不重置`);
+        return;
+      }
       exhaustedRetries.push({ slug: line.slug, relPath: entry.relPath, tries: line.tries, error: line.error });
       console.warn(`[${i + 1}/${targets.length}] ${entry.relPath} — 尝试已耗尽（tries=${line.tries}），本轮跳过（--force 可重置重跑）`);
       return;
