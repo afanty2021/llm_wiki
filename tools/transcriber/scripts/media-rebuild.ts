@@ -27,7 +27,8 @@
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/media-rebuild.ts --check     # 零写入
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/media-rebuild.ts --execute [--concurrency 3]
 //   SVC_PASSWORD=... npx tsx ... --execute --only slug1,slug2                        # 定点修复子集
-// 审计落 ~/kb-dumps/20261015-media-rebuild-batch2/；报告落 out/media-rebuild-report.json。
+// 审计落 ~/kb-dumps/20261015-media-rebuild-batch2/；报告落 out/media-rebuild-report.json
+// （--only 定点跑落 media-rebuild-report-only.json，不覆盖全量报告）。
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs"
 import { join, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -60,9 +61,11 @@ const byRel = new Map(manifest.rows.map((r) => [r.relPath, r]))
 const stateLines = readFileSync(join(outDir, "state.jsonl"), "utf-8")
   .trim().split("\n").map((l) => JSON.parse(l) as { slug: string; status: string; relPath: string })
 let targets = stateLines.filter((l) => l.status === "done")
+let ONLY = false
 {
   const want = new Set(opt("--only", "").split(",").map((s) => s.trim()).filter(Boolean))
   if (want.size) {
+    ONLY = true
     targets = targets.filter((l) => want.has(l.slug))
     if (targets.length === 0) { console.error(`--only 未命中任何 slug（state done）`); process.exit(1) }
   }
@@ -92,7 +95,10 @@ for (const { slug, relPath } of targets) {
     const heads = [...mdDisk.matchAll(/^## \[(\d+):(\d+)\] (.+)$/gm)]
       .map((m) => ({ start_s: Number(m[1]) * 60 + Number(m[2]), label: m[3] }))
     let snapN = -1
-    try { snapN = (JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8")) as unknown[]).length } catch { /* 无快照 */ }
+    try {
+      const snap = JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8"))
+      if (Array.isArray(snap)) snapN = snap.length
+    } catch { /* 无快照 */ }
     if (snapN > 0 && heads.length === snapN) {
       mdHeadingFallback++
       items.push({
@@ -120,7 +126,12 @@ for (const { slug, relPath } of targets) {
     chs !== null && chs.length === heads.length &&
     heads.every((h, i) => Math.floor(chs[i].start_s) === h.t && chs[i].label === h.label)
   let cuts: ChapterCut[] | null = null
-  try { cuts = JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8")) } catch { /* 无快照 */ }
+  // 合法 JSON 非数组（如 LLM 原始 {"chapters":[…]} 形态）视同无快照走机械推导，
+  // 不让 for...of 在 try 外抛 TypeError 崩整批（评审 2026-10-16 Minor 2）
+  try {
+    const p = JSON.parse(readFileSync(join(outDir, "chapters", `${slug}.json`), "utf-8"))
+    if (Array.isArray(p)) cuts = p as ChapterCut[]
+  } catch { /* 无快照 */ }
   const mkInput = (segs: Segment[]) => ({
     title: titleOf(relPath), segments: segs, sourcePath, mediaSlug: slug, durationS: row.durationS,
   })
@@ -203,12 +214,14 @@ await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
 const by = (s: string) => [...pageOutcomes.values()].filter((v) => v === s).length
 console.log(`transcript 页：created=${by("created")} updated=${by("updated")} skipped=${by("skipped")} failed=${by("failed")}`)
 
-writeFileSync(join(outDir, "media-rebuild-report.json"), JSON.stringify({
+// --only 定点跑写独立报告文件，避免覆盖全量 919 报告（评审 2026-10-16 Minor 5）
+const reportName = ONLY ? "media-rebuild-report-only.json" : "media-rebuild-report.json"
+writeFileSync(join(outDir, reportName), JSON.stringify({
   generatedAt: new Date().toISOString(),
   targets: targets.length, ready: items.length, problems,
   chapters: { semantic, mechanical, mdHeadingFallback, emptyChapters },
   mediaImported: imported,
   pages: Object.fromEntries(pageOutcomes),
 }, null, 2))
-console.log(`报告：${join(outDir, "media-rebuild-report.json")}`)
+console.log(`报告：${join(outDir, reportName)}`)
 process.exit(problems.length > 0 || by("failed") > 0 ? 1 : 0)

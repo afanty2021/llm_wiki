@@ -90,6 +90,9 @@ tools/transcriber/out/rechapter-*.json
 tools/transcriber/out/chapters/
 tools/transcriber/out/ingest-report.json
 tools/transcriber/out/punct/
+tools/transcriber/out/abstract/
 tools/transcriber/out/punctuate-*.json
+tools/transcriber/out/*-backfill-pending.json
+tools/transcriber/out/state.jsonl.bak*
 # Python 字节码缓存（tools/ltutor 等脚本目录运行残渣）
 __pycache__/

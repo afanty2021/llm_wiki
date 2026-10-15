@@ -256,7 +256,9 @@ export async function runTranscribe(o: TranscribeOpts): Promise<Segment[]> {
 }
 
 // —— JSONL 状态机（断点续跑）——
-export type TranscribeStatus = "pending" | "running" | "done" | "failed";
+// deduped：2026-10-15 去重战役败者终态（页/向量/media 行已物理删除，error 字段指路
+// ~/kb-dumps/20261015-dedupe-81/plan.tsv）。不可重置、不可领取（lineEligible 显式 false）。
+export type TranscribeStatus = "pending" | "running" | "done" | "failed" | "deduped";
 
 export interface StateLine {
   slug: string;

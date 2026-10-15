@@ -247,9 +247,16 @@ export function isRescuableMedia(probe: { videoCodec: string | null; audioCodec:
 }
 
 /** 行是否还有尝试配额（M1 评审 #4，接 nextPending 同款语义消费）：
- *  无行（新文件）可跑；done 走复用分支；pending 可跑；failed/running 残留需 tries<2。 */
+ *  无行（新文件）可跑；done 走复用分支；pending 可跑；failed/running 残留需 tries<2；
+ *  deduped 显式不可跑（2026-10-15 去重败者，此前靠「不匹配任何分支」隐式成立——评审 Important 1 钉死）。 */
 export const lineEligible = (l: StateLine | undefined): boolean =>
-  l === undefined || l.status === "done" || nextPending([l]) !== undefined;
+  l === undefined || l.status === "done" || (l.status !== "deduped" && nextPending([l]) !== undefined);
+
+/** --force 重置（全部行为 pending、tries 清零），deduped 例外：败者的页/向量/media
+ *  已在去重战役中物理删除，重置即重转写+重摄取+重登记 media，静默复活整场去重
+ *  （评审 2026-10-16 Important 1）。 */
+export const forceReset = (lines: Line[]): Line[] =>
+  lines.map(l => l.status === "deduped" ? l : ({ ...l, status: "pending" as const, tries: 0 }));
 
 /** 失败落行（M1 review r2：tries 只计转写失败）：
  *  - 转写类（runTranscribe 抛错 / whisper json 解析失败 / 音频抽取失败）→ tries+1，
@@ -537,7 +544,11 @@ async function cmdTranscribe(argv: string[]): Promise<void> {
   mkdirSync(join(outDir, "playback"), { recursive: true });
 
   let lines: Line[] = loadState(statePath);
-  if (args.force) lines = lines.map(l => ({ ...l, status: "pending", tries: 0 }));
+  if (args.force) {
+    const skippedDeduped = lines.filter(l => l.status === "deduped").length;
+    if (skippedDeduped > 0) console.log(`--force：${skippedDeduped} 行 deduped（去重败者）保持终态不重置`);
+    lines = forceReset(lines);
+  }
   const byRel = new Map<string, Line>();
   for (const l of lines) if (l.relPath) byRel.set(l.relPath, l);
 

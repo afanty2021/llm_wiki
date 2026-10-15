@@ -6,6 +6,10 @@
 // 四写锁步：页（upsert 自动重嵌+刷 title）+ 源 md + punct 快照同替换
 // （快照不同步会被 punctuate-backfill 判陈旧→无谓重标点，C1 同款防御）
 // + wiki/index.md 链接文本统一刷（末尾一轮）。
+// pending 兜底（评审 2026-10-16 Important 3）：四写任一失败 → slug 落
+// out/title-backfill-pending.json 继续跑，重跑先对清单幂等补写——否则页已改而
+// 源未改时重跑按「title 已非纯数字」永久跳过，源与页静默漂移（源 md 是下次
+// wipe-rebuild 的真值来源，漂移会在重建时复活旧标题）。
 // 用法：
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/title-backfill.ts            # 干跑（列目标+系列，无 LLM）
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/title-backfill.ts --execute  # 实跑（LLM+四写）
@@ -74,6 +78,39 @@ function replaceTitle(md: string, neu: string): string | null {
   return md.replace(/^---\n[\s\S]*?\n---/, `---\n${lines.join("\n")}\n---`)
 }
 
+// —— pending 未完成写清单（幂等重放：replaceTitle 同值替换、upsert sha 相同 skipped、
+//    源覆盖写、index old 链接找不到 = 已刷过跳过）——
+const pendingPath = join(outDir, "title-backfill-pending.json")
+const loadPending = (): Record<string, { path: string; old: string; neu: string }> => {
+  try { return JSON.parse(readFileSync(pendingPath, "utf-8")) } catch { return {} }
+}
+let pending = loadPending()
+const savePending = () => writeFileSync(pendingPath, JSON.stringify(pending, null, 1))
+
+// 上次未完成写：先对账补写再进主扫描（页 GET 现值 → replaceTitle 幂等出 next → 三写）
+const replayLinks: Array<{ old: string; neu: string; path: string }> = []
+if (EXECUTE && Object.keys(pending).length > 0) {
+  console.log(`发现未完成写清单 ${Object.keys(pending).length} 条，幂等补写…`)
+  for (const [slug, info] of Object.entries(pending)) {
+    try {
+      const gr = await api.authedFetch(`/api/v1/projects/${api.projectId}/page?path=${encodeURIComponent(info.path)}`)
+      const page = (await gr.json()) as { content: string | null }
+      const next = page.content === null ? null : replaceTitle(page.content, info.neu)
+      if (next === null) { console.error(`  [留存] ${slug}: 页缺失或 frontmatter 异常`); continue }
+      await api.upsertTranscriptPage(info.path, next)
+      await api.writeSource(`sources/transcripts/${slug}.md`, next)
+      const punctPath = join(outDir, "punct", `${slug}.md`)
+      if (existsSync(punctPath)) {
+        const snapNeu = replaceTitle(readFileSync(punctPath, "utf-8"), info.neu)
+        if (snapNeu !== null) writeFileSync(punctPath, snapNeu)
+      }
+      replayLinks.push({ old: info.old, neu: info.neu, path: info.path })
+      delete pending[slug]; savePending()
+      console.log(`  [补写完成] ${slug}`)
+    } catch (e) { console.error(`  [留存] ${slug}: ${String(e).slice(0, 120)}`) }
+  }
+}
+
 const r = await api.authedFetch(`/api/v1/projects/${api.projectId}/pages`)
 const pages = ((await r.json()) as Array<{ path: string }>).filter(p => p.path.startsWith("transcripts/"))
 console.log(`模式=${EXECUTE ? "EXECUTE" : "dry-run"} 扫描 ${pages.length} 页（title 纯数字为目标）…`)
@@ -87,7 +124,10 @@ for (const p of pages) {
   if (!page.title || !/^\d+$/.test(page.title) || !page.content) continue
   const slug = p.path.slice(12, -3)
   const rel = state.get(slug) ?? ""
-  const series = rel.includes("听说视频") ? "听说" : rel.includes("读写视频") ? "读写" : null
+  // 系列判定要求 relPath 属 Unlock 系列（评审 2026-10-16 Minor 4：防未来其他系列
+  // 的纯数字标题被错误冠名「Unlock 4级…」）
+  const series = !rel.includes("Unlock") ? null
+    : rel.includes("听说视频") ? "听说" : rel.includes("读写视频") ? "读写" : null
   const abs = abstractOf(page.content)
   if (!series || !abs) {
     console.error(`  [skip] ${slug}：series=${series} 有摘要=${!!abs}`)
@@ -102,36 +142,50 @@ for (const p of pages) {
   }
   const next = replaceTitle(page.content, neu)
   if (next === null) { console.error(`  [fail] ${slug}: frontmatter title 行异常`); failed++; continue }
+  if (EXECUTE) {
+    try {
+      await api.upsertTranscriptPage(p.path, next)
+      await api.writeSource(`sources/transcripts/${slug}.md`, next)
+      const punctPath = join(outDir, "punct", `${slug}.md`)
+      if (existsSync(punctPath)) {
+        const snapNeu = replaceTitle(readFileSync(punctPath, "utf-8"), neu)
+        if (snapNeu === null) throw new Error("punct 快照 title 行异常")
+        writeFileSync(punctPath, snapNeu)
+      }
+    } catch (e) {
+      pending[slug] = { path: p.path, old: page.title, neu }
+      savePending()
+      console.error(`  [pending] ${slug}: ${String(e).slice(0, 120)}（已记清单，重跑对账补写）`)
+      failed++
+      continue
+    }
+    delete pending[slug]; savePending()
+  }
   plans.push({ slug, path: p.path, old: page.title, neu, content: next })
   console.log(`  ${page.title} → ${neu}  (${slug})`)
-  if (EXECUTE) {
-    await api.upsertTranscriptPage(p.path, next)
-    await api.writeSource(`sources/transcripts/${slug}.md`, next)
-    const punctPath = join(outDir, "punct", `${slug}.md`)
-    if (existsSync(punctPath)) {
-      const snapNeu = replaceTitle(readFileSync(punctPath, "utf-8"), neu)
-      if (snapNeu === null) { console.error(`  [warn] ${slug}: punct 快照 title 行异常，未同步`); failed++ }
-      else writeFileSync(punctPath, snapNeu)
-    }
-  }
 }
 
-// index.md 链接文本刷新（label 从数字换新标题；路径不动）
-if (plans.length > 0) {
+// index.md 链接文本刷新（label 从数字换新标题；路径不动）；含重放补写成功的条目
+const indexTargets = [...replayLinks, ...plans]
+if (indexTargets.length > 0) {
   const idxPath = "wiki/index.md"
   const gr = await api.authedFetch(`/api/v1/projects/${api.projectId}/page?path=${encodeURIComponent(idxPath)}`)
   const idx = (await gr.json()) as { content: string | null }
   let content = idx.content ?? ""
   let hits = 0
-  for (const pl of plans) {
+  for (const pl of indexTargets) {
     const oldLink = `[${pl.old}](${pl.path})`
     const neuLink = `[${pl.neu}](${pl.path})`
     if (!content.includes(oldLink)) { console.error(`  [warn] index 未找到 [${pl.old}](${pl.path})`); continue }
     content = content.split(oldLink).join(neuLink)
     hits++
   }
-  console.log(`index.md 链接文本：${hits}/${plans.length} 处${EXECUTE ? "" : "（dry-run 未写入）"}`)
+  console.log(`index.md 链接文本：${hits}/${indexTargets.length} 处${EXECUTE ? "" : "（dry-run 未写入）"}`)
   if (EXECUTE && hits > 0) await api.upsertTranscriptPage(idxPath, content)
+}
+if (Object.keys(pending).length > 0) {
+  console.error(`${Object.keys(pending).length} 条未完成写留存 ${pendingPath}（重跑本脚本对账补写）`)
+  process.exit(1)
 }
 if (failed) { console.error(`${failed} 个失败/跳过`); process.exit(1) }
 console.log(EXECUTE ? `完成 ${plans.length} 页` : `干跑通过 ${plans.length} 页（加 --execute 实跑）`)

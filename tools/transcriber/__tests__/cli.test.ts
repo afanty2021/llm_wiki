@@ -5,7 +5,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   dedupeByRelPath,
   parseTranscribeArgs, selectFirstBatchVideos, parseBootstrapEnv,
-  parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible,
+  parseFailedItemStates, isRescuableMedia, RESCUE_CODEC_BLACKLIST, lineEligible, forceReset,
   applyWriteFailure, applyTranscribeFailure, runIngestPhase, transcribeExitCode,
   parseDiffPath,
 } from "../src/cli";
@@ -208,6 +208,30 @@ describe("lineEligible（M1 评审 #4：主循环接 nextPending 的 tries 上�
   it("崩溃残留的 running 同样受 tries 上限（与 nextPending 一致）", () => {
     expect(lineEligible(mk({ status: "running", tries: 1 }))).toBe(true);
     expect(lineEligible(mk({ status: "running", tries: 2 }))).toBe(false);
+  });
+  it("deduped（去重败者终态）显式不可跑——不再依赖「不匹配任何分支」的隐式语义（评审 2026-10-16 Important 1）", () => {
+    expect(lineEligible(mk({ status: "deduped", tries: 0 }))).toBe(false);
+    expect(lineEligible(mk({ status: "deduped", tries: 9 }))).toBe(false);
+  });
+});
+
+describe("forceReset（评审 2026-10-16 Important 1：--force 不复活去重败者）", () => {
+  const mk = (over: Partial<StateLine>): StateLine =>
+    ({ slug: "s", wavSha: "abcd1234", status: "pending", tries: 0, ...over });
+  it("pending/failed/running 全部重置为 pending 且 tries 清零", () => {
+    const out = forceReset([
+      mk({ status: "failed", tries: 2, slug: "a" }),
+      mk({ status: "running", tries: 1, slug: "b" }),
+      mk({ status: "done", tries: 3, slug: "c" }),
+    ]);
+    expect(out.map(l => l.status)).toEqual(["pending", "pending", "pending"]);
+    expect(out.every(l => l.tries === 0)).toBe(true);
+  });
+  it("deduped 行保持原样（页/向量/media 已删，重置即复活整场去重）", () => {
+    const deduped = mk({ status: "deduped", tries: 9, slug: "loser", error: "2026-10-15 去重战役" });
+    const out = forceReset([deduped, mk({ status: "failed", tries: 2, slug: "normal" })]);
+    expect(out[0]).toEqual(deduped);
+    expect(out[1].status).toBe("pending");
   });
 });
 
