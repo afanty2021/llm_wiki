@@ -7,7 +7,9 @@
 // 用法：
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/abstract-backfill.ts --dry-run  # 只列目标页
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/abstract-backfill.ts            # 实跑
-import { writeFileSync, existsSync } from "node:fs"
+//   --ratio 0.30：阈值旋钮（2026-10-15）——0.15 对「英文正文+LLM 中文章头」页太紧，
+//   章头把占比抬到 0.16-0.30 的英文课堂页漏网（QC 10-15 的 10 页即此族）。
+import { writeFileSync, existsSync, readFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ApiClient } from "../src/api-client"
@@ -17,7 +19,8 @@ import { llmAbstract, sampleMdForAbstract, persistAbstract, DEFAULT_ABSTRACT, ty
 const here = dirname(fileURLToPath(import.meta.url))
 const outDir = join(here, "../out")
 const DRY = process.argv.includes("--dry-run")
-const RATIO_THRESHOLD = 0.15
+const ratioArg = Number(process.argv[process.argv.indexOf("--ratio") + 1])
+const RATIO_THRESHOLD = Number.isFinite(ratioArg) && ratioArg > 0 && ratioArg < 1 ? ratioArg : 0.15
 
 const cfg: Required<AbstractConfig> = { ...DEFAULT_ABSTRACT }
 if (existsSync(join(here, "../config.json"))) {
@@ -30,6 +33,7 @@ function readFileSyncSafe(): string {
 
 const chineseRatio = (s: string): number =>
   (s.replace(/^---[\s\S]*?---/, "").match(/[\u4e00-\u9fff]/g)?.length ?? 0) / Math.max(s.length, 1)
+const readFileSyncPunct = (p: string): string => readFileSync(p, "utf-8")
 
 const password = process.env.SVC_PASSWORD
 if (!password) { console.error("缺 SVC_PASSWORD"); process.exit(1) }
@@ -63,6 +67,13 @@ for (const p of pages) {
     persistAbstract(outDir, slug, text) // 管线重跑按快照复用（out/abstract/<slug>.md）
     await api.upsertTranscriptPage(p.path, next)
     await api.writeSource(`sources/transcripts/${slug}.md`, next)
+    // punct 快照同步（2026-10-15）：页内容变了，快照若不同步会被 backfill 判陈旧
+    // → 删快照重标点（无谓 LLM churn）。快照本与旧页 byte-equal，套同一 insertAbstract
+    // 即与新页 byte-equal，三工件锁步（页/源/快照）。
+    const punctPath = join(outDir, "punct", `${slug}.md`)
+    if (existsSync(punctPath)) {
+      writeFileSync(punctPath, insertAbstract(readFileSyncPunct(punctPath), text))
+    }
     done++
   } catch (e) {
     failed++
