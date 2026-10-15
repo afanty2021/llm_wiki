@@ -7,6 +7,12 @@
 // 时间戳 + 空白 + 标点后不剩任何字符的行删除（幻觉实测 100% 纯段，真段剥词后仍有
 // 内容必保留）；其余行一字不动。
 //
+// 2026-10-15 QC 变体家族补充：「订阅，转发，明镜与点栏目。」标点重复串——基础 token
+// 的空格形（订阅 转发）与点点形（明镜与点点）都匹配不上（故 08-29 清扫后仍残留）。
+// 变体只做整行处置（不做行内序列剥除，防误杀直播里合法口播的「订阅/关注/转发」）：
+// 行含「明镜与点」水印，或全行仅由 订阅/转发/栏目 词元+标点组成（≥3 词元）——
+// 剥词元后剩真内容则保留、全空则删行。
+//
 // 用法：
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/purge-hallucinations.ts --dry-run  # 只报将删行数
 //   SVC_PASSWORD=... npx tsx tools/transcriber/scripts/purge-hallucinations.ts           # 实跑三写
@@ -30,18 +36,40 @@ const HALLUCINATION_SEQ = new RegExp(
   "g",
 )
 
+/** 变体家族行处置：null=非变体行（走基础规则）；""=删行；字符串=替换行。 */
+function variantLine(line: string): string | null {
+  const bare = line.replace(TS_LINE, "")
+  if (!bare.includes("明镜与点")) {
+    const toks = bare.split(/[，。、；,.!?;:\s（）()]+/).filter(Boolean)
+    if (!(toks.length >= 3 && toks.every(t => t === "订阅" || t === "转发" || t === "栏目"))) return null
+  }
+  const ts = TS_LINE.exec(line)?.[1]
+  const remainder = bare.replace(/(订阅|转发|明镜与点[点点]?|栏目)[\s，。！？；：、,.!?;:（）()"'—-]*/g, "").trim()
+  if (!remainder) return ""
+  return ts ? `[${ts}] ${remainder}` : remainder
+}
+
 /** md 全文清洗：frontmatter/章头/无幻觉行一字不动。命中幻觉的行——
  *  剥幻觉序列后：剩真内容 → 行替换为剥后文本；全空 → 整行删（含时间戳）。
+ *  变体行的余烬必须**串行再过基础规则**（首版短路 bug：变体余烬混基础 token
+ *  ——「订阅，转发，明镜与点栏目。请不吝点赞，打赏支持」剥变体词后基础 token 幸存）。
  *  返回 null = 无幻觉。 */
 export function purgeMd(md: string): { text: string; removed: number; cleaned: number } | null {
-  if (!HALLUCINATION_TOKENS.some(tok => md.includes(tok))) return null
+  if (!HALLUCINATION_TOKENS.some(tok => md.includes(tok)) && !md.includes("明镜与点")) return null
   const lines = md.split("\n")
   const out: string[] = []
   let removed = 0, cleaned = 0
   for (const line of lines) {
-    if (!HALLUCINATION_TOKENS.some(tok => line.includes(tok))) { out.push(line); continue }
-    const ts = TS_LINE.exec(line)?.[1]
-    const body = line.replace(TS_LINE, "")
+    let cur = line
+    const v = variantLine(cur)
+    if (v === "") { removed++; continue }
+    if (v !== null) cur = v
+    if (!HALLUCINATION_TOKENS.some(tok => cur.includes(tok))) {
+      if (cur !== line) { cleaned++; out.push(cur) } else out.push(line)
+      continue
+    }
+    const ts = TS_LINE.exec(cur)?.[1]
+    const body = cur.replace(TS_LINE, "")
     const stripped = body.replace(HALLUCINATION_SEQ, "").trim()
     if (!stripped) { removed++; continue }
     cleaned++

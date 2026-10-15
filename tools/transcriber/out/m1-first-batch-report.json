@@ -1,21 +1,21 @@
 {
-  "startedAt": "2026-10-15T12:52:05.627Z",
-  "finishedAt": "2026-10-15T13:12:32.783Z",
-  "files": 1,
-  "transcribed": 1,
+  "startedAt": "2026-10-15T13:25:33.479Z",
+  "finishedAt": "2026-10-15T13:44:00.906Z",
+  "files": 2,
+  "transcribed": 2,
   "skipped": 0,
   "failed": 0,
   "jobStatus": "succeeded",
-  "jobId": "f966ccf6-5ff7-454f-9a23-8625d4b4b22f",
+  "jobId": "60d47aa8-d184-4936-8973-bfd33104c4e1",
   "jobError": null,
   "failedSources": [],
   "exhaustedRetries": [],
-  "durationMinutes": 20.5,
-  "transcribeMinutes": 15.4,
-  "mediaHours": 1.49,
-  "realtimeFactor": 5.8,
+  "durationMinutes": 18.5,
+  "transcribeMinutes": 13.6,
+  "mediaHours": 1.57,
+  "realtimeFactor": 6.9,
   "reAudit": {
-    "generatedAt": "2026-10-15T12:53:07.789Z",
+    "generatedAt": "2026-10-15T13:26:36.474Z",
     "probeFailures": 0,
     "firstBatch": {
       "dir": "英语教师语言学习专栏",
@@ -30,13 +30,24 @@
   },
   "perFile": [
     {
-      "slug": "LT教材分析之各教材对比分析-5e733261",
-      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/LT教材分析之各教材对比分析.mp4",
+      "slug": "6月15日直播-会员学习问题答疑-下-bae770aa",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/LT直播回放专栏/6月15日直播-会员学习问题答疑（下）.mp4",
       "status": "done",
-      "durationS": 5347,
-      "transcribeMs": 924670,
+      "durationS": 1941,
+      "transcribeMs": 132648,
+      "upsert": "updated"
+    },
+    {
+      "slug": "4-50-小学教学案例视频分析-外研社版听说课-788e5d61",
+      "relPath": "4.课堂教学案例视频分析（新）/4_50-小学教学案例视频分析-外研社版听说课.mp4",
+      "status": "done",
+      "durationS": 3714,
+      "transcribeMs": 685889,
       "upsert": "updated"
     }
   ],
-  "warnings": []
+  "warnings": [
+    "ingest前 覆写告警：transcripts/6月15日直播-会员学习问题答疑-下-bae770aa.md 服务端 hash 不符（疑似 LLM 页覆写），重写…",
+    "ingest前 已重写 transcripts/6月15日直播-会员学习问题答疑-下-bae770aa.md（upsert=updated）"
+  ]
 }
