@@ -146,11 +146,39 @@ fn is_valid_wiki_path(path: &str) -> bool {
             .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'/' | b'.'))
 }
 
-/// parse_file_blocks 的落块口：path 过 W2 确定性校验才入 blocks，否则该页按
-/// 解析失败处理（丢弃 + warn）。
+/// 命名空间单复数笔误归一（2026-10-15 entity/ 单数残根战役）：step2 曾一次性把
+/// 7 个 entity 页写成 `entity/` 单数前缀——W2 字符集校验全字节合法即放行，而下游
+/// 存量页注入/复用匹配（fetch_concept_entity_pairs）硬过滤 `concepts/% OR
+/// entities/%`，错前缀页对所有后续摄取隐形（不复用、不被链，只进 index）。此处把
+/// prompt 三前缀（step2_generate.txt）的单数形改写回复数形（warn 留痕，供批
+/// warnings 逐条 grep），内容零丢失；`note/`→`notes/` 同理对称防御。
+fn normalize_namespace_typo(path: &str) -> Option<String> {
+    const SINGULARS: [(&str, &str); 3] =
+        [("entity/", "entities/"), ("concept/", "concepts/"), ("note/", "notes/")];
+    for (from, to) in SINGULARS {
+        if let Some(rest) = path.strip_prefix(from) {
+            return Some(format!("{to}{rest}"));
+        }
+    }
+    None
+}
+
+/// parse_file_blocks 的落块口：path 先归一化命名空间单复数笔误，再过 W2 确定性
+/// 校验，否则该页按解析失败处理（丢弃 + warn）。
 fn push_validated_block(blocks: &mut Vec<ParsedBlock>, path: &str, content: &str) {
-    if is_valid_wiki_path(path) {
-        blocks.push(parse_single_block(path, content));
+    let normalized = match normalize_namespace_typo(path) {
+        Some(fixed) => {
+            tracing::warn!(
+                original = %path,
+                normalized = %fixed,
+                "step2 FILE block namespace typo normalized (singular -> plural)"
+            );
+            fixed
+        }
+        None => path.to_string(),
+    };
+    if is_valid_wiki_path(&normalized) {
+        blocks.push(parse_single_block(&normalized, content));
     } else {
         tracing::warn!(
             path = %path,
@@ -1419,6 +1447,15 @@ fn is_llm_generated_path(path: &str) -> bool {
     path.starts_with("transcripts/")
 }
 
+/// step2 LLM 可写命名空间白名单（2026-10-15 entity/ 单数残根战役）：prompt
+/// （step2_generate.txt）明示 concepts/…、entities/…、notes/… 三前缀；其余
+/// 前缀（裸 slug、examples/、wiki/、归一化漏网的编造目录等）一律 GuardSkipped——
+/// 计账语义与 transcripts/ 守卫一致（计入 pages_written、不算失败、source 照常
+/// mark ingested，resume 不必重跑），warn 逐条留痕待人工/下轮处置。
+fn is_llm_writable_namespace(path: &str) -> bool {
+    path.starts_with("concepts/") || path.starts_with("entities/") || path.starts_with("notes/")
+}
+
 /// upsert 循环单页写入结果——run_ingest_job 的计账模型（fold_page_write_outcomes 的输入）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PageWriteOutcome {
@@ -1772,6 +1809,11 @@ pub async fn run_ingest_job(
                     // git show c7b93abc:src-server/src/services/ingest_pipeline.rs）——
                     if is_llm_generated_path(&page.path) {
                         tracing::warn!(path = %page.path, source = %sp, "skip LLM page into transcripts/ namespace");
+                        outcomes.push(PageWriteOutcome::GuardSkipped);
+                        continue;
+                    }
+                    if !is_llm_writable_namespace(&page.path) {
+                        tracing::warn!(path = %page.path, source = %sp, "skip LLM page outside writable namespaces (concepts/ entities/ notes/)");
                         outcomes.push(PageWriteOutcome::GuardSkipped);
                         continue;
                     }
@@ -2775,6 +2817,31 @@ mod tests {
     }
 
     #[test]
+    fn namespace_typo_normalizer_boundaries() {
+        // 2026-10-15 entity/ 残根战役：三单数形归一，前缀边界（复数形/形似词/裸 slug）不得误伤
+        assert_eq!(normalize_namespace_typo("entity/think-textbook.md").as_deref(), Some("entities/think-textbook.md"));
+        assert_eq!(normalize_namespace_typo("concept/a.md").as_deref(), Some("concepts/a.md"));
+        assert_eq!(normalize_namespace_typo("note/a.md").as_deref(), Some("notes/a.md"));
+        assert_eq!(normalize_namespace_typo("entities/a.md"), None, "复数形不得再命中");
+        assert_eq!(normalize_namespace_typo("concepts/a.md"), None);
+        assert_eq!(normalize_namespace_typo("notes/a.md"), None, "note/ 与 notes/ 前缀边界");
+        assert_eq!(normalize_namespace_typo("entityy/a.md"), None, "形似前缀不命中");
+        assert_eq!(normalize_namespace_typo("transcripts/a.md"), None, "transcripts/ 无单复数语义，不归一（写层守卫拦截）");
+        assert_eq!(normalize_namespace_typo("a.md"), None);
+    }
+
+    #[test]
+    fn parse_file_blocks_normalizes_singular_namespace() {
+        // 单数前缀 FILE block 归一回复数形后正常落块，内容不丢
+        let text = "---FILE: entity/the-box-of-children.md ---\n# T\n正文。\n---END FILE---\n\
+                    ---FILE: concept/reading.md ---\n# C\nBody\n---END FILE---";
+        let (blocks, _) = parse_file_blocks(text);
+        let paths: Vec<&str> = blocks.iter().map(|b| b.path.as_str()).collect();
+        assert_eq!(paths, vec!["entities/the-box-of-children.md", "concepts/reading.md"]);
+        assert!(blocks[0].content.contains("正文"), "归一化只改路径，内容必须原样保留");
+    }
+
+    #[test]
     fn parse_file_blocks_invalid_path_between_valid_blocks() {
         // 中间页 path 违规被丢弃，不吞前后合法页
         let text = "---FILE: a.md ---\n# A\nBody\n---END FILE---\n\
@@ -3393,6 +3460,19 @@ mod tests {
         assert!(is_llm_generated_path("transcripts/xx.md"), "transcripts/ 前缀页必须命中守卫");
         assert!(!is_llm_generated_path("transcript-note.md"), "形似前缀但不带 transcripts/ 路径前缀，不命中");
         assert!(!is_llm_generated_path("pages/xx.md"), "普通 LLM 生成页路径不命中");
+    }
+
+    #[test]
+    fn llm_writable_namespace_whitelist() {
+        // 2026-10-15 entity/ 残根战役：写层白名单 = prompt 三前缀，其余 GuardSkipped
+        assert!(is_llm_writable_namespace("concepts/a.md"));
+        assert!(is_llm_writable_namespace("entities/e1.md"));
+        assert!(is_llm_writable_namespace("notes/n.md"));
+        assert!(!is_llm_writable_namespace("a.md"), "裸 slug 不在白名单");
+        assert!(!is_llm_writable_namespace("entity/a.md"), "单数残根形态兜底拦截（常态被解析层归一化）");
+        assert!(!is_llm_writable_namespace("transcripts/t.md"), "transcripts/ 由先行的专属守卫拦截");
+        assert!(!is_llm_writable_namespace("examples/e.md"));
+        assert!(!is_llm_writable_namespace("wiki/index.md"), "reserved 页不走 step2 通道");
     }
 
     #[test]
