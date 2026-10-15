@@ -1,26 +1,21 @@
 {
-  "startedAt": "2026-09-12T23:28:34.122Z",
-  "finishedAt": "2026-09-12T23:51:54.625Z",
-  "files": 21,
-  "transcribed": 7,
-  "skipped": 14,
+  "startedAt": "2026-10-15T12:52:05.627Z",
+  "finishedAt": "2026-10-15T13:12:32.783Z",
+  "files": 1,
+  "transcribed": 1,
+  "skipped": 0,
   "failed": 0,
-  "jobStatus": "succeeded_with_warnings",
-  "jobId": "ce23babc-1414-412e-a19a-543ceb7d5976",
+  "jobStatus": "succeeded",
+  "jobId": "f966ccf6-5ff7-454f-9a23-8625d4b4b22f",
   "jobError": null,
-  "failedSources": [
-    {
-      "path": "sources/transcripts/15-Reading-Spelling-Teacher-Training-Section-7-5-logicofengl-fdcdd989.md",
-      "error": "LLM API error: step1 JSON parse failed（无有效 JSON 对象，retried once + 控制字符修复层 fired=true）| serde: Syntax at line 1 col 1 | line_text: \"```json\" | head: \"```json\\n{\\n  \\\"entities\\\": [\\n    {\\n      \\\"name\\\": \\\"Logic of English 教师培训课程\\\",\\n      \\\"\" | tail: \"指出该长音规则存在少数例外位置，其中之一是 W 之后的 a 常发 broad sound，如 water、wall、wash。\\\"\\n    }\\n  ]\\n}\\n```\""
-    }
-  ],
+  "failedSources": [],
   "exhaustedRetries": [],
-  "durationMinutes": 23.3,
-  "transcribeMinutes": 15.7,
-  "mediaHours": 1.77,
-  "realtimeFactor": 6.8,
+  "durationMinutes": 20.5,
+  "transcribeMinutes": 15.4,
+  "mediaHours": 1.49,
+  "realtimeFactor": 5.8,
   "reAudit": {
-    "generatedAt": "2026-09-12T23:29:01.612Z",
+    "generatedAt": "2026-10-15T12:53:07.789Z",
     "probeFailures": 0,
     "firstBatch": {
       "dir": "英语教师语言学习专栏",
@@ -35,164 +30,13 @@
   },
   "perFile": [
     {
-      "slug": "03-Reading-Spelling-Teacher-Training-Section-2-logicofenglis-7f950441",
-      "relPath": "Logic-of-English-Teacher-Training/03. Reading & Spelling Teacher Training Section 2 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 1540,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "04-Reading-Spelling-Teacher-Training-Section-3-by-Logic-Of-E-7ce3c22d",
-      "relPath": "Logic-of-English-Teacher-Training/04. Reading & Spelling Teacher Training Section 3 by Logic Of English #logicofenglish #scienceofreading.mp4",
-      "status": "skipped",
-      "durationS": 1120,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "05-Reading-Spelling-Teacher-Training-Section-4-logicofenglis-61ed53aa",
-      "relPath": "Logic-of-English-Teacher-Training/05. Reading & Spelling Teacher Training Section 4 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 1467,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "06-Reading-Spelling-Teacher-Training-Section-5-1-logicofengl-f6bba58f",
-      "relPath": "Logic-of-English-Teacher-Training/06. Reading & Spelling Teacher Training Section 5.1 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 845,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "07-Reading-Spelling-Teacher-Training-Section-5-2-by-Logic-of-77106e20",
-      "relPath": "Logic-of-English-Teacher-Training/07. Reading & Spelling Teacher Training Section 5.2 by Logic of English #logicofenglish.mp4",
-      "status": "skipped",
-      "durationS": 1246,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "08-Reading-Spelling-Teacher-Training-Section-5-3-logicofengl-470887d8",
-      "relPath": "Logic-of-English-Teacher-Training/08. Reading & Spelling Teacher Training Section 5.3 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 650,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "09-Reading-Spelling-Teacher-Training-Section-5-4-logicofengl-5986ca10",
-      "relPath": "Logic-of-English-Teacher-Training/09. Reading & Spelling Teacher Training Section 5.4 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 274,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "10-Reading-Spelling-Teacher-Training-Section-6-logicofenglis-d78caac1",
-      "relPath": "Logic-of-English-Teacher-Training/10. Reading & Spelling Teacher Training Section 6 #logicofenglish #spelling #reading #scienceofreading.mp4",
-      "status": "skipped",
-      "durationS": 975,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "11-Reading-Spelling-Teacher-Training-Section-7-1-logicofengl-b2fc59af",
-      "relPath": "Logic-of-English-Teacher-Training/11. Reading & Spelling Teacher Training Section 7.1 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 510,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "12-Reading-Spelling-Teacher-Training-Section-7-2-logicofengl-8574e5c4",
-      "relPath": "Logic-of-English-Teacher-Training/12. Reading & Spelling Teacher Training Section 7.2 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 994,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "13-Reading-Spelling-Teacher-Training-Section-7-3-logicofengl-0b757fc1",
-      "relPath": "Logic-of-English-Teacher-Training/13. Reading & Spelling Teacher Training Section 7.3 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 514,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "14-Reading-Spelling-Teacher-Training-Section-7-4-logicofengl-b25ee39b",
-      "relPath": "Logic-of-English-Teacher-Training/14. Reading & Spelling Teacher Training Section 7.4 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "skipped",
-      "durationS": 889,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "01-Reading-Spelling-Teacher-Training-Intro-by-Logic-of-Engli-c30b15df",
-      "relPath": "Logic-of-English-Teacher-Training/01. Reading & Spelling Teacher Training Intro by Logic of English #logicofenglish #scienceofreading.mp4",
-      "status": "skipped",
-      "durationS": 152,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "16-Reading-Spelling-Teacher-Training-Section-7-6-89890772",
-      "relPath": "Logic-of-English-Teacher-Training/16. Reading & Spelling Teacher Training Section 7.6.mp4",
+      "slug": "LT教材分析之各教材对比分析-5e733261",
+      "relPath": "【2024-2025】LT年度师训会员（高年级版）/教材及教学素材解析/LT教材分析之各教材对比分析.mp4",
       "status": "done",
-      "durationS": 465,
-      "transcribeMs": 50660,
-      "upsert": "created"
-    },
-    {
-      "slug": "02-Reading-Spelling-Teacher-Training-Section-1-logicofenglis-2ccc14fa",
-      "relPath": "Logic-of-English-Teacher-Training/02. Reading & Spelling Teacher Training Section 1 #logicofenglish #spelling #reading #scienceofreading.mp4",
-      "status": "skipped",
-      "durationS": 1438,
-      "transcribeMs": 0
-    },
-    {
-      "slug": "15-Reading-Spelling-Teacher-Training-Section-7-5-logicofengl-fdcdd989",
-      "relPath": "Logic-of-English-Teacher-Training/15. Reading & Spelling Teacher Training Section 7.5 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "done",
-      "durationS": 1193,
-      "transcribeMs": 126672,
-      "upsert": "created"
-    },
-    {
-      "slug": "17-Reading-Spelling-Teacher-Training-Section-7-7-logicofengl-25b30728",
-      "relPath": "Logic-of-English-Teacher-Training/17. Reading & Spelling Teacher Training Section 7.7 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "done",
-      "durationS": 688,
-      "transcribeMs": 63519,
-      "upsert": "created"
-    },
-    {
-      "slug": "19-Reading-Spelling-Teacher-Training-Section-7-9-logicofengl-b5f9b1c6",
-      "relPath": "Logic-of-English-Teacher-Training/19. Reading & Spelling Teacher Training Section 7.9 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "done",
-      "durationS": 1003,
-      "transcribeMs": 148297,
-      "upsert": "created"
-    },
-    {
-      "slug": "20-Reading-Spelling-Teacher-Training-Section-8-logicofenglis-ca3d44f1",
-      "relPath": "Logic-of-English-Teacher-Training/20. Reading & Spelling Teacher Training Section 8 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "done",
-      "durationS": 967,
-      "transcribeMs": 119445,
-      "upsert": "created"
-    },
-    {
-      "slug": "18-Reading-Spelling-Teacher-Training-Section-7-8-logicofengl-3c80ca79",
-      "relPath": "Logic-of-English-Teacher-Training/18. Reading & Spelling Teacher Training Section 7.8 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "done",
-      "durationS": 1338,
-      "transcribeMs": 277046,
-      "upsert": "created"
-    },
-    {
-      "slug": "21-Reading-Spelling-Teacher-Training-Section-9-logicofenglis-7ea768dd",
-      "relPath": "Logic-of-English-Teacher-Training/21. Reading & Spelling Teacher Training Section 9 #logicofenglish #scienceofreading #reading #spelling.mp4",
-      "status": "done",
-      "durationS": 726,
-      "transcribeMs": 156779,
-      "upsert": "created"
+      "durationS": 5347,
+      "transcribeMs": 924670,
+      "upsert": "updated"
     }
   ],
-  "warnings": [
-    "ingest前 覆写告警：transcripts/01-Reading-Spelling-Teacher-Training-Intro-by-Logic-of-Engli-c30b15df.md 服务端 hash 不符（疑似 LLM 页覆写），重写…",
-    "ingest前 已重写 transcripts/01-Reading-Spelling-Teacher-Training-Intro-by-Logic-of-Engli-c30b15df.md（upsert=updated）",
-    "ingest前 覆写告警：transcripts/02-Reading-Spelling-Teacher-Training-Section-1-logicofenglis-2ccc14fa.md 服务端 hash 不符（疑似 LLM 页覆写），重写…",
-    "ingest前 已重写 transcripts/02-Reading-Spelling-Teacher-Training-Section-1-logicofenglis-2ccc14fa.md（upsert=updated）"
-  ]
+  "warnings": []
 }
