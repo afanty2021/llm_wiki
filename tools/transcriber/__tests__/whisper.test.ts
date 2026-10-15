@@ -60,6 +60,32 @@ describe("stripHallucinationSegments（B 站搬运幻觉过滤，2026-08-29 全�
       { offsets: { from: 2000, to: 3000 }, text: "优独播剧场——YoYo Television Series Exclusive" },
     ] })).toEqual([]);
   });
+  it("2026-10-15 变体家族：逗号形水印段（明镜与点栏目）丢弃", () => {
+    expect(parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "订阅，转发，明镜与点栏目。" },
+      { offsets: { from: 2000, to: 3000 }, text: "请不吝点赞 订阅 转发 打赏支持明镜与点栏目" },
+    ] })).toEqual([]);
+  });
+  it("2026-10-15 变体家族：整段纯 订阅/转发/栏目 词元段丢弃（无水印也兜住）", () => {
+    expect(parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "订阅，转发，栏目。" },
+      { offsets: { from: 2000, to: 3000 }, text: "订阅 转发 栏目" },
+    ] })).toEqual([]);
+  });
+  it("2026-10-15 变体家族：混合段（变体词+真内容）保留，行级清扫处置", () => {
+    const out = parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "订阅，转发，栏目。欢迎回到今天的课堂" },
+    ] });
+    expect(out).toHaveLength(1);
+    expect(out[0].text).toContain("欢迎回到今天的课堂");
+  });
+  it("2026-10-15 变体家族：真段零误杀（含订阅/栏目字样的正常话术不丢）", () => {
+    const out = parseWhisperJson({ transcription: [
+      { offsets: { from: 1000, to: 2000 }, text: "欢迎大家订阅频道，也可以转发给学生看" },
+      { offsets: { from: 2000, to: 3000 }, text: "这个栏目我们聊了三个话题" },
+    ] });
+    expect(out).toHaveLength(2);
+  });
 });
 
 describe("窗级退化守门（2026-09-07 刘飞雪试点 04/06 双例后落地）", () => {

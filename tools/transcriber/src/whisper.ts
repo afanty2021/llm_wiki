@@ -32,19 +32,45 @@ export function parseWhisperJson(raw: unknown, opts: { strip?: boolean } = {}): 
  *  开放集由下方窗级退化守门按循环签名兜底。剥词后整段为空才丢弃——真段剥词后
  *  仍有内容必保留，零误杀。 */
 export const HALLUCINATION_TOKENS = [
-  "中文字幕志愿者", "字幕志愿者", "李宗盛", "明镜与点点", "请不吝点赞", "打赏支持",
+  // 「明镜与点点」必须列在「明镜与点」前——剥词按序消费，先短后长残留「点栏目」3 字漏放
+  "中文字幕志愿者", "字幕志愿者", "李宗盛", "明镜与点点", "明镜与点", "请不吝点赞", "打赏支持",
   "订阅 转发", "打赏", "优优独播剧场", "优独播剧场", "YoYo Television Series Exclusive", "YoYo Television",
 ] as const;
 
-/** 幻觉段过滤：含黑名单词的段，剥词后剩余 ≤2 字（「订阅 转发 栏目」级搬运
- *  话术残渣）即丢弃；不含黑名单词的段无条件保留（零误杀入口）。 */
+/** 变体家族词元（2026-10-15 QC 补全，与 scripts/purge-hallucinations.ts variantLine
+ *  同族）：「订阅，转发，明镜与点栏目。」逗号重复串——基础 token 的空格形
+ *  （订阅 转发）与点点形（明镜与点点）都匹配不上。段级两条结构规则兜住，
+ *  逗号连写**不进** token 表——本表同时喂 purge 脚本的行内剥除正则，逐字 token
+ *  会误伤真实口播 CTA（「求订阅，转发支持」）：
+ *  ①整段仅由 订阅/转发/栏目 词元+标点/空白组成（≥3 词元）即纯搬运话术段；
+ *  ②含水印段剥基础词后，余烬若纯由变体词元组成（≥1 词元）同样不算真内容
+ *  （「…明镜与点栏目。」剥水印剩「订阅，转发，栏目。」6 实字，旧 ≤2 口径漏放）。
+ *  ≥3 与脚本侧行级阈值一致；剥词后混有真字的段两规则都不咬（归行级清扫处置）。 */
+const VARIANT_HALLUCINATION_WORDS: readonly string[] = ["订阅", "转发", "栏目"];
+
+function isVariantHallucinationSegment(text: string): boolean {
+  const toks = text.split(/[，。、；,.!?;:\s（）()]+/).filter(Boolean);
+  return toks.length >= 3 && toks.every(t => VARIANT_HALLUCINATION_WORDS.includes(t));
+}
+
+/** 幻觉段过滤：含黑名单词的段，剥词+空白+标点后剩余 ≤2 字（「订阅 转发 栏目」级
+ *  搬运话术残渣）即丢弃；不含黑名单词的段除规则①外无条件保留（零误杀入口）。
+ *  标点不计入残余（「栏目。」3 字符系标点虚胖，与脚本侧 variantLine
+ *  「词元+标点后全空才删」对齐）。 */
 export function stripHallucinationSegments(segments: Segment[]): Segment[] {
+  const isVariantResidue = (text: string) => {
+    const toks = text.split(/[，。、；,.!?;:\s（）()]+/).filter(Boolean);
+    return toks.length > 0 && toks.every(t => VARIANT_HALLUCINATION_WORDS.includes(t));
+  };
   return segments.filter(seg => {
-    if (!HALLUCINATION_TOKENS.some(tok => seg.text.includes(tok))) return true
-    let core = seg.text
-    for (const tok of HALLUCINATION_TOKENS) core = core.split(tok).join("")
-    return core.replace(/\s/g, "").length > 2
-  })
+    if (isVariantHallucinationSegment(seg.text)) return false;
+    if (!HALLUCINATION_TOKENS.some(tok => seg.text.includes(tok))) return true;
+    let core = seg.text;
+    for (const tok of HALLUCINATION_TOKENS) core = core.split(tok).join("");
+    const bare = core.replace(/[\s，。！？；：、,.!?;:（）()"'—-]/g, "");
+    if (bare.length > 2 && !isVariantResidue(core)) return true;
+    return false;
+  });
 }
 
 // ── 窗级退化守门（2026-09-07 刘飞雪试点 04/06 双例后落地，评审专科阈值）──
