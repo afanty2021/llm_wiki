@@ -600,11 +600,11 @@ test("集成·SUPERVISION_TOOLS 白名单钉桩（决策③：常量在分发层
 // （周报任务 ca270c3a5a58 2026-09-05 实锺）。新契约：可选声明（系统/cron 通道
 // 显式化）；用户会话防冒名不变——identity 锁对不匹配参数照常硬拒。
 
-test("schema：17 个 src-server 工具——15 个可选声明 wecom_userid；两个 T2 检索工具不声明（brief §4：无身份参数，supervisor 路径天然不触发）", () => {
+test("schema：18 个 src-server 工具——15 个可选声明 wecom_userid；两个 T2 检索工具与 web_clip（Task 3+4）不声明（检索工具无身份参数；web_clip 会话身份即收藏人、无 cron 流量）", () => {
   const tools = [...srcServerToolDefinitions(), ...trainingToolDefinitions()]
-  assert.equal(tools.length, 17)
-  const newSearchTools = ["teacher_tutor_video_search", "teacher_tutor_roster_search"]
-  const declaringTools = tools.filter((tool) => !newSearchTools.includes(tool.name))
+  assert.equal(tools.length, 18)
+  const noIdentityTools = ["teacher_tutor_video_search", "teacher_tutor_roster_search", "teacher_tutor_web_clip"]
+  const declaringTools = tools.filter((tool) => !noIdentityTools.includes(tool.name))
   assert.equal(declaringTools.length, 15)
   for (const tool of declaringTools) {
     const props = (tool.inputSchema.properties ?? {}) as Record<string, unknown>
@@ -620,13 +620,24 @@ test("schema：17 个 src-server 工具——15 个可选声明 wecom_userid；�
   }
   // 两个新检索工具：q 必填非空白、limit 可选、不声明 wecom_userid（系统/cron 回合
   // 本就不该用它们——主管找片/点名是交互会话流量）
-  for (const name of newSearchTools) {
+  for (const name of ["teacher_tutor_video_search", "teacher_tutor_roster_search"]) {
     const tool = tools.find((t) => t.name === name)!
     assert.ok(tool, `${name} must be defined`)
     const props = tool.inputSchema.properties as Record<string, unknown>
     assert.equal(props.wecom_userid, undefined, `${name}: 不声明 wecom_userid`)
     assert.deepEqual(tool.inputSchema.required, ["q"])
     assert.ok(typeof props.limit === "object", `${name}: limit 可选声明`)
+  }
+  // web_clip（Task 3+4，Ruling R12）：schema 只有 url——v1 无 force；剪藏是教师交互
+  // 意图（无 cron 流量），会话身份即收藏人 actor，不声明 wecom_userid（系统回合
+  // 硬传仍被 handler 直读透传——index.ts asObject 口径，身份锁兜底）
+  {
+    const tool = tools.find((t) => t.name === "teacher_tutor_web_clip")!
+    assert.ok(tool, "teacher_tutor_web_clip must be defined")
+    const props = tool.inputSchema.properties as Record<string, unknown>
+    assert.equal(props.wecom_userid, undefined, "web_clip 不声明 wecom_userid")
+    assert.deepEqual(tool.inputSchema.required, ["url"])
+    assert.equal(props.force, undefined, "web_clip v1 无 force（Ruling R12）")
   }
   // 其余必填位不受牵连
   const search = tools.find((t) => t.name === "llm_wiki_search")!

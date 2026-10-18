@@ -24,14 +24,21 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@mozilla/readability": "^0.6.0",
     "d3": "^7.9.0",
+    "jsdom": "^26.1.0",
     "jszip": "^3.10.2",
     "markmap-lib": "^0.18.12",
     "markmap-view": "^0.18.12",
-    "pptxgenjs": "^4.0.1"
+    "pptxgenjs": "^4.0.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "undici": "^6.29.1"
   },
   "devDependencies": {
+    "@types/jsdom": "^27.0.0",
     "@types/node": "^20.0.0",
+    "@types/turndown": "^5.0.6",
     "typescript": "^5.7.3"
   }
 }

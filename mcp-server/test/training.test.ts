@@ -7,6 +7,7 @@ import { test } from "node:test"
 import { LlmWikiApiClient, resolveApiForm } from "../src/api-client.js"
 import { TeacherCredentialStore, ToolArgumentError, createSrcServerHandlers, joinTLink } from "../src/training.js"
 import { assertSrcServerEnv, buildTools } from "../src/index.js"
+import { WebClipError, type ClipOutcome } from "../src/web-clip.js"
 
 // 全部 mock 驱动：不依赖任何 live src-server。
 const BASE = "http://127.0.0.1:8080"
@@ -92,6 +93,7 @@ function makeHandlers(
     renderWorksheet?: Parameters<typeof createSrcServerHandlers>[0]["renderWorksheet"]
     renderPptx?: Parameters<typeof createSrcServerHandlers>[0]["renderPptx"]
     mediaExtract?: Parameters<typeof createSrcServerHandlers>[0]["mediaExtract"]
+    webClip?: Parameters<typeof createSrcServerHandlers>[0]["webClip"]
   } = {},
 ) {
   const client = new LlmWikiApiClient({ baseUrl: BASE, fetchImpl })
@@ -105,6 +107,7 @@ function makeHandlers(
     renderWorksheet: opts.renderWorksheet,
     renderPptx: opts.renderPptx,
     mediaExtract: opts.mediaExtract,
+    webClip: opts.webClip,
   })
 }
 
@@ -652,7 +655,7 @@ test("joinTLink: 尾斜杠归一 + 绝对链接直通", () => {
 
 // ── 形态注册过滤 ──
 
-test("src-server 形态：只注册 17 工具（15 teacher_tutor_* + 2 llm_wiki），9 个桌面工具不在 ListTools", () => {
+test("src-server 形态：只注册 18 工具（16 teacher_tutor_* + 2 llm_wiki），9 个桌面工具不在 ListTools", () => {
   const names = buildTools("src-server").map((tool) => tool.name)
   assert.deepEqual([...names].sort(), [
     "llm_wiki_read_file",
@@ -665,6 +668,7 @@ test("src-server 形态：只注册 17 工具（15 teacher_tutor_* + 2 llm_wiki�
     "teacher_tutor_pptx",
     "teacher_tutor_roster_search",
     "teacher_tutor_video_search",
+    "teacher_tutor_web_clip",
     "teacher_tutor_worksheet",
     "teacher_tutor_plan_link",
     "teacher_tutor_plan_list",
@@ -1342,4 +1346,136 @@ test("pptx v2: image 越界路径 → ok:false 文本、不抛 ToolArgumentError
     slides: [{ heading: "a", bullets: ["x"] }, { heading: "b", bullets: ["x"] }, { heading: "c", bullets: ["y"] }],
   })
   assert.ok(toolText(result2).includes("audio_path 不在允许范围"))
+})
+
+// ── teacher_tutor_web_clip（Task 3+4，clip-to-teacher-kb：工具注册 + 错误码/回复物料契约）──
+
+function clipOutcome(overrides: Partial<ClipOutcome> = {}): ClipOutcome {
+  return {
+    status: "created",
+    title: "初中英语教师如何维持口语水平",
+    sourcePath: "sources/clips/初中英语教师如何维持口语水平-1a2b3c4d.md",
+    pagePath: "clips/初中英语教师如何维持口语水平-1a2b3c4d.md",
+    jobId: "job-clip-1",
+    ...overrides,
+  }
+}
+
+test("web_clip·工具定义：schema 只有 url 且必填（R12：v1 无 force、无 wecom_userid 声明）", () => {
+  const tool = buildTools("src-server").find((t) => t.name === "teacher_tutor_web_clip")
+  assert.ok(tool, "teacher_tutor_web_clip 必须在 src-server ListTools 中")
+  assert.deepEqual(Object.keys(tool!.inputSchema.properties), ["url"])
+  assert.deepEqual(tool!.inputSchema.required, ["url"])
+  assert.equal(tool!.inputSchema.additionalProperties, false)
+  const description = tool!.description
+  for (const must of ["一次只收一条链接", "批量抓取", "版权风险", "公开可读的文章页", "提不了正文"]) {
+    assert.ok(description.includes(must), `description 须含要点「${must}」`)
+  }
+})
+
+test("web_clip·created：透传 url/actor/token → 结构化结果 + 现成 reply + identity_source", async () => {
+  const seen: Array<{ url: string; actor: string; token: string }> = []
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    webClip: async (url, actor, token) => {
+      seen.push({ url, actor, token })
+      return clipOutcome()
+    },
+  })
+  const result = await handlers.get("teacher_tutor_web_clip")!({
+    wecom_userid: "t1",
+    url: " https://mp.weixin.qq.com/s/abc?utm_source=x ",
+  })
+  // url trim 后透传；actor=身份解析的 wecomUserid（clipped_by 口径）；token=凭证链产物
+  assert.deepEqual(seen, [{
+    url: "https://mp.weixin.qq.com/s/abc?utm_source=x",
+    actor: "t1",
+    token: "acc-tool",
+  }])
+  const payload = JSON.parse(toolText(result)) as Record<string, unknown>
+  assert.equal(payload.status, "created")
+  assert.equal(payload.title, "初中英语教师如何维持口语水平")
+  assert.equal(payload.sourcePath, "sources/clips/初中英语教师如何维持口语水平-1a2b3c4d.md")
+  assert.equal(payload.pagePath, "clips/初中英语教师如何维持口语水平-1a2b3c4d.md")
+  assert.equal(payload.jobId, "job-clip-1")
+  assert.equal(payload.reply, "已收藏《初中英语教师如何维持口语水平》，稍后整理完成后即可检索")
+  assert.ok(result.content.some((c) => c.text.includes('identity_source: "system"')))
+})
+
+test("web_clip·already：reply 带收藏人+日期（共享库语境 M5），payload 含 prev 两字段", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    webClip: async () => clipOutcome({
+      status: "already",
+      prevClippedAt: "2026-10-01T08:09:10.000Z",
+      prevClippedBy: "王老师",
+    }),
+  })
+  const result = await handlers.get("teacher_tutor_web_clip")!({ wecom_userid: "t1", url: "https://example.com/a" })
+  const payload = JSON.parse(toolText(result)) as Record<string, unknown>
+  assert.equal(payload.status, "already")
+  assert.equal(payload.prevClippedAt, "2026-10-01T08:09:10.000Z")
+  assert.equal(payload.prevClippedBy, "王老师")
+  assert.equal(payload.reply, "王老师 已于 2026-10-01 收藏过《初中英语教师如何维持口语水平》，已顺手再补一次整理")
+})
+
+test("web_clip·already 异常页无 prev 字段 → 回复优雅降级（不输出 undefined）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    webClip: async () => clipOutcome({ status: "already" }),
+  })
+  const result = await handlers.get("teacher_tutor_web_clip")!({ wecom_userid: "t1", url: "https://example.com/a" })
+  const payload = JSON.parse(toolText(result)) as Record<string, unknown>
+  assert.equal(payload.reply, "此前收藏过《初中英语教师如何维持口语水平》，已顺手再补一次整理")
+})
+
+test("web_clip·错误码全集 → 老师可读文案映射（任务书 B.5 硬契约；正常返回不进熔断）", async () => {
+  const expectations: Array<[string, RegExp]> = [
+    ["invalid_url", /^这个链接格式不对，发一下完整链接（http\/https 开头）$/],
+    ["bad_scheme", /^这个链接格式不对，发一下完整链接（http\/https 开头）$/],
+    ["ssrf_blocked", /^这个链接我不能安全访问$/],
+    ["redirect_downgrade", /^这个链接我不能安全访问$/],
+    ["too_many_redirects", /^这个链接我不能安全访问$/],
+    ["dns_failed", /^链接访问失败（网络或站点问题），稍后再试$/],
+    ["fetch_failed", /^链接访问失败（网络或站点问题），稍后再试$/],
+    ["bad_content_type", /^这不是可收藏的文章页 \/ 内容过大$/],
+    ["too_large", /^这不是可收藏的文章页 \/ 内容过大$/],
+    ["undecodable", /^页面编码异常读不了$/],
+    ["empty_content", /^这篇提不了正文（可能已删除、需登录或付费墙），可以把正文复制发我$/],
+  ]
+  for (const [code, pattern] of expectations) {
+    const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+      webClip: async () => { throw new WebClipError(code) },
+    })
+    const result = await handlers.get("teacher_tutor_web_clip")!({ wecom_userid: "t1", url: "https://example.com/x" })
+    assert.match(toolText(result), pattern, `code=${code} 文案映射不符`)
+    assert.ok(result.content.some((c) => c.text.includes('identity_source: "system"')), `code=${code} 仍带 identity_source`)
+  }
+})
+
+test("web_clip·未知 code → 通用兜底文案（不裸抛机器码给老师）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    webClip: async () => { throw new WebClipError("surprise_new_code") },
+  })
+  const result = await handlers.get("teacher_tutor_web_clip")!({ wecom_userid: "t1", url: "https://example.com/x" })
+  const text = toolText(result)
+  assert.ok(text.includes("收藏失败"), "兜底文案须说明收藏失败")
+  assert.ok(text.includes("surprise_new_code"), "兜底文案附带 code 供排查")
+})
+
+test("web_clip·缺 url → ToolArgumentError（同既有 required 参数口径）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    webClip: async () => clipOutcome(),
+  })
+  await assert.rejects(
+    handlers.get("teacher_tutor_web_clip")!({ wecom_userid: "t1" }),
+    (err: unknown) => err instanceof ToolArgumentError && err.message === "url is required",
+  )
+})
+
+test("web_clip·非 WebClipError（服务端 5xx/网络）照抛上抛（计熔断口径不变）", async () => {
+  const handlers = makeHandlers(async () => { throw new Error("no fetch") }, {
+    webClip: async () => { throw new Error("LLM Wiki API 500: ingest queue down") },
+  })
+  await assert.rejects(
+    handlers.get("teacher_tutor_web_clip")!({ wecom_userid: "t1", url: "https://example.com/x" }),
+    /LLM Wiki API 500/,
+  )
 })
