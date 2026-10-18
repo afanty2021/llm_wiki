@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 export const DEFAULT_API_BASE_URL = "http://127.0.0.1:19828"
 
 /**
@@ -203,6 +205,21 @@ export class ApiNotFoundError extends Error {
   }
 }
 
+/**
+ * API 非 2xx（非 404）错误——携带 HTTP status 供调用方按状态分流（Task 2：
+ * upsertPage 的 409 If-Match 冲突链）。message 与既有普通 Error 完全同形
+ * （向后兼容：老调用方按 message 正则断言不受影响）。
+ */
+export class ApiHttpError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = "ApiHttpError"
+    this.status = status
+  }
+}
+
 export function normalizeBaseUrl(value?: string): string {
   const raw = (value ?? DEFAULT_API_BASE_URL).trim() || DEFAULT_API_BASE_URL
   return raw.replace(/\/+$/, "")
@@ -392,6 +409,94 @@ export class LlmWikiApiClient {
     }
   }
 
+  // ── 剪藏写入链（Task 2，teacher_tutor_web_clip）：源文件写 + 页读/upsert + ingest 入队 ──
+  // 路由对照 src-server：POST /api/v1/files/:id/{*path}（body {path, contents}，URL *path
+  // 仅占位）· GET /api/v1/projects/:id/page?path= · POST|PUT /api/v1/projects/:id/page(s) ·
+  // POST /api/v1/projects/:id/ingest {source_paths}。upsert 409 策略逐段镜像
+  // tools/transcriber/src/api-client.ts 的 upsertTranscriptPage。
+
+  /** POST /files/:id/write {path, contents} → 写剪藏源文件（URL write 段仅占位，路径在 body）。 */
+  async writeSource(path: string, contents: string, projectId = "current"): Promise<void> {
+    await this.requestObject(`/files/${encodeURIComponent(projectId)}/write`, {
+      method: "POST",
+      body: { path, contents },
+    })
+  }
+
+  /** GET /projects/:id/page?path= → wiki 页 {content, updated_at}；404（ApiNotFoundError）→ null。 */
+  async getPage(
+    path: string,
+    projectId = "current",
+  ): Promise<{ content: string; updated_at: string } | null> {
+    try {
+      const json = await this.requestObject(
+        `/projects/${encodeURIComponent(projectId)}/page?path=${encodeURIComponent(path)}`,
+      )
+      return {
+        content: typeof json.content === "string" ? json.content : "",
+        updated_at: typeof json.updated_at === "string" ? json.updated_at : "",
+      }
+    } catch (err) {
+      if (err instanceof ApiNotFoundError) return null
+      throw err
+    }
+  }
+
+  /**
+   * 页 upsert（If-Match 乐观锁，镜像 transcriber upsertTranscriptPage）：
+   * POST /projects/:id/pages {path, content, frontmatter}；409 → GET 预检：
+   * 服务端 content sha256 与本地一致 → skipped（幂等重跑零写放大）；不一致 →
+   * PUT 带 `if-match: <GET 的 updated_at>`；PUT 再 409（预检-写入窗口被并发改写）
+   * → 整轮重试，上限 {@link UPSERT_MAX_ROUNDS} 轮。
+   */
+  async upsertPage(
+    path: string,
+    md: string,
+    frontmatter: object,
+    projectId = "current",
+  ): Promise<"created" | "skipped" | "updated"> {
+    const body = { path, content: md, frontmatter }
+    const pagePath = () =>
+      `/projects/${encodeURIComponent(projectId)}/page?path=${encodeURIComponent(path)}`
+    try {
+      await this.requestObject(`/projects/${encodeURIComponent(projectId)}/pages`, {
+        method: "POST",
+        body,
+      })
+      return "created"
+    } catch (err) {
+      if (!(err instanceof ApiHttpError) || err.status !== 409) throw err
+    }
+    const localHash = sha256Hex(md)
+    for (let round = 0; round < UPSERT_MAX_ROUNDS; round++) {
+      const json = await this.requestObject(pagePath())
+      const content = typeof json.content === "string" ? json.content : ""
+      const updatedAt = typeof json.updated_at === "string" ? json.updated_at : ""
+      if (sha256Hex(content) === localHash) return "skipped"
+      try {
+        await this.requestObject(pagePath(), {
+          method: "PUT",
+          headers: { "if-match": updatedAt }, // 服务端 RFC3339 解析为 timestamptz 精确比较
+          body, // body.path == query path（PUT 不支持 rename）
+        })
+        return "updated"
+      } catch (err) {
+        if (err instanceof ApiHttpError && err.status === 409) continue // stale write → 重新 GET 再比
+        throw err
+      }
+    }
+    throw new Error(`upsertPage ${path}: If-Match conflict persisted after ${UPSERT_MAX_ROUNDS} rounds`)
+  }
+
+  /** POST /projects/:id/ingest {source_paths} → {job_id}（恒入队；ingested_files 判重短路在服务端）。 */
+  async createIngestJob(sourcePaths: string[], projectId = "current"): Promise<{ job_id: string }> {
+    const json = await this.requestObject(`/projects/${encodeURIComponent(projectId)}/ingest`, {
+      method: "POST",
+      body: { source_paths: sourcePaths },
+    })
+    return { job_id: requireString(json.job_id, "createIngestJob job_id") }
+  }
+
   // ── src-server 形态端点（路径/方法/响应形状按 src-server 路由实现适配）──
 
   /** GET /health → {status:"ok"}；无 mcpEnabled 断言（src-server 无此开关）。
@@ -578,7 +683,7 @@ export class LlmWikiApiClient {
 
   private async doFetch(path: string, options: RequestOptions = {}): Promise<unknown> {
     const url = `${this.baseUrl}${options.rawPath ? path : apiPath(path)}`
-    const headers: Record<string, string> = { Accept: "application/json" }
+    const headers: Record<string, string> = { Accept: "application/json", ...options.headers }
     if (options.adminToken?.trim()) headers["x-training-admin-token"] = options.adminToken.trim()
     const bearer = options.token ?? this.token
     if (options.auth !== false && bearer?.trim()) {
@@ -613,7 +718,8 @@ export class LlmWikiApiClient {
       // 404 = 应用级"未找到"（如文件不存在，多半是调用方拼错 path），不是服务故障：
       // 抛类型化 ApiNotFoundError 供 read_file 等工具分流为正常返回。
       if (response.status === 404) throw new ApiNotFoundError(message)
-      throw new Error(message)
+      // 其余非 2xx 带 status 上抛（upsertPage 按 409 分流 If-Match 冲突链）
+      throw new ApiHttpError(response.status, message)
     }
     return json
   }
@@ -629,7 +735,17 @@ interface RequestOptions {
   adminToken?: string
   /** 跳过 /api/v1 前缀（src-server 顶层 /health）。 */
   rawPath?: boolean
+  /** 按调用注入的额外请求头（upsertPage 的 if-match 乐观锁）。 */
+  headers?: Record<string, string>
 }
+
+/** sha256 hex（upsertPage 幂等判同：服务端 content 与本地 md 字节比对）。 */
+function sha256Hex(s: string): string {
+  return createHash("sha256").update(s).digest("hex")
+}
+
+/** upsert If-Match 冲突整轮重试上限（GET 预检 → PUT；镜像 transcriber UPSERT_MAX_ROUNDS）。 */
+const UPSERT_MAX_ROUNDS = 3
 
 /** 错误消息提取：desktop {error:"..."} 与 src-server {error:{code,message}} 双形状。 */
 function apiErrorMessage(json: unknown, fallback: string): string {

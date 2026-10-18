@@ -80,22 +80,35 @@ test("urlHash8·sha256 hex 前 8 字符（含已知答案）+ 确定性", () => 
 
 test("kebabSlug·小写/分隔/压缩/去首尾/空结果回退", () => {
   assert.equal(kebabSlug("Hello World! Foo"), "hello-world-foo")
-  assert.equal(kebabSlug("My Great Article — Part 2"), "my-great-article-part-2", "em dash 等非 [a-z0-9] 归分隔符")
+  assert.equal(kebabSlug("My Great Article — Part 2"), "my-great-article-part-2", "em dash 等非保留字符归分隔符")
   assert.equal(kebabSlug("  --leading--and--trailing--  "), "leading-and-trailing")
-  assert.equal(kebabSlug("纯中文标题"), "clip", "纯 CJK 结果为空 → clip")
+  assert.equal(kebabSlug("？！。"), "clip", "纯标点结果为空 → clip")
   assert.equal(kebabSlug(""), "clip")
 })
 
-test("kebabSlug·截断 60 字符", () => {
-  assert.equal(kebabSlug("a".repeat(70)), "a".repeat(60))
-  assert.equal(kebabSlug(`-${"b".repeat(65)}-`), "b".repeat(60))
+test("kebabSlug·R10 修订：保留 CJK（Han），标点/空白归分隔符", () => {
+  assert.equal(kebabSlug("纯中文标题"), "纯中文标题", "纯 CJK 标题原样保留（R10 前→clip）")
+  assert.equal(kebabSlug("《初中英语教师如何维持口语水平？》"), "初中英语教师如何维持口语水平", "书名号/问号剥除，正文保留")
+  assert.equal(kebabSlug("Hello 世界 Foo"), "hello-世界-foo", "拉丁小写化 + CJK 保留，边界归分隔符")
+  assert.equal(kebabSlug("英文 English 混排 123"), "英文-english-混排-123", "混排逐词分段")
 })
 
-test("clipFileName·`<slug>-<hash8>.md`（纯 CJK 标题 → clip-<hash8>.md）", () => {
+test("kebabSlug·截断 60 字符（CJK 每字计 1）", () => {
+  assert.equal(kebabSlug("a".repeat(70)), "a".repeat(60))
+  assert.equal(kebabSlug(`-${"b".repeat(65)}-`), "b".repeat(60))
+  assert.equal(kebabSlug("语".repeat(70)), "语".repeat(60), "CJK 超 60 截断")
+})
+
+test("clipFileName·`<slug>-<hash8>.md`（CJK 标题保留 CJK slug）", () => {
   const url = "https://example.com/article"
-  assert.equal(clipFileName("纯中文标题", url), `clip-${urlHash8(url)}.md`)
+  assert.equal(clipFileName("纯中文标题", url), `纯中文标题-${urlHash8(url)}.md`)
   assert.equal(clipFileName("Hello World", url), `hello-world-${urlHash8(url)}.md`)
   assert.match(clipFileName("T", url), /^t-[0-9a-f]{8}\.md$/)
+  assert.equal(
+    clipFileName("《初中英语教师如何维持口语水平？》", url),
+    `初中英语教师如何维持口语水平-${urlHash8(url)}.md`,
+    "产物文件名如 初中英语教师如何维持口语水平-8f3a2b1c.md（方案 R10 例）",
+  )
 })
 
 // ── isPublicUnicast / explainRejection（§4.1：默认拒绝，只放行公网单播）──
