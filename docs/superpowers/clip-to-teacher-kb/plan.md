@@ -151,8 +151,24 @@ Phase 0：0.5 天 · Phase 1：**2-2.5 天**（原估 1.5 天偏乐观——归�
 | I7 | 回滚漏 SKILL.md | §5 revert 仓源同批+双份 cp |
 | I8 | 微信冒烟应升 Phase 0 | §3 Phase 0 第 3 项（闸门） |
 
-Minor 已折入 3 条：工具注册实际在 training.ts（§3 改动面）；SKILL 清单计数口径分歧（去重 17 vs 评审 20）→ 改为计数无关的增量更新指令（§3）；Phase 0 清理走手工（Admin 权能，§3）。其余 9 Minor 以评审报告为准（报告未落盘，施工批随行核对）。
+Minor 已折入 3 条：工具注册实际在 training.ts（§3 改动面）；SKILL 清单计数口径分歧（去重 17 vs 评审 20）→ 改为计数无关的增量更新指令（§3）；Phase 0 清理走手工（Admin 权能，§3）。其余 9 Minor 处置见 §10（评审报告已随分支落盘：report.md）。
 
 ---
 
 **本方案未获明确许可前不写任何生产代码。**
+
+## 10. 评审 Minor 处置（2026-10-18 实施批补记）
+
+评审报告已落盘随分支（`report.md`，§9「未落盘」说法作废）。12 Minor 处置：
+- **M1 工具计数**：SKILL.md §2 自声明「只准用以下 20 个」（15 teacher_tutor_* + 2 llm_wiki_* + 3 系统工具）→ 施工改 **20→21**（teacher_tutor_* 15→16）并加条目
+- **M2 注册点位**：`training.ts` 的 `trainingToolDefinitions()` + `createSrcServerHandlers` 内 `handlers.set(...)`；index.ts 经 `buildTools` 展开无需改
+- **M3 笔记页 slug**：被 R8 修正设计覆盖（clips 页由工具确定性命名，管线笔记页不复存在于本流）
+- **M4 CJK 文件名（Ruling R10）**：kebabSlug 改**保留 CJK**（库内 transcripts 中文文件名+-hash 后缀有大量先例，safe_resolve 无 unicode 限制），仅剥标点/空白→`-`；空结果才回落 `clip`
+- **M5 共享库措辞**：重复收藏回复带 clipped_by（「王老师已于…收藏过」）
+- **M6 Phase 0 清理走手工**：已实证（files delete 要 Admin；本批 psql+存储直删）
+- **M7 细节钉死**：Content-Type 加 `application/xhtml+xml`；charset 前缀解析；相对 Location 按 RFC 解析；https→http 降级**拒绝**；10MB 流式截断+abort
+- **M8 frontmatter 进 LLM 输入**：provenance 保持英文短键，接受
+- **M9 排队话术**：「稍后整理完成」，工具返回带 job_id 供追问
+- **M10 CJS 互操作**：三依赖均 CJS，esModuleInterop default import；jsdom 不开 `resources`（顺带收窄图片面）
+- **M11 actor-set 变化**：clip 把共享检索语料写入者从管理员扩到全体教师（网页注入指令随检索回流 tutor prompt 的攻击面同比扩大）——风险接受，SKILL 防试探条款为既有防线
+- **M12 图片热链腐烂**：微信图床 Referer 校验，turndown 保留的 img 大概率失效——v1 接受（md 源 images 管线本就暂不处理）
