@@ -182,3 +182,15 @@ Minor 已折入 3 条：工具注册实际在 training.ts（§3 改动面）；S
 2. `clips/` 页量及其在 llm_wiki_search 命中占比（PR #8 降噪延续观察）；
 3. `wiki_pages.frontmatter->>'clipped_by'` 维度量级（D2 v2 硬配额数据积累）；
 4. clips 源 ingest job 失败率（I6 自愈依赖重试，失败须被巡检看见）。
+
+## 12. R12 勘误与实现评审收口（2026-10-18 实现评审批）
+
+**R12 勘误**（§3/§4.3 中「force:true 留强制重存口」作废）：实现评审裁定 v1 **无 force**——恒 enqueue 已覆盖自愈（ingested_files 路径+内容哈希短路：成功=近零成本 no-op、失败=自动重试），force 属 YAGNI。schema 已钉桩（identity.test.ts 断言无 force 字段）。
+
+**R12 派生死角与处置口径**：`clips/` 页在且内容相同、但 `sources/clips/` 源文件被手工误删 → `changed=false` 不重写源文件 → 恒 enqueue 对缺失文件永败。频率极低（仅人工误删触发），**不设 force 兜底，处置=运维手工补源文件**（从 `clips/` 页内容复制回 `sources/clips/<同名>` 即可，路径同名）。
+
+**实现评审（816549b..c3bd3a5，impl-report.md）收口批**：
+- **Important-1**（生产 fetch 接线零测试触达 + undici 浮动 semver）：已修——新增 `test/web-clip-net.test.ts` 真网络回归 7 例（负向两形 ssrf_blocked+零连接 / 钉 lookup 透传活证 / 慢滴 AbortSignal 撕断 / remainingMs 收窄 / 跨跳预算 / DNS 超时），双向变异红证实跑；`undici` 锁精确版 `6.29.1`（去 ^），升级走显式评审。
+- **顺收 Minor**：normalizeUrl 剥 userinfo + 尾点 host 归一（同文双形态同 hash）；总墙钟 60s 帽 + DNS 5s 超时（FetchGuardsDeps 新增 totalBudgetMs/dnsTimeoutMs/monoNow 注入缝，生产默认不变）。
+- **记档维持**：@types/jsdom@27 配 jsdom@26（**@types 无 26.x 存在**，21.1.7 直接跳 27.0.0，「对齐」无可执行形态）；kebabSlug 仅保留 Han（R10 中文场景拍板）；钉首址无 happy-eyeballs（安全优先）；already 话术依赖 userid 形态；GBK 夹具字节级（Node 无内建 gbk 编码，整页夹具需引 iconv 依赖不值）；yamlQuote 不转义换行（判重字节比对不受影响）。
+- 评审建议 push 建远程备份：按用户「说一声即推」纪律执行。
