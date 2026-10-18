@@ -713,7 +713,10 @@ export interface ClipOutcome {
   prevClippedBy?: string
 }
 
-/** 生产 io：fetchWithGuards + LlmWikiApiClient（env 同 client 约定）+ 真时钟。 */
+/**
+ * 生产 io：fetchWithGuards + LlmWikiApiClient（env 同 client 约定）+ 真时钟。
+ * 仅桌面形态/测试用——src-server 形态下无 token 首调即 401 且 embed 路由为桌面专属，生产装配恒在 training.ts 注入 io。
+ */
 export function defaultWebClipIo(): WebClipIo {
   return {
     projectId: (process.env.TRAINING__PROJECT_ID ?? "").trim() || "current",

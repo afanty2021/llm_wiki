@@ -172,3 +172,13 @@ Minor 已折入 3 条：工具注册实际在 training.ts（§3 改动面）；S
 - **M10 CJS 互操作**：三依赖均 CJS，esModuleInterop default import；jsdom 不开 `resources`（顺带收窄图片面）
 - **M11 actor-set 变化**：clip 把共享检索语料写入者从管理员扩到全体教师（网页注入指令随检索回流 tutor prompt 的攻击面同比扩大）——风险接受，SKILL 防试探条款为既有防线
 - **M12 图片热链腐烂**：微信图床 Referer 校验，turndown 保留的 img 大概率失效——v1 接受（md 源 images 管线本就暂不处理）
+
+## 11. R8 勘误与上线观测（2026-10-18 实施批）
+
+**勘误**：§2/§3 中「产物落 notes/」为 R8 前口径，按 R8 修订设计作废——Phase 0 已实证通用摄取不产 notes 页、sources 零嵌入。实施流为：工具直写 `clips/<slug>-<urlhash8>.md` 页（服务端页写入自动嵌向量，pages.rs 非致命嵌入块）+ ingest 抽概念实体。
+
+**观测点**（R8 修订口径，四条）：
+1. `sources/clips/` 文件增速；
+2. `clips/` 页量及其在 llm_wiki_search 命中占比（PR #8 降噪延续观察）；
+3. `wiki_pages.frontmatter->>'clipped_by'` 维度量级（D2 v2 硬配额数据积累）；
+4. clips 源 ingest job 失败率（I6 自愈依赖重试，失败须被巡检看见）。
