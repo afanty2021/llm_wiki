@@ -65,6 +65,29 @@ test("normalizeUrl·非法 URL → WebClipError('invalid_url')", () => {
   assertWebClipError(() => normalizeUrl("example.com/foo"), "invalid_url")
 })
 
+test("normalizeUrl·剥 userinfo（实现评审 Minor-3）：凭证不进 source_url/LLM 输入/外发请求", () => {
+  assert.equal(normalizeUrl("https://user:p%40ss@example.com/a?x=1"), "https://example.com/a?x=1")
+  assert.equal(normalizeUrl("http://token@example.com/"), "http://example.com/")
+  // 只有 username 的形态（`@` 空段）同样剥净
+  assert.equal(normalizeUrl("https://@example.com/x"), "https://example.com/x")
+  // 归一收敛：带凭证与不带凭证同文判重（urlhash8 同值）
+  assert.equal(
+    urlHash8(normalizeUrl("https://user:secret@example.com/a")),
+    urlHash8(normalizeUrl("https://example.com/a")),
+    "凭证形态与裸形态归一到同一 hash（重复收藏不因凭证分叉）",
+  )
+})
+
+test("normalizeUrl·尾点 host 归一（DNS 根标签）：example.com. ≡ example.com", () => {
+  assert.equal(normalizeUrl("https://example.com./a?x=1"), "https://example.com/a?x=1")
+  assert.equal(normalizeUrl("https://example.com../a"), "https://example.com/a", "多尾点同样收敛")
+  assert.equal(
+    urlHash8(normalizeUrl("https://example.com./a")),
+    urlHash8(normalizeUrl("https://example.com/a")),
+    "同文双形态同 hash（防双份收藏，实现评审 Minor-3）",
+  )
+})
+
 // ── urlHash8 / kebabSlug / clipFileName（§4.3：确定性路径）──
 
 test("urlHash8·sha256 hex 前 8 字符（含已知答案）+ 确定性", () => {

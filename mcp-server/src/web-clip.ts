@@ -50,8 +50,8 @@ function isTrackingParam(name: string): boolean {
 
 /**
  * URL 归一化（判重前置，方案 I4）：scheme/host 小写、去 fragment、去默认端口
- * （http:80 / https:443）、剥追踪参数白名单、微信 `/s/<id>` 短路径丢全部 query、
- * 剩余参数按名排序（确定性）。解析失败 → WebClipError('invalid_url')。
+ * （http:80 / https:443）、剥 userinfo、剥追踪参数白名单、微信 `/s/<id>` 短路径丢
+ * 全部 query、剩余参数按名排序（确定性）。解析失败 → WebClipError('invalid_url')。
  */
 export function normalizeUrl(input: string): string {
   let u: URL
@@ -61,6 +61,14 @@ export function normalizeUrl(input: string): string {
     throw new WebClipError("invalid_url", `invalid_url: ${input}`)
   }
   u.hash = ""
+  // 剥 userinfo（实现评审 Minor-3）：fetch/判重/provenance 全吃归一化产物，
+  // 凭证既不外发也不进共享可检索的 frontmatter source_url
+  u.username = ""
+  u.password = ""
+  // 尾点 host 归一（DNS 根标签）：example.com. ≡ example.com，防同文双份收藏
+  if (u.hostname.endsWith(".")) {
+    u.hostname = u.hostname.replace(/\.+$/, "")
+  }
   if ((u.protocol === "http:" && u.port === "80") || (u.protocol === "https:" && u.port === "443")) {
     u.port = ""
   }
@@ -388,8 +396,12 @@ export function buildSourceMarkdown(o: SourceMarkdownInput): string {
 
 // ── §4.1 fetch 层（Task 2）：DNS 全址过门 + 连接时钉 IP + 重定向手动复验 ───────
 
-/** 请求超时（headers/body/connect 三处统一 20s）。 */
+/** 请求超时（headers/body/connect 三处统一 20s，单跳内再按剩余预算收窄）。 */
 const REQUEST_TIMEOUT_MS = 20000
+/** 总墙钟预算（实现评审 Minor-2）：跨跳+慢滴总帽，超帽 AbortSignal 撕断在飞请求。 */
+const TOTAL_FETCH_BUDGET_MS = 60000
+/** 单次 DNS 解析超时（实现评审 Minor-2：OS resolver 默认可达 30s+，不得吃满预算）。 */
+const DNS_TIMEOUT_MS = 5000
 /** 手动重定向上限（超 3 跳 → too_many_redirects）。 */
 const MAX_REDIRECT_HOPS = 3
 /** 响应体硬帽（流式累计，超帽即撕流——不得先整缓冲）。 */
@@ -415,6 +427,12 @@ export interface GuardedResponse {
 export interface FetchGuardsDeps {
   lookupAll?: (hostname: string) => Promise<LookupAddress[]>
   requestOnce?: (url: URL, pinned: LookupAddress) => Promise<GuardedResponse>
+  /** 总墙钟预算毫秒（默认 TOTAL_FETCH_BUDGET_MS；测试注入小值免等墙钟）。 */
+  totalBudgetMs?: number
+  /** 单次 DNS 解析超时毫秒（默认 DNS_TIMEOUT_MS）。 */
+  dnsTimeoutMs?: number
+  /** 单调毫秒钟（默认 Date.now；测试注入推进虚拟时钟）。 */
+  monoNow?: () => number
 }
 
 export interface FetchGuardResult {
@@ -428,15 +446,28 @@ function stripIpv6Brackets(hostname: string): string {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname
 }
 
+/** Promise 竞速超时：输者后续 rejection 挂空 catch，不成 unhandled。 */
+function raceWithTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms)
+    timer.unref()
+  })
+  void p.catch(() => {})
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer))
+}
+
 /**
  * 解析并钉住连接地址（每跳调用）：
  * - host 是字面量 IP（IPv6 含 `[...]`）→ 跳过 DNS 直接逐个校验；
  * - 否则 DNS `lookup(all:true)` **全址过门**——任一地址不过 isPublicUnicast 即拒
  *   （评审 I1：不给「另选过门地址」留绕过面），全过后钉首个地址（验证与连接同一地址）。
+ * DNS 解析带显式超时（实现评审 Minor-2：OS resolver 默认可达 30s+）。
  */
 async function resolveAndPin(
   u: URL,
   lookupAll: (hostname: string) => Promise<LookupAddress[]>,
+  dnsTimeoutMs: number,
 ): Promise<LookupAddress> {
   const host = stripIpv6Brackets(u.hostname)
   const literalFamily = isIP(host)
@@ -448,7 +479,11 @@ async function resolveAndPin(
   }
   let addresses: LookupAddress[]
   try {
-    addresses = await lookupAll(u.hostname)
+    addresses = await raceWithTimeout(
+      lookupAll(u.hostname),
+      dnsTimeoutMs,
+      `dns lookup exceeded ${dnsTimeoutMs}ms`,
+    )
   } catch (err) {
     throw new WebClipError(
       "dns_failed",
@@ -506,10 +541,28 @@ export function pinnedLookup(pinned: LookupAddress): LookupFunction {
   }
 }
 
-/** 生产单跳请求：每跳新建钉 IP Agent（剪藏为低频操作，逐跳 Agent 免复用状态）。 */
-async function undiciRequestOnce(url: URL, pinned: LookupAddress): Promise<GuardedResponse> {
+/** 单跳请求限额（生产由 fetchWithGuards 按总预算折算；真网络测试直呼可注入）。 */
+export interface RequestLimits {
+  /** 总预算 AbortSignal（超帽撕断在飞请求，覆盖 connect/headers/body 全阶段）。 */
+  signal?: AbortSignal
+  /** 剩余预算毫秒：connect/headers/body 三处 timeout 取 min(20s, 剩余)。 */
+  remainingMs?: number
+}
+
+/**
+ * 生产单跳请求：每跳新建钉 IP Agent（剪藏为低频操作，逐跳 Agent 免复用状态）。
+ * 导出仅为真网络回归测试（web-clip-net.test.ts）——生产唯一直接调用方是 fetchWithGuards；
+ * undici 为精确钉版（package.json 无 ^），buildConnector 对 connect.lookup 的透传语义
+ * 由真网络测试钉住（假域名 + 钉 lookup 真连本地服务，透传破坏即红）。
+ */
+export async function undiciRequestOnce(
+  url: URL,
+  pinned: LookupAddress,
+  limits: RequestLimits = {},
+): Promise<GuardedResponse> {
+  const perHopMs = Math.max(1, Math.min(REQUEST_TIMEOUT_MS, limits.remainingMs ?? REQUEST_TIMEOUT_MS))
   const agent = new Agent({
-    connect: { timeout: REQUEST_TIMEOUT_MS, lookup: pinnedLookup(pinned) },
+    connect: { timeout: perHopMs, lookup: pinnedLookup(pinned) },
   })
   let res: Awaited<ReturnType<typeof undiciRequest>>
   try {
@@ -517,8 +570,9 @@ async function undiciRequestOnce(url: URL, pinned: LookupAddress): Promise<Guard
       dispatcher: agent,
       // 手动跳重定向（undici v8 移除 maxRedirections 选项且非零值直接抛错——
       // request() 缺省即不跟随重定向 ≡ maxRedirections: 0，逐跳复验在 fetchWithGuards）
-      headersTimeout: REQUEST_TIMEOUT_MS,
-      bodyTimeout: REQUEST_TIMEOUT_MS,
+      headersTimeout: perHopMs,
+      bodyTimeout: perHopMs,
+      signal: limits.signal,
       headers: { "user-agent": CLIP_USER_AGENT },
     })
   } catch (err) {
@@ -544,87 +598,107 @@ async function undiciRequestOnce(url: URL, pinned: LookupAddress): Promise<Guard
  * 带 SSRF 门的取回（Task 2 核心）：scheme 仅 http/https；每跳 DNS 全址过门 + 连接时
  * 钉 IP；重定向手动 ≤3 跳（新 URL 重走完整校验链，https→http 降级一律拒绝）；
  * Content-Type 白名单（text/html、application/xhtml+xml、text/plain）；10MB 流式帽
- * （逐 chunk 累计，超帽 destroy 流再抛——绝不先整缓冲）。
+ * （逐 chunk 累计，超帽 destroy 流再抛——绝不先整缓冲）；总墙钟预算 60s（实现评审
+ * Minor-2：跨跳+慢滴总帽，超帽 AbortSignal 撕断在飞请求，慢滴不得拖长单次 MCP 调用）。
  */
 export async function fetchWithGuards(normalizedUrl: string, deps: FetchGuardsDeps = {}): Promise<FetchGuardResult> {
   const lookupAll = deps.lookupAll ?? ((hostname: string) => dnsLookup(hostname, { all: true }))
+  const budgetMs = deps.totalBudgetMs ?? TOTAL_FETCH_BUDGET_MS
+  const dnsTimeoutMs = deps.dnsTimeoutMs ?? DNS_TIMEOUT_MS
+  const monoNow = deps.monoNow ?? Date.now
+  const startedAt = monoNow()
+  const deadline = new AbortController()
+  const deadlineTimer = setTimeout(() => deadline.abort(), Math.max(0, budgetMs))
+  deadlineTimer.unref()
   let current: URL
   try {
-    current = new URL(normalizedUrl)
-  } catch {
-    throw new WebClipError("invalid_url", `invalid_url: ${normalizedUrl}`)
-  }
-  let hops = 0
-  for (;;) {
-    if (current.protocol !== "http:" && current.protocol !== "https:") {
-      throw new WebClipError("bad_scheme", `bad_scheme: ${current.protocol} (only http/https)`)
-    }
-    const pinned = await resolveAndPin(current, lookupAll)
-    const res = deps.requestOnce !== undefined
-      ? await deps.requestOnce(current, pinned)
-      : await undiciRequestOnce(current, pinned)
-    if (REDIRECT_STATUSES.has(res.status) && res.location !== null) {
-      res.destroy()
-      hops += 1
-      if (hops > MAX_REDIRECT_HOPS) {
-        throw new WebClipError(
-          "too_many_redirects",
-          `too_many_redirects: exceeded ${MAX_REDIRECT_HOPS} hops at ${current.toString()}`,
-        )
-      }
-      let next: URL
-      try {
-        next = new URL(res.location, current) // 相对 Location 按 RFC 3986 相对解析（M7）
-      } catch {
-        throw new WebClipError("invalid_url", `invalid_url: bad redirect Location "${res.location}" from ${current.toString()}`)
-      }
-      if (current.protocol === "https:" && next.protocol === "http:") {
-        throw new WebClipError(
-          "redirect_downgrade",
-          `redirect_downgrade: ${current.toString()} -> ${next.toString()}`,
-        )
-      }
-      current = next
-      continue // 新 URL 重走完整校验链（scheme + DNS + 钉 IP）
-    }
-    const { mediaType, charsetParam } = parseContentType(res.contentType)
-    if (!ALLOWED_MEDIA_TYPES.has(mediaType)) {
-      res.destroy()
-      throw new WebClipError("bad_content_type", `bad_content_type: ${res.contentType ?? "(none)"}`)
-    }
-    const chunks: Uint8Array[] = []
-    let total = 0
     try {
-      try {
-        for await (const chunk of res.body) {
-          total += chunk.byteLength
-          if (total > MAX_BODY_BYTES) {
-            throw new WebClipError("too_large", `too_large: body exceeded ${MAX_BODY_BYTES} bytes`)
-          }
-          chunks.push(chunk)
-        }
-      } catch (err) {
-        // 中途断流（socket 断裂/RESET 等）也是取回失败——统一入错误族，不漏裸 undici 错误
-        if (err instanceof WebClipError) throw err
+      current = new URL(normalizedUrl)
+    } catch {
+      throw new WebClipError("invalid_url", `invalid_url: ${normalizedUrl}`)
+    }
+    let hops = 0
+    for (;;) {
+      if (current.protocol !== "http:" && current.protocol !== "https:") {
+        throw new WebClipError("bad_scheme", `bad_scheme: ${current.protocol} (only http/https)`)
+      }
+      const remainingMs = budgetMs - (monoNow() - startedAt)
+      if (remainingMs <= 0) {
         throw new WebClipError(
           "fetch_failed",
-          `fetch_failed: body stream aborted at ${current.toString()} after ${total} bytes (${err instanceof Error ? err.message : String(err)})`,
+          `fetch_failed: total ${budgetMs}ms budget exhausted at ${current.toString()}`,
         )
       }
-    } finally {
-      res.destroy()
+      const pinned = await resolveAndPin(current, lookupAll, dnsTimeoutMs)
+      const res = deps.requestOnce !== undefined
+        ? await deps.requestOnce(current, pinned)
+        : await undiciRequestOnce(current, pinned, { signal: deadline.signal, remainingMs })
+      if (REDIRECT_STATUSES.has(res.status) && res.location !== null) {
+        res.destroy()
+        hops += 1
+        if (hops > MAX_REDIRECT_HOPS) {
+          throw new WebClipError(
+            "too_many_redirects",
+            `too_many_redirects: exceeded ${MAX_REDIRECT_HOPS} hops at ${current.toString()}`,
+          )
+        }
+        let next: URL
+        try {
+          next = new URL(res.location, current) // 相对 Location 按 RFC 3986 相对解析（M7）
+        } catch {
+          throw new WebClipError("invalid_url", `invalid_url: bad redirect Location "${res.location}" from ${current.toString()}`)
+        }
+        if (current.protocol === "https:" && next.protocol === "http:") {
+          throw new WebClipError(
+            "redirect_downgrade",
+            `redirect_downgrade: ${current.toString()} -> ${next.toString()}`,
+          )
+        }
+        current = next
+        continue // 新 URL 重走完整校验链（scheme + DNS + 钉 IP）
+      }
+      const { mediaType, charsetParam } = parseContentType(res.contentType)
+      if (!ALLOWED_MEDIA_TYPES.has(mediaType)) {
+        res.destroy()
+        throw new WebClipError("bad_content_type", `bad_content_type: ${res.contentType ?? "(none)"}`)
+      }
+      const chunks: Uint8Array[] = []
+      let total = 0
+      try {
+        try {
+          for await (const chunk of res.body) {
+            total += chunk.byteLength
+            if (total > MAX_BODY_BYTES) {
+              throw new WebClipError("too_large", `too_large: body exceeded ${MAX_BODY_BYTES} bytes`)
+            }
+            chunks.push(chunk)
+          }
+        } catch (err) {
+          // 中途断流（socket 断裂/RESET/总预算 AbortSignal 撕断）也是取回失败——
+          // 统一入错误族，不漏裸 undici 错误
+          if (err instanceof WebClipError) throw err
+          throw new WebClipError(
+            "fetch_failed",
+            `fetch_failed: body stream aborted at ${current.toString()} after ${total} bytes (${err instanceof Error ? err.message : String(err)})`,
+          )
+        }
+      } finally {
+        res.destroy()
+      }
+      const bytes = new Uint8Array(total)
+      let offset = 0
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+      return {
+        bytes,
+        contentType: charsetParam !== null ? `${mediaType}; charset=${charsetParam}` : mediaType,
+        finalUrl: current.toString(),
+      }
     }
-    const bytes = new Uint8Array(total)
-    let offset = 0
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    return {
-      bytes,
-      contentType: charsetParam !== null ? `${mediaType}; charset=${charsetParam}` : mediaType,
-      finalUrl: current.toString(),
-    }
+  } finally {
+    clearTimeout(deadlineTimer)
   }
 }
 
