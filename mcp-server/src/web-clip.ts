@@ -595,12 +595,21 @@ export async function fetchWithGuards(normalizedUrl: string, deps: FetchGuardsDe
     const chunks: Uint8Array[] = []
     let total = 0
     try {
-      for await (const chunk of res.body) {
-        total += chunk.byteLength
-        if (total > MAX_BODY_BYTES) {
-          throw new WebClipError("too_large", `too_large: body exceeded ${MAX_BODY_BYTES} bytes`)
+      try {
+        for await (const chunk of res.body) {
+          total += chunk.byteLength
+          if (total > MAX_BODY_BYTES) {
+            throw new WebClipError("too_large", `too_large: body exceeded ${MAX_BODY_BYTES} bytes`)
+          }
+          chunks.push(chunk)
         }
-        chunks.push(chunk)
+      } catch (err) {
+        // 中途断流（socket 断裂/RESET 等）也是取回失败——统一入错误族，不漏裸 undici 错误
+        if (err instanceof WebClipError) throw err
+        throw new WebClipError(
+          "fetch_failed",
+          `fetch_failed: body stream aborted at ${current.toString()} after ${total} bytes (${err instanceof Error ? err.message : String(err)})`,
+        )
       }
     } finally {
       res.destroy()

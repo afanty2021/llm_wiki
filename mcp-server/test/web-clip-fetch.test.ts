@@ -7,6 +7,8 @@ import type { LookupAddress } from "node:dns"
 import { Readable } from "node:stream"
 import { test } from "node:test"
 
+import { Agent } from "undici"
+
 import {
   ApiHttpError,
   ApiNotFoundError,
@@ -141,6 +143,13 @@ test("pinnedLookup·恒返回已验证地址（DNS 答案无法左右 socket 目
     assert.equal(address, "1.2.3.4")
     assert.equal(family, 4)
   })
+})
+
+test("undici Agent·connect.lookup 钉 IP 接缝构造受纳（零网络；undici 6 buildConnector 透传 net/tls.connect）", async () => {
+  const agent = new Agent({
+    connect: { timeout: 20, lookup: pinnedLookup({ address: "1.2.3.4", family: 4 }) },
+  })
+  await agent.close() // 构造+优雅关闭即证选项面成立（InvalidArgumentError 会在构造/建连即抛）
 })
 
 // ── fetchWithGuards：scheme 与 SSRF 门（默认拒绝）────────────────────────────
@@ -413,6 +422,31 @@ test("fetchWithGuards·流式帽对 node:stream Readable 同样生效（伪造 u
     "too_large",
   )
   assert.ok(stream.destroyed, "Readable 已 destroy")
+})
+
+test("fetchWithGuards·响应体中途断流（socket 断裂）→ fetch_failed，不漏裸 undici 错误（评审 Minor）", async () => {
+  const look = lookupStub()
+  let destroyedFlag = false
+  const body: AsyncIterable<Uint8Array> = (async function* () {
+    yield bytes("<html>前半")
+    throw new Error("read ECONNRESET")
+  })()
+  const response: GuardedResponse = {
+    status: 200,
+    location: null,
+    contentType: "text/html",
+    body,
+    destroy: () => {
+      destroyedFlag = true
+    },
+  }
+  const seq = requestSeq([() => response])
+  await assertWebClipError(
+    fetchWithGuards("https://example.com/x", { lookupAll: look.lookupAll, requestOnce: seq.requestOnce }),
+    "fetch_failed",
+    /ECONNRESET/,
+  )
+  assert.ok(destroyedFlag, "断流后仍撕流（finally destroy）")
 })
 
 // ── extractArticle ───────────────────────────────────────────────────────────
