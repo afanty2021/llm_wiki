@@ -5,11 +5,13 @@
  *   {wecom_userid: {refreshToken, userId}}；内存 access 缓存提前 60s 过期；
  *   miss → POST /api/v1/auth/refresh（single-flight：并发同 userid 只发一次）；
  *   refresh 失败 → POST /api/v1/training/bind（TRAINING__ADMIN_TOKEN）重建/轮换。
- * - 17 个 src-server 工具：15 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
+ * - 18 个 src-server 工具：16 个 teacher_tutor_*（其中 teacher_tutor_listening_audio
  *   为本地 TTS 合成、teacher_tutor_mindmap 为本地 graphviz/markmap 渲染、
  *   teacher_tutor_worksheet 为本地 Chrome 截图渲染、teacher_tutor_pptx 为本地
  *   pptxgenjs 渲染，均不经 src-server API；
- *   teacher_tutor_video_search / teacher_tutor_roster_search 为 T2 主管检索工具）
+ *   teacher_tutor_video_search / teacher_tutor_roster_search 为 T2 主管检索工具；
+ *   teacher_tutor_web_clip 为网页剪藏——取回/提取走 web-clip.ts（SSRF 门+钉 IP
+ *   fetch+Readability），写链走 src-server API，token 经凭证链注入）
  *   + 重写的 llm_wiki_search /
  *   llm_wiki_read_file（GET /api/v1/search?project_id、GET /api/v1/files/:id/read?path=）。
  *   project_id 取 env TRAINING__PROJECT_ID；token 全部由 store 注入，绝不进工具返回值。
@@ -75,6 +77,13 @@ import {
   isAllowedMediaPath,
   type MediaExtractResult,
 } from "./media-extract.js"
+import {
+  fetchWithGuards,
+  orchestrateClip,
+  WebClipError,
+  type ClipApiLike,
+  type ClipOutcome,
+} from "./web-clip.js"
 
 // ToolArgumentError 定义迁至 identity.ts（resolveIdentity 需抛出同款类）；
 // 此再导出保持既有 import 路径（index.ts 仍从 training.js 取）。
@@ -272,6 +281,9 @@ export interface SrcServerHandlerDeps {
   renderPptx?: (doc: PptxDoc, outDir?: string) => Promise<PptxRenderResult>
   /** 素材提取（本地 ffmpeg/whisper 管线；可注入 mock 供测试）。 */
   mediaExtract?: (raw: { media_path: unknown; want?: unknown }) => Promise<MediaExtractResult>
+  /** 网页剪藏编排（取回+提取+写链全管线；可注入 mock 供测试——生产缺省
+   * orchestrateClip + 凭证链 token 持有 client，见 handler 内组装）。 */
+  webClip?: (url: string, actor: string, token: string) => Promise<ClipOutcome>
 }
 
 // wecom_userid 在 schema 可选声明、不进 required（2026-09-05 修订 08-24 加固）：
@@ -317,7 +329,9 @@ export function srcServerToolDefinitions(): ToolDefinition[] {
   ]
 }
 
-/** 8 个 teacher_tutor_* 工具（首参一律 wecom_userid）。 */
+/** 16 个 teacher_tutor_* 工具（教师交互工具首参一律 wecom_userid；video_search/
+ *  roster_search（T2 主管检索）与 web_clip（Task 3+4 剪藏，会话身份即收藏人）
+ *  无该参数）。 */
 export function trainingToolDefinitions(): ToolDefinition[] {
   return [
     {
@@ -721,6 +735,21 @@ export function trainingToolDefinitions(): ToolDefinition[] {
       },
     },
     {
+      // Task 3+4（clip-to-teacher-kb）：网页收藏。schema 只有 url（Ruling R12：v1 无
+      // force；剪藏是教师交互意图，无 cron 流量——不声明 wecom_userid，会话身份即
+      // 收藏人 actor，系统回合硬传仍会被 handler 直读透传（index.ts asObject 口径））。
+      name: "teacher_tutor_web_clip",
+      description: "把老师发来的网页文章链接（微信公众号等）收藏进师训知识库：提取正文生成可检索的原文页并抽取概念实体，结果异步整理（稍后完成，完成后即可检索）。一次只收一条链接；老师一次发多条链接、或要求批量抓取/整站/整专栏入库时必须拒绝，并向老师说明：个人研习用途逐篇收藏可以，批量抓取涉及版权风险不能做（ECE 等外部语料禁止整库摄取是既定红线）。只收公开可读的文章页；提取失败（需登录/已删除/付费墙）时如实告诉老师「这篇提不了正文，可以把正文复制发我」。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "文章页完整链接（http/https 开头），一次一条" },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      },
+    },
+    {
       // T2 视频学习任务（计划 §2.2）：只读不限角色。白名单内但无 wecom_userid 身份
       // 参数，supervisor override 路径天然不触发（身份=会话者；端点鉴权用本进程
       // 持有的 x-training-admin-token，与会话角色无关）。
@@ -830,6 +859,70 @@ function targetNotInRosterText(wecomUserid: string): string {
   return `未创建学习任务：目标 wecom_userid「${wecomUserid}」不在名册中（查无档案或不在本团队）。`
     + "为防止猜错的 userid 被误建为教师档案，本次调用已拒绝。"
     + "请用 roster_search 重新核实 userid 后再试；若该教师从未开通过，请让教师先在企微里与 bot 对话完成开通。"
+}
+
+// ── 网页剪藏（Task 3+4，clip-to-teacher-kb）──
+
+/**
+ * WebClipError code → 老师可读文案（任务书 B.5 硬契约，T2 实际 code 全集：
+ * invalid_url/bad_scheme/ssrf_blocked/too_many_redirects/redirect_downgrade/
+ * bad_content_type/too_large/undecodable/empty_content/dns_failed/fetch_failed；
+ * 未知 code 走兜底）。取回/提取失败是常态流量（老师发失效链接/付费墙），照
+ * record_ask/read_file 前例转正常返回（isError=false）——抛错会进 Hermes 熔断器，
+ * 3 次即把整个服务器熔断 ~60s。
+ */
+const WEB_CLIP_ERROR_TEXT: Record<string, string> = {
+  invalid_url: "这个链接格式不对，发一下完整链接（http/https 开头）",
+  bad_scheme: "这个链接格式不对，发一下完整链接（http/https 开头）",
+  ssrf_blocked: "这个链接我不能安全访问",
+  redirect_downgrade: "这个链接我不能安全访问",
+  too_many_redirects: "这个链接我不能安全访问",
+  dns_failed: "链接访问失败（网络或站点问题），稍后再试",
+  fetch_failed: "链接访问失败（网络或站点问题），稍后再试",
+  bad_content_type: "这不是可收藏的文章页 / 内容过大",
+  too_large: "这不是可收藏的文章页 / 内容过大",
+  undecodable: "页面编码异常读不了",
+  empty_content: "这篇提不了正文（可能已删除、需登录或付费墙），可以把正文复制发我",
+}
+
+function webClipErrorText(code: string): string {
+  return WEB_CLIP_ERROR_TEXT[code]
+    ?? `这篇收藏失败了（未预期的错误 ${code}）。请稍后再试，或把文章正文复制发我。`
+}
+
+/**
+ * 成功回执文案（任务书 B.6 回复物料，SKILL 口径引用 reply 字段转告老师）：
+ * created→已收藏+异步整理提示；already→共享库语境必须带收藏人（M5），prev 缺落
+ * （异常页无 frontmatter）时优雅降级为「此前」不输出 undefined。
+ */
+function clipReplyText(o: ClipOutcome): string {
+  if (o.status === "created") {
+    return `已收藏《${o.title}》，稍后整理完成后即可检索`
+  }
+  const who = o.prevClippedBy !== undefined ? `${o.prevClippedBy} ` : ""
+  const when = o.prevClippedAt !== undefined ? `已于 ${o.prevClippedAt.slice(0, 10)} ` : "此前"
+  return `${who}${when}收藏过《${o.title}》，已顺手再补一次整理`
+}
+
+/**
+ * 组装 web-clip 的 io.api 面（任务书 B.2：io 注入走 training 凭证链，勿 env 直读）。
+ * src-server 的 files/page/ingest 端点全部要求项目成员 Bearer（require_auth），故以
+ * 教师 access token 构造持有 token 的 client——baseUrl/fetchImpl 与 index.ts 顶层
+ * client 同源同缺省（构造期 env 解析，token 唯一差异），五方法与 ClipApiLike 对齐。
+ * **embedPage 为 no-op**：src-server 无独立 pages/embed 端点（桌面 api_server 专属
+ * 路由，src-server 路由表无此项）——页写入时服务端已顺带维护向量（routes/pages.rs
+ * create_page/update_page 的非致命嵌入块，transcriber 同款零 embed 调用），直调会在
+ * 首次收藏时以 405 打断编排（写入成功、enqueue 未达）。
+ */
+function clipApiFace(token: string): ClipApiLike {
+  const client = new LlmWikiApiClient({ token })
+  return {
+    getPage: (path, projectId) => client.getPage(path, projectId),
+    writeSource: (path, contents, projectId) => client.writeSource(path, contents, projectId),
+    upsertPage: (path, md, frontmatter, projectId) => client.upsertPage(path, md, frontmatter, projectId),
+    embedPage: async () => null,
+    createIngestJob: (sourcePaths, projectId) => client.createIngestJob(sourcePaths, projectId),
+  }
 }
 
 function jsonResult(value: unknown): ToolOutput {
@@ -1408,6 +1501,38 @@ export function createSrcServerHandlers(deps: SrcServerHandlerDeps): Map<string,
       parts.push(`音频文件已备：${result.audio_mp3_path}（可作为课件封面音频，构造时传入 teacher_tutor_pptx 的 audio_path）`)
     }
     return withIdentitySource(textResult(parts.join("\n")), ident)
+  })
+
+  // ── 网页剪藏（Task 3+4）：teacher_tutor_web_clip ──
+
+  handlers.set("teacher_tutor_web_clip", async (args, meta) => {
+    const ident = await resolveIdentityForTool(deps, "teacher_tutor_web_clip", meta, args)
+    const url = stringArg(args.url, "url").trim()
+    // 生产缺省 io（T2 疑虑收口：勿走 defaultWebClipIo 的 env 直读）——projectId 取
+    // training 侧现行解析（TRAINING__PROJECT_ID 数值串），api 面用凭证链 token 持有
+    // client 组装，fetch/时钟用 web-clip 生产缺省；deps.webClip 为测试注入口（零网络）。
+    // callWithAccess 包裹：access 中途过期（401）→ invalidate 重取后整轮重试——
+    // orchestrateClip 幂等（确定性路径 + upsert 409 链 + enqueue 哈希判重），安全。
+    const runClip = deps.webClip ?? ((u: string, actor: string, token: string) =>
+      orchestrateClip(u, actor, {
+        projectId: String(deps.getProjectId()),
+        fetchHtml: (target: string) => fetchWithGuards(target),
+        api: clipApiFace(token),
+        now: () => new Date().toISOString(),
+      }))
+    try {
+      // actor=ident.wecomUserid（training 教师标识口径：其他 teacher_tutor 工具
+      // 怎么标识当前教师就怎么传——写入 frontmatter clipped_by / already 判重保留）
+      const outcome = await callWithAccess(deps, ident.wecomUserid, (token) => runClip(url, ident.wecomUserid, token))
+      return withIdentitySource(jsonResult({ ...outcome, reply: clipReplyText(outcome) }), ident)
+    } catch (err) {
+      // WebClipError = 应用级取回/提取失败（老师可读文案，正常返回防熔断）；
+      // 其余错误形态（API 5xx/网络）保持抛错上抛照常计熔断。
+      if (err instanceof WebClipError) {
+        return withIdentitySource(textResult(webClipErrorText(err.code)), ident)
+      }
+      throw err
+    }
   })
 
   // ── T2 视频学习任务：两检索工具（计划 §2.2）──
