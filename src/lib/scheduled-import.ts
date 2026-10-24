@@ -2,6 +2,7 @@ import {
   copyFile,
   fileExists,
   getFileMd5,
+  getFileModifiedTime,
   getFileSize,
   listDirectory,
   readFile,
@@ -34,8 +35,20 @@ import { createLogger } from "@/lib/logger"
 
 const logger = createLogger("scheduled-import")
 
+interface ImportStat {
+  size: number
+  mtime: number
+}
+
 interface ImportDb {
   files: Record<string, string>
+  /**
+   * Size + mtime (ms) per source path. Lets a scan reuse the recorded content
+   * hash for files that did not change instead of re-reading and re-hashing
+   * every file on every run. Optional and additive: databases written by
+   * older builds simply lack it and fall back to hashing once.
+   */
+  statCache?: Record<string, ImportStat>
   lastScan: number | null
 }
 
@@ -57,6 +70,7 @@ type ScanOptions = {
 
 const EMPTY_DB: ImportDb = {
   files: {},
+  statCache: {},
   lastScan: null,
 }
 
@@ -118,6 +132,7 @@ function caseFoldPath(normalized: string): string {
 function cloneDb(db: ImportDb): ImportDb {
   return {
     files: { ...db.files },
+    statCache: { ...(db.statCache ?? {}) },
     lastScan: db.lastScan,
   }
 }
@@ -388,6 +403,9 @@ async function loadImportDb(
     files: Object.fromEntries(
       Object.entries(db.files).map(([path, md5]) => [dbDirectoryKey(path), md5]),
     ),
+    statCache: Object.fromEntries(
+      Object.entries(db.statCache ?? {}).map(([path, stat]) => [dbDirectoryKey(path), stat]),
+    ),
     lastScan: db.lastScan,
   }
 }
@@ -465,6 +483,7 @@ export async function scanAndImport(
     const maxFileSizeBytes = sourceWatchConfig.maxFileSizeMb * 1024 * 1024
     const db = await loadImportDb(projectPath, importRoot)
     const nextDb: ImportDb = { files: {}, lastScan: Date.now() }
+    const nextStatCache: Record<string, ImportStat> = {}
     const changedFiles: Array<{ key: string; md5: string; destPath: string }> = []
     const observedEligibleKeys = new Set<string>()
 
@@ -499,7 +518,21 @@ export async function scanAndImport(
 
         observedEligibleKeys.add(key)
 
+        // Fast path: if size and mtime are unchanged since the last scan,
+        // reuse the recorded hash instead of re-reading and re-hashing the
+        // file. Files whose stat differs, including imports from older
+        // builds that have no cache entry yet, are still verified by content
+        // hash below.
+        const cachedStat = db.statCache?.[key]
+        const mtime = await getFileModifiedTime(sourcePath)
+        if (cachedStat && db.files[key] && cachedStat.size === size && cachedStat.mtime === mtime) {
+          nextDb.files[key] = db.files[key]
+          nextStatCache[key] = cachedStat
+          continue
+        }
+
         const md5 = await getFileMd5(sourcePath)
+        nextStatCache[key] = { size, mtime }
 
         if (db.files[key] === md5) {
           nextDb.files[key] = md5
@@ -582,6 +615,8 @@ export async function scanAndImport(
         bumpDataVersion: true,
       })
     }
+
+    nextDb.statCache = nextStatCache
 
     await saveImportDb(projectPath, importRoot, nextDb)
 

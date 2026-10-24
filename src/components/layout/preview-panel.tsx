@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef, useState } from "react"
-import { X } from "lucide-react"
+import { ArrowLeft, ArrowRight, X } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile } from "@/commands/fs"
 import { getFileCategory, isBinary, isExtractedTextPreviewFile } from "@/lib/file-types"
@@ -19,6 +19,10 @@ export function PreviewPanel() {
   const externalPreview = useWikiStore((s) => s.externalPreview)
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const closePreview = useWikiStore((s) => s.closePreview)
+  const previewBackStack = useWikiStore((s) => s.previewBackStack)
+  const previewForwardStack = useWikiStore((s) => s.previewForwardStack)
+  const navigatePreviewBack = useWikiStore((s) => s.navigatePreviewBack)
+  const navigatePreviewForward = useWikiStore((s) => s.navigatePreviewForward)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // #6：PUT/建页失败此前只进 console，编辑器无感（web 下页面写回 DB 失败
   // 若不提示，用户以为已保存）。持久错误条，下次成功保存清除。
@@ -31,6 +35,7 @@ export function PreviewPanel() {
   const lastLoadedRef = useRef<string>("")
 
   useEffect(() => {
+    let cancelled = false
     if (!selectedFile) {
       setFileContent("")
       lastLoadedRef.current = ""
@@ -55,13 +60,18 @@ export function PreviewPanel() {
 
     readFile(selectedFile)
       .then((content) => {
+        if (cancelled) return
         lastLoadedRef.current = content
         setFileContent(content)
       })
       .catch((err) => {
+        if (cancelled) return
         lastLoadedRef.current = ""
         setFileContent(`Error loading file: ${err}`)
       })
+    return () => {
+      cancelled = true
+    }
   }, [selectedFile, previewContentPath, externalPreview, setFileContent])
 
   const writeNow = useCallback((path: string, markdown: string, syncStore = false) => {
@@ -119,13 +129,16 @@ export function PreviewPanel() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-1.5">
-        <span className="truncate text-xs text-muted-foreground" title={selectedFile}>
-          {fileName}
-        </span>
-        <button
-          onClick={closePreview}
-          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
-        >
+        <div className="flex min-w-0 items-center gap-1">
+          <button type="button" onClick={navigatePreviewBack} disabled={previewBackStack.length === 0} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30" title={t("preview.back")} aria-label={t("preview.back")}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={navigatePreviewForward} disabled={previewForwardStack.length === 0} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30" title={t("preview.forward")} aria-label={t("preview.forward")}>
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+          <span className="truncate text-xs text-muted-foreground" title={selectedFile}>{fileName}</span>
+        </div>
+        <button onClick={closePreview} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent" title={t("common.close")} aria-label={t("common.close")}>
           <X className="h-3.5 w-3.5" />
         </button>
       </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { buildTitleIndex, resolveTarget } from "@/lib/wiki-graph"
-import { buildTitleIndex as buildTitleIndexRR, resolveTarget as resolveTargetRR } from "@/lib/graph-relevance"
+import { buildTitleIndex as buildTitleIndexRR, buildTargetResolver as buildTargetResolverRR, resolveTarget as resolveTargetRR } from "@/lib/graph-relevance"
 
 // 归一化：小写 + 空白→连字符（与服务端 graph.rs normalize_stem 对齐）
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, "-")
@@ -87,15 +87,18 @@ describe("graph-relevance resolveTarget with title index", () => {
     { id: "dup-a", title: "重复" },
     { id: "dup-b", title: "重复" },
   ])
+  // 上游 v0.6.13 重构：resolveTarget(raw, resolver)——nodeIds+titleIndex 经
+  // buildTargetResolver 汇成一张别名表（id 派生键优先，歧义标题整组排除）。
+  const resolver = buildTargetResolverRR(nodeIds, titleIndex)
 
   it("resolves Chinese bare links by title", () => {
-    expect(resolveTargetRR("PPP 教学模式", nodeIds, titleIndex)).toBe("ppp-teaching-model")
+    expect(resolveTargetRR("PPP 教学模式", resolver)).toBe("ppp-teaching-model")
   })
 
   it("keeps slug-form resolution and excludes collided titles", () => {
-    expect(resolveTargetRR("Zoltan Dornyei", nodeIds, titleIndex)).toBe("zoltan-dornyei")
-    expect(resolveTargetRR("重复", nodeIds, titleIndex)).toBeNull()
-    expect(resolveTargetRR("dangling", nodeIds, titleIndex)).toBeNull()
+    expect(resolveTargetRR("Zoltan Dornyei", resolver)).toBe("zoltan-dornyei")
+    expect(resolveTargetRR("重复", resolver)).toBeNull()
+    expect(resolveTargetRR("dangling", resolver)).toBeNull()
   })
 })
 

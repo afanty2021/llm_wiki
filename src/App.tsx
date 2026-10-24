@@ -9,7 +9,7 @@ import { useLintStore } from "@/stores/lint-store"
 import { useChatStore } from "@/stores/chat-store"
 import { BASE_FONT_SIZE_PX, useZoomStore } from "@/stores/zoom-store"
 import { openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMineruConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadCustomLlmPresets, loadActivePresetId, loadTaskModelRouting, loadProjectLlmOverride, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig, loadGeneralConfig, loadZoomLevel } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMineruConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadCustomLlmPresets, loadActivePresetId, loadTaskModelRouting, loadProjectLlmOverride, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchAllProjects, loadSourceWatchConfig, loadApiConfig, loadGeneralConfig, loadZoomLevel } from "@/lib/project-store"
 import { loadReviewItems, loadLintItems, loadChatHistory, loadChatPreferences } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
@@ -530,8 +530,11 @@ function App() {
           projectLlmOverride,
           llmState.customLlmPresets,
         ))
-        const projectOutputLang = await loadOutputLanguage(proj.id)
-        useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")
+        const [projectOutputLang, globalOutputLang] = await Promise.all([
+          loadOutputLanguage(proj.id),
+          loadOutputLanguage(),
+        ])
+        useWikiStore.getState().setOutputLanguage(projectOutputLang ?? globalOutputLang ?? "auto")
       }
       setSelectedFile(null)
       setFileTree([])
@@ -584,6 +587,8 @@ function App() {
       // may enqueue ingest tasks and require an active project queue.
       // 桌面 only:恢复本地持久化的摄取/去重队列。web 摄取走 server(triggerIngest + poll
       // getIngestJob),队列状态在 server 端,不读本地 .llm-wiki/*.json,跳过避免无谓请求。
+      // 上游侧冲突块的 source-watch / clip-notify 与本仓下方 fork 门控版重复(allProjects
+      // 增强已并入下方块),不取上游侧。
       if (caps.platform !== "web") {
         try {
           const { restoreQueue } = await import("@/lib/ingest-queue")
@@ -603,16 +608,43 @@ function App() {
       // web 下 canWatchFiles=false（无本地 FS），整块跳过避免 invoke undefined 报错
       // （window.__TAURI__ 不存在 → "Cannot read properties of undefined (reading 'invoke')"）。
       if (caps.canWatchFiles) {
-        import("@/lib/project-file-sync").then(async ({ startProjectFileSync, stopProjectFileSync }) => {
-          const config = await loadSourceWatchConfig(proj.id)
+        import("@/lib/project-file-sync").then(async ({
+          startAllProjectFileSync,
+          startProjectFileSync,
+          stopAllProjectFileSync,
+          stopProjectFileSync,
+        }) => {
+          // 上游 v0.6.12：all-projects 源监控（loadSourceWatchAllProjects + 全项目启动）。
+          const [configResult, allProjectsResult] = await Promise.allSettled([
+            loadSourceWatchConfig(proj.id),
+            loadSourceWatchAllProjects(),
+          ])
+          const config = configResult.status === "fulfilled"
+            ? configResult.value
+            : DEFAULT_SOURCE_WATCH_CONFIG
+          const allProjects = allProjectsResult.status === "fulfilled"
+            ? allProjectsResult.value
+            : false
+          if (configResult.status === "rejected") {
+            logger.error("failed to load project source watch config", { error: String(configResult.reason) })
+          }
+          if (allProjectsResult.status === "rejected") {
+            logger.error("failed to load all-project source watch setting", { error: String(allProjectsResult.reason) })
+          }
           if (!isCurrentProject(proj)) return
           useWikiStore.getState().setSourceWatchConfig(config)
+          useWikiStore.getState().setSourceWatchAllProjects(allProjects)
           if (config.enabled) {
             startProjectFileSync(proj, config).catch((err) =>
               logger.error("failed to start project file sync", { error: String(err) })
             )
           } else {
             stopProjectFileSync().catch(() => {})
+          }
+          if (allProjects) {
+            startAllProjectFileSync(proj)
+          } else {
+            stopAllProjectFileSync()
           }
         }).catch((err) => logger.error("failed to configure project file sync", { error: String(err) }))
       }
@@ -704,6 +736,9 @@ function App() {
   }
 
   async function handleSwitchProject() {
+    import("@/lib/project-file-sync").then(({ stopAllProjectFileSync }) => {
+      stopAllProjectFileSync()
+    }).catch(() => {})
     // Stop scheduled import before switching projects
     import("@/lib/scheduled-import").then(({ stopScheduledImport }) => {
       stopScheduledImport()
