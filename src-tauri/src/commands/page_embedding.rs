@@ -316,8 +316,12 @@ async fn remove_legacy_vector_id_if_safe(project_path: &str, page_id: &str) {
     if owners != 1 {
         return;
     }
-    if let Err(error) =
-        vectorstore::vector_delete_page(project_path.to_string(), legacy_id.to_string()).await
+    if let Err(error) = vectorstore::vector_delete_page(
+        project_path.to_string(),
+        legacy_id.to_string(),
+        format!("page_embedding:{page_id}"),
+    )
+    .await
     {
         eprintln!("[Embedding] failed to remove legacy vector id '{legacy_id}': {error}");
     }
