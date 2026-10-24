@@ -12,9 +12,9 @@ import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { useReviewStore } from "@/stores/review-store"
 import { stripBodyWikilinkPathPrefixes } from "./page-merge"
 import { normalizeMalformedWikilinks } from "./ingest-sanitize"
+import { createLogger } from "@/lib/logger"
 
 const logger = createLogger("deep-research")
-import { createLogger } from "@/lib/logger"
 
 const MAX_RESEARCH_SOURCES = 20
 const MIN_RESEARCH_CONTENT_CHARS = 120

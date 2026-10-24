@@ -4,9 +4,9 @@ import { createDirectory, getFileSize, readFileAsBase64, writeFileBase64 } from 
 import { getHttpFetch } from "@/lib/tauri-fetch"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 import type { SavedImage } from "@/lib/extract-source-images"
+import { createLogger } from "@/lib/logger"
 
 const logger = createLogger("mineru")
-import { createLogger } from "@/lib/logger"
 
 const API_BASE = "https://mineru.net/api/v4"
 export const DEFAULT_LOCAL_MINERU_ENDPOINT = "http://127.0.0.1:8000"
