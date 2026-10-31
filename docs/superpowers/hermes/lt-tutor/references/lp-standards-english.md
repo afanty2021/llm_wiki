@@ -1,7 +1,7 @@
 # lp-standards-english —— 英语（EFL·中国义务教育）课标知识库
 
 > **本文件由 flow-lesson-plan.md（流程 11）在动工前必读**；未读先设计=关键失败。不存在课标外部图谱——课标锚定以**本文件**为唯一来源。
-> 改编自 anthropics/k12-teacher-skills `k12-lesson-plan-creation/references/english.md`（@2994762）：WeCom 通道适配——lesson.json/文档渲染机制替换为分段文本交付 + worksheet 出图。
+> 改编自 anthropics/k12-teacher-skills `k12-lesson-plan-creation/references/english.md`（@2994762）：WeCom 通道适配——lesson.json/文档渲染机制替换为单条文本交付 + worksheet 出图。
 >
 > Copyright 2026 Anthropic, PBC · Copyright 2026 Learning Commons · SPDX-License-Identifier: Apache-2.0. Complete terms in ../LICENSES/Apache-2.0.txt（技能根目录 NOTICE 记改编来源）.
 
@@ -142,7 +142,7 @@
 
 ---
 
-## 4. 节结构（Section structure）——WeCom 分段交付序
+## 4. 节结构（Section structure）——WeCom 单条交付序
 
 教案正文按以下 8 节组织，**一条消息接续给全**（企微每回合仅送达一条；单元整体教学等超长内容同样一次给全，禁止分条悬停）：
 
