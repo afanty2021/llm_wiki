@@ -266,3 +266,11 @@ git revert 仓源两文件类提交 → 常规双份 cp 重新部署（**禁止�
 **评审门槛**：max 评审（跨会话传递约定：报告落 `.superpowers/ltutor-lesson-plan-cfu/report.md` 由用户转交）；Critical/Important 收口 + 施工口令后进 T1。
 
 **收口记录（2026-10-31，评审结论=修后可开工 0C/3I/若干 Minor，续问 agent_40105975）**：§1.2 承重墙事实 6/6 全真。I-1 §11.2 回归脚本勘正（dry-run.md 实存 1–5；答疑=脚本 2 非脚本 3；学案从无 dry-run 脚本——回归改抽 1/2/4）✔；I-2 Gate A 复发源「整数判定」系 "whole statements" 误译，勘正为「陈述句选项结论对但理由各异」（§6.2b ③）✔；I-3 verification.md 不再并入 cfu-english.md，独立 references/cfu-verification.md + flow Step 6 才 skill_view，时序防呆原样保留（§1.1/§5/§6.2b）✔。Minor 全收：§1.1 CFU 侧学科参考勘正为仅 math.md；§7 量估改实测口径 ~+1.3KB→~25.0KB；§8 补 LICENSES/Apache-2.0.txt 许可证文本副本（仿源仓 references/NOTICE 先例）；§10.2 活跃会话措辞勘正（驻留旧版正文，经会话轮换覆盖）；§11.1 补 11a 内含当堂检测断言 + 新增 12c 口头应答型不出图用例。文件面变化：references/ 4→**5 件**，T2/T6 同步。
+
+**T7 记录（2026-10-31）——11a 首跑路由截胡事故与两项环境修复**（c8249633 部署后、T7 复跑前）：
+
+- **现象**：11a（「帮我设计一节五年级一般过去时的课」，reset 新会话，snapshot 已刷新至新版 manifest 25,222B）回复为无课标锚的通用教案。state.db messages tool_calls 实证：skill_view 加载的是**陈旧技能 `lt-teacher-tutor`**（MCP 时代旧版，9-17 建、10-05/10-10 有改），非 teacher-tutor。
+- **根因 1（截胡）**：lt-tutor profile config.yaml `skills.external_dirs: [~/.hermes/skills]`（当初为共享 comfyui-image-gen 加的）把默认技能目录整目录泄进教师通道索引；`lt-teacher-tutor` 描述 48 字全显且含「内容生成/计划」，比 teacher-tutor 的截断描述更匹配「设计一节课」。核查：当前 teacher-tutor 仓源/live 对其**零路径依赖**（references/scripts 无引用），cron jobs/config 亦零引用。**修复**：config `skills.platform_disabled.wecom: [lt-teacher-tutor]`（备份 config.yaml.bak-20261031-*；get_disabled_skill_names 走 mtime+size 键控缓存 → 热生效，无需重启；平台级仅限 wecom，不影响默认 profile 自用）。
+- **根因 2（触发词不可见）**：Hermes `SKILL_PROMPT_DESC_LIMIT = 60` 且按**最后一个空白**截断（agent/skill_utils.py:842-861，`_LAST_WHITESPACE_RE=\s\S*$`）——中文描述无空格，可见窗仅 23 字（「LT 师训学习助手（企业微信 lt-tutor...」）。description 中段全部触发词（含旧流程的学案/课件/听力）**从未进过路由索引**，旧流程一直靠「师训学习助手」泛匹配 + 无竞争者存活。**修复**：description 开头重排「LT 师训学习助手（企业微信lt-tutor通道专用）：答疑/学案/课件/听力/导图/教案设计/当堂检测/周报 」（尾随空格控制截断点），按源码算法模拟实证可见窗 55 字全触发词命中；尾部原文未动。SKILL.md 25,222→25,288B，双份 cp 已重部署。
+- **教训入册**：①外挂目录共享是路由污染面——新增 profile 级 external_dirs 时必须盘点被泄入的技能与描述竞争；②本网关 description 路由窗=60 字符按最后空白截断，中文触发词必须前置排布并用空白锚定截点。
+- **复跑**：reset 会话 → 重发 11a → 按 dry-run.md 11a 检查单核验。
