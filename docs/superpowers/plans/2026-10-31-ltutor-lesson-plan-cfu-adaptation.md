@@ -1,6 +1,6 @@
 # 2026-10-31 · lt-tutor 教案生成 + 当堂检测（CFU）技能适配方案
 
-> 分支 `feat/ltutor-lesson-plan-cfu` · 状态：**待评审**（施工许可以评审收口为准）
+> 分支 `feat/ltutor-lesson-plan-cfu` · 状态：**评审收口完成**（max 评审 0C/3I/若干 Minor，3I+Minor 已全处置——收口记录见本节末）· 待施工口令
 > 源仓：anthropics/k12-teacher-skills @ 2994762（v0.10.0，Apache-2.0；本地 `~/github/english/cn-k12-teacher-skills`，ghfast 代理 clone，push 指向官方——**不推**）
 
 ## 0. 背景与目标
@@ -38,10 +38,10 @@ Anthropic 官方 k12-teacher-skills 近两个提交新增了 **English (EFL, Chi
 | lesson-plan references/output.md | 142 | **精编并入** flow | brevity/everything-matches 硬要求浓缩为交付规则 |
 | lesson-plan rendering/*（docx/claude-artifact）+ scripts/ | — | **不移植** | 无渲染执行环境 |
 | learning-commons-kg.md ×2 | — | **不移植** | KG 不存在；Step 2 改走 wiki 检索 |
-| math/ela/science/social_studies.md ×2 | — | **不移植** | LT 全员英语教师，学科路由坍缩为 english 单路 |
+| 学科参考：lesson-plan 侧 math/ela/science/social_studies.md；CFU 侧 math.md | — | **不移植** | LT 全员英语教师，学科路由坍缩为 english 单路（CFU 侧学科参考本就只有 math.md 一份） |
 | CFU SKILL.md | 175 | **改编** → flow-cfu.md | Steps 0–7 保留（含焦点确认硬门与双验证门） |
 | CFU references/english.md | 146 | **改编** → cfu-english.md | 检测维度 + L1 错误映射 + 题目设计 |
-| CFU references/verification.md | ~90 | **精编并入** cfu-english.md | Gate A/B 是 CFU 质量核心，保留 |
+| CFU references/verification.md | ~90 | **保留独立** → references/cfu-verification.md | Gate A/B 是 CFU 质量核心；**不并入 cfu-english.md**——源设计的时序防呆（SKILL.md Step 6 前「Do not open … during Step 4 or 5」，防验证门 checklist 化）原样保留，flow Step 6 才 skill_view 本文件 |
 | CFU references/output.md | 251 | **部分并入** | HTML 双文件机制不移植；题面跨卷一致、无来源标注等规则并入 |
 
 ### 1.2 已核实的运行环境事实
@@ -140,11 +140,11 @@ Anthropic 官方 k12-teacher-skills 近两个提交新增了 **English (EFL, Chi
 | Step 2 Ground | 2 定位 | 课标锚从 cfu-english.md（内容要求要素 + 学业质量编号）；错误模式库自带（L1 迁移映射）；可选 wiki 增强检索（常见错误/教学法），非必须步 |
 | Step 3 Focus | 3 **焦点确认（硬门）** | 选最可测的 learning component → 一句话（老师的话，非术语）+ 一行理由 + 一个直接问题 → **停，等回复**。老师改向 → 其选择为锚。WeCom 上一问一答天然支持 |
 | Step 4 Build | 4 构建 | 维度判定（语法运用/词汇与拼读/语篇理解/语用得体/混合）→ L1 错误→题干特征映射 → 1–3 题按维度定形式 → 干扰项：一个前提缺口 + 一个同级混淆，无两行同路由 → **asset-based language**（禁 weak/fragile/can't/struggling 等 deficit 措辞，具体化重述）。**data-use guardrail：两卷均不带任何来源标注** |
-| Step 5 Output | 5 交付 | 学生卷 → `teacher_tutor_worksheet`（题干 text + 选择 checklist / 答题 fill；首块姓名日期 fill 行；题面跨卷逐字一致）；教师指南 → 聊天文本（每题正确答案 + 每干扰项揭示什么 + 三桶路由：已掌握/需巩固/需再教 → 各自下一步教学动作）。MEDIA 行回显核心 §1 |
-| Step 6 Verify | 6 **双验证门（交付前）** | Gate A：逐选择写最强辩护（内部，不外显），恰一个可辩护 → 过；多个 → 题干补名属性或删选项；零个 → 题重做。Gate B：每干扰项是真实学生推理落点（对应错误映射表），不是「明显错答案」。未过即修即重写，**不带病交付** |
+| Step 5 Output | 5 交付 | 学生卷 → `teacher_tutor_worksheet`（题干 text + 选择 checklist / 答题 fill；首块姓名日期 fill 行；题面跨卷逐字一致）；教师指南 → 聊天文本（每题正确答案 + 每干扰项揭示什么 + 三桶路由：已掌握/需巩固/需再教 → 各自下一步教学动作）。MEDIA 行回显核心 §1。**口头应答型（一级听选图/认读/口头应答）可不出图**——题面+判读全在聊天呈现，如实说明口头施测无纸面 |
+| Step 6 Verify | 6 **双验证门（交付前）** | **先 `skill_view` references/cfu-verification.md（时序硬门：Step 6 前禁读本文件，防 checklist 化——源设计原样保留）**；两卷已存在才开始。Gate A：逐选择写最强辩护（内部，不外显），恰一个可辩护 → 过；多个 → 题干补名属性或删选项；零个 → 题重做。Gate B：每干扰项是真实学生推理落点（对应错误映射表），不是「明显错答案」。未过即修即重写，**不带病交付** |
 | Step 7 Close | 7 收尾 | 问是否合用 + ≤2 个具体调整（换难度层 / 同焦点加一题 / 改成书面产出题） |
 
-## 6. 参考文件设计（references/ 新增 4 件）
+## 6. 参考文件设计（references/ 新增 5 件）
 
 ### 6.1 lp-standards-english.md（~350 行，改编自源 english.md）
 
@@ -158,14 +158,19 @@ Anthropic 官方 k12-teacher-skills 近两个提交新增了 **English (EFL, Chi
 - 学情预设 L1 迁移知识（汉语无时态变形→漏 -ed、三单漏 -s、冠词遗留、语序直移、语用直译等——具体化表述，非「忘加 ed」式标签）
 - **替换**原「Writing lesson.json」节 → 「WeCom 学生页 worksheet 映射」：六型 blocks 如何承载语篇/读中任务/当堂检测；预备级无学生页判定
 
-### 6.2 cfu-english.md（~200 行，改编自源 CFU english.md + verification.md + output.md 精编）
+### 6.2 cfu-english.md（~180 行，改编自源 CFU english.md + output.md 精编；**不含验证门**）
 
 - 检测维度表（component→维度→检测什么→题目形式）
 - L1 错误→题干特征映射（documented errors map，构建前必建）
 - 好干扰项标准 + 三桶路由框架
-- Gate A/B 验证门全文精编（Gate A 四类「第二可辩护答案」复发源：等价形式多帽、整数判定靠无效推理、约度/单位/精度未定、约定非事实）
 - asset-based language 规范 + 学生卷极简原则（只题干+选项/作答区+姓名日期，无 meta/无来源/无 next-step 语言）
-- 一级中文题导语许可
+- 一级中文题导语许可；口头应答型不出图判定
+
+### 6.2b cfu-verification.md（~60 行，源 verification.md 全文改编，**独立文件**）
+
+- 头部时序注记（源原样）：「两卷已存在、交付前才读全文；Step 4/5 期间禁读本文件——它是成品的闸门不是构建指引，早读会把验证门退化成对预设打勾的清单」；flow Step 6 才 skill_view 本文件
+- Gate A（恰一个可辩护答案）：逐选择写最强辩护；四类「第二可辩护答案」复发源——①约定非事实（如因数顺序 a×b=b×a）②等价形式多帽（1/2、0.5、2/4、50%）③**陈述句选项结论对但理由各异**（选项为完整陈述句「对/错，因为…」时多个选项可携正确结论仅理由不同——仅当题干明判理由时成立）④约度/单位/精度未定
+- Gate B（每干扰项=真实学生推理落点）：对照错误映射表，非「明显错答案」
 
 ### 6.3 flow-lesson-plan.md / flow-cfu.md（§4/§5 的正文，各 ~60-80 行）
 
@@ -181,14 +186,14 @@ Anthropic 官方 k12-teacher-skills 近两个提交新增了 **English (EFL, Chi
 | 工具白名单 | **不动**（21 个不变；llm_wiki_search 行缩写展开规则被流程 11/12 复用） | 0 |
 | dry-run.md | 增补脚本（§11） | — |
 
-合计 ~+800B → ~24.5KB（现 23,678B）。核心每回合全载，此增量可接受；**记档**：下次核心再膨胀时优先考虑快速路径表外移。
+合计 ~+1.3KB → ~25.0KB（现 23,678B；快速路径两行含 CJK 三字节字符，评审实测口径）。核心每回合全载，此增量可接受；**记档**：下次核心再膨胀时优先考虑快速路径表外移。
 
 ## 8. 版权与合规
 
 1. **Apache-2.0 → GPL-3.0 仓**：单向兼容（FSF 认可）。lp-standards-english.md 与 cfu-english.md 头部保留：
    `Copyright 2026 Anthropic, PBC · Copyright 2026 Learning Commons · SPDX-License-Identifier: Apache-2.0`
    + 改编说明行（源自 anthropics/k12-teacher-skills@2994762，本仓改动：WeCom 流程适配 + lesson.json/渲染机制替换）。两 flow 文件为原创编排（引用参考文件），头注「改编自 …，Apache-2.0」。
-2. **目录级 NOTICE**：`docs/superpowers/hermes/lt-tutor/` 下新增 NOTICE 文件记录第三方来源与 Commit（仓根无 NOTICE，先补目录级；仓级 LICENSE 合并声明留给上游合并时定夺——上游合并项记入 §13 开放问题）。
+2. **目录级 NOTICE + 许可证文本副本**：`docs/superpowers/hermes/lt-tutor/` 下新增 NOTICE 文件记录第三方来源与 Commit（仿源仓先例——源 lesson-plan references/ 自带 NOTICE 文件），并 cp 源仓 LICENSE 全文为 `LICENSES/Apache-2.0.txt`（严格口径下再分发应随附许可证文本；内部部署风险低但成本近零，一并做）。仓级 LICENSE 合并声明留给上游合并时定夺——上游合并项记入 §13 开放问题。
 3. **教材语料红线**：源 Copyright guardrail 全文保留改编进 flow 11——不逐字复现教材学生页文本/教师用书注释/活动叙述；不假造教材板块名；think/look 单元语篇只引用（版本+单元+标题+页码指示），原创平行文本替代并告知老师。
 4. **课标引用规范**：逐字引用全文仅一次（学业质量描述或内容要求行），余处编号+短释义；教案尾注「课标依据：《义务教育英语课程标准（2022 年版）》」。
 5. **ECE 语料**：CC BY-NC（CLAUDE.md 硬约束 8）——幼儿段分支只检索引用既有入库页，不新增摄取。
@@ -198,19 +203,19 @@ Anthropic 官方 k12-teacher-skills 近两个提交新增了 **English (EFL, Chi
 | # | 任务 | 产出 | 依赖 |
 |---|---|---|---|
 | T1 | 改编 lp-standards-english.md | references/ 新文件 | — |
-| T2 | 改编 cfu-english.md | references/ 新文件 | — |
+| T2 | 改编 cfu-english.md + cfu-verification.md（验证门独立文件，时序防呆入头注） | references/ 2 新文件 | — |
 | T3 | 编写 flow-lesson-plan.md | references/ 新文件 | T1 |
-| T4 | 编写 flow-cfu.md | references/ 新文件 | T2 |
+| T4 | 编写 flow-cfu.md（Step 6 才 skill_view cfu-verification.md） | references/ 新文件 | T2 |
 | T5 | 核心 SKILL.md 增量（description/表 2 行/指针 2 节/§13→§15 重号） | SKILL.md 修改 | T3/T4 |
-| T6 | NOTICE 文件 + dry-run.md 增补脚本 | 2 文件 | T5 |
+| T6 | NOTICE 文件 + LICENSES/Apache-2.0.txt 副本 + dry-run.md 增补脚本（11a–d/12a–c + 回归 1/2/4） | 3 文件 | T5 |
 | T7 | 本地干跑（mock 注入法，同 dry-run 手册）+ 触发分流变异测试 | 干跑记录 | T6 |
 | T8 | 评审收口后部署（§10） | live 生效 | 评审通过 |
 
 ## 10. 部署方案
 
-1. **双份 cp**：`SKILL.md` + `references/` 全目录（含 4 新文件）→ `~/.hermes/profiles/lt-tutor/skills/teacher-tutor/`
-2. **生效面**：正文快速路径表与全部 references 文件**热生效**（skill_view 现读盘，§1.2 已核实）；description 触发词增量对新会话即时生效（prompt 构建读盘），活跃会话不受影响（teacher-tutor 已加载态的路由靠正文表）
-3. **网关重启**：非必须；如需 description 绝对一致，搭车低峰 `--replace` 重启（**避开周日 19:00–20:00 周报窗**；10-31 为周六，建议周六/周一执行）
+1. **双份 cp**：`SKILL.md` + `references/` 全目录（含 5 新文件）→ `~/.hermes/profiles/lt-tutor/skills/teacher-tutor/`
+2. **生效面**：新增 references 文件对**新 skill_view 调用**即热生效（现读盘，§1.2 已核实）；但**活跃会话驻留旧版正文与描述**——新流程要经会话轮换自然覆盖（净效果与硬约束 5 一致）；description 触发词增量对新会话 prompt 构建即时生效
+3. **网关重启**：非必须；如需立即全量生效（不等会话轮换），低峰 `--replace` 重启（**避开周日 19:00–20:00 周报窗**；10-31 为周六，建议周六/周一执行）
 4. **核验**：`~/.hermes/profiles/lt-tutor/.skills_prompt_snapshot.json` manifest 指向 + live 副本与仓源 diff 为空
 5. **mcp-server / src-server 零改动**——无 build、无重启
 
@@ -220,16 +225,17 @@ Anthropic 官方 k12-teacher-skills 近两个提交新增了 **English (EFL, Chi
 
 | 脚本 | 输入 | 期望 |
 |---|---|---|
-| 11a 教案-完整包 | 「帮我设计一节五年级一般过去时的课」 | 调用序列：profile_get → skill_view(flow-lesson-plan) → skill_view(lp-standards) → record_ask → llm_wiki_search ×1–2（含「一般过去时/活动观」类查询）→（命中）read_file → 分段教案含课标锚（二级·语法知识或学业质量 2-x）+ wiki 来源标注；询问学生页与否或按级别判定 |
+| 11a 教案-完整包 | 「帮我设计一节五年级一般过去时的课」 | 调用序列：profile_get → skill_view(flow-lesson-plan) → skill_view(lp-standards) → record_ask → llm_wiki_search ×1–2（含「一般过去时/活动观」类查询）→（命中）read_file → 分段教案含课标锚（二级·语法知识或学业质量 2-x）+ wiki 来源标注 + **内含 1 题当堂检测（三桶判读）**；询问学生页与否或按级别判定 |
 | 11b 教案-草稿 + 图片输入 | 发教材页照片 +「按这个单元出教案，先看草稿」 | vision_analyze（region 分块）→ 草稿速览（六要素）→ 等 go → 全量；教材语篇零逐字复现 |
 | 11c 教材缩写复用 | 「think2e Level 2 出个单元教案」 | 检索查询含展开后的 Think2e-Teaching-Notes（验证 §2 表复用） |
 | 11d 幼儿段分支 | 幼儿段档案老师「设计一节字母 S 发音的课」 | 不套课标锚；检索 ECE/LOE（loe 展开命中 Logic of English）；尾注依据说明 |
-| 12a CFU 主路径 | 「出个当堂检测，七年级，第三人称单数」 | skill_view(flow-cfu) → skill_view(cfu-english) → **焦点确认消息后停**（无 worksheet 调用）→ 老师回复 → worksheet 学生卷（题干+checklist 选项+姓名日期）+ 聊天教师指南（三桶路由）；两卷无来源标注 |
+| 12a CFU 主路径 | 「出个当堂检测，七年级，第三人称单数」 | skill_view(flow-cfu) → skill_view(cfu-english) → **焦点确认消息后停**（无 worksheet 调用）→ 老师回复 → worksheet 学生卷（题干+checklist 选项+姓名日期）+ 聊天教师指南（三桶路由）；两卷无来源标注；**cfu-verification 的 skill_view 不早于交付步**（时序防呆） |
 | 12b CFU 边界 | 「出张练习纸操练一下」「出份单元测试卷」 | 前者走流程 8；后者如实说明 CFU 范围（1–3 题形成性），不硬做 |
+| 12c 口头应答型 | 「一年级，出一道听听指令做动作的检测」 | 判定口头应答型 → **不调 worksheet**；题面+判读指南全在聊天，说明口头施测无纸面 |
 
 ### 11.2 回归
 
-- 既有脚本抽 1/3/8 复跑（新用户引导/答疑/学案）——SKILL.md 只增不改既有行，期望零偏差
+- dry-run.md 现存脚本 1–5（1 新用户问卷+首单 / 2 答疑带来源时间戳 / 3 完成确认+进度 / 4 身份冒用对抗 / 5 周报 cron）；**学案（流程 8）等媒体流程从无 dry-run 脚本**——抽脚本 1/2/4 复跑（覆盖问卷首单、检索引用、身份硬规则三条主轴；SKILL.md 只增不改既有行，期望零偏差）
 - 变异测试：临时把流程 11 表行的触发词改窄 → 「出个教案」应 miss（证分流真的靠表行）；恢复后复绿
 
 ### 11.3 观察项（上线后首月）
@@ -258,3 +264,5 @@ git revert 仓源两文件类提交 → 常规双份 cp 重新部署（**禁止�
 ---
 
 **评审门槛**：max 评审（跨会话传递约定：报告落 `.superpowers/ltutor-lesson-plan-cfu/report.md` 由用户转交）；Critical/Important 收口 + 施工口令后进 T1。
+
+**收口记录（2026-10-31，评审结论=修后可开工 0C/3I/若干 Minor，续问 agent_40105975）**：§1.2 承重墙事实 6/6 全真。I-1 §11.2 回归脚本勘正（dry-run.md 实存 1–5；答疑=脚本 2 非脚本 3；学案从无 dry-run 脚本——回归改抽 1/2/4）✔；I-2 Gate A 复发源「整数判定」系 "whole statements" 误译，勘正为「陈述句选项结论对但理由各异」（§6.2b ③）✔；I-3 verification.md 不再并入 cfu-english.md，独立 references/cfu-verification.md + flow Step 6 才 skill_view，时序防呆原样保留（§1.1/§5/§6.2b）✔。Minor 全收：§1.1 CFU 侧学科参考勘正为仅 math.md；§7 量估改实测口径 ~+1.3KB→~25.0KB；§8 补 LICENSES/Apache-2.0.txt 许可证文本副本（仿源仓 references/NOTICE 先例）；§10.2 活跃会话措辞勘正（驻留旧版正文，经会话轮换覆盖）；§11.1 补 11a 内含当堂检测断言 + 新增 12c 口头应答型不出图用例。文件面变化：references/ 4→**5 件**，T2/T6 同步。
