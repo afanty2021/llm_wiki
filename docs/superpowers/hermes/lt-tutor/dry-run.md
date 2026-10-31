@@ -389,7 +389,7 @@ mock `plan_create` 返回改为既有计划：`plan.created_at` 为本周早些�
 ```
 
 7. （命中后）`llm_wiki_read_file {"path":"transcripts/grammar-in-context-d1e2f3.md"}`
-8. 分段教案 2–4 条消息（无 worksheet 学生页时直接问询收尾；或调 `teacher_tutor_worksheet` 出学生页后附 `MEDIA:` 行）
+8. 教案正文**一条消息接续给全**（企微每回合仅送达一条——T7 实证：多条会被合并或「接下一条」悬停截断；无 worksheet 学生页时直接问询收尾；或调 `teacher_tutor_worksheet` 出学生页后附 `MEDIA:` 行）
 
 ### 人工核对清单（脚本 11a）
 
