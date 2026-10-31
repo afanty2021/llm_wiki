@@ -1,7 +1,7 @@
 # cfu-verification —— 交付前双验证门
 
 > **时序硬门（源自原设计，原样保留）**：两卷已存在、**交付前**才读全文。构建期间（Step 4/5）禁读本文件——它是成品的闸门，不是构建指引；早读会把两道门退化成对你「本来想写什么」打勾的清单。flow-cfu.md Step 6 才 skill_view 本文件。
->
+> 改编自 anthropics/k12-teacher-skills `k12-check-for-understanding/references/verification.md`（@2994762）。
 > Copyright 2026 Anthropic, PBC · Copyright 2026 Learning Commons · SPDX-License-Identifier: Apache-2.0. Complete terms in ../LICENSES/Apache-2.0.txt（技能根目录 NOTICE 记改编来源）.
 
 两道门跑在每道题上；一道不过即修即重写，修完的版本才是老师看到的第一个版本。整个验证过程内部进行——不叙述、不外显「我检查发现…」。

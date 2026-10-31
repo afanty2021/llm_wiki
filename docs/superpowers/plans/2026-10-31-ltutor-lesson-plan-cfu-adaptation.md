@@ -213,7 +213,7 @@ Anthropic 官方 k12-teacher-skills 近两个提交新增了 **English (EFL, Chi
 
 ## 10. 部署方案
 
-1. **双份 cp**：`SKILL.md` + `references/` 全目录（含 5 新文件）→ `~/.hermes/profiles/lt-tutor/skills/teacher-tutor/`
+1. **双份 cp**：`SKILL.md` + `references/` 全目录（含 5 新文件）**+ `NOTICE` + `LICENSES/`**（参考文件头注的 `../LICENSES/Apache-2.0.txt` 相对指针靠它落地，漏部署即悬空）→ `~/.hermes/profiles/lt-tutor/skills/teacher-tutor/`
 2. **生效面**：新增 references 文件对**新 skill_view 调用**即热生效（现读盘，§1.2 已核实）；但**活跃会话驻留旧版正文与描述**——新流程要经会话轮换自然覆盖（净效果与硬约束 5 一致）；description 触发词增量对新会话 prompt 构建即时生效
 3. **网关重启**：非必须；如需立即全量生效（不等会话轮换），低峰 `--replace` 重启（**避开周日 19:00–20:00 周报窗**；10-31 为周六，建议周六/周一执行）
 4. **核验**：`~/.hermes/profiles/lt-tutor/.skills_prompt_snapshot.json` manifest 指向 + live 副本与仓源 diff 为空
