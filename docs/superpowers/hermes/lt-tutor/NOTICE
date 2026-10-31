@@ -1,0 +1,22 @@
+本目录（docs/superpowers/hermes/lt-tutor/）含改编自第三方 Apache-2.0 项目的文件：
+
+- `references/lp-standards-english.md` —— 改编自 anthropics/k12-teacher-skills
+  `plugin/skills/k12-lesson-plan-creation/references/english.md`（Commit 2994762, v0.10.0）
+- `references/cfu-english.md` —— 改编自同仓 `plugin/skills/k12-check-for-understanding/references/english.md`
+  与 `references/output.md`（同 Commit）
+- `references/cfu-verification.md` —— 改编自同仓
+  `plugin/skills/k12-check-for-understanding/references/verification.md`（同 Commit）
+- `references/flow-lesson-plan.md` / `references/flow-cfu.md` —— 编排改编自同仓两技能的
+  `SKILL.md`（k12-lesson-plan-creation / k12-check-for-understanding，同 Commit）
+
+Copyright 2026 Anthropic, PBC · Copyright 2026 Learning Commons · SPDX-License-Identifier: Apache-2.0
+
+本仓改动（WeCom/lt-tutor 通道适配）：lesson.json/文档渲染机制替换为分段文本交付 + worksheet 出图；
+Learning Commons KG connector 替换为 llm-wiki MCP 检索；学科路由坍缩为 English（EFL, China）单路；
+CFU HTML 双文件机制替换为 worksheet 学生卷 + 聊天教师指南。
+
+Apache-2.0 许可证全文见 LICENSES/Apache-2.0.txt。上述文件随本仓（GPL-3.0）一并分发适用
+Apache-2.0 → GPLv3 单向兼容；原始版本见 https://github.com/anthropics/k12-teacher-skills
+
+目录内其余文件（SKILL.md 主体、其余 references/、dry-run.md、worksheet-lesson-notes.md）
+为本仓原有内容，不属第三方改编件。
