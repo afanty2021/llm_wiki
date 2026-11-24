@@ -1,0 +1,54 @@
+基线（未变异）：fail=0
+M1 不揭开容器: 被杀  fail=4  (tsc 有类型错但仍出 JS)
+     ← extractArticle·微信真实形态（N-1 回归钉）：#js_content 行内 visibility:hidden;opacity:0 → 正文
+     ← extractArticle·微信正文阈值 = 200 非空白字符（199 拒 / 200 收）
+     ← extractArticle·微信页只揭开 #js_content 自身：其内有意隐藏的子节点（display:none 或行内 visibility:hi
+     ← orchestrateClip·微信真实形态端到端：揭开的正文全量写入源文件与页面，正文前带不可信围栏行
+M2 去掉正文阈值: 被杀  fail=3  (tsc ok)
+     ← extractArticle·微信正文低于阈值（失效/验证壳：容器里只剩一行提示，或容器揭开失败只剩页头署名）→ empty_content，不得报成功
+     ← extractArticle·微信正文阈值 = 200 非空白字符（199 拒 / 200 收）
+     ← orchestrateClip·微信壳页正文低于阈值（N-1）：empty_content 立即抛，零写入零入队
+M3 不论主机名都揭开: 被杀  fail=1  (tsc ok)
+     ← extractArticle·揭开只认微信主机名：同款 HTML 从非微信主机名取回时正文不揭开；普通页内的 visibility:hidden 段落不进库
+M3b 主机名放宽为后缀匹配: 被杀  fail=1  (tsc ok)
+     ← extractArticle·揭开只认微信主机名：同款 HTML 从非微信主机名取回时正文不揭开；普通页内的 visibility:hidden 段落不进库
+M3c 连子元素一起揭开: 被杀  fail=1  (tsc ok)
+     ← extractArticle·微信页只揭开 #js_content 自身：其内有意隐藏的子节点（display:none 或行内 visibility:hi
+M4 提取处不洗标题: 被杀  fail=1  (tsc ok)
+     ← extractArticle·title 清洗（W3-I1）：控制符/零宽符剥除、空白折叠、超长按码点截断 120；纯不可见 title 回落 'clip'
+M6 去掉正文围栏行: 被杀  fail=3  (tsc ok)
+     ← orchestrateClip·微信真实形态端到端：揭开的正文全量写入源文件与页面，正文前带不可信围栏行
+     ← buildSourceMarkdown·快照：frontmatter 全字段 + 围栏行 + 空行 + body 原样
+     ← buildSourceMarkdown·正文围栏行（W3-I1）：固定一行、引用块形态、明示 untrusted，位于 body 之前且 body 原样收尾
+M6b 围栏行放到正文之后: 被杀  fail=3  (tsc ok)
+     ← orchestrateClip·微信真实形态端到端：揭开的正文全量写入源文件与页面，正文前带不可信围栏行
+     ← buildSourceMarkdown·快照：frontmatter 全字段 + 围栏行 + 空行 + body 原样
+     ← buildSourceMarkdown·正文围栏行（W3-I1）：固定一行、引用块形态、明示 untrusted，位于 body 之前且 body 原样收尾
+M7 阈值不区分主机名: 被杀  fail=2  (tsc ok)
+     ← extractArticle·阈值只约束微信域名：其他站点的短页照常提取
+     ← extractArticle·揭开只认微信主机名：同款 HTML 从非微信主机名取回时正文不揭开；普通页内的 visibility:hidden 段落不进库
+M8 阈值差一(<=): 被杀  fail=1  (tsc ok)
+     ← extractArticle·微信正文阈值 = 200 非空白字符（199 拒 / 200 收）
+M8b 阈值降到 50: 被杀  fail=3  (tsc ok)
+     ← extractArticle·微信正文低于阈值（失效/验证壳：容器里只剩一行提示，或容器揭开失败只剩页头署名）→ empty_content，不得报成功
+     ← extractArticle·微信正文阈值 = 200 非空白字符（199 拒 / 200 收）
+     ← orchestrateClip·微信壳页正文低于阈值（N-1）：empty_content 立即抛，零写入零入队
+M9 按 UTF-16 单元截断: 被杀  fail=1  (tsc ok)
+     ← sanitizeClipTitle·按码点截断 120（不劈代理对）；恰好 120 原样
+M10a 不剥格式字符: 被杀  fail=4  (tsc 有类型错但仍出 JS)
+     ← web_clip·回执防御（W3-I1）：title 经同款清洗后才进 reply——不可见字符剥除、换行折叠、超长截断 120
+     ← extractArticle·title 清洗（W3-I1）：控制符/零宽符剥除、空白折叠、超长按码点截断 120；纯不可见 title 回落 'clip'
+     ← sanitizeClipTitle·C0/C1 控制符折空格；格式符（零宽/双向控制/词连接符/BOM/软连字符/标签符）与变体选择符直接剥除
+     ← sanitizeClipTitle·空白折叠去首尾；幂等；纯不可见字符 → 空串
+M10b 不剥变体选择符: 被杀  fail=1  (tsc 有类型错但仍出 JS)
+     ← sanitizeClipTitle·C0/C1 控制符折空格；格式符（零宽/双向控制/词连接符/BOM/软连字符/标签符）与变体选择符直接剥除
+M11 控制符删除而非折空格: 被杀  fail=4  (tsc ok)
+     ← web_clip·回执防御（W3-I1）：title 经同款清洗后才进 reply——不可见字符剥除、换行折叠、超长截断 120
+     ← extractArticle·title 清洗（W3-I1）：控制符/零宽符剥除、空白折叠、超长按码点截断 120；纯不可见 title 回落 'clip'
+     ← sanitizeClipTitle·C0/C1 控制符折空格；格式符（零宽/双向控制/词连接符/BOM/软连字符/标签符）与变体选择符直接剥除
+     ← sanitizeClipTitle·空白折叠去首尾；幂等；纯不可见字符 → 空串
+M12 不折叠空白: 被杀  fail=2  (tsc ok)
+     ← sanitizeClipTitle·C0/C1 控制符折空格；格式符（零宽/双向控制/词连接符/BOM/软连字符/标签符）与变体选择符直接剥除
+     ← sanitizeClipTitle·空白折叠去首尾；幂等；纯不可见字符 → 空串
+M5 回执用原始 title: 被杀  fail=1  (tsc 有类型错但仍出 JS)
+     ← web_clip·回执防御（W3-I1）：title 经同款清洗后才进 reply——不可见字符剥除、换行折叠、超长截断 120

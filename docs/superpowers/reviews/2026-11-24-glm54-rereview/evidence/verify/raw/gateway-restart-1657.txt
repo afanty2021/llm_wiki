@@ -1,0 +1,55 @@
+网关 16:57 重启取证（2026-11-24 18:20，协调者只读取证；重启非本会话发起）
+==========================================================================================
+现象：收尾核对时发现 Hermes 网关 pid 1019（lstart 11-23 09:43:02）已不在，现为 pid 977（lstart 11-24 16:57:05）；
+      两个 MCP 子进程由 1226/1250 变为 1116（16:57:11 启动）/ 1121（16:57:12 启动）。
+
+时间线（~/.hermes/logs/agent.log；已剔除含凭证的行，长行有截断）
+16:54:59.965 INFO gateway.run: Received SIGTERM — initiating shutdown
+16:54:59.965 WARNING gateway.run: Shutdown context: signal=SIGTERM parent_pid=1
+             ↑ SIGTERM 发自 launchd：外部发起的停机请求，不是进程崩溃
+16:55:00.013 INFO gateway.run: Stopping gateway...
+16:55:00.031 WARNING [Feishu] Send attempt 1/3 failed for chat oc_41bc…; retrying in 1s
+16:55:01.038 WARNING [Feishu] Send attempt 2/3 failed …; retrying in 2s
+16:55:04.294 ERROR [Feishu] Send error: … NameResolutionError … /open-apis/auth/v3/tenant_access_token/internal
+             ↑ 停机流程开始 18ms 后有一条发往飞书的消息，三次均因 open.feishu.cn 域名解析失败未发出
+16:55:19.332 WARNING gateway.run: Shutdown drain capped to 15s (configured 180s) to fit the live launchd exit timeout of 25s
+16:55:19.338 INFO gateway.run: Shutdown phase: drain done at +19.32s
+             （drain took 0.00s, timed_out=False, active_at_start=0, active_now=0, cron_at_start=0, cron_now=0,
+              api_at_start=0, api_now=0, deferred_at_start=0, deferred_now=0）
+16:55:19.344 WARNING gateway.run_runtime: 4 authority task(s) did not settle within 0s; left for recovery
+16:55:23.044 CRITICAL gateway.shutdown_watchdog: Shutdown watchdog fired after 23s — forcing process exit
+             (asyncio drain path appears wedged)
+             ↑ 排空已「完成」但进程没退出，关停看门狗在 23s 处强制结束（调用栈转储在 gateway-shutdown-watchdog.log）
+16:57:05     新进程 pid 977 启动（gateway-exit-diag.log：gateway.start pid=977 replace=true @ 08:57:09Z）
+16:57:13.007 INFO gateway.run: Starting Hermes Gateway...
+16:57:16.228 INFO gateway.run: ✓ feishu connected
+16:57:16.233 INFO gateway.run: ✓ wecom connected
+16:57:16.643 INFO gateway.run: ✓ wecom connected (profile: zops)
+16:57:16.699 INFO gateway.run: Gateway running with 3 platform(s)
+16:57:18.571 INFO cron.scheduler_provider: Multiplex cron scheduler started for 3 profile(s): ['default', 'lt-tutor', 'zops']
+
+launchctl print gui/$(id -u)/ai.hermes.gateway：state = running / runs = 1 / pid = 977 / last exit code = (never exited)
+  → runs=1 且从未退出 = 重新 bootstrap 的全新任务实例（bootout→bootstrap 形态），不是崩溃自愈；
+    旧进程 16:55:23 被强制结束到新进程 16:57:05 启动，间隔 1 分 42 秒。
+
+发起方：统一日志（log show，窗口 16:54:50–16:57:15）里查不到相关记录，无法判定是谁。
+  本会话零重启动作；13:50:26 重建 mcp-server/dist 之后只做了文档、证据、记忆与只读核对。
+  那条飞书消息的内容日志未记；当时 active / deferred / cron / api 均为 0，没有在处理中的教师回合。
+
+网络旁证：15:56:59 与 16:37:37–16:38:04，model catalog 拉取对两个不同主机 SSL 握手超时共 5 次；
+          16:55 飞书域名解析失败。即 16:37–16:55 本机出网/DNS 有异常，重启时间与网络恢复吻合。
+
+对 N-1 的意义
+- MCP 子进程启动时间（16:57:11 / 16:57:12）晚于 live dist 构建（13:50:26）；dist 此后未再变动，且含修复导出
+  （dist/src/web-clip.js 命中 11 处、dist/src/training.js 命中 2 处）→ 两个子进程载入的是修复后的代码，
+  teacher_tutor_web_clip 的微信修复自 16:57 起已在 live 进程里。
+- 判定依据只有「启动时间 + dist 内容」；没有经网关做真链路收藏验证（那会真实写库并入队）。
+
+重启后健康（18:17）：pid 977 存活 1h20m；17:00 之后 agent.log 零 ERROR / CRITICAL；三平台已连。
+
+日志卫生侧发现（值不记）
+- Lark SDK 以 INFO 级把带 access_key 与 ticket 参数的 WebSocket 地址整行写进日志：agent.log 19 行、gateway.log 80 行
+  （logger 名「Lark」）。属短期连接凭证、仅本机文件；但任何 grep 网关日志的输出都会把它们带出来——
+  取证时须过滤（access_key|ticket=）。协调者本轮取证时有一行此类输出进入了会话终端，未写入任何文件。
+- 关停看门狗强制结束（「drain path appears wedged」）：排空完成后进程仍未自行退出，被看门狗在 23s 处结束。
+  与 11-05 那次（WeCom ws 断+假死→看门狗自愈）不是同一形态，但同属「关停不干净」一类，记录备查。

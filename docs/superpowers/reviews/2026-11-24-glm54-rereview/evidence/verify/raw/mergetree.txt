@@ -1,0 +1,96 @@
+109e4e0faeb5330bb2358c5b803ba60f8fb11e40
+README.md
+README_CN.md
+README_JA.md
+README_KO.md
+mcp-server/src/api-client.ts
+mcp-server/src/index.ts
+src-tauri/src/commands/search.rs
+src/App.tsx
+src/components/layout/preview-panel.tsx
+src/i18n/en.json
+src/i18n/it.json
+src/i18n/ru.json
+src/i18n/zh.json
+src/lib/graph-relevance.ts
+src/lib/ingest-queue.ts
+src/lib/ingest.ts
+src/lib/page-merge.ts
+src/lib/project-file-sync.ts
+
+Auto-merging README.md
+CONFLICT (content): Merge conflict in README.md
+Auto-merging README_CN.md
+CONFLICT (content): Merge conflict in README_CN.md
+Auto-merging README_JA.md
+CONFLICT (content): Merge conflict in README_JA.md
+Auto-merging README_KO.md
+CONFLICT (content): Merge conflict in README_KO.md
+Auto-merging mcp-server/src/api-client.ts
+CONFLICT (content): Merge conflict in mcp-server/src/api-client.ts
+Auto-merging mcp-server/src/index.ts
+CONFLICT (content): Merge conflict in mcp-server/src/index.ts
+Auto-merging mcp-server/test/api-client.test.ts
+Auto-merging package-lock.json
+Auto-merging package.json
+Auto-merging src-tauri/Cargo.lock
+Auto-merging src-tauri/Cargo.toml
+Auto-merging src-tauri/src/api_server.rs
+Auto-merging src-tauri/src/commands/claude_cli.rs
+Auto-merging src-tauri/src/commands/codex_cli.rs
+Auto-merging src-tauri/src/commands/file_sync.rs
+Auto-merging src-tauri/src/commands/fs.rs
+Auto-merging src-tauri/src/commands/search.rs
+CONFLICT (content): Merge conflict in src-tauri/src/commands/search.rs
+Auto-merging src-tauri/src/commands/vectorstore.rs
+Auto-merging src-tauri/src/lib.rs
+Auto-merging src/App.tsx
+CONFLICT (content): Merge conflict in src/App.tsx
+Auto-merging src/components/chat/chat-panel.tsx
+Auto-merging src/components/graph/graph-view.tsx
+Auto-merging src/components/layout/activity-panel.tsx
+Auto-merging src/components/layout/preview-panel.tsx
+CONFLICT (content): Merge conflict in src/components/layout/preview-panel.tsx
+Auto-merging src/components/review/review-view.tsx
+Auto-merging src/components/settings/settings-view.tsx
+Auto-merging src/components/sources/sources-view.tsx
+Auto-merging src/i18n/en.json
+CONFLICT (content): Merge conflict in src/i18n/en.json
+Auto-merging src/i18n/it.json
+CONFLICT (content): Merge conflict in src/i18n/it.json
+Auto-merging src/i18n/ru.json
+CONFLICT (content): Merge conflict in src/i18n/ru.json
+Auto-merging src/i18n/zh.json
+CONFLICT (content): Merge conflict in src/i18n/zh.json
+Auto-merging src/lib/__tests__/wiki-graph.test.ts
+Auto-merging src/lib/claude-cli-transport.ts
+Auto-merging src/lib/codex-cli-transport.ts
+Auto-merging src/lib/deep-research.test.ts
+Auto-merging src/lib/deep-research.ts
+Auto-merging src/lib/embedding.test.ts
+Auto-merging src/lib/embedding.ts
+Auto-merging src/lib/extract-source-images.ts
+Auto-merging src/lib/graph-relevance.ts
+CONFLICT (content): Merge conflict in src/lib/graph-relevance.ts
+Auto-merging src/lib/image-caption-pipeline.ts
+Auto-merging src/lib/ingest-queue.ts
+CONFLICT (content): Merge conflict in src/lib/ingest-queue.ts
+Auto-merging src/lib/ingest.ts
+CONFLICT (content): Merge conflict in src/lib/ingest.ts
+Auto-merging src/lib/llm-client.test.ts
+Auto-merging src/lib/llm-client.ts
+Auto-merging src/lib/mineru.ts
+Auto-merging src/lib/page-merge.ts
+CONFLICT (content): Merge conflict in src/lib/page-merge.ts
+Auto-merging src/lib/project-file-sync.test.ts
+Auto-merging src/lib/project-file-sync.ts
+CONFLICT (content): Merge conflict in src/lib/project-file-sync.ts
+Auto-merging src/lib/project-store.ts
+Auto-merging src/lib/scheduled-import.ts
+Auto-merging src/lib/source-lifecycle.ts
+Auto-merging src/lib/wiki-graph.ts
+Auto-merging src/lib/wiki-page-delete.ts
+Auto-merging src/lib/wiki-page-resolver.test.ts
+Auto-merging src/lib/wiki-page-resolver.ts
+Auto-merging src/stores/wiki-store.test.ts
+Auto-merging src/stores/wiki-store.ts

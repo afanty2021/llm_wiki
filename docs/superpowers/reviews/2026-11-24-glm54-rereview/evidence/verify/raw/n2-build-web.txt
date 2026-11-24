@@ -1,0 +1,28 @@
+N-2 live web dist 桌面形态 → npm run build:web（2026-11-24 13:07 执行；15:15 复核）
+==========================================================================================
+背景：10-25 09:03 `npm run tauri build` 的 beforeBuildCommand（build:desktop）把 live dist/ 覆盖成桌面形态，
+      :8080 运行时直接读盘 dist/（ServeDir），故 web 端一直下发把 API 基址烤死成 http://localhost:8080 的构建。
+
+执行：npm run build:web（vite --mode web，.env.web 置空 VITE_API_BASE_URL）—— 用户 13:0x 口令「跑 npm run build:web」
+
+复核（15:15，只读 curl + 本地文件比对）：
+- 本地 dist/index.html            mtime 11-24 13:07，入口 assets/index-C_Bt6V8i.js
+- api-client chunk                assets/api-client-BPKp9pE6.js（5,928 字节，mtime 13:07）
+- chunk 内基址表达式（本地与下发逐字节相同）：
+    function n(e){return e??`http://localhost:8080`}var r=n(``),i=class extends Error{status;co...
+  → 调用处实参是空串（空模板字面量），`"" ?? 默认值` 取空串 → 同源相对请求。桌面形态这里是 n(void 0)。
+  注意：字面量 http://localhost:8080 在两种构建里都在（它是函数体里的默认值），不能拿「含不含该字面量」当判据。
+- :8080 实服：
+    /                                  HTTP/1.1 200  cache-control: no-cache   与本地 dist/index.html 字节相同
+    /assets/api-client-BPKp9pE6.js     HTTP/1.1 200                            与本地 dist 字节相同
+  下发的 index.html 引用的正是 api-client-BPKp9pE6.js（旧桌面形态的 api-client-Cpj5Gy3Y.js 已不在）。
+- 无需重启 src-server（dist 运行时读盘）。
+
+自检命令勘误：此前记的自检法 grep '(void 0|"")' 对 web 形态会漏报——压缩器输出的是空模板字面量（一对反引号），
+不是 ""。可靠判法=看默认值字面量之后的调用处：
+    f=$(curl -s http://127.0.0.1:8080/ | grep -oE 'assets/api-client-[^"]+\.js' | head -1)
+    curl -s "http://127.0.0.1:8080/$f" | grep -oE 'localhost:8080`.{0,24}'
+  web 同源形态 → localhost:8080`}var r=n(``),i=...      （本次实测输出，调用处实参为空）
+  桌面形态     → localhost:8080`}var r=n(void 0)...    （10-25 至 11-24 13:07 之前 live 的形态，见 report §二 N-2）
+
+未执行：git add / commit / push（dist/ 不入库：13:07 重建后 git status 里没有 dist 改动）。

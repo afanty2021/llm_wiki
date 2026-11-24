@@ -1,0 +1,30 @@
+=== 收尾快照 2026-11-24 02:17:15 CST ===
+--- repo A llm_wiki ---
+HEAD: 06a9315c8c2396ba0ebe9cd6040d268fd2691915
+branch: main
+?? docs/superpowers/reviews/2026-10-25-hermes-day-fixes/
+?? docs/superpowers/reviews/2026-10-25-hermes-v0.22.5-merge/
+?? docs/superpowers/reviews/2026-10-26-hermes-gate-fixes/
+?? docs/superpowers/reviews/2026-11-04-hermes-v0.22.7-merge/
+?? docs/superpowers/reviews/2026-11-24-glm54-rereview/
+--- repo B Hermes-agent ---
+HEAD: 48fd4fb49571d887fa654807ab34de664207277e
+branch: lt-tutor-vendor-patches
+?? .zcode/
+--- repo B refs/heads ---
+refs/heads/fix/feishu-dm-card-click-gate 19cd21f8ff4098b23278790422165a82c2a3850e
+refs/heads/fix/log-noise-ping-relay 4c4705294391e7eb7a62ad66f376a83f000de1d3
+refs/heads/lt-tutor-vendor-patches 48fd4fb49571d887fa654807ab34de664207277e
+refs/heads/main 48fd4fb49571d887fa654807ab34de664207277e
+refs/heads/merge/upstream-20260913 e0f8f85eafc157b8c235d53be30feaa9c1adcb0b
+refs/heads/merge/upstream-20260920 5af434e8367848877ccd42ae17f95f284f01d3f0
+refs/heads/merge/upstream-20261025 eaacebe2bd69904a1af6dec4722c787cd319be75
+refs/heads/merge/upstream-20261104 9ce27798f485cf7f3485099daf1beefdd32c2283
+refs/heads/merge/upstream-20261108 48fd4fb49571d887fa654807ab34de664207277e
+refs/heads/zops-vendor-patches 5af434e8367848877ccd42ae17f95f284f01d3f0
+--- repo B worktrees ---
+/Users/berton/Github/Coding-Agents/Hermes-agent          48fd4fb495 [lt-tutor-vendor-patches]
+/private/tmp/hermes-main-holder                          48fd4fb495 [main] prunable
+/Users/berton/Github/Coding-Agents/hermes-merge-20261025 eaacebe2bd [merge/upstream-20261025]
+/Users/berton/Github/Coding-Agents/hermes-merge-20261104 9ce27798f4 [merge/upstream-20261104]
+/Users/berton/Github/Coding-Agents/hermes-merge-20261108 48fd4fb495 [merge/upstream-20261108]

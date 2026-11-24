@@ -1,0 +1,55 @@
+# web_clip 微信修复：修前 vs 修后（同一份 2026-11-24 13:18 存档的 5 篇真实微信 HTML；计数=非空白字符；只读，不写库不入队）
+#
+# 归档说明：本文件 13:55 的初版误存了第一次运行的报错（旧 dist 备份目录旁没有 node_modules，
+# ERR_MODULE_NOT_FOUND），5 篇对照表当时只在终端看过、没进归档。15:05 把旧 dist 的 src/ 拷到带 node_modules
+# 软链的临时目录后重跑同一脚本（scripts/before_after.mjs），结果如下，与 13:4x 的口头汇报逐数一致。
+#
+#   修前 = /tmp/webclip-fix/dist-live-backup-pre-fix/src（10-25 起在用的 live dist，修复前备份）
+#   修后 = mcp-server/dist/src（仓内 `npm --prefix mcp-server test` 于 13:50 正式构建）
+#   decoy = 正文里是否混入页头署名类文字（公众号名/作者/栏目语等）
+
+# ===== 一、5 篇存档文章对照（15:05 重跑）=====
+8-3hXTx-mVmcKLuf8REHTg  #js_content=5299 字
+   修前:    49 字符 | decoy=有 | title=26字
+   修后:  5317 字符 | decoy=无 | title=26字
+FtWphyEt7j7TGapfssEIjg  #js_content=7631 字
+   修前:    21 字符 | decoy=有 | title=29字
+   修后:  7676 字符 | decoy=无 | title=29字
+bLmjAw_9tQNf_wSgX6ng1w  #js_content=3542 字
+   修前:    47 字符 | decoy=有 | title=24字
+   修后:  3561 字符 | decoy=无 | title=24字
+dgAJIzmu_QeAQowf-SJFig  #js_content=8081 字
+   修前:    41 字符 | decoy=有 | title=17字
+   修后:  8086 字符 | decoy=无 | title=17字
+jTa4JlrAAWqJ8mC14My2Hg  #js_content=6021 字
+   修前:    45 字符 | decoy=有 | title=22字
+   修后:  6039 字符 | decoy=无 | title=22字
+
+判读：
+- 修前 5 篇全是 21–49 字符的页头碎片（decoy 全「有」），修后 3561–8086 字符（decoy 全「无」），标题长度逐篇不变。
+- 修后计数比 #js_content 的 textContent 多 5–45 字符：markdown 化带进的链接地址、图片地址、标题井号等标记，属预期。
+- 第 6 篇（13:5x 现抓、未存档）见下节，修后非空白 2150 字符——6 篇合计修后范围 2150–8086。
+
+# ===== 二、真链路冒烟（live dist 生产函数链 fetchWithGuards→decodeBody→extractArticle，第 6 篇，未事先存档；13:51）=====
+OK  bytes=3771102 ct=text/html; charset=utf-8, text/html finalHost=mp.weixin.qq.com
+    title="陈力老师这番话给英语教学的启示太大了"
+    markdown=2257 字符（非空白 2150）| 行数 60
+    文件名: 陈力老师这番话给英语教学的启示太大了-807f29e5.md
+    --- 回执预览（training.ts clipReplyText 同款模板套真实标题）---
+    已收藏《陈力老师这番话给英语教学的启示太大了》，稍后整理完成后即可检索
+    --- 正文前 160 字 ---
+    我们在英语教学上灵感和启发的获得，而引发方法的改进，效益的提高，往往是因为某人的一句（段）话、某篇文章或某本书中深刻而有见地的观点。 ⏎  ⏎ 先请大家仔细读完人教社陈力老师在他的微博“中小学英语教学”发的帖子： ⏎  ⏎ 技能类的学习掌握，有个一万小时定律。语言与其说是一门学科，不如说是一门技能，是学习交流和表达的工具。学英语，用
+
+# ===== 三、段落形态探针（13:33；合成夹具，总字数在 200 阈值两侧）=====
+# 已知边界：正文只有一个段落时 Readability 会选到带页头的外层容器（约 41 字署名混入正文开头）；
+#            多段落时精确选 #js_content。真实微信文章基本都是多段落（上面 6 篇全部精确命中）。
+[199] total=199 -> OK md_nws=240 decoy=true
+[200] total=200 -> OK md_nws=241 decoy=true
+[100,99] total=199 -> empty_content empty_content: weixin body too short
+[100,100] total=200 -> OK md_nws=200 decoy=false
+[50,50,50,49] total=199 -> empty_content empty_content: weixin body too short
+[50,50,50,50] total=200 -> OK md_nws=200 decoy=false
+[67,66,66] total=199 -> empty_content empty_content: weixin body too short
+[68,66,66] total=200 -> OK md_nws=200 decoy=false
+
+# 未做：git add / commit / push；Hermes 网关未重启（live 进程仍在跑 11-23 09:43 启动时载入的旧代码）。

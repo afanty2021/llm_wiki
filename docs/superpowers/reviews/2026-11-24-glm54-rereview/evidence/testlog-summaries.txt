@@ -1,0 +1,55 @@
+=== 子代理测试日志判决行提取（原始日志在 /tmp 已随清理删除，提取时刻 2026-11-24 02:17:31） ===
+--- /tmp/review-glm54/test-mocks.log (tail 6) ---
+ Test Files  181 passed (181)
+      Tests  2588 passed (2588)
+   Start at  01:51:05
+   Duration  12.50s (transform 4.71s, setup 973ms, import 8.43s, tests 22.43s, environment 1.41s)
+
+EXIT=0
+--- /tmp/review-glm54/test-root-cargo.log (tail 6) ---
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+RETRY5 OK EXIT=0
+done
+--- /tmp/review-glm54/test-srcserver-lib.log (tail 6) ---
+test tests::auth_tests::auth_tests::test_hash_password_edge_cases ... ok
+
+test result: ok. 382 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.16s
+
+RETRY5 OK EXIT=0
+done
+--- /tmp/review-glm54/test-srctauri.log (tail 6) ---
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+RETRY5 OK EXIT=0
+done
+--- H1/H2 pytest 与门禁日志（testlogs/ logs/ 目录内判决行） ---
+10 passed in 0.75s
+>       assert not mcp_tool._is_application_level_mcp_error(SYNTHETIC_408)
+E        +  where True = <function _is_application_level_mcp_error at 0x1070359e0>(MCPError(408, 'Timed out while waiting for response to CallToolRequest. Waited 30.0 seconds.', None))
+E        +    where <function _is_application_level_mcp_error at 0x1070359e0> = mcp_tool._is_application_level_mcp_error
+>       assert not mcp_tool._is_application_level_mcp_error(_mcp_error(-32001, "read timeout"))
+E        +  where True = <function _is_application_level_mcp_error at 0x1070359e0>(MCPError(-32001, 'read timeout', None))
+E        +    where <function _is_application_level_mcp_error at 0x1070359e0> = mcp_tool._is_application_level_mcp_error
+E        +    and   MCPError(-32001, 'read timeout', None) = _mcp_error(-32001, 'read timeout')
+>       assert mcp_tool._server_error_counts[SERVER] == mcp_tool._CIRCUIT_BREAKER_THRESHOLD
+ERROR    tools.mcp_tool:mcp_tool_handlers.py:758 MCP tool llm-wiki-training/llm_wiki_read_file call failed: Timed out while waiting for response to CallToolRequest. Waited 30.0 seconds.
+ERROR    tools.mcp_tool:mcp_tool_handlers.py:758 MCP tool llm-wiki-training/llm_wiki_read_file call failed: Timed out while waiting for response to CallToolRequest. Waited 30.0 seconds.
+ERROR    tools.mcp_tool:mcp_tool_handlers.py:758 MCP tool llm-wiki-training/llm_wiki_read_file call failed: Timed out while waiting for response to CallToolRequest. Waited 30.0 seconds.
+3 failed, 7 passed in 0.84s
+1 failed, 8 passed in 0.82s
+3 passed in 0.74s
+11 passed, 5 warnings in 2.90s
+17 passed, 5 warnings in 3.09s
+15 passed, 5 warnings in 2.14s
+21 passed, 5 warnings in 1.69s
+1 passed, 1 skipped in 1.10s
+19 passed in 3.60s
+10 passed in 0.62s
+258 passed, 1 skipped, 5 warnings in 16.09s
+9 passed in 0.74s
+4 passed in 0.55s

@@ -1,0 +1,98 @@
+N-3 fork 陈旧「AI 上下文文档」21 份 —— 删除前核验（2026-11-24，协调者实跑，全程只读）
+==========================================================================================
+仓：~/Github/Coding-Agents/Hermes-agent；分支 lt-tutor-vendor-patches = 48fd4fb495
+对照：upstream = 21ae0e1238（v0.23.0+616）；git 只读一律 GIT_NO_LAZY_FETCH=1（partial clone，不联网）
+
+一、清单本体（git ls-files ∩ CLAUDE.md|docs/adr/）
+------------------------------------------------------------------------------------------------
+行数   最后提交      日期        路径
+701    48fd4fb495    2026-11-08  CLAUDE.md                 （仅动 2 行：基线头 + 平台数 17→26）
+271    3d499d0f6b    2026-04-08  acp_adapter/CLAUDE.md
+292    3d499d0f6b    2026-04-08  agent/CLAUDE.md
+261    3d499d0f6b    2026-04-08  cron/CLAUDE.md
+259    3d499d0f6b    2026-04-08  environments/CLAUDE.md
+481    ba32f9f265    2026-04-14  gateway/CLAUDE.md
+484    ba32f9f265    2026-04-14  hermes_cli/CLAUDE.md
+330    3d499d0f6b    2026-04-08  plugins/CLAUDE.md
+388    3d499d0f6b    2026-04-08  tests/CLAUDE.md
+320    1387266545    2026-05-06  tools/CLAUDE.md
+95     3d499d0f6b    2026-04-08  docs/adr/001-sync-agent-loop.md
+109    3d499d0f6b    2026-04-08  docs/adr/002-tool-registry.md
+115    3d499d0f6b    2026-04-08  docs/adr/003-multi-instance.md
+103    3d499d0f6b    2026-04-08  docs/adr/004-prompt-cache.md
+175    3d499d0f6b    2026-04-08  docs/adr/005-plugin-memory.md
+197    3d499d0f6b    2026-04-08  docs/adr/006-command-system.md
+238    3d499d0f6b    2026-04-08  docs/adr/007-session-management.md
+316    3d499d0f6b    2026-04-08  docs/adr/008-skill-system.md
+105    3d499d0f6b    2026-04-08  docs/adr/CHANGELOG.md
+270    3d499d0f6b    2026-04-08  docs/adr/FEEDBACK.md
+60     3d499d0f6b    2026-04-08  docs/adr/README.md
+------------------------------------------------------------------------------------------------
+合计 21 份 5,570 行，全部在库，作者同为 afanty2021。与 02:17 报告所列清单逐份一致。
+
+二、与上游的关系
+- `git ls-tree -r --name-only upstream | grep -E '(^|/)CLAUDE\.md$|^docs/adr/'` → 0 行（上游同路径零文件）；上游 AGENTS.md 15 份。
+- `git diff --name-status upstream...HEAD` → 33 A + 53 M = 86；21 份文档的状态全为 A（fork-only 新增）。
+- 推论：删除不产生任何合并冲突面；fork 对上游的增量由 86 降到 65 个文件。
+
+三、引用关系
+1. 仓内（git grep 'CLAUDE\.md|docs/adr'，排除 21 份自身）共 187 处命中，分布：
+   website/ 83、tests/ 31、上游代码（agent/ hermes_cli/ 等）24、skills/ 21、locales/ 17、CHANGELOG.md 4、
+   plugin-catalog/ 3、optional-skills/ 2、cli-config.yaml.example 1、tui_gateway/methods_session.py 1。
+   以「目录前缀 + CLAUDE.md」或「docs/adr」二次过滤 → 0 处：**没有任何一处点名这 21 个路径**。逐类判读：
+   - 上游代码（agent/subdirectory_hints.py、agent/prompt_builder.py、agent/coding_context.py、
+     hermes_cli/config_defaults.py、hermes_cli/profiles.py、hermes_cli/subcommands/cron.py、tui_gateway/methods_session.py）：
+     全是「按文件名可选加载」的通用机制，文件不存在即跳过。
+   - 测试：全部是 tmp_path 下临时写的同名夹具文件，或守卫扫描器的字符串样例。
+   - website/ skills/ locales/ plugin-catalog/ optional-skills/：上游文档、UI 文案与技能说明里对文件名的泛称。
+   - CHANGELOG.md:402/421/435/442：fork 自己 2026-04 的历史条目（「创建根级文档」「创建所有模块文档」等），
+     属流水账，不构成依赖。
+2. 运行时（上游机制实际规则，读 agent/prompt_builder.py:1640-1743、agent/subdirectory_hints.py:19-89 得出）：
+   - 启动：「只加载一种项目上下文，先找到者胜」=.hermes.md → AGENTS.md 链（git 根→cwd）→ CLAUDE.md（仅 cwd）。
+     仓根有 AGENTS.md → 根 CLAUDE.md 被遮蔽，不进系统提示词。
+   - 子目录按需注入：每个目录按 [AGENTS.override.md, AGENTS.md, agents.md, CLAUDE.md, …] 取第一个命中。
+     9 份嵌套 CLAUDE.md 中 8 份（agent/ cron/ gateway/ hermes_cli/ plugins/ tests/ tools/）被同目录 AGENTS.md 遮蔽；
+     **只有 acp_adapter/ 与 environments/ 没有 AGENTS.md，这两份会被真的注入**（工作目录覆盖到它们的会话首次触碰该目录时）。
+   - environments/ 的在库文件**只有** environments/CLAUDE.md——整个目录是幽灵目录；acp_adapter/ 另有 22 个上游代码文件。
+3. 仓外：
+   - Hermes cron 库（~/.hermes/cron/jobs.json、profiles/lt-tutor、profiles/zops）grep 命中 0 / 0 / 0。
+   - 合并手册记忆（hermes-upstream-merge-playbook）无提及。
+   - llm_wiki 仓：命中仅在本轮评审自己的 H1.md / H2.md / report.md / hermes-verification.md / doc_audit.py / doc-audit.md，
+     全是叙述性引用。
+4. 门禁与脚本：fork_gate.sh、F821 守卫、pyproject、CI 工作流、.github/ 均零引用。
+
+四、内容价值
+- docs/adr/ 11 份：回溯生成的「上游架构描述」——索引里的日期写 2024-01-15～2024-04-01、状态全是「✅ 接受」，
+  实际提交于 2026-04-08；ADR-001 开头「在构建 Hermes Agent 时，我们需要决定…」是替上游代言，不记录任何 fork 决策；
+  FEEDBACK.md 是一张 0 条反馈的空表；ADR CHANGELOG 把 2026-04-08 记成了「2024-04-08」。
+- CLAUDE.md 10 份：v0.13.0 时代架构描述（陈旧度见 doc-audit.md / doc-audit-root.md）。唯一 fork 专属内容：
+  ① 根文件 §本地修改（:561-675）——zai-coding-cn provider（提交 29da0316，本地可解析）与自适应空闲超时；
+  ② tools/CLAUDE.md:181-216——空闲超时机制说明。
+  两处所述机制代码自带说明：hermes_cli/config_defaults.py:302-308 注释块（含「Defaults to 60 when omitted」）、
+  tools/terminal_tool.py 的 _preprocess_command_for_adaptive_timeout docstring。
+  空闲超时 60 的出处不靠文档也成立：功能与文档同在提交 1387266545（2026-05-06）落地，引入 diff 里出厂值即为 60
+  （`.get("idle_timeout", 60)` / `_idle_timeout = 60  # Fallback default`）。
+  而文档自引的出处 `f163bf40`（「2026-05-04」）在本地 git 里解析不到（Not a valid object name）。
+- 根文件 11-08 那次「上游基线刷新」（提交 48fd4fb495）只改了文件头与平台数两行：头部写着
+  「更新时间：2026-11-08 | 上游版本：v0.23.0+616」，正文其余 699 行仍是 5 月的——比不刷新更具误导性。
+
+五、可逆性
+lt-tutor-vendor-patches = origin/lt-tutor-vendor-patches = main = origin/main = 48fd4fb495（已推）。
+删除后任一份可用 `git show 3d499d0f6b:<path>`（或 ba32f9f265 / 1387266545 / 48fd4fb495）原样取回。
+
+六、结论与注意项
+结论：**可以整批删除，无需分流保留**（10 份 CLAUDE.md + 11 份 docs/adr/ 一并）。未执行，等用户口令。
+
+注意项：
+1. 删后「只读 CLAUDE.md」的工具（如 Claude Code）在该仓就没有自动加载的项目指令了；AGENTS.md 仍在，
+   Hermes / Codex / ZCode 照常读。.claude/settings.local.json 最近改动 08-12——若仍用 Claude Code 在此仓工作，
+   可另留一份一行的根 CLAUDE.md（内容 `@AGENTS.md`），这是可选项。
+2. 报告 I-6（H2-I6）引用 `tools/CLAUDE.md:187` 作为「60s 是 05-06 有意设计」的出处；删后改以提交 1387266545 为锚（见四）。
+3. 范围：origin/zops-vendor-patches（26692c43b9）上同样 21 份俱在；本轮只核了 lt-tutor-vendor-patches，
+   要一并清需在 zops 分支单独 cherry-pick 删除提交。
+4. 侧发现（不在 21 份内）：根 CHANGELOG.md 的 fork 段最新条目停在 2026-04-24（提交 b26979cc53），
+   05-06 空闲超时、wecom 适配、SDK 钉版、三次上游合并均未入册——同一批「April 文档工程」的遗留，是否处置另议。
+
+七、本轮未做
+- 未删除任何文件；git add / commit / push 零执行；未触碰 .claude/ 内容（仅列目录与文件名）。
+- 历史深搜（git log -S/-G）因禁用懒抓取未能进行；对 1387266545 的单提交 diff 读取成功（blob 本地在）。

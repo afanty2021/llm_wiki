@@ -1,0 +1,44 @@
+=== 集成测试前 · 生产库只读快照 2026-11-24 07:36:13 CST ===
+--- 在飞任务 ---
+ingest_jobs	cancelled	2
+ingest_jobs	failed	7
+ingest_jobs	succeeded	4
+ingest_jobs	succeeded_with_warnings	14
+research_tasks	done	1
+research_tasks	error	6
+--- 各表精确行数 ---
+activity_logs	0
+chat_conversations	7
+chat_messages	2
+embeddings	79067
+ingest_jobs	27
+ingested_files	1608
+learning_events	820
+learning_items	367
+learning_plans	110
+llm_providers	11
+media_assets	841
+projects	118
+refresh_tokens	4
+research_tasks	7
+review_items	4616
+search_providers	2
+short_links	74
+teacher_profiles	46
+team_members	373
+teams	266
+users	260
+wiki_pages	18435
+--- 现存测试残渣基线（LT 域前缀族） ---
+users_t_prefix	151
+projects_LT_test	52
+media_t_prefix	0
+--- M1/M2 域残渣基线（非 LT 前缀的测试用户/项目，按历史 tag 形态粗估） ---
+users_total	260
+projects_total	118
+providers_total	11
+--- Redis 各 DB 队列长度 ---
+db0	ingest:queue	0
+db0	research:queue	0
+db1	ingest:queue	7
+db1	research:queue	7

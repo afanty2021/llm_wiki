@@ -1,0 +1,19 @@
+fork规则           翻转 0 例: []
+无脑rstrip         翻转 1 例: ['path+slash']
+origin相等         翻转 2 例: ['path+slash', 'strava']
+根折叠              翻转 1 例: ['strava']
+前缀匹配             翻转 3 例: ['path+slash', 'strava', 'default-port']
+大小写/端口归一         翻转 4 例: ['otter-a', 'otter-b', 'host-case', 'default-port']
+--- 每个用例唯一杀死的变异（删掉该用例后无人再拦的变异）
+  exact        杀: []  唯一: []
+  otter-a      杀: ['大小写/端口归一']  唯一: []
+  otter-b      杀: ['大小写/端口归一']  唯一: []
+  path+slash   杀: ['无脑rstrip', 'origin相等', '前缀匹配']  唯一: ['无脑rstrip']
+  strava       杀: ['origin相等', '根折叠', '前缀匹配']  唯一: ['根折叠']
+  other-auth   杀: []  唯一: []
+  host-case    杀: ['大小写/端口归一']  唯一: []
+  default-port 杀: ['前缀匹配', '大小写/端口归一']  唯一: []
+注释A（rstrip 翻转 8 例中仅 path+slash 一例）: True
+注释B（rstrip 本就保持 strava 对不等）: True
+注释C（strava 例拦 origin 相等/根折叠类简化）: True
+无杀伤力的用例: ['exact', 'other-auth']

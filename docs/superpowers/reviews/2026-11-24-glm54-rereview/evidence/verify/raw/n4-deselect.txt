@@ -1,0 +1,31 @@
+N-4 机械 deselect —— 修后验证（2026-11-24，协调者实跑）
+================================================================
+仓：~/Github/Coding-Agents/Hermes-agent，分支 lt-tutor-vendor-patches，HEAD 48fd4fb495，工作区仅 pyproject.toml 一处改动
+解释器：/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python（= live 网关 pid 1019 所用环境）
+统一前缀：PYTHONDONTWRITEBYTECODE=1 <python> -m pytest <目标> -q -p no:cacheprovider
+
+改动（pyproject.toml [tool.pytest.ini_options]，原行 785）：
+-  addopts = "-m 'not integration and not live'"
++  # fork deselect (2026-11-24): upstream #11113 asserts that tool-error payloads burn
++  # circuit-breaker strikes. This fork deliberately resets on any completed RPC instead
++  # (tools/mcp_tool_handlers.py `_on_failure` / `_record_call_outcome`; pinned by
++  # tests/test_mcp_circuit_breaker.py), so that upstream case is a permanent
++  # design-divergence red here — not a regression, do not "fix" the fork to satisfy it.
++  # Keyed by node id: if upstream renames or drops the case, this entry is a silent no-op.
++  addopts = "-m 'not integration and not live' --deselect tests/tools/test_mcp_circuit_breaker.py::test_breaker_opened_by_tool_errors_says_rejected_not_unreachable"
+
+| # | 命令（目标 / 额外参数）                                   | 修前基线            | 修后实测                 |
+|---|-----------------------------------------------------------|----------------------|---------------------------|
+| 1 | tests/tools/test_mcp_circuit_breaker.py（默认 addopts）    | 1 failed / 7 passed  | 7 passed, 1 deselected    |
+| 2 | tests/test_mcp_circuit_breaker.py（fork 自有，默认 addopts）| 10 passed            | 10 passed                 |
+| 3 | tests/tools/test_mcp_circuit_breaker.py -o addopts=""      | （同 1，无 deselect）| 1 failed / 7 passed       |
+
+判读：
+- ① pytest 正常解析 pyproject（TOML 合法）且 deselect 命中该 node id——上游熔断文件在默认口径下由红转绿。
+- ② deselect 按 node id 精确命中，fork 自有的同名文件不受波及（fork 语义的钉子 10 例仍在跑）。
+- ③ 逃生口：清空 addopts 后该例仍以同一 node id、同一断言失败
+     AssertionError: dns lookup failed for https://nope.invalid / assert ('rejected' in ...)
+  ——用例没被删、分歧没被改写，只是默认口径不再计入；凡覆盖 addopts 的调用（上游 CI 工作流用 -o addopts="" / -m）照旧看到这条红。
+- 已知局限（已写进注释）：上游若改名或删除该用例，--deselect 静默空转，届时需人工清理这一条。
+
+未执行：git add / commit / push；网关重启（pyproject 改动与 live 网关运行时无关，不需要重启）。

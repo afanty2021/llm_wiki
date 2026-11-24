@@ -1,0 +1,17 @@
+# 仓内正式：npm --prefix mcp-server test（= tsc 构建进 live dist + node --test dist/test/*.test.js），2026-11-24 13:50
+ℹ tests 343
+ℹ suites 0
+ℹ pass 343
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2061.7825
+exit=0
+
+# 新产物 MCP stdio 握手（网关同款 node v26.12.1；不读密钥、不调工具）
+initialize ok: server={"name":"llm-wiki","version":"0.4.26"} protocol=2024-11-05
+tools/list: 18 tools
+  llm_wiki_read_file, llm_wiki_search, teacher_tutor_item_complete, teacher_tutor_listening_audio, teacher_tutor_media_extract, teacher_tutor_mindmap, teacher_tutor_plan_create, teacher_tutor_plan_link, teacher_tutor_plan_list, teacher_tutor_pptx, teacher_tutor_profile_get, teacher_tutor_profile_put, teacher_tutor_progress, teacher_tutor_record_ask, teacher_tutor_roster_search, teacher_tutor_video_search, teacher_tutor_web_clip, teacher_tutor_worksheet
+web_clip schema: {"type":"object","properties":{"url":{"type":"string","description":"文章页完整链接（http/https 开头），一次一条"}},"required":["url"],"additionalProperties":false}
+stderr[0]: LLM Wiki MCP server v0.4.26 (src-server form) connected to http://127.0.0.1:8080

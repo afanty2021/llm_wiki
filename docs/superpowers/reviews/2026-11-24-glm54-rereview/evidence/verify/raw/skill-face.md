@@ -1,0 +1,68 @@
+# lt-tutor 技能文本面对账
+- 注册表：18 个工具（src-server 形态）；技能目录 30 份 md
+- 工具名提及 115 处：不在注册表 **0** 处
+- 单行可解析的期望调用 22 处：参数与注册表不符 **0** 处
+- 技能文件路径引用 89 处：文件不存在 **10** 处
+  - [live] references/cfu-english.md:3 `flow-cfu.md`
+  - [live] references/cfu-english.md:24 `lp-standards-english.md`
+  - [live] references/cfu-verification.md:3 `flow-cfu.md`
+  - [live] references/lp-standards-english.md:3 `flow-lesson-plan.md`
+  - [live] references/parent-communication.md:7 `flow-pptx.md`
+  - [repo] dry-run.md:472 `cfu-verification.md`
+  - [repo] references/cfu-english.md:3 `flow-cfu.md`
+  - [repo] references/cfu-english.md:24 `lp-standards-english.md`
+  - [repo] references/cfu-verification.md:3 `flow-cfu.md`
+  - [repo] references/lp-standards-english.md:3 `flow-lesson-plan.md`
+- 反引号参数名提及 216 处：与邻近工具不符 **20** 处（启发式，需人工看）
+  - [live] SKILL.md:27 `wecom_userid` ↔ 邻近工具 ('teacher_tutor_web_clip',)
+  - [live] SKILL.md:29 `item_id` ↔ 邻近工具 ('teacher_tutor_video_search',)
+  - [live] SKILL.md:71 `status` ↔ 邻近工具 ('llm_wiki_read_file', 'llm_wiki_search', 'teacher_tutor_media_extract', 'teacher_tutor_pptx', 'teacher_tutor_web_clip', 'teacher_tutor_worksheet')
+  - [live] SKILL.md:103 `goals` ↔ 邻近工具 ('llm_wiki_search',)
+  - [live] SKILL.md:103 `interests` ↔ 邻近工具 ('llm_wiki_search',)
+  - [live] SKILL.md:105 `goals` ↔ 邻近工具 ('llm_wiki_search', 'teacher_tutor_progress')
+  - [live] SKILL.md:105 `grade_levels` ↔ 邻近工具 ('llm_wiki_search', 'teacher_tutor_progress')
+  - [live] references/flow-worksheet.md:13 `items` ↔ 邻近工具 ('llm_wiki_read_file', 'llm_wiki_search', 'teacher_tutor_worksheet')
+  - [repo] SKILL.md:26 `wecom_userid` ↔ 邻近工具 ('teacher_tutor_web_clip',)
+  - [repo] SKILL.md:69 `status` ↔ 邻近工具 ('llm_wiki_read_file', 'llm_wiki_search', 'teacher_tutor_media_extract', 'teacher_tutor_pptx', 'teacher_tutor_web_clip', 'teacher_tutor_worksheet')
+  - [repo] SKILL.md:101 `goals` ↔ 邻近工具 ('llm_wiki_search',)
+  - [repo] SKILL.md:101 `interests` ↔ 邻近工具 ('llm_wiki_search',)
+  - [repo] SKILL.md:103 `goals` ↔ 邻近工具 ('llm_wiki_search', 'teacher_tutor_progress')
+  - [repo] SKILL.md:103 `grade_levels` ↔ 邻近工具 ('llm_wiki_search', 'teacher_tutor_progress')
+  - [repo] dry-run.md:86 `goals` ↔ 邻近工具 ('teacher_tutor_profile_get',)
+  - [repo] dry-run.md:150 `payload` ↔ 邻近工具 ('llm_wiki_read_file',)
+  - [repo] dry-run.md:207 `item_id` ↔ 邻近工具 ('teacher_tutor_plan_list',)
+  - [repo] dry-run.md:293 `interests` ↔ 邻近工具 ('llm_wiki_search',)
+  - [repo] dry-run.md:335 `items` ↔ 邻近工具 ('teacher_tutor_plan_link',)
+  - [repo] references/flow-worksheet.md:13 `items` ↔ 邻近工具 ('llm_wiki_read_file', 'llm_wiki_search', 'teacher_tutor_worksheet')
+
+## 各文件引用的工具
+- [repo] SKILL.md（13696 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_item_complete, teacher_tutor_listening_audio, teacher_tutor_media_extract, teacher_tutor_mindmap, teacher_tutor_plan_create, teacher_tutor_plan_link, teacher_tutor_plan_list, teacher_tutor_pptx, teacher_tutor_profile_get, teacher_tutor_profile_put, teacher_tutor_progress, teacher_tutor_record_ask, teacher_tutor_roster_search, teacher_tutor_video_search, teacher_tutor_web_clip, teacher_tutor_worksheet
+- [repo] dry-run.md（17765 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_item_complete, teacher_tutor_plan_create, teacher_tutor_plan_link, teacher_tutor_plan_list, teacher_tutor_profile_get, teacher_tutor_profile_put, teacher_tutor_progress, teacher_tutor_record_ask, teacher_tutor_worksheet
+- [repo] worksheet-lesson-notes.md（1454 字符）：teacher_tutor_worksheet
+- [repo] references/cfu-english.md（4811 字符）：—
+- [repo] references/cfu-verification.md（1981 字符）：—
+- [repo] references/flow-cfu.md（2076 字符）：teacher_tutor_record_ask, teacher_tutor_worksheet
+- [repo] references/flow-lesson-plan.md（2773 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_plan_create, teacher_tutor_profile_get, teacher_tutor_record_ask, teacher_tutor_worksheet
+- [repo] references/flow-listening-audio.md（1070 字符）：teacher_tutor_listening_audio
+- [repo] references/flow-mindmap.md（924 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_mindmap
+- [repo] references/flow-pptx.md（2917 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_media_extract, teacher_tutor_pptx
+- [repo] references/flow-supervisor-video.md（1622 字符）：llm_wiki_search, teacher_tutor_plan_create, teacher_tutor_plan_list, teacher_tutor_roster_search, teacher_tutor_video_search
+- [repo] references/flow-weekly-report.md（1640 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_plan_create, teacher_tutor_plan_list, teacher_tutor_profile_get, teacher_tutor_progress
+- [repo] references/flow-worksheet.md（1919 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_worksheet
+- [repo] references/lp-standards-english.md（10659 字符）：llm_wiki_search, teacher_tutor_worksheet
+- [repo] references/think-unit-design-notes.md（1819 字符）：llm_wiki_search
+- [live] SKILL.md（13958 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_item_complete, teacher_tutor_listening_audio, teacher_tutor_media_extract, teacher_tutor_mindmap, teacher_tutor_plan_create, teacher_tutor_plan_link, teacher_tutor_plan_list, teacher_tutor_pptx, teacher_tutor_profile_get, teacher_tutor_profile_put, teacher_tutor_progress, teacher_tutor_record_ask, teacher_tutor_roster_search, teacher_tutor_video_search, teacher_tutor_web_clip, teacher_tutor_worksheet
+- [live] worksheet-lesson-notes.md（1454 字符）：teacher_tutor_worksheet
+- [live] references/cfu-english.md（4811 字符）：—
+- [live] references/cfu-verification.md（1981 字符）：—
+- [live] references/flow-cfu.md（2076 字符）：teacher_tutor_record_ask, teacher_tutor_worksheet
+- [live] references/flow-lesson-plan.md（2773 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_plan_create, teacher_tutor_profile_get, teacher_tutor_record_ask, teacher_tutor_worksheet
+- [live] references/flow-listening-audio.md（1070 字符）：teacher_tutor_listening_audio
+- [live] references/flow-mindmap.md（924 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_mindmap
+- [live] references/flow-pptx.md（2917 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_media_extract, teacher_tutor_pptx
+- [live] references/flow-supervisor-video.md（1622 字符）：llm_wiki_search, teacher_tutor_plan_create, teacher_tutor_plan_list, teacher_tutor_roster_search, teacher_tutor_video_search
+- [live] references/flow-weekly-report.md（1640 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_plan_create, teacher_tutor_plan_list, teacher_tutor_profile_get, teacher_tutor_progress
+- [live] references/flow-worksheet.md（1919 字符）：llm_wiki_read_file, llm_wiki_search, teacher_tutor_worksheet
+- [live] references/lp-standards-english.md（10659 字符）：llm_wiki_search, teacher_tutor_worksheet
+- [live] references/parent-communication.md（1279 字符）：—
+- [live] references/think-unit-design-notes.md（1819 字符）：llm_wiki_search
