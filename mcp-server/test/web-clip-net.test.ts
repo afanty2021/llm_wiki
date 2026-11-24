@@ -8,7 +8,10 @@
 // 2) undici buildConnector 对 connect.lookup 的透传（正向：假域名 + 钉 lookup 真连本地
 //    服务——透传被破坏则真实 DNS 解析 .invalid 失败，本测试红）；
 // 3) 总墙钟 AbortSignal 撕断慢滴 body（Minor-2：bodyTimeout 是 chunk 闲歇帽，慢滴可绕）；
-// 4) remainingMs 收窄单跳 timeout（headersTimeout 旗标在帽内触发）。
+// 4) remainingMs 收窄单跳 timeout（headersTimeout 旗标在帽内触发）；
+// 5) destroy 闭包消化销毁未完成 body 时 undici 的 UND_ERR_ABORTED——删监听器即红
+//    （2026-11-24 微信 __biz 老链崩溃回归钉：重定向分支销毁未消费在飞 BodyReadable，
+//    四次实锺栈 orchestrateClip）。
 import assert from "node:assert/strict"
 import http from "node:http"
 import type { AddressInfo } from "node:net"
@@ -199,4 +202,37 @@ test("DNS 超时：解析悬挂超 dnsTimeoutMs → dns_failed（Minor-2：不�
       err instanceof WebClipError && err.code === "dns_failed" && /exceeded 150ms/.test(err.message),
   )
   assert.ok(Date.now() - startedAt < 5000)
+})
+
+// ── 5) 重定向分支 destroy 消化 UND_ERR_ABORTED（2026-11-24 __biz 老链崩溃回归钉）──
+
+test("真网络·destroy 闭包：销毁未完成的 302 body 不以 unhandled error 击杀进程（2026-11-24 崩溃钉）", async () => {
+  // 生产形态：微信 __biz 老链 → 302，fetchWithGuards 重定向分支 res.destroy() 销毁
+  // 未消费的在飞 BodyReadable——undici v6 的 BodyReadable.destroy 对未完成流会带
+  // UND_ERR_ABORTED 销毁，无 error 监听器时该抛点无人接住：生产裸异步链里即
+  // uncaught 'error' 击杀整个 MCP 进程（11-24 四次实锺，栈 orchestrateClip；node:test
+  // 捕获为用例失败）。修复=destroy 闭包先挂一次性 noop 监听器。SSRF 门不放环回进
+  // fetchWithGuards（负向钉 1 钉的正是该语义），故本钉直呼 undiciRequestOnce——
+  // 生产重定向分支销毁的正是同一个 destroy 闭包。删掉监听器那行，本测试即红
+  // （变异实跑证真：destroy 调用点同步抛 UND_ERR_ABORTED AbortError）。
+  const s = await startServer((_req, res) => {
+    // 永不 end 的 302：响应 body 处于在飞未完成态（生产崩溃的触发条件）
+    res.writeHead(302, { location: "/final" })
+    const drip = setInterval(() => res.write("redirect-body"), 20)
+    res.on("close", () => clearInterval(drip))
+    res.on("error", () => clearInterval(drip))
+  })
+  try {
+    const res = await undiciRequestOnce(new URL(`http://weixin-old.invalid:${s.port}/old-link`), LOOPBACK)
+    assert.equal(res.status, 302)
+    assert.equal(res.location, "/final")
+    res.destroy() // 生产崩溃点：销毁未完成的在飞 body（闭包内 agent.close 撕断在飞交换）
+    // GuardedResponse.body 声明为 AsyncIterable，运行时是 undici Readable（destroy 同步置位）
+    const body = res.body as unknown as { destroyed: boolean }
+    assert.ok(body.destroyed, "body 须已销毁")
+    // 给 emitErrorNT/abort 机制留窗口：活到此处=钉子成立（删监听器=进程崩溃）
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  } finally {
+    await s.close()
+  }
 })
