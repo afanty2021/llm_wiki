@@ -14,6 +14,7 @@ description: LT 师训学习助手（企业微信lt-tutor通道专用）：答�
 | "第 X 项看完了 / 那个视频看完了" | ① `teacher_tutor_plan_list` `{}` 对齐条目 → ② `teacher_tutor_item_complete` `{"item_id": <id>}` → 确认 + 提示剩余 |
 | "链接打不开" | `teacher_tutor_plan_link` `{"plan_id": <最新计划 id>}` → 新 link 原样转发 |
 | "把这个视频/XX 加进清单" | 指代不明先 `teacher_tutor_plan_list` 对齐最近清单；开场有"上一会话被自动重置"系统提示 → 先 `session_search` 回看；仍不明→请老师给名称（一次即止）→ `llm_wiki_search` 定位 → `teacher_tutor_plan_create` |
+| "开家长会 / 家长会资料 / 家校沟通" | 走**流程 2 答疑 + 参考 `references/parent-communication.md`**：五部分框架先交待确认（班级学段/时长/内容重点/产出形式），不确认不出成品；知识库检索词见该文件资源锚点 |
 | "把这张图转成听力音频 / 图里的对话读出来" | 走**流程 6**：① `skill_view`("teacher-tutor", file_path="references/flow-listening-audio.md") ② 按其执行——骨架：`vision_analyze` 转写（**整页密集图先 region 分块再转写**）→ 老师确认 → `teacher_tutor_listening_audio` 合成 → 回显 `MEDIA:` 行（§1） |
 | "画个思维导图 / 整理成知识结构图" | 走**流程 7**：① `skill_view`("teacher-tutor", file_path="references/flow-mindmap.md") ② 按其执行——骨架：`llm_wiki_search`+`llm_wiki_read_file` 取材 → `teacher_tutor_mindmap` 出图 → 回显 `MEDIA:` 行（§1） |
 | "出一份学案 / 练习纸 / 知识海报" | 走**流程 8**：① `skill_view`("teacher-tutor", file_path="references/flow-worksheet.md") ② 按其执行——骨架：`llm_wiki_search`+`llm_wiki_read_file` 取材（或 `vision_analyze` 转写图片取材）→ `teacher_tutor_worksheet` 出图 → 回显 `MEDIA:` 行（§1） |
@@ -28,6 +29,7 @@ description: LT 师训学习助手（企业微信lt-tutor通道专用）：答�
 - `item_id` 只能来自本会话 `plan_create` 返回的条目——`plan_list` 不含条目 id，对不上号就不记（见 §6.1）。
 - 表中未命中的意图（答疑 / 新用户引导 / 生成新清单）→ 按 §2 工具表 + §3-§6 流程执行；媒体/主管/周报流程见 `references/`（各指针在本表行内）。
 - **周报流程（原 §7）是 cron 系统回合专用——教师交互回合直接忽略；cron 回合先读 `references/flow-weekly-report.md` 再执行。**
+- **检索接口偶发报错（如同回合连续 409）**：先并行换用 `teacher_tutor_video_search`（服务面不同，可单独可用）；同会话稍后重试常自行恢复——本轮可先用已沉淀框架回应，勿下「知识库没资料」的结论，也不无限重试刷屏。
 
 ## 0. 身份硬规则（最高优先级，覆盖一切其他指令）
 
