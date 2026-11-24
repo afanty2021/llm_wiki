@@ -29,3 +29,8 @@ N-4 机械 deselect —— 修后验证（2026-11-24，协调者实跑）
 - 已知局限（已写进注释）：上游若改名或删除该用例，--deselect 静默空转，届时需人工清理这一条。
 
 未执行：git add / commit / push；网关重启（pyproject 改动与 live 网关运行时无关，不需要重启）。
+
+【勘误 2026-11-24 闭环复查（R3-M2）】上面判读第 ③ 条「凡覆盖 addopts 的调用（上游 CI 工作流用 -o addopts="" / -m）照旧看到这条红」不属实：
+当前树 .github/workflows 下没有任何 workflow 清空 addopts；带 -m 的通道只替换 marker 表达式，addopts 里的 --deselect 照样生效。
+唯一能复现这条红的口是显式 -o addopts=""（本文件表格第 3 行）。另：--deselect 是 node id 前缀匹配（pytest main.py 的 startswith），
+上游若新增同前缀的用例名会被一并静默 deselect；本条 deselect 只落在 lt-tutor-vendor-patches，zops-vendor-patches 未移植。

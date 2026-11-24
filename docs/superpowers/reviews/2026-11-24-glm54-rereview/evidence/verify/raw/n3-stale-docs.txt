@@ -96,3 +96,8 @@ lt-tutor-vendor-patches = origin/lt-tutor-vendor-patches = main = origin/main = 
 七、本轮未做
 - 未删除任何文件；git add / commit / push 零执行；未触碰 .claude/ 内容（仅列目录与文件名）。
 - 历史深搜（git log -S/-G）因禁用懒抓取未能进行；对 1387266545 的单提交 diff 读取成功（blob 本地在）。
+
+【勘误 2026-11-24 闭环复查】① 第 81 行「任一份可用 git show 3d499d0f6b:<path>」对 4 份取到的不是终版：gateway/、hermes_cli/ 两份终版在
+ba32f9f265，tools/ 在 1387266545，根文件在 48fd4fb495。lt-tutor 分支统一用 48fd4fb495（即 2da13543a3^）最稳；zops 分支用
+5af434e836（即 370956b3aa^），其根 CLAUDE.md 是另一个 blob（7a4d850875，缺 11-08 那 2 行刷新），其余 20 份与 lt-tutor 版相同。
+② 第 4 行称「partial clone」：闭环复查时 remote.origin.promisor / partialclonefilter 均未设置（是否后来转为全量克隆未核），不影响结论。
