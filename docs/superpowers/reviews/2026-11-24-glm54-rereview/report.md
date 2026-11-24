@@ -41,7 +41,7 @@
   - 证据：知识库里被引用过的 6 条真实 `mp.weixin.qq.com/s/…` 链接（5 条可取回，每页约 3.8MB HTML、`#js_content` 齐全；1 条系正则截断的畸形链接，属预期失败）走生产同款 `fetchWithGuards` + `extractArticle`，`#js_content` 真实正文 3,796–8,487 字符，提取结果仅 **25–56 字符**；按回执模板教师会被告知 `已收藏《有老师说，他自己没有天赋，但照样能学好英语。你信吗？》，稍后整理完成后即可检索`——标题对、回执成功、落库正文几乎为空，属**静默丢失**。
   - 根因（已实验确证）：微信以行内样式 `visibility: hidden; opacity: 0;` 下发正文，Readability 0.6.0 丢弃不可见节点后挑中页头。把 `#js_content` 的 `visibility` 改为 `visible` 后立即提取出 8,135 / 3,796 字符，与页面正文逐数相等。（核验中曾假设 class `rich_media_content` 撞 Readability 黑名单，实测证伪。）
   - 为何测试全绿：`mcp-server/test/web-clip-fetch.test.ts:489` 夹具写的是 `style="opacity: 0;"`，缺 `visibility: hidden`。为何线上没炸：25–56 字符高于空内容判定线，且 `clips/` 页为 0——功能上线至今无人用过，**尚无存量损害**。
-  - 修法（未实施）：① `extractArticle` 对 `#js_content` 先清 `visibility:hidden`（或微信分支直接取该节点）；② 夹具补真实样式；③ 正文低于阈值（如 <200 字符）按 `empty_content` 处理，不再报「已收藏」。与 I-1 同文件可一并修。 **→ 已与 I-1 一并修完并验证（`cc377bb3`）；16:57 网关重启后已生效，见 §九。**
+  - 修法（未实施）：① `extractArticle` 对 `#js_content` 先清 `visibility:hidden`（或微信分支直接取该节点）；② 夹具补真实样式；③ 正文低于阈值（如 <200 字符）按 `empty_content` 处理，不再报「已收藏」。与 I-1 同文件可一并修。 **→ 已与 I-1 一并修完并验证（`cc377bb3`）；16:57 网关重启后已生效，真链路验证通过，见 §九。**
 - **N-2【W2·Important（部署态）】live 的 web dist 是桌面形态，自 10-25 09:03 起**
   - 证据：`curl http://127.0.0.1:8080/` 实际下发的 `assets/api-client-Cpj5Gy3Y.js` 含 `function n(e){return e??\`http://localhost:8080\`}` 且以 `n(void 0)` 调用；`.env.web` 的约定是空串→同源相对请求。当前源码以 `--mode web` 构建到临时目录后与 live dist 比对，221 个文件里唯一真差异就是 api-client（新构建为 `n("")`）。
   - 成因：10-25 打桌面包时 `tauri.conf.json` 的 `beforeBuildCommand: npm run build:desktop` 于 09:03:05 把 `dist/` 整个覆盖，此后无人再跑 `build:web`。影响：只有以 `http://localhost:8080` 打开才正常；用 `127.0.0.1:8080` 打开会跨源（CORS 白名单只有 1420/5173，实测 `Origin: http://127.0.0.1:8080` 的响应不带 ACAO 头），经隧道域名打开则 API 打到访问者自己的 localhost——两种情况 web 端都不可用。**至今零暴露**：请求日志（覆盖 10-16 起）里没有任何一次真实的浏览器加载，`/assets/` 请求只有评审自己的 3 次，11-20 那次孤立的 `GET /` 之后无任何资源或 API 请求，应为探活。属潜伏的部署错误，且违反硬约束 3。凌晨评审没抓到是因为「特征串指纹」分辨不了两种构建。
@@ -203,7 +203,7 @@
 |---|---|---|---|
 | N-2 | ✅ 已部署 | `npm run build:web`（13:07）；:8080 下发的 api-client chunk 调用处实参为空串（同源），与本地 dist 字节相同；`index.html` 带 `cache-control: no-cache` | `evidence/verify/raw/n2-build-web.txt` |
 | W1-I3 | ✅ 已回仓已提交（`414e4d1e`） | live → 仓源字节一致：`SKILL.md` +2 行、新增 `references/parent-communication.md`（2,933B，原为全机唯一副本） | 工作区 `git status` |
-| N-1 + W3-I1 | ✅ 已修已验并已生效（提交 `cc377bb3`） | 见下。16:57 网关重启（非本会话发起）后 live 已载入新代码 | `evidence/verify/raw/webclip-fix/`、`gateway-restart-1657.txt` |
+| N-1 + W3-I1 | ✅ 已修已验并已生效+真链路验证通过（提交 `cc377bb3`） | 见下。16:57 网关重启（非本会话发起）后 live 已载入新代码；19:04–19:09 用户企微真发全链通过 | `evidence/verify/raw/webclip-fix/`、`gateway-restart-1657.txt` |
 | N-4 | ✅ 已改已验（Hermes 提交 `084986d85f`） | pyproject `addopts` 追加 `--deselect` 并注明理由；上游熔断文件 `1 failed / 7 passed` → `7 passed, 1 deselected`；fork 自有熔断文件 10 passed；清空 addopts 仍是 `1 failed / 7 passed`（分歧原样可复现） | `evidence/verify/raw/n4-deselect.txt` |
 | N-3 | ✅ 已实删（用户口令「N-3 实删（连 zops 分支一并清）」） | 可以整批删除、无需分流保留。`lt-tutor-vendor-patches` 删除提交 `2da13543a3`；`zops-vendor-patches` 删除提交 `370956b3aa`（架在本地 zops tip 5af434e836 上，连带把此前未推的 5af434e836 推上 origin，26692c43b9→370956b3aa）。四 ref（两分支×本地/origin）doc 计数均 21→0；恢复用 `git show 48fd4fb495:<path>` | `evidence/verify/raw/n3-stale-docs.txt` |
 
@@ -214,7 +214,13 @@
 - 验证：新增 13 例（合计 343/343，typecheck 0 错）；17 个变异体全部被杀（其中 1 条断言原先因 turndown 转义下划线而恒真，换成不含下划线的标记并加正向对照后才是真钉子）；真实微信 6 篇：修前 21–49 字符的页头碎片 → 修后 2150–8086 字符，署名杂物清零、标题不变；live dist 由仓内正式测试重建，新产物握手 18 工具、schema 未变。
 - 已知边界：正文只有一个段落的极短文章，Readability 会选到带页头的外层容器，约 41 字署名混进正文开头（6 篇真实文章均为多段落、精确命中 `#js_content`）。要彻底消除可改成微信分支直接取 `#js_content` 节点，本轮未做。
 - 归档勘误：`before-after.txt` 的 13:55 初版误存了首次运行的报错、缺 5 篇对照表；15:05 已重跑并重写，数字与原汇报逐数一致。
-- 生效：16:57 网关重启后，两个 MCP 子进程（16:57:11/12 启动）载入的是 13:50 构建的 dist——按启动时间与 dist 内容判定，未做经网关的真链路收藏。
+- 生效：16:57 网关重启后，两个 MCP 子进程（16:57:11/12 启动）载入的是 13:50 构建的 dist。
+
+**真链路验证（19:04–19:09，用户企微真发）——全链通过 ✅**
+- 链路：WeCom 入站（HuangZhengBo 发 `mp.weixin.qq.com/s/eyKga8P5qyIj2eUwsg2J_w`，19:04:58）→ lt-tutor 会话 → `teacher_tutor_web_clip` 返回 **`status: "created"`**（jobId `6f953d4a`）→ 回执 308 字符 19:06:23 送达企微。
+- 落库产物：`sources/clips/…-e574c75a.md`——`> ⚠ untrusted` 提示行在、提示行后正文 **2,544** 非空白字符（旧 bug 形态是 20–50 的署名碎片）、署名杂物 0、frontmatter 带 `clipped_by/at`；`clips/` wiki 页 2,967 字符；向量 4 chunks 已嵌；ingest job `succeeded_with_warnings`（警告逐条核过=guard-v2 的「非路径 source 条目迁入概念页 citations」，预期机制），抽出 9 个概念页。
+- 行为观察（非缺陷）：模型先调内置 `web_extract`（Tavily）读文摘要、再调 web_clip 收藏——比 SKILL 快速路径的「链接即收藏」多一步；回执里的简介出自 Tavily，库里正文出自 Readability，两源独立。同一回合还有一次 `terminal` 调用是会话既有《杠杆式学习》缺书登记的顺带查重，与本功能无关（既有 'always' 自动批准）。
+- 复核插曲如实记：协调者第一轮核验（19:05:58）早于文件落库（19:06:03–05）七秒，一度误判「未落库」——以库内行/盘上文件的 created_at 对时后才翻案，教训同 [[部署声明按证据核验]]。
 
 **16:57 网关重启取证（非本会话发起；明细 `evidence/verify/raw/gateway-restart-1657.txt`）**
 - 旧进程 16:54:59 收到来自 launchd 的 SIGTERM（外部停机请求，不是崩溃），16:55:23 被关停看门狗强制结束，16:57:05 新实例启动，16:57:16 三平台连上。launchd 显示 `runs = 1 / 从未退出`，是重新 bootstrap 的形态。发起方查不到。
@@ -232,9 +238,9 @@
 
 **仍未做（需用户口令）**
 1. ~~两仓提交与推送~~ **已完成**（用户口令「提交并推送」，11-24 18:48–18:52）：llm_wiki `main` = `cc377bb3`（web_clip 修复）+ `414e4d1e`（漂移回仓）+ 本目录落盘提交；Hermes `lt-tutor-vendor-patches` = `084986d85f`（pyproject deselect）。均已推 origin。
-2. ~~Hermes 网关重启（硬约束 4）~~——16:57 已由外部重启完成，本项作废；经网关的一次真链路收藏验证仍未做。
+2. ~~Hermes 网关重启（硬约束 4）~~——16:57 已由外部重启完成，本项作废；真链路收藏验证已完成（见 N-1 真链路验证段）。
 3. ~~N-3 实删~~ **已完成**（用户口令）：21 份从 `lt-tutor-vendor-patches`（`2da13543a3`）与 `zops-vendor-patches`（`370956b3aa`）删净并推 origin；未留根 CLAUDE.md 桩（如需给 Claude Code 用，`@AGENTS.md` 一行桩可随时补）。
 4. W1 评审提的两处可选措辞（家长会快速路径行补 `skill_view` 两步骨架；409 那条的动机改写为凭证/检索链路）未动——回仓保持与 live 字节一致。
-5. 临时目录 `/tmp/webclip-fix/` 仍保留（内有修复前 live dist 备份）；真链路收藏验证过后可清。
+5. ~~临时目录 `/tmp/webclip-fix/`~~——真链路验证通过后已清（含修复前 dist 备份，恢复依赖 git 历史与本次验证记录）。
 
 **处置轮外部访问补记（接 §七）**：微信文章页 GET 至少 6 次（5 篇存档 + 1 篇现抓冒烟）；本机 :8080 curl 若干；其余为本地构建、测试与 MCP stdio 握手（起独立 node 进程，不连网关、不读密钥、不调工具）；Hermes 仓 pytest 两次基线 + 三次修后验证（`PYTHONDONTWRITEBYTECODE=1 -p no:cacheprovider`）；18:00 起只读 `~/.hermes/logs` 与 launchctl 状态做重启取证（含凭证的日志行未写入任何文件）。零 git 写操作、零服务重启、零密钥读取。
