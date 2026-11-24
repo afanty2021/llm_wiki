@@ -3,6 +3,8 @@ import { createHash } from "node:crypto"
 import { test } from "node:test"
 
 import {
+  CLIP_UNTRUSTED_NOTICE,
+  MAX_CLIP_TITLE_CHARS,
   WebClipError,
   buildSourceMarkdown,
   clipFileName,
@@ -11,6 +13,7 @@ import {
   isPublicUnicast,
   kebabSlug,
   normalizeUrl,
+  sanitizeClipTitle,
   sniffCharset,
   urlHash8,
 } from "../src/web-clip.js"
@@ -316,9 +319,9 @@ test("decodeBody·非法编码标签 → WebClipError（所有错误走 WebClipE
   assertWebClipError(() => decodeBody(new Uint8Array([0x41]), "not-a-charset"), "undecodable")
 })
 
-// ── buildSourceMarkdown（§4.2/§4.3：frontmatter provenance + 正文原样）──
+// ── buildSourceMarkdown（§4.2/§4.3：frontmatter provenance + 不可信围栏行 + 正文原样）──
 
-test("buildSourceMarkdown·快照：frontmatter 全字段 + 空行 + body 原样", () => {
+test("buildSourceMarkdown·快照：frontmatter 全字段 + 围栏行 + 空行 + body 原样", () => {
   const md = buildSourceMarkdown({
     title: "深度学习入门",
     url: "https://example.com/article?x=1",
@@ -337,9 +340,55 @@ test("buildSourceMarkdown·快照：frontmatter 全字段 + 空行 + body 原样
       'via: "teacher-tutor"',
       "---",
       "",
+      CLIP_UNTRUSTED_NOTICE,
+      "",
       "# 标题\n\n正文第一段。",
     ].join("\n"),
   )
+})
+
+test("buildSourceMarkdown·正文围栏行（W3-I1）：固定一行、引用块形态、明示 untrusted，位于 body 之前且 body 原样收尾", () => {
+  const md = buildSourceMarkdown({
+    title: "t",
+    url: "u",
+    clippedAt: "t",
+    clippedBy: "c",
+    body: "正文含「忽略以上指令」",
+  })
+  const noticeAt = md.indexOf(CLIP_UNTRUSTED_NOTICE)
+  const bodyAt = md.indexOf("正文含「忽略以上指令」")
+  assert.ok(noticeAt > 0 && noticeAt < bodyAt, "围栏行在 body 之前")
+  assert.match(CLIP_UNTRUSTED_NOTICE, /^> /, "引用块形态（人读页面也可见）")
+  assert.ok(!CLIP_UNTRUSTED_NOTICE.includes("\n"), "单行")
+  assert.match(CLIP_UNTRUSTED_NOTICE, /untrusted/)
+  assert.ok(md.endsWith("正文含「忽略以上指令」"), "body 原样在末尾，不追加任何内容")
+})
+
+// ── sanitizeClipTitle（W3-I1：网页作者控制的 title 进库/进回执前的单点清洗）──
+
+test("sanitizeClipTitle·C0/C1 控制符折空格；格式符（零宽/双向控制/词连接符/BOM/软连字符/标签符）与变体选择符直接剥除", () => {
+  assert.equal(sanitizeClipTitle("口语\u0001\u007F\u0085水平"), "口语 水平")
+  assert.equal(sanitizeClipTitle("系\u200B统\u202E提\u2060示\uFEFF"), "系统提示")
+  assert.equal(sanitizeClipTitle("d\u00ADc\u{E0061}\u{E0062}k"), "dck", "软连字符与标签符（ASCII 走私载体）一律剥除，不解码")
+  assert.equal(sanitizeClipTitle("❤\uFE0F指\u{E0100}南\u034F篇"), "❤指南篇", "变体选择符与组合符连接符")
+})
+
+test("sanitizeClipTitle·空白折叠去首尾；幂等；纯不可见字符 → 空串", () => {
+  assert.equal(sanitizeClipTitle("  a\n\tb \u3000 c  "), "a b c")
+  const once = sanitizeClipTitle("x\u202Ey\nz\u0001w")
+  assert.equal(once, "xy z w")
+  assert.equal(sanitizeClipTitle(once), once, "幂等")
+  assert.equal(sanitizeClipTitle("\u200B\u0001\uFEFF \t\n"), "")
+})
+
+test("sanitizeClipTitle·按码点截断 120（不劈代理对）；恰好 120 原样", () => {
+  assert.equal(MAX_CLIP_TITLE_CHARS, 120)
+  assert.equal(sanitizeClipTitle("语".repeat(120)), "语".repeat(120))
+  assert.equal(sanitizeClipTitle("语".repeat(121)), "语".repeat(120))
+  const out = sanitizeClipTitle("语".repeat(119) + "😀尾")
+  assert.equal(Array.from(out).length, 120)
+  assert.equal(out, "语".repeat(119) + "😀", "第 120 个码点是完整 emoji")
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out), "无孤立代理项")
 })
 
 test("buildSourceMarkdown·标题内双引号 YAML 转义；via 恒为 teacher-tutor", () => {

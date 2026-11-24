@@ -80,6 +80,7 @@ import {
 import {
   fetchWithGuards,
   orchestrateClip,
+  sanitizeClipTitle,
   WebClipError,
   type ClipApiLike,
   type ClipOutcome,
@@ -894,14 +895,17 @@ function webClipErrorText(code: string): string {
  * 成功回执文案（任务书 B.6 回复物料，SKILL 口径引用 reply 字段转告老师）：
  * created→已收藏+异步整理提示；already→共享库语境必须带收藏人（M5），prev 缺落
  * （异常页无 frontmatter）时优雅降级为「此前」不输出 undefined。
+ * 回执防御（W3-I1）：reply 由模型原样转告老师，而 title 出自网页作者——生产链
+ * extractArticle 已清洗，此处再做同款（幂等），注入口/旁路传来的脏 title 也进不了回执。
  */
 function clipReplyText(o: ClipOutcome): string {
+  const title = sanitizeClipTitle(o.title) || "clip"
   if (o.status === "created") {
-    return `已收藏《${o.title}》，稍后整理完成后即可检索`
+    return `已收藏《${title}》，稍后整理完成后即可检索`
   }
   const who = o.prevClippedBy !== undefined ? `${o.prevClippedBy} ` : ""
   const when = o.prevClippedAt !== undefined ? `已于 ${o.prevClippedAt.slice(0, 10)} ` : "此前"
-  return `${who}${when}收藏过《${o.title}》，已顺手再补一次整理`
+  return `${who}${when}收藏过《${title}》，已顺手再补一次整理`
 }
 
 /**
