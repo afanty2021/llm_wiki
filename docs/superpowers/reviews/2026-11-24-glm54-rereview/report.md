@@ -46,7 +46,7 @@
   - 证据：`curl http://127.0.0.1:8080/` 实际下发的 `assets/api-client-Cpj5Gy3Y.js` 含 `function n(e){return e??\`http://localhost:8080\`}` 且以 `n(void 0)` 调用；`.env.web` 的约定是空串→同源相对请求。当前源码以 `--mode web` 构建到临时目录后与 live dist 比对，221 个文件里唯一真差异就是 api-client（新构建为 `n("")`）。
   - 成因：10-25 打桌面包时 `tauri.conf.json` 的 `beforeBuildCommand: npm run build:desktop` 于 09:03:05 把 `dist/` 整个覆盖，此后无人再跑 `build:web`。影响：只有以 `http://localhost:8080` 打开才正常；用 `127.0.0.1:8080` 打开会跨源（CORS 白名单只有 1420/5173，实测 `Origin: http://127.0.0.1:8080` 的响应不带 ACAO 头），经隧道域名打开则 API 打到访问者自己的 localhost——两种情况 web 端都不可用。**至今零暴露**：请求日志（覆盖 10-16 起）里没有任何一次真实的浏览器加载，`/assets/` 请求只有评审自己的 3 次，11-20 那次孤立的 `GET /` 之后无任何资源或 API 请求，应为探活。属潜伏的部署错误，且违反硬约束 3。凌晨评审没抓到是因为「特征串指纹」分辨不了两种构建。
   - 修法：`npm run build:web`；发版配方补「`tauri build` 之后必须重跑 `build:web`」。 **→ 13:07 已执行并验证，live 已是同源形态，见 §九。**
-- **N-3【H2·Minor，清理价值高】fork 自带「AI 上下文文档」整批陈旧**：根 `CLAUDE.md` + 9 份嵌套 `CLAUDE.md` + `docs/adr/` 11 份，共 **21 份 5,570 行**，全部是 fork 作者 2026-04/05 提交、此后从未实质刷新（根文件 11-08 只改了一行基线），占 fork 增量 86 个文件里的 21 个。上游在同样位置放的是现行的 `AGENTS.md`（根 + 13 个目录），本 fork 一份 `CLAUDE.md` 都不对应。机械体检：反引号路径引用仍存在的比例 `environments/` 0/19、`plugins/` 2/16、`acp_adapter/` 5/15、`cron/` 5/12、`gateway/` 9/23；根目录与 7 个子目录里两套指令文件并存，根 `CLAUDE.md` 还链接进这些嵌套文档与 ADR。按 `CLAUDE.md` 取项目指令的工具会读到 7 个月前的架构描述。建议整批删除（fork-only 文件，上游不碰，零合并冲突）。 **→ 核验结论：可以整批删除、无需分流保留（`evidence/verify/raw/n3-stale-docs.txt`）；未实删，等口令。注意项见 §九。**
+- **N-3【H2·Minor，清理价值高】fork 自带「AI 上下文文档」整批陈旧**：根 `CLAUDE.md` + 9 份嵌套 `CLAUDE.md` + `docs/adr/` 11 份，共 **21 份 5,570 行**，全部是 fork 作者 2026-04/05 提交、此后从未实质刷新（根文件 11-08 只改了一行基线），占 fork 增量 86 个文件里的 21 个。上游在同样位置放的是现行的 `AGENTS.md`（根 + 13 个目录），本 fork 一份 `CLAUDE.md` 都不对应。机械体检：反引号路径引用仍存在的比例 `environments/` 0/19、`plugins/` 2/16、`acp_adapter/` 5/15、`cron/` 5/12、`gateway/` 9/23；根目录与 7 个子目录里两套指令文件并存，根 `CLAUDE.md` 还链接进这些嵌套文档与 ADR。按 `CLAUDE.md` 取项目指令的工具会读到 7 个月前的架构描述。建议整批删除（fork-only 文件，上游不碰，零合并冲突）。 **→ 核验结论：可以整批删除、无需分流保留（`evidence/verify/raw/n3-stale-docs.txt`）；已实删（两分支，见 §九）。注意项见 §九。**
 - **N-4【H1·Minor】上游 #11113 熔断测试在 fork 上恒红，但「永久 deselect」只存在于记忆里**：`tests/tools/test_mcp_circuit_breaker.py::test_breaker_opened_by_tool_errors_says_rejected_not_unreachable` 断言上游语义（错误载荷烧 strike），fork 故意改为「完成的 RPC 一律复位」——属设计分歧红（10-25 轮登记为 E-2）。仓内 conftest / pyproject / pytest 配置零机械登记，宽口径跑测必现，后来者可能误当回归去「修」fork。建议在 pyproject 的 pytest 配置里 `--deselect` 并写明理由。 **→ 已改并验证（Hermes `084986d85f`），见 §九。**
 - **N-5【W1·Minor】dry-run 脚本 1–5 的 mock 返回侧 4 类陈旧**：`record_ask` 真实只回 `{"id":N}`（mock 写成完整事件对象）；错误码真实为 `RESOURCE_NOT_FOUND`/`VALIDATION_FAILED` 且工具层形态是 `LLM Wiki API 404: …` 错误文本（mock 写 `not_found`/`bad_request` 的 JSON body）；`items` 计数缺 `watched`（09-12 新增）；search 文本 mock 与 `formatSearchResults` 实际格式不同。调用侧（工具名/参数/必填）全部正确，脚本判据不依赖这些字段，无教师面风险。
 - **N-6【W1·Minor】「防熔断」动机过时**：mcp-server 十余处注释称「抛 -32602 会被 Hermes 熔断器计入、3 次熔断 ~60s」；熔断参数属实（`tools/mcp_tool.py:517` 阈值 3 / 冷却 60s），但本 fork 自 2026-08-24 起对应用级 MCP 错误**不烧 strike**（`tools/mcp_tool_handlers.py:750-757/:273-279`）。防御写法无害、建议保留；live 技能里「连续 409 → 换 video_search、勿无限重试」的防熔断理由已不成立（作为绕开故障端点的手段仍有效），回仓时一并改措辞。
@@ -148,7 +148,7 @@
 2. **N-1**：web_clip 微信正文提取的修法与时机；修好前是否先在技能面下架或加「暂不支持公众号文章」提示。目前 0 次使用，无存量损害。 **【裁定：与 I-1 同文件一并修——已修已验，16:57 网关重启后已生效 ✅】**
 3. **W1-I3** 漂移回仓：按 cc8dde4c 先例并回仓源——回仓前任何例行双份 cp 都有丢失风险，建议尽快。 **【裁定：回仓——已字节一致回仓并提交（`414e4d1e`）✅】**
 4. **W1 M-9**：LOE / Foundations 语料的入库许可依据（无记录在案）与 ECE「禁商用」对幼儿段教案底座用法的口径。
-5. **N-3**：是否整批删除 21 份 fork 自带的陈旧 AI 上下文文档（根 + 9 份嵌套 CLAUDE.md + 11 份 ADR）。 **【结论：可以整批删除；未实删，等口令】**
+5. **N-3**：是否整批删除 21 份 fork 自带的陈旧 AI 上下文文档（根 + 9 份嵌套 CLAUDE.md + 11 份 ADR）。 **【裁定：实删、连 zops 分支一并清——已完成 ✅】**
 6. **N-4**：是否给上游 #11113 熔断测试做机械 deselect。 **【裁定：做——已改已验并提交（Hermes `084986d85f`）✅】**
 7. **W4-I2 连带项**：transcripts/ 守卫是否一并补持久化。
 8. **W4 补充**：`llm_provider_crud_roundtrip` 存量红（会留测试 provider 行）——恢复应用层查重还是改测试并登记分歧。
@@ -205,7 +205,7 @@
 | W1-I3 | ✅ 已回仓已提交（`414e4d1e`） | live → 仓源字节一致：`SKILL.md` +2 行、新增 `references/parent-communication.md`（2,933B，原为全机唯一副本） | 工作区 `git status` |
 | N-1 + W3-I1 | ✅ 已修已验并已生效（提交 `cc377bb3`） | 见下。16:57 网关重启（非本会话发起）后 live 已载入新代码 | `evidence/verify/raw/webclip-fix/`、`gateway-restart-1657.txt` |
 | N-4 | ✅ 已改已验（Hermes 提交 `084986d85f`） | pyproject `addopts` 追加 `--deselect` 并注明理由；上游熔断文件 `1 failed / 7 passed` → `7 passed, 1 deselected`；fork 自有熔断文件 10 passed；清空 addopts 仍是 `1 failed / 7 passed`（分歧原样可复现） | `evidence/verify/raw/n4-deselect.txt` |
-| N-3 | 📋 结论已出，等口令 | **可以整批删除，无需分流保留** | `evidence/verify/raw/n3-stale-docs.txt` |
+| N-3 | ✅ 已实删（用户口令「N-3 实删（连 zops 分支一并清）」） | 可以整批删除、无需分流保留。`lt-tutor-vendor-patches` 删除提交 `2da13543a3`；`zops-vendor-patches` 删除提交 `370956b3aa`（架在本地 zops tip 5af434e836 上，连带把此前未推的 5af434e836 推上 origin，26692c43b9→370956b3aa）。四 ref（两分支×本地/origin）doc 计数均 21→0；恢复用 `git show 48fd4fb495:<path>` | `evidence/verify/raw/n3-stale-docs.txt` |
 
 **N-1 + W3-I1 细节**（`mcp-server/src/web-clip.ts`、`src/training.ts` 与三个测试文件）
 - 微信分支：仅当最终 URL 主机名精确等于 `mp.weixin.qq.com` 时，把 `#js_content` 自身的 `visibility: hidden` 揭开（不碰任何子元素），再交给 Readability；正文非空白字符 < 200 抛 `empty_content`，不再回「已收藏」。
@@ -233,7 +233,7 @@
 **仍未做（需用户口令）**
 1. ~~两仓提交与推送~~ **已完成**（用户口令「提交并推送」，11-24 18:48–18:52）：llm_wiki `main` = `cc377bb3`（web_clip 修复）+ `414e4d1e`（漂移回仓）+ 本目录落盘提交；Hermes `lt-tutor-vendor-patches` = `084986d85f`（pyproject deselect）。均已推 origin。
 2. ~~Hermes 网关重启（硬约束 4）~~——16:57 已由外部重启完成，本项作废；经网关的一次真链路收藏验证仍未做。
-3. N-3 实删。
+3. ~~N-3 实删~~ **已完成**（用户口令）：21 份从 `lt-tutor-vendor-patches`（`2da13543a3`）与 `zops-vendor-patches`（`370956b3aa`）删净并推 origin；未留根 CLAUDE.md 桩（如需给 Claude Code 用，`@AGENTS.md` 一行桩可随时补）。
 4. W1 评审提的两处可选措辞（家长会快速路径行补 `skill_view` 两步骨架；409 那条的动机改写为凭证/检索链路）未动——回仓保持与 live 字节一致。
 5. 临时目录 `/tmp/webclip-fix/` 仍保留（内有修复前 live dist 备份）；真链路收藏验证过后可清。
 
