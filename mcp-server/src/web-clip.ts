@@ -625,6 +625,11 @@ export async function undiciRequestOnce(
     contentType: headerValue(res.headers, "content-type"),
     body: res.body,
     destroy: () => {
+      // undici BodyReadable 中途销毁会 emit UND_ERR_ABORTED error 事件；
+      // 无监听器时为 unhandled 'error' 直接击杀进程（2026-11-24 微信 __biz
+      // 重定向链接实证：redirect 分支 res.destroy() → 全进程崩溃）。
+      // 挂一次性 noop 监听器消化该事件；正常消费路径的流错误仍由消费方处理。
+      res.body.once("error", () => {})
       res.body.destroy()
       void agent.close().catch(() => {})
     },
