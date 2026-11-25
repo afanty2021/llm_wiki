@@ -125,6 +125,14 @@ test("kebabSlug·截断 60 字符（CJK 每字计 1）", () => {
   assert.equal(kebabSlug("语".repeat(70)), "语".repeat(60), "CJK 超 60 截断")
 })
 
+test("kebabSlug·截断按码点：增补平面汉字不被劈成孤立代理项（首轮评审 R1-M9）", () => {
+  // CJK 扩展 B 属 Han、留在 slug 里，占两个 UTF-16 单元；按单元截断会在第 60 位留下半个字符
+  const astral = "\u{20000}"
+  const slug = kebabSlug("a".repeat(59) + astral + "b")
+  assert.equal(slug, "a".repeat(59) + astral, "第 60 个码点是完整的增补平面汉字，其后的 b 丢弃")
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(slug), "无孤立代理项")
+})
+
 test("clipFileName·`<slug>-<hash8>.md`（CJK 标题保留 CJK slug）", () => {
   const url = "https://example.com/article"
   assert.equal(clipFileName("纯中文标题", url), `纯中文标题-${urlHash8(url)}.md`)
@@ -389,6 +397,13 @@ test("sanitizeClipTitle·按码点截断 120（不劈代理对）；恰好 120 �
   assert.equal(Array.from(out).length, 120)
   assert.equal(out, "语".repeat(119) + "😀", "第 120 个码点是完整 emoji")
   assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out), "无孤立代理项")
+})
+
+test("sanitizeClipTitle·截断点落在空格上：结果不以空格收尾，再清洗一次不变（首轮评审 R1：幂等的角落反例）", () => {
+  // 折叠后 119 个 a + 空格 + 10 个 b：第 120 个码点恰是那个空格
+  const once = sanitizeClipTitle("a".repeat(119) + " " + "b".repeat(10))
+  assert.equal(once, "a".repeat(119), "截断后再去首尾")
+  assert.equal(sanitizeClipTitle(once), once, "幂等")
 })
 
 test("buildSourceMarkdown·标题内双引号 YAML 转义；via 恒为 teacher-tutor", () => {

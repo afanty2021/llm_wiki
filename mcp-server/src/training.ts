@@ -78,6 +78,8 @@ import {
   type MediaExtractResult,
 } from "./media-extract.js"
 import {
+  CLIP_SNIPPET_UNTRUSTED_NOTICE,
+  MAX_CLIP_TITLE_CHARS,
   fetchWithGuards,
   orchestrateClip,
   sanitizeClipTitle,
@@ -883,12 +885,27 @@ const WEB_CLIP_ERROR_TEXT: Record<string, string> = {
   bad_content_type: "这不是可收藏的文章页 / 内容过大",
   too_large: "这不是可收藏的文章页 / 内容过大",
   undecodable: "页面编码异常读不了",
-  empty_content: "这篇提不了正文（可能已删除、需登录或付费墙），可以把正文复制发我",
+  // empty_content 也兜「内容太短 / 以图片为主」：提取层对这类页同样回 empty_content（首轮评审 R1）
+  empty_content: "这篇提不了正文（可能已删除、需登录、付费墙，或内容太短、以图片为主），可以把正文复制发我",
 }
 
 function webClipErrorText(code: string): string {
   return WEB_CLIP_ERROR_TEXT[code]
     ?? `这篇收藏失败了（未预期的错误 ${code}）。请稍后再试，或把文章正文复制发我。`
+}
+
+/** 回执里「谁收藏过」的码点上限：clipped_by 取自库内既有页的 frontmatter，不是本工具独占写入。 */
+const REPLY_WHO_MAX_CHARS = 40
+
+/**
+ * 回执层字段收口（首轮评审 R1-M5）：过同款清洗、折叠空白，再按码点截断。非字符串与清洗后
+ * 为空一律当缺省——注入口/旁路传来的脏值不抛 TypeError（抛错会进熔断）。
+ */
+function cleanReplyField(value: unknown, maxChars: number): string | undefined {
+  if (typeof value !== "string") return undefined
+  const chars = Array.from(sanitizeClipTitle(value))
+  const out = chars.slice(0, maxChars).join("").trim()
+  return out === "" ? undefined : out
 }
 
 /**
@@ -897,15 +914,16 @@ function webClipErrorText(code: string): string {
  * （异常页无 frontmatter）时优雅降级为「此前」不输出 undefined。
  * 回执防御（W3-I1）：reply 由模型原样转告老师，而 title 出自网页作者——生产链
  * extractArticle 已清洗，此处再做同款（幂等），注入口/旁路传来的脏 title 也进不了回执。
+ * prev 两字段同理（取自库内页的 frontmatter）；日期只认 YYYY-MM-DD 开头，认不出按缺省。
  */
 function clipReplyText(o: ClipOutcome): string {
-  const title = sanitizeClipTitle(o.title) || "clip"
+  const title = cleanReplyField(o.title, MAX_CLIP_TITLE_CHARS) ?? "clip"
   if (o.status === "created") {
     return `已收藏《${title}》，稍后整理完成后即可检索`
   }
-  const who = o.prevClippedBy !== undefined ? `${o.prevClippedBy} ` : ""
-  const when = o.prevClippedAt !== undefined ? `已于 ${o.prevClippedAt.slice(0, 10)} ` : "此前"
-  return `${who}${when}收藏过《${title}》，已顺手再补一次整理`
+  const who = cleanReplyField(o.prevClippedBy, REPLY_WHO_MAX_CHARS)
+  const date = /^\d{4}-\d{2}-\d{2}/.exec(cleanReplyField(o.prevClippedAt, MAX_CLIP_TITLE_CHARS) ?? "")
+  return `${who !== undefined ? `${who} ` : ""}${date !== null ? `已于 ${date[0]} ` : "此前"}收藏过《${title}》，已顺手再补一次整理`
 }
 
 /**
@@ -1604,6 +1622,7 @@ export function formatSearchResults(query: string, search: { results: ApiSearchR
     lines.push(`## ${index + 1}. ${result.title}`)
     lines.push(`Path: ${result.path}`)
     lines.push(`Score: ${result.score.toFixed(6)}${typeof result.vectorScore === "number" ? ` | Vector score: ${result.vectorScore.toFixed(6)}` : ""}`)
+    if (result.snippet && result.path.startsWith("clips/")) lines.push(CLIP_SNIPPET_UNTRUSTED_NOTICE)
     if (result.snippet) lines.push(`Snippet: ${result.snippet}`)
     if (result.images && result.images.length > 0) {
       lines.push(`Images: ${result.images.map((image) => image.url).join(", ")}`)

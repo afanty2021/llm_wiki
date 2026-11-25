@@ -530,13 +530,39 @@ test("extractArticle·微信正文低于阈值（失效/验证壳：容器里只
   await assertWebClipError(extractArticle(headerOnly, WX_URL), "empty_content")
 })
 
-test("extractArticle·微信正文阈值 = 200 非空白字符（199 拒 / 200 收）", async () => {
+test("extractArticle·微信正文阈值 = 200 可见字符（199 拒 / 200 收）", async () => {
   // 多段落形态（真实文章的形态）：Readability 精确选中 #js_content，页头不计入正文
   const at199 = weixinPage("边界页", `<p>${"字".repeat(100)}</p><p>${"字".repeat(99)}</p>`)
   const at200 = weixinPage("边界页", `<p>${"字".repeat(100)}</p><p>${"字".repeat(100)}</p>`)
-  await assertWebClipError(extractArticle(at199, WX_URL), "empty_content", /too short \(199 < 200/)
+  await assertWebClipError(extractArticle(at199, WX_URL), "empty_content", /too short \(199 < 200 visible chars\)/)
   const ok = await extractArticle(at200, WX_URL)
   assert.equal(nonWs(ok.markdown), 200)
+})
+
+test("extractArticle·微信正文阈值只数可见字符：零宽/填充符凑出的「正文」过不了阈值（首轮评审 R1：修前 300 个零宽空格即可过）", async () => {
+  // 每例都钉到 too short 的计数上，不只断言 empty_content：要测的是阈值这一关——
+  // Readability 判 null 也算 empty_content，只断言 code 的钉子是空的。
+  // 这种「正文」会让 Readability 连页头署名区一起选中（N-1 的原始症状），可见字符数不是 0
+  // 而是页头那几十个；重点是塞了多少零宽/填充符都数不进 200
+  const zeroWidth = String.fromCodePoint(0x200b)
+  const hangulFill = String.fromCodePoint(0x3164)
+  const variationSelector = String.fromCodePoint(0xfe0f)
+  const cases: Array<[string, string]> = [
+    ["零宽空格 ×300（Cf）", zeroWidth.repeat(300)],
+    ["零宽空格 ×250 + 真字符 ×10", zeroWidth.repeat(250) + "字".repeat(10)],
+    ["谚文填充符 ×300（Lo）", hangulFill.repeat(300)],
+    ["变体选择符 ×300（Mn）", variationSelector.repeat(300)],
+  ]
+  for (const [label, body] of cases) {
+    await assert.rejects(
+      extractArticle(weixinPage("填充页", `<p>${body}</p>`), WX_URL),
+      (err: unknown) =>
+        err instanceof WebClipError
+        && err.code === "empty_content"
+        && /too short \(\d+ < 200 visible chars\)/.test(err.message),
+      label,
+    )
+  }
 })
 
 test("extractArticle·阈值只约束微信域名：其他站点的短页照常提取", async () => {
@@ -615,6 +641,16 @@ test("extractArticle·title 回落链：无 title/h1 → 'clip'", async () => {
   const { title, markdown } = await extractArticle(html, "https://example.com/x")
   assert.equal(title, "clip", "Readability 空 title + document.title 空 → clip")
   assert.ok(markdown.length > 0)
+})
+
+test("extractArticle·title 回落链中段：Readability 的 title 清洗后为空 → 回落 document.title（首轮评审 R1：删中段存活）", async () => {
+  // Readability 0.6：document.title 短于 15 字且页面恰有一个 h1 时取 h1 文本——这里的 h1
+  // 只有不可见字符，清洗后为空；document.title 本身可用。og:title 同为不可见字符（以后的
+  // Readability 若改读 og:title，本页照样落进中段）
+  const html = `<html><head><meta charset="utf-8"><meta property="og:title" content="${"\u{200B}"}"><title>短标题</title></head><body>`
+    + `<article><h1>${"\u{200B}\u{2060}"}</h1>${paras(12)}</article></body></html>`
+  const { title } = await extractArticle(html, "https://example.com/f")
+  assert.equal(title, "短标题", "清洗后为空的 Readability title 不得直接落到 clip")
 })
 
 // ── orchestrateClip（全 fake io）──────────────────────────────────────────────
