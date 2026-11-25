@@ -1,0 +1,18 @@
+== v26.13.1 cwd=/tmp/glm54-fix-20261126/repo
+--- 步骤 1（CI check）: npx vite build → 桌面形态
+rc=0 dist-desktop 文件数=221 dist 存在=否
+dist-desktop 快照行数 221
+--- 步骤 2（CI 新增）: npm run build:web
+rc=0 dist 文件数=221
+build:web 之后 dist-desktop 变化的文件数: 0
+--- 步骤 3（CI 新增）: node scripts/check-web-bundle.mjs dist
+✓ web 形态自检通过：api-client-BPKp9pE6.js 的 API base 是字符串字面量（空串 = 同源）
+rc=0
+--- 副本 dist/（build:web）vs live dist/：逐文件比对
+副本 221 文件 / live 221 文件 / 差异行 0
+--- 断言脚本的变异
+m1: build rc=0 断言 rc=1 | ✗ web 形态自检失败（/tmp/glm54-fix-20261126/mut-dist/m1）：API base 实参是 void 0（桌面形态，回落 localhost:8080）——.env.web 没被加载，或构建没带 --mod
+m2: build rc=0 断言 rc=0 | ✓ web 形态自检通过：api-client-BPKp9pE6.js 的 API base 是字符串字面量（空串 = 同源）
+m3: build rc=0 断言 rc=1 | ✗ web 形态自检失败（/tmp/glm54-fix-20261126/mut-dist/m3）：API base 实参是 void 0（桌面形态，回落 localhost:8080）——.env.web 没被加载，或构建没带 --mod
+m4: build rc=0 断言 rc=1 | ✗ web 形态自检失败（/tmp/glm54-fix-20261126/mut-dist/m4）：API base 实参是 void 0（桌面形态，回落 localhost:8080）——.env.web 没被加载，或构建没带 --mod
+.env.web 已还原（与工作树同字节）

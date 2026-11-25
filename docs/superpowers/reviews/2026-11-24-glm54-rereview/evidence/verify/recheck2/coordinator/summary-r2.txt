@@ -1,0 +1,43 @@
+== R2 VERIFY start 2026-11-25 18:57:10 ==
+local node: /opt/homebrew/bin/node | v26.13.0 | prod node: v26.12.1
+cp -cR mcp-server/node_modules rc=0
+与 live 同字节: src True | test True
+undici 版本(副本): 6.29.1
+BUILD baseline: rc=0 1.4s ts_errors=0 dist_web-clip.js=f3b8562d79029bd4
+  副本 dist/src/web-clip.js 与 live 同字节: True
+  dist/test 文件数: 15
+TEST baseline-full-prod [node@2.1-darwin-arm64/bin]: rc=0 {'tests': 344, 'pass': 343, 'fail': 0, 'skipped': 1} codes=[] failureType=[]
+TEST baseline-full-local [node@/opt/homebrew/bin]: rc=0 {'tests': 344, 'pass': 343, 'fail': 0, 'skipped': 1} codes=[] failureType=[]
+TEST baseline-net-prod [node@2.1-darwin-arm64/bin]: rc=0 {'tests': 8, 'pass': 8, 'fail': 0, 'skipped': 0} codes=[] failureType=[]
+BUILD fullpath-nail: rc=0 1.2s ts_errors=0 dist_web-clip.js=f3b8562d79029bd4
+TEST fullpath-nail-net-prod [node@2.1-darwin-arm64/bin]: rc=0 {'tests': 9, 'pass': 9, 'fail': 0, 'skipped': 0} codes=[] failureType=[]
+BUILD drop-listener: rc=0 1.2s ts_errors=0 dist_web-clip.js=c9f260a51ff7807f
+TEST drop-listener-net-prod [node@2.1-darwin-arm64/bin]: rc=1 {'tests': 9, 'pass': 7, 'fail': 2, 'skipped': 0} codes=['UND_ERR_ABORTED'] failureType=['uncaughtException']
+      not ok 8 - 真网络·destroy 闭包：销毁未完成的 302 body 不以 unhandled error 击杀进程（2026-11-24 崩溃钉）
+      not ok 9 - 真网络·全路径：fetchWithGuards 重定向分支销毁在飞 302 body 不击杀进程（R2b 试写）
+TEST drop-listener-full-prod [node@2.1-darwin-arm64/bin]: rc=1 {'tests': 345, 'pass': 342, 'fail': 2, 'skipped': 1} codes=['UND_ERR_ABORTED'] failureType=['uncaughtException']
+      not ok 287 - 真网络·destroy 闭包：销毁未完成的 302 body 不以 unhandled error 击杀进程（2026-11-24 崩溃钉）
+      not ok 288 - 真网络·全路径：fetchWithGuards 重定向分支销毁在飞 302 body 不击杀进程（R2b 试写）
+BUILD listener-at-call-sites: rc=2 1.2s ts_errors=3 dist_web-clip.js=12f5a2ae69861d1b
+TEST listener-at-call-sites-net-prod [node@2.1-darwin-arm64/bin]: rc=1 {'tests': 9, 'pass': 8, 'fail': 1, 'skipped': 0} codes=['UND_ERR_ABORTED'] failureType=['uncaughtException']
+      not ok 8 - 真网络·destroy 闭包：销毁未完成的 302 body 不以 unhandled error 击杀进程（2026-11-24 崩溃钉）
+TEST listener-at-call-sites-full-prod [node@2.1-darwin-arm64/bin]: rc=1 {'tests': 345, 'pass': 330, 'fail': 14, 'skipped': 1} codes=['ERR_ASSERTION', 'ERR_TEST_FAILURE', 'UND_ERR_ABORTED'] failureType=['testCodeFailure', 'uncaughtException']
+      not ok 231 - fetchWithGuards·200 成功：chunk 拼接 / CT 归一 / finalUrl / 钉首个过门地址
+      not ok 237 - fetchWithGuards·字面量 IP host 跳过 DNS 直接校验：环回拒、公网过且钉住
+      not ok 238 - fetchWithGuards·IPv6 字面量（含 [] 括号）直接校验：::1 拒、全球单播放行
+      not ok 240 - fetchWithGuards·重定向目标私网 → 逐跳复验拒绝（302 → 内网地址）
+      not ok 241 - fetchWithGuards·https→http 降级一律拒绝（redirect_downgrade）
+      not ok 242 - fetchWithGuards·重定向超 3 跳 → too_many_redirects（恰 3 跳放行）
+      not ok 243 - fetchWithGuards·相对 Location 按 RFC 3986 相对解析（M7）
+      not ok 244 - fetchWithGuards·重定向到非 http(s) scheme → bad_scheme
+      not ok 245 - fetchWithGuards·畸形 Location 头 → invalid_url（统一错误族，不漏裸 TypeError）
+      not ok 246 - fetchWithGuards·Content-Type 白名单外拒（bad_content_type）
+      not ok 247 - fetchWithGuards·三种白名单媒体类型放行（含分段参数）
+      not ok 249 - fetchWithGuards·10MB 流式帽：恰 10MB 放行，+1 字节即撕流拒（不得先整缓冲）
+      not ok 251 - fetchWithGuards·响应体中途断流（socket 断裂）→ fetch_failed，不漏裸 undici 错误（评审 Minor）
+      not ok 287 - 真网络·destroy 闭包：销毁未完成的 302 body 不以 unhandled error 击杀进程（2026-11-24 崩溃钉）
+BUILD restored: rc=0 1.2s ts_errors=0 dist_web-clip.js=f3b8562d79029bd4
+还原后 dist/src/web-clip.js 与 live 同字节: True
+TEST restored-net-prod [node@2.1-darwin-arm64/bin]: rc=0 {'tests': 8, 'pass': 8, 'fail': 0, 'skipped': 0} codes=[] failureType=[]
+live src/test 与开工同字节: True | live dist web-clip.js 与副本干净构建同字节: True
+== R2 VERIFY end 2026-11-25 18:57:33 ==

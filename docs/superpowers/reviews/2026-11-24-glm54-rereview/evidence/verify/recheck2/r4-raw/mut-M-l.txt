@@ -1,0 +1,33 @@
+
+ RUN  v4.1.4 /private/tmp/glm54-recheck-20261125/R4/tree
+
+ ✓ src/lib/build-form.test.ts > build 形态 × 产物目录分流 > build:web 显式走 --mode web，产物落 dist/ —— src-server :8080 读盘的静态根 52ms
+ ✓ src/lib/build-form.test.ts > build 形态 × 产物目录分流 > 桌面形态（npm run build）的产物不落 dist/，目录独立且已 gitignore 19ms
+ × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/ 2ms
+   → expected 'dist' not to be 'dist' // Object.is equality
+ ✓ src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build 不重建 mcp-server —— bundle 只读拷贝检出的 mcp-server/（Hermes live 进程入口） 0ms
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  19:47:54
+   Duration  271ms (transform 13ms, setup 12ms, import 58ms, tests 74ms, environment 0ms)
+
+(node:49243) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:49244) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/
+AssertionError: expected 'dist' not to be 'dist' // Object.is equality
+ ❯ src/lib/build-form.test.ts:85:23
+     83|     expect(modes).toHaveLength(1)
+     84|     const built = await outDirFor(modes[0])
+     85|     expect(built).not.toBe(WEB_OUT_DIR)
+       |                       ^
+     86|     // frontendDist 相对 src-tauri/ 解析
+     87|     expect(path.relative(ROOT, path.resolve(ROOT, "src-tauri", tauri.b…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+

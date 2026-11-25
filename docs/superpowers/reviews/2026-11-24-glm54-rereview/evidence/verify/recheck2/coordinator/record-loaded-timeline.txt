@@ -1,0 +1,105 @@
+# 记录勘误取证：0f17695f 在 11-24 22:00 前是否「尚未加载」（协调者只读取证 2026-11-25 19:17:34；日志行已滤凭证、截 240 字符）
+## A. 主网关 mcp-stderr.log：崩溃尾幅与 MCP 重拉序列（末 26 条）
+12016:2026-11-20 19:34:23,539 ===== starting MCP server 'zops' =====
+12021:2026-11-20 19:36:43,701 ===== starting MCP server 'zops' =====
+12023:2026-11-20 19:36:43,706 ===== starting MCP server 'llm-wiki-training' =====
+12025:2026-11-20 19:36:43,731 ===== starting MCP server 'llm-wiki-admin' =====
+12030:2026-11-22 15:25:02,580 ===== starting MCP server 'llm-wiki-training' =====
+12032:2026-11-22 15:25:02,590 ===== starting MCP server 'llm-wiki-admin' =====
+12034:2026-11-22 15:25:02,598 ===== starting MCP server 'zops' =====
+12039:2026-11-23 09:43:06,716 ===== starting MCP server 'llm-wiki-admin' =====
+12041:2026-11-23 09:43:06,723 ===== starting MCP server 'llm-wiki-training' =====
+12043:2026-11-23 09:43:06,751 ===== starting MCP server 'zops' =====
+12048:2026-11-24 16:57:11,119 ===== starting MCP server 'zops' =====
+12050:2026-11-24 16:57:11,129 ===== starting MCP server 'llm-wiki-training' =====
+12052:2026-11-24 16:57:11,132 ===== starting MCP server 'llm-wiki-admin' =====
+12080:2026-11-24 20:51:19,252 Node.js v26.12.1
+12082:2026-11-24 20:51:21,318 ===== starting MCP server 'llm-wiki-training' =====
+12109:2026-11-24 20:51:22,268 Node.js v26.12.1
+12111:2026-11-24 20:51:22,308 ===== starting MCP server 'llm-wiki-training' =====
+12138:2026-11-24 20:51:45,482 Node.js v26.12.1
+12140:2026-11-24 20:51:45,522 ===== starting MCP server 'llm-wiki-training' =====
+12167:2026-11-24 20:52:07,061 Node.js v26.12.1
+12169:2026-11-24 20:52:07,105 ===== starting MCP server 'llm-wiki-training' =====
+12173:2026-11-24 20:54:05,489 ===== starting MCP server 'llm-wiki-training' =====
+12177:2026-11-24 21:28:15,442 ===== starting MCP server 'llm-wiki-admin' =====
+12179:2026-11-25 05:31:42,529 ===== starting MCP server 'llm-wiki-training' =====
+12181:2026-11-25 05:31:42,541 ===== starting MCP server 'llm-wiki-admin' =====
+12183:2026-11-25 05:31:42,550 ===== starting MCP server 'zops' =====
+## B. 20:52:07（:12167）之后新增的崩溃尾幅数
+       0
+## C. lt-tutor agent.log：20:52–20:55
+## D. 两篇老链（mid=2247494605/2247494610）收藏页落盘时间与 frontmatter 键
+2026-11-24 20:45:49  /Users/berton/kb-storage/teams/916/projects/614/sources/clips/如何在英语课文教学中实施-梯度问题链-dd23670e.md
+source_url: "https://mp.weixin.qq.com/s/3ukY2-NFy3jloNbvU37Jsw"
+clipped_at: "2026-11-24T12:45:49.918Z"
+2026-11-24 21:49:24  /Users/berton/kb-storage/teams/916/projects/614/sources/clips/实话实说-一些英语老师阅读课很少提问-即使提问质量也不高-169ef2e0.md
+source_url: "https://mp.weixin.qq.com/s?__biz=MzI5MDY5NTI0Mg%3D%3D&idx=1&mid=2247494605&sn=d5163a26e792d57de6be1ae1b0061f9a"
+clipped_at: "2026-11-24T13:49:24.342Z"
+2026-11-24 21:42:48  /Users/berton/kb-storage/teams/916/projects/614/sources/clips/补遗篇-要想提高英语课堂提问水平-请注意问题的不同类型-5a0b4f8e.md
+source_url: "https://mp.weixin.qq.com/s?__biz=MzI5MDY5NTI0Mg%3D%3D&idx=1&mid=2247494610&sn=14633edbb9f9f40adcf8c24253482e80"
+clipped_at: "2026-11-24T13:42:48.353Z"
+## E. stderr 日志 20:52–21:50 的启动/健康/尾幅行
+12167:2026-11-24 20:52:07,061 Node.js v26.12.1
+12169:2026-11-24 20:52:07,105 ===== starting MCP server 'llm-wiki-training' =====
+12171:2026-11-24 20:52:07,361 [health] src-server ok
+12173:2026-11-24 20:54:05,489 ===== starting MCP server 'llm-wiki-training' =====
+12175:2026-11-24 20:54:05,735 [health] src-server ok
+12177:2026-11-24 21:28:15,442 ===== starting MCP server 'llm-wiki-admin' =====
+## C. lt-tutor agent.log 11-24 20:51–20:56（行内含日期与时分；滤凭证，截 300 字符）
+## C2. 主网关 agent.log 同窗（15 行）
+5103:2026-11-24 20:51:02,156 INFO hermes_plugins.platforms__wecom.adapter: [Wecom] Inbound callback: chattype='single' chatid=None sender='<所有者企微名>' msgtype='text' has_chatid=False
+5104:2026-11-24 20:51:02,758 INFO gateway.platforms.base: [Wecom] Flushing text batch agent:main:wecom:dm:<所有者企微名> (68 chars)
+5106:2026-11-24 20:51:02,912 INFO run_agent: OpenAI client created (agent_init, shared=True) thread=hermes-gateway_43:482409295872 provider=zai-coding-cn base_url=https://open.bigmodel.cn/api/coding/paas/v4 model=glm-5.3-flash
+5107:2026-11-24 20:51:02,913 INFO tools.registry: check_fn _browser_cdp_check returned False; dependent tools will be unavailable this turn
+5108:2026-11-24 20:51:02,913 INFO tools.registry: check_fn _browser_dialog_check returned False; dependent tools will be unavailable this turn
+5109:2026-11-24 20:51:02,914 INFO tools.registry: check_fn browser_exec_available returned False; dependent tools will be unavailable this turn
+5110:2026-11-24 20:51:02,917 INFO tools.registry: check_fn check_computer_use_requirements returned False; dependent tools will be unavailable this turn
+5111:2026-11-24 20:51:02,924 INFO agent.auxiliary_client: Vision auto-detect: using main provider zai-coding-cn (glm-5.3-flash)
+5112:2026-11-24 20:51:02,931 INFO agent.memory_manager: Memory provider 'memory_tencentdb' registered (3 tools)
+5113:2026-11-24 20:51:02,932 INFO plugins.memory.memory_tencentdb: memory-tencentdb Gateway command auto-discovered: /Users/berton/Github/AI-Infra/TencentDB-Agent-Memory/MemoryCore/src/gateway/server.ts (override with MEMORY_TENCENTDB_GATEWAY_CMD)
+5114:2026-11-24 20:51:02,933 INFO plugins.memory.memory_tencentdb: memory-tencentdb Gateway already running (127.0.0.1:8420)
+5115:2026-11-24 20:51:02,933 INFO run_agent: Memory provider 'memory_tencentdb' activated
+5117:2026-11-24 20:51:02,999 INFO run_agent: OpenAI client created (chat_completion_stream_request, shared=False) thread=Thread-209 (<lambda>):482476601344 provider=zai-coding-cn base_url=https://open.bigmodel.cn/api/coding/paas/v4 model=glm-5.3-flash
+## C3. 主网关 agent.log 11-24 20:52–20:56：工具调用与返回（滤凭证，截 320 字符）
+5136:2026-11-24 20:52:07,073 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its transport mid-call); reconnecting without replay.
+5137:2026-11-24 20:52:07,073 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+5138:2026-11-24 20:52:07,396 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.49s): {"error": "MCP server 'llm-wiki-training' lost its stdio subprocess after the tool call began. The operation may have completed, so Hermes did not replay it. D
+5140:2026-11-24 20:52:20,719 INFO tools.terminal_tool: Creating new local environment for task session:...
+5141:2026-11-24 20:52:22,245 INFO tools.environments.base: Session snapshot created (session=27a3b928ca5e, cwd=/Users/berton)
+5142:2026-11-24 20:52:22,245 INFO tools.terminal_tool: local environment ready for task session:
+5143:2026-11-24 20:52:22,397 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (1.73s, 650 chars)
+5145:2026-11-24 20:52:36,822 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (7.21s, 2354 chars)
+5147:2026-11-24 20:52:40,675 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (0.10s, 11226 chars)
+5149:2026-11-24 20:53:10,508 INFO [20261025_172801_094d1579] agent.tool_executor: tool read_file completed (0.01s, 4336 chars)
+5151:2026-11-24 20:53:31,071 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (0.14s, 354 chars)
+5153:2026-11-24 20:53:33,781 INFO [20261025_172801_094d1579] agent.tool_executor: tool read_file completed (0.01s, 1029 chars)
+5156:2026-11-24 20:53:44,598 INFO [20261025_172801_094d1579] agent.tool_executor: tool patch completed (0.40s, 1276 chars)
+5158:2026-11-24 20:53:49,177 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (1.68s, 397 chars)
+5160:2026-11-24 20:53:54,210 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (1.47s, 169 chars)
+5162:2026-11-24 20:54:02,033 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (2.35s, 46 chars)
+5163:2026-11-24 20:54:05,221 INFO hermes.lint.lsp: lsp[typescript] active for /Users/berton/Github/kb-obsidian/llm_wiki/mcp-server
+5165:2026-11-24 20:54:05,469 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' had already exited when the call was dispatched); respawning and retrying once.
+5166:2026-11-24 20:54:05,469 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+5167:2026-11-24 20:54:06,109 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.64s, 73 chars)
+5169:2026-11-24 20:54:13,177 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.37s, 73 chars)
+5171:2026-11-24 20:54:17,443 INFO tools.web_tools: Extracting content from 2 URL(s)
+5172:2026-11-24 20:54:17,472 INFO tools.web_tools: Web extract via tavily: 2 URL(s)
+5175:2026-11-24 20:54:23,228 WARNING tools.web_tools: web_extract backend 'tavily' failed all 2 URL(s) (Failed to fetch url); one-shot keyless rescue
+5176:2026-11-24 20:54:36,829 INFO tools.web_tools: Extracted content from 2 pages
+5179:2026-11-24 20:54:36,835 INFO [20261025_172801_094d1579] agent.tool_executor: tool web_extract completed (19.39s, 1275 chars)
+5181:2026-11-24 20:54:59,262 INFO tools.web_tools: Web search via tavily: '李陆桂 实话实说 一些英语老师阅读课很少提问 即使提问质量也不高 mp.weixin.qq.com' (limit: 8)
+5184:2026-11-24 20:55:01,719 INFO [20261025_172801_094d1579] agent.tool_executor: tool web_search completed (2.47s, 9176 chars)
+5186:2026-11-24 20:55:18,277 INFO tools.web_tools: Extracting content from 1 URL(s)
+5187:2026-11-24 20:55:18,332 INFO tools.web_tools: Web extract via tavily: 1 URL(s)
+5190:2026-11-24 20:55:20,724 WARNING tools.web_tools: web_extract backend 'tavily' failed all 1 URL(s) (Failed to fetch url); one-shot keyless rescue
+5191:2026-11-24 20:55:24,382 INFO tools.web_tools: Extracted content from 1 pages
+5192:2026-11-24 20:55:24,388 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool web_extract returned error (6.11s): {
+5197:2026-11-24 20:55:36,405 INFO [20261025_172801_094d1579] agent.tool_executor: tool cronjob_manage completed (0.02s, 1524 chars)
+5199:2026-11-24 20:55:46,737 INFO [20261025_172801_094d1579] agent.tool_executor: tool skill_view completed (0.06s, 6926 chars)
+5201:2026-11-24 20:55:54,250 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "operations[0] needs a 'name' (the skill it targets).", "success": false}
+5203:2026-11-24 20:56:00,176 INFO [20261025_172801_094d1579] agent.tool_executor: tool skill_manage completed (0.16s, 146 chars)
+5205:2026-11-24 20:56:09,731 INFO [20261025_172801_094d1579] agent.conversation_loop: Turn ended: reason=text_response(finish_reason=stop) model=glm-5.3-flash api_calls=26/90 budget=26/90 tool_turns=46 last_msg_role=assistant response_len=569 session=20261025_172801_094d1579
+5206:2026-11-24 20:56:09,835 INFO gateway.run: response ready: platform=wecom chat=<所有者企微名> session=agent:main:wecom:dm:<所有者企微名> time=307.0s api_calls=26 response=569 chars
+5207:2026-11-24 20:56:09,879 INFO gateway.platforms.base: [Wecom] Sending response (569 chars) to <所有者企微名>
+

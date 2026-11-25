@@ -1,0 +1,46 @@
+# 推送前卫生扫描（协调者，只读）
+来源：origin/main..HEAD 新增行 1224 条；评审目录全量文本行 6648 条（共 7872）
+origin slug: afanty2021/llm_wiki（URL 已脱敏）
+gh: rc=0 {"isPrivate":false,"visibility":"PUBLIC"}
+## key-prefix: 4 处
+   <R>/evidence/verify/raw/sdk_kwargs2.py:18  sk-ant…(22)
+   <R>/evidence/verify/raw/sdk_resolve.py:142  sk-ant…(22)
+## kv-secret: 8 处
+   <R>/evidence/verify/raw/sdk_kwargs2.py:18  sk-ant…(22)
+   <R>/evidence/verify/raw/sdk_kwargs2.py:20  sk-dum…(18)
+   <R>/evidence/verify/raw/sdk_resolve.py:142  sk-ant…(22)
+   <R>/evidence/verify/raw/sdk_resolve.py:147  sk-dum…(18)
+## cred-url: 0 处
+## email: 0 处
+## ipv4-public: 13 处
+   diff+<R>/evidence/verify/recheck/R4.md:127  192.88…(11)
+   diff+<R>/evidence/verify/recheck/R4.md:127  192.31…(12)
+   diff+<R>/evidence/verify/recheck/R4.md:127  192.52…(12)
+   diff+<R>/evidence/verify/recheck/R4.md:127  192.17…(12)
+   <R>/W3.md:83  192.88…(11)
+   <R>/W3.md:84  192.88…(11)
+   <R>/W3.md:84  192.31…(12)
+   <R>/W3.md:84  192.52…(12)
+   <R>/W3.md:84  192.17…(12)
+   <R>/evidence/verify/recheck/R4.md:127  192.88…(11)
+   <R>/evidence/verify/recheck/R4.md:127  192.31…(12)
+   <R>/evidence/verify/recheck/R4.md:127  192.52…(12)
+   <R>/evidence/verify/recheck/R4.md:127  192.17…(12)
+## cn-mobile: 0 处
+## wecom-id: 11 处
+   <R>/report.md:74  write-…(10)
+   <R>/W2.md:15  write_…(10)
+   <R>/H2.md:43  writer…(11)
+   <R>/evidence/verify/coordinator-verification.md:44  write-…(10)
+   <R>/evidence/verify/raw/skill_face.py:22  write_…(10)
+   <R>/evidence/verify/raw/webclip-fix/scripts/fetch.mjs:2  writeF…(13)
+   <R>/evidence/verify/raw/webclip-fix/scripts/mutate.py:53  write_…(10)
+## wecom-user: 22 处
+   <R>/W3.md:164  wecom_…(12)
+   <R>/H2.md:144  wecom_…(12)
+   <R>/evidence/verify/coordinator-verification.md:56  wecom_…(12)
+   <R>/evidence/verify/ltutor-text-verification.md:9  wecom_…(12)
+   <R>/evidence/verify/raw/skill-face.md:17  wecom_…(12)
+## hex-32-63: 2 处
+   diff+<R>/evidence/verify/recheck/R2.md:14  22a4b8…(32)
+   <R>/evidence/verify/recheck/R2.md:14  22a4b8…(32)

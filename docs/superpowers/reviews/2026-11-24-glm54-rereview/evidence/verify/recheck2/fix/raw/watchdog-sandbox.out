@@ -1,0 +1,17 @@
+== WATCHDOG-SANDBOX start 2026-11-25 21:28:38 ==
+PASS bash -n 过（系统 bash 3.2）
+PASS W1 正常：rc=0、OK 行带 ltutor audit ok、零通知 | rc=0 '2026-11-25 21:28:38 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok' ''
+PASS W2 上一趟失败（旧格式、无 exit 行）：rc=1、两条问题、一次通知 | rc=1 ['2026-11-25 21:28:38 ALERT: ltutor 周报巡检：巡检最近一趟退出码 1；最近一趟（2026-11-25 15:28:38）没走到「巡检完成」；'] '-e display notification "巡检最近一趟退出码 1；最近一趟（2026-11-25 15:28:38）没走到「巡检完成」；" with title "周报巡检看门" sound name "Basso"\n'
+PASS W2b 新格式失败趟：退出码两处都报、不误报「没走到完成」 | rc=1 ['2026-11-25 21:28:38 ALERT: ltutor 周报巡检：巡检最近一趟退出码 1；日志记的退出码 1；']
+PASS W3 日志 30h 没更新：告警 | rc=1 ['2026-11-25 21:28:39 ALERT: ltutor 周报巡检：日志已 30 小时没更新（launchd 没触发或机器没开）；']
+PASS W4 任务未加载：告警且不误报退出码 | rc=1 ['2026-11-25 21:28:39 ALERT: ltutor 周报巡检：巡检任务 wiki.ltutor-weekly-audit 未加载；']
+PASS W5 停发告警：告警 | rc=1 ['2026-11-25 21:28:39 ALERT: ltutor 周报巡检：最近一趟（2026-11-25 15:28:39）没走到「巡检完成」；有「停发-告警」（停发名单里的教师任务仍在跑）；']
+PASS W6 新开办 1：rc=0、NOTIFY 一次、静默通知一次 | rc=0 '2026-11-25 21:28:39 NOTIFY: ltutor 周报巡检 2026-11-25 15:28:39 新开办 1\n2026-11-25 21:28:39 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok' '-e display notification "周报巡检 2026-11-25 15:28:39 新开办 1 位教师的周报任务" with title "周报巡检看门"\n'
+PASS W6 再跑：同一趟不重复通知 | '2026-11-25 21:28:39 NOTIFY: ltutor 周报巡检 2026-11-25 15:28:39 新开办 1\n2026-11-25 21:28:39 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok\n2026-11-25 21:28:39 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok'
+PASS W7 日志不存在：告警 | rc=1 ['2026-11-25 21:28:40 ALERT: ltutor 周报巡检：日志不存在；']
+PASS W8 睡醒补火：等在跑的巡检收尾后不告警（空等 ≥10s） | rc=0 dt=20.2s '2026-11-25 21:29:00 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok'
+PASS W9 locale=(无)：正常趟 → rc=0、NOTIFY 一次、stderr 干净 | rc=0 '2026-11-25 21:29:00 NOTIFY: ltutor 周报巡检 2026-11-25 15:29:00 新开办 1\n2026-11-25 21:29:00 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok' ''
+PASS W9 locale=zh_CN.UTF-8：正常趟 → rc=0、NOTIFY 一次、stderr 干净 | rc=0 '2026-11-25 21:29:00 NOTIFY: ltutor 周报巡检 2026-11-25 15:29:00 新开办 1\n2026-11-25 21:29:00 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok' ''
+PASS W9 locale=C.UTF-8：正常趟 → rc=0、NOTIFY 一次、stderr 干净 | rc=0 '2026-11-25 21:29:01 NOTIFY: ltutor 周报巡检 2026-11-25 15:29:00 新开办 1\n2026-11-25 21:29:01 OK: backup fresh, mirror fresh, size ok, verify fresh, ltutor audit ok' ''
+== 结果：14 过 / 0 败 [] ==
+== WATCHDOG-SANDBOX end 2026-11-25 21:29:01 ==

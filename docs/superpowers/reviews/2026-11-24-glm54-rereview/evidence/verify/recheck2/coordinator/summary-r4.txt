@@ -1,0 +1,97 @@
+== R4-NAIL start 2026-11-25 20:49:20 ==
+setup: tree 已存在，复用
+NAIL ORIG--baseline: rc=0 | Tests  4 passed (4)
+NAIL B--baseline: rc=0 | Tests  8 passed (8)
+NAIL C--baseline: rc=0 | Tests  10 passed (10)
+ORIG it( 数 = 4；C it( 数 = 10
+NAIL ORIG--R1f2_R4Mg: rc=0 | Tests  4 passed (4)
+NAIL B--R1f2_R4Mg: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--R1f2_R4Mg: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--R1f4_R4Mh: rc=0 | Tests  4 passed (4)
+NAIL B--R1f4_R4Mh: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--R1f4_R4Mh: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--R4Mk: rc=0 | Tests  4 passed (4)
+NAIL B--R4Mk: rc=0 | Tests  8 passed (8)
+NAIL C--R4Mk: rc=1 | Tests  2 failed | 8 passed (10)
+NAIL ORIG--R4Ml: rc=1 | Tests  1 failed | 3 passed (4)
+NAIL B--R4Ml: rc=1 | Tests  2 failed | 6 passed (8)
+NAIL C--R4Ml: rc=1 | Tests  3 failed | 7 passed (10)
+NAIL ORIG--Xk2: rc=0 | Tests  4 passed (4)
+NAIL B--Xk2: rc=0 | Tests  8 passed (8)
+NAIL C--Xk2: rc=1 | Tests  2 failed | 8 passed (10)
+NAIL ORIG--Xk3: rc=1 | Tests  1 failed | 3 passed (4)
+NAIL B--Xk3: rc=1 | Tests  2 failed | 6 passed (8)
+NAIL C--Xk3: rc=1 | Tests  3 failed | 7 passed (10)
+NAIL ORIG--Xk4: rc=0 | Tests  4 passed (4)
+NAIL B--Xk4: rc=0 | Tests  8 passed (8)
+NAIL C--Xk4: rc=1 | Tests  2 failed | 8 passed (10)
+NAIL ORIG--Xk5: rc=0 | Tests  4 passed (4)
+NAIL B--Xk5: rc=0 | Tests  8 passed (8)
+NAIL C--Xk5: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--Xk6: rc=0 | Tests  4 passed (4)
+NAIL B--Xk6: rc=0 | Tests  8 passed (8)
+NAIL C--Xk6: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--Xf1b: rc=0 | Tests  4 passed (4)
+NAIL B--Xf1b: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--Xf1b: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--Xf2b: rc=0 | Tests  4 passed (4)
+NAIL B--Xf2b: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--Xf2b: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--Xt: rc=1 | Tests  1 failed | 3 passed (4)
+NAIL B--Xt: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--Xt: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--Xenv: rc=0 | Tests  4 passed (4)
+NAIL B--Xenv: rc=0 | Tests  8 passed (8)
+NAIL C--Xenv: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--Xenv2: rc=0 | Tests  4 passed (4)
+NAIL B--Xenv2: rc=0 | Tests  8 passed (8)
+NAIL C--Xenv2: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--R1e: rc=0 | Tests  4 passed (4)
+NAIL B--R1e: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--R1e: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--R1a1: rc=0 | Tests  4 passed (4)
+NAIL B--R1a1: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--R1a1: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--R1a2: rc=0 | Tests  4 passed (4)
+NAIL B--R1a2: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--R1a2: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--R1f1: rc=0 | Tests  4 passed (4)
+NAIL B--R1f1: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--R1f1: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--R1f-gitignore: rc=1 | Tests  1 failed | 3 passed (4)
+NAIL B--R1f-gitignore: rc=1 | Tests  1 failed | 7 passed (8)
+NAIL C--R1f-gitignore: rc=1 | Tests  1 failed | 9 passed (10)
+NAIL ORIG--restored-final: rc=0 | Tests  4 passed (4)
+  终态与 live 同字节: package.json True
+  终态与 live 同字节: vite.config.ts True
+  终态与 live 同字节: .env.web True
+  终态与 live 同字节: .gitignore True
+  终态与 live 同字节: src-tauri/tauri.conf.json True
+  终态与 live 同字节: src-tauri/tauri.macos.conf.json True
+  终态与 live 同字节: src-tauri/tauri.windows.conf.json True
+  终态与 live 同字节: src/lib/build-form.test.ts True
+
+== 矩阵（绿 = 变异体存活 / RED = 被杀）==
+  R1f2_R4Mg        ORIG:green  B:RED   C:RED 
+  R1f4_R4Mh        ORIG:green  B:RED   C:RED 
+  R4Mk             ORIG:green  B:green  C:RED 
+  R4Ml             ORIG:RED   B:RED   C:RED 
+  Xk2              ORIG:green  B:green  C:RED 
+  Xk3              ORIG:RED   B:RED   C:RED 
+  Xk4              ORIG:green  B:green  C:RED 
+  Xk5              ORIG:green  B:green  C:RED 
+  Xk6              ORIG:green  B:green  C:RED 
+  Xf1b             ORIG:green  B:RED   C:RED 
+  Xf2b             ORIG:green  B:RED   C:RED 
+  Xt               ORIG:RED   B:RED   C:RED 
+  Xenv             ORIG:green  B:green  C:RED 
+  Xenv2            ORIG:green  B:green  C:RED 
+  R1e              ORIG:green  B:RED   C:RED 
+  R1a1             ORIG:green  B:RED   C:RED 
+  R1a2             ORIG:green  B:RED   C:RED 
+  R1f1             ORIG:green  B:RED   C:RED 
+  R1f-gitignore    ORIG:RED   B:RED   C:RED 
+ORIG: 存活 15 / 19 -> ['R1f2_R4Mg', 'R1f4_R4Mh', 'R4Mk', 'Xk2', 'Xk4', 'Xk5', 'Xk6', 'Xf1b', 'Xf2b', 'Xenv', 'Xenv2', 'R1e', 'R1a1', 'R1a2', 'R1f1']
+B: 存活 7 / 19 -> ['R4Mk', 'Xk2', 'Xk4', 'Xk5', 'Xk6', 'Xenv', 'Xenv2']
+C: 存活 0 / 19 -> []
+== R4-NAIL end 2026-11-25 20:50:05 ==

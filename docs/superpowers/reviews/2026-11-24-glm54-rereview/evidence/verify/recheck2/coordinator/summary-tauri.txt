@@ -1,0 +1,47 @@
+== TAURI E2E start 2026-11-25 18:59:36 ==
+开工: dist 221 文件, dist-desktop 221 文件, mcp-server/dist 31 文件
+  mcp-server/node_modules.inode = 159648564
+  mcp-server/node_modules.dir_mtime = 2026-11-25 18:57:11
+  mcp-server/node_modules.entries = 12578
+  mcp-server/node_modules.newest_entry_mtime = 2026-11-25 18:57:11
+  mcp-server/node_modules.package_lock_sha = 4144ec5e928a523d01c48baa8fd97649690f5db9fe64673b55f66de9cea492b1
+  副本 dist 与 live dist 同字节: 221/221
+命令: npm run tauri -- build --bundles app -- --offline | CARGO_BUILD_JOBS=6 | PATH 加 cargo 工具链
+tauri build: rc=0 wall=775s (12.9 min)
+   > Finished `release` profile [optimized] target(s) in 12m 45s
+   > Bundling LLM Wiki.app (/private/tmp/glm54-recheck-20261125/C/tree/src-tauri/target/release/bundle/macos/LLM Wiki.app)
+   > error v2.0.20
+   > error-impl v2.0.20
+   > error v1.0.69
+   > error-impl v1.0.69
+   > error v2.0.1
+   > warning: unused imports: `LogDisplayEntry` and `LogLevel`
+   | warning: `llm-wiki` (lib) generated 1 warning (run `cargo fix --lib -p llm-wiki` to apply 1 suggestion)
+   |     Finished `release` profile [optimized] target(s) in 12m 45s
+   |        Built application at: /private/tmp/glm54-recheck-20261125/C/tree/src-tauri/target/release/llm-wiki
+   |     Bundling LLM Wiki.app (/private/tmp/glm54-recheck-20261125/C/tree/src-tauri/target/release/bundle/macos/LLM Wiki.app)
+   |     Finished 1 bundle at:
+   |         /private/tmp/glm54-recheck-20261125/C/tree/src-tauri/target/release/bundle/macos/LLM Wiki.app
+  构建前后 dist: 变化 0/221
+  构建前后 dist-desktop: 变化 0/221
+  构建前后 mcp-server/dist: 变化 0/31
+  构建前后 mcp-server/node_modules: inode=同, dir_mtime=同, entries=同, newest_entry_mtime=同, package_lock_sha=同 (inode=159648564, dir_mtime=2026-11-25 18:57:11, entries=12578, newest_entry=2026-11-25 18:57:11)
+  构建后 dist-desktop 与 live dist-desktop 同字节: 221/221 (live 221)
+bundle/macos/*.app: ['LLM Wiki.app']
+  bundle Resources 顶层: ['icon.icns', 'mcp-server']
+   bundle mcp-server/package.json: 存在=True 与副本检出同字节=True
+   bundle mcp-server/dist/src/web-clip.js: 存在=True 与副本检出同字节=True
+   bundle mcp-server/dist/src/index.js: 存在=True 与副本检出同字节=True
+   bundle mcp-server/node_modules/undici/package.json: 存在=True 与副本检出同字节=True
+  Info.plist CFBundleShortVersionString = 0.6.13
+  release 二进制 64.5 MB mtime=2026-11-25 19:12:31
+  桌面独有资源名 28/28 出现在二进制；web 独有资源名 0/28
+  api-client: desktop 名在二进制=True, web 名在二进制=False
+  核对期间(应零变化) dist: 变化 0/221
+  核对期间(应零变化) dist-desktop: 变化 0/221
+  核对期间(应零变化) mcp-server/dist: 变化 0/31
+  核对期间(应零变化) mcp-server/node_modules: inode=同, dir_mtime=同, entries=同, newest_entry_mtime=同, package_lock_sha=同 (inode=159648564, dir_mtime=2026-11-25 18:57:11, entries=12578, newest_entry=2026-11-25 18:57:11)
+live 终态:
+  live dist 与开工快照同字节: 221/221
+  live mcp-server/node_modules: {'inode': 89736671, 'dir_mtime': '2026-10-25 09:02:47', 'entries': 12578, 'newest_entry_mtime': '2026-10-25 09:02:47'}
+== TAURI E2E end 2026-11-25 19:12:31 ==

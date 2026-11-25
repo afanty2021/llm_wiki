@@ -1,0 +1,108 @@
+== NAIL-FINAL start 2026-11-25 21:09:23 ==
+setup: tree 已存在，复用
+live 钉与归档 nail-hardened-C 同字节: True | sha256 b2f6ac0d00682c14
+it( 数 = 10
+  副本与 live 同字节: vite.config.ts True
+  副本与 live 同字节: package.json True
+  副本与 live 同字节: .env.web True
+  副本与 live 同字节: .gitignore True
+  副本与 live 同字节: src-tauri/tauri.conf.json True
+  副本与 live 同字节: src-tauri/tauri.macos.conf.json True
+  副本与 live 同字节: src-tauri/tauri.windows.conf.json True
+  副本与 live 同字节: src-tauri/tauri.linux.conf.json True
+NAIL baseline: rc=0 | Tests  10 passed (10)
+NAIL R1f2_R4Mg: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c）
+NAIL R1f4_R4Mh: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c）
+NAIL R4Mk: rc=1 | Tests  2 failed | 8 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/ 2ms
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web 1ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web
+NAIL R4Ml: rc=1 | Tests  3 failed | 7 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/ 2ms
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web 1ms
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server 1ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server
+NAIL Xk2: rc=1 | Tests  2 failed | 8 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/ 2ms
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web 1ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web
+NAIL Xk3: rc=1 | Tests  3 failed | 7 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/ 2ms
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web 1ms
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server 1ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server
+NAIL Xk4: rc=1 | Tests  2 failed | 8 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/ 2ms
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web 1ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web
+NAIL Xk5: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c）
+NAIL Xk6: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c）
+NAIL Xf1b: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server
+NAIL Xf2b: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c）
+NAIL Xt: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build 不重建 mcp-server —— bundle 只读拷贝检出的 mcp-server/（Hermes live 进程入口） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build 不重建 mcp-server —— bundle 只读拷贝检出的 mcp-server/（Hermes live 进程入口）
+NAIL Xenv: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C6 web 构建必须同源：.env.web 的 VITE_API_BASE_URL 恰有一行且为空 3ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C6 web 构建必须同源：.env.web 的 VITE_API_BASE_URL 恰有一行且为空
+NAIL Xenv2: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C6 web 构建必须同源：.env.web 的 VITE_API_BASE_URL 恰有一行且为空 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C6 web 构建必须同源：.env.web 的 VITE_API_BASE_URL 恰有一行且为空
+NAIL R1e: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C1 不变量：除 web 外任何 mode 都不写 dist/ —— 上游若把分流改成按别的条件判，即红 6ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C1 不变量：除 web 外任何 mode 都不写 dist/ —— 上游若把分流改成按别的条件判，即红
+NAIL R1a1: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C2 任何平台的 tauri.<platform>.conf.json 都不得覆盖 build 段（frontendDist / beforeBuildCommand） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C2 任何平台的 tauri.<platform>.conf.json 都不得覆盖 build 段（frontendDist / beforeBuildCommand）
+NAIL R1a2: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C2 任何平台的 tauri.<platform>.conf.json 都不得覆盖 build 段（frontendDist / beforeBuildCommand） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C2 任何平台的 tauri.<platform>.conf.json 都不得覆盖 build 段（frontendDist / beforeBuildCommand）
+NAIL R1f1: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server
+NAIL R1f-gitignore: rc=1 | Tests  1 failed | 9 passed (10)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > 桌面形态（npm run build）的产物不落 dist/，目录独立且已 gitignore 18ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > 桌面形态（npm run build）的产物不落 dist/，目录独立且已 gitignore
+NAIL restored-final: rc=0 | Tests  10 passed (10)
+
+== 矩阵（live 钉 = C；green = 变异体存活 / RED = 被杀）==
+  R1f2_R4Mg        package.json                         RED
+  R1f4_R4Mh        package.json                         RED
+  R4Mk             package.json                         RED
+  R4Ml             src-tauri/tauri.conf.json            RED
+  Xk2              src-tauri/tauri.conf.json            RED
+  Xk3              package.json                         RED
+  Xk4              package.json                         RED
+  Xk5              package.json                         RED
+  Xk6              package.json                         RED
+  Xf1b             package.json                         RED
+  Xf2b             package.json                         RED
+  Xt               package.json                         RED
+  Xenv             .env.web                             RED
+  Xenv2            .env.web                             RED
+  R1e              vite.config.ts                       RED
+  R1a1             src-tauri/tauri.macos.conf.json      RED
+  R1a2             src-tauri/tauri.windows.conf.json    RED
+  R1f1             package.json                         RED
+  R1f-gitignore    .gitignore                           RED
+live 钉: 存活 0 / 19 -> []
+== NAIL-FINAL end 2026-11-25 21:09:38 ==

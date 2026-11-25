@@ -1,0 +1,16 @@
+$ 摘自 tauri-build.txt（939 行）：脚本链与构建结论行；全日志大小写不敏感含 mcp 的行 1 条（全是文件名 ImCp… 这类巧合，含 mcp 词的 0 条）
+> llm-wiki@0.6.13 tauri
+> tauri build --bundles app -- --offline
+> llm-wiki@0.6.13 build:desktop
+> npm run build
+> llm-wiki@0.6.13 build
+> npm run typecheck && vite build
+> llm-wiki@0.6.13 typecheck
+> tsc --build --pretty
+vite v8.0.3 building client environment for production...
+transforming...✓ 4265 modules transformed.
+✓ built in 644ms
+warning: unused imports: `LogDisplayEntry` and `LogLevel`
+    Finished `release` profile [optimized] target(s) in 12m 45s
+    Bundling LLM Wiki.app (/private/tmp/glm54-recheck-20261125/C/tree/src-tauri/target/release/bundle/macos/LLM Wiki.app)
+    Finished 1 bundle at:

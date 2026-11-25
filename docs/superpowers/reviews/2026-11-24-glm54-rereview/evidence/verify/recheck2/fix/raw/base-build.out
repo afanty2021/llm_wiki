@@ -1,0 +1,4 @@
+
+> llm-wiki-mcp-server@0.4.26 build
+> tsc -p tsconfig.json
+

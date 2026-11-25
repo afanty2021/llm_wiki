@@ -1,0 +1,1 @@
+✗ web 形态自检失败（/tmp/glm54-fix-20261126/mut-dist/m3）：API base 实参是 void 0（桌面形态，回落 localhost:8080）——.env.web 没被加载，或构建没带 --mode web

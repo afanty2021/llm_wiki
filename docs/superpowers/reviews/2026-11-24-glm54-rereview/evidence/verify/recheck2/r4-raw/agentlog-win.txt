@@ -1,0 +1,23 @@
+2026-11-24 20:51:19,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its transport mid-call); reconnecting without replay.
+2026-11-24 20:51:19,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+2026-11-24 20:51:22,059 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (3.10s): {"error": "MCP server 'llm-wiki-training' lost its stdio subprocess after the tool call began. The operation may have completed, so Hermes did not replay it. Do NOT
+2026-11-24 20:51:22,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its transport mid-call); reconnecting without replay.
+2026-11-24 20:51:22,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+2026-11-24 20:51:22,605 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.54s): {"error": "MCP server 'llm-wiki-training' lost its stdio subprocess after the tool call began. The operation may have completed, so Hermes did not replay it. Do NOT
+2026-11-24 20:51:45,492 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its transport mid-call); reconnecting without replay.
+2026-11-24 20:51:45,492 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+2026-11-24 20:51:46,080 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.77s): {"error": "MCP server 'llm-wiki-training' lost its stdio subprocess after the tool call began. The operation may have completed, so Hermes did not replay it. Do NOT
+2026-11-24 20:52:07,073 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its transport mid-call); reconnecting without replay.
+2026-11-24 20:52:07,073 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+2026-11-24 20:52:07,396 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.49s): {"error": "MCP server 'llm-wiki-training' lost its stdio subprocess after the tool call began. The operation may have completed, so Hermes did not replay it. Do NOT
+2026-11-24 20:54:05,469 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' had already exited when the call was dispatched); respawning and retrying once.
+2026-11-24 20:54:05,469 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+2026-11-24 20:54:06,109 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.64s, 73 chars)
+2026-11-24 20:54:13,177 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.37s, 73 chars)
+2026-11-24 20:54:23,228 WARNING tools.web_tools: web_extract backend 'tavily' failed all 2 URL(s) (Failed to fetch url); one-shot keyless rescue
+2026-11-24 20:54:36,835 INFO [20261025_172801_094d1579] agent.tool_executor: tool web_extract completed (19.39s, 1275 chars)
+2026-11-24 20:55:20,724 WARNING tools.web_tools: web_extract backend 'tavily' failed all 1 URL(s) (Failed to fetch url); one-shot keyless rescue
+2026-11-24 20:55:24,388 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool web_extract returned error (6.11s): {
+2026-11-24 21:44:55,744 WARNING tools.web_tools: web_extract backend 'tavily' failed all 1 URL(s) (Failed to fetch url); one-shot keyless rescue
+2026-11-24 21:45:26,155 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool web_extract returned error (34.69s): {
+

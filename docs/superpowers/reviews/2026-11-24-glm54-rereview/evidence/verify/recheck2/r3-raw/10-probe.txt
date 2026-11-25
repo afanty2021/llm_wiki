@@ -1,0 +1,214 @@
+Q4/Q5 SANDBOX PROBES  (hermes-3.11 python, cwd=/, HERMES_HOME=/tmp/glm54-recheck-20261125/R3/scratch-*)  started 2026-11-25 19:10:53
+root top-level names that are ALSO stdlib names: [] | ALSO site-packages names: []
+
+====================================================================================================
+### Q4(a)  NO fix line:  from cron import jobs
+    HERMES_HOME=/tmp/glm54-recheck-20261125/R3/scratch-hermes-home  cwd=/  python=/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python  -B  PYTHONDONTWRITEBYTECODE=1
+    exit code = 0   wall = 0.1s
+   python 3.11.15 | cwd / | HERMES_HOME /tmp/glm54-recheck-20261125/R3/scratch-hermes-home | sys.path[0] = ''
+   RESULT: ModuleNotFoundError: No module named 'hermes_yaml'
+      e.name = 'hermes_yaml'
+      frame File "<stdin>", line 62, in <module>
+      frame File "/Users/berton/Github/Coding-Agents/Hermes-agent/cron/__init__.py", line 13, in <module>
+      frame File "/Users/berton/Github/Coding-Agents/Hermes-agent/cron/jobs.py", line 49, in <module>
+      frame File "/Users/berton/Github/Coding-Agents/Hermes-agent/utils.py", line 20, in <module>
+   ### AUDIT EVENTS  (phase | kind | event | xN | path)
+      (none)
+   ### MODULES LOADED FROM THE CHECKOUT  (top-level name | n_submodules | file of top-level)
+      agent                  |   4 | <CHECKOUT>/agent/jiter_preload.py
+      cron                   |   9 | <CHECKOUT>/cron/worker_bootstrap.py
+      hermes_cli             |   3 | <CHECKOUT>/hermes_cli/__init__.py
+      hermes_constants       |   1 | <CHECKOUT>/hermes_constants.py
+      hermes_time            |   1 | <CHECKOUT>/hermes_time.py
+      top-level from checkout that are stdlib/site names (real shadowing): []
+      in MAPPING: ['agent', 'cron', 'hermes_cli', 'hermes_constants', 'hermes_time'] | NOT in MAPPING: []
+   --- scratch tree after:
+
+====================================================================================================
+### Q4(b)  WITH fix line: sys.path.insert(0, <checkout root>) ; from cron import jobs ; load_jobs on empty store
+    HERMES_HOME=/tmp/glm54-recheck-20261125/R3/scratch-hermes-home  cwd=/  python=/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python  -B  PYTHONDONTWRITEBYTECODE=1
+    exit code = 0   wall = 0.2s
+   python 3.11.15 | cwd / | HERMES_HOME /tmp/glm54-recheck-20261125/R3/scratch-hermes-home | sys.path[0] = ''
+   RESULT: import OK
+      cron      = /Users/berton/Github/Coding-Agents/Hermes-agent/cron/__init__.py
+      utils     = /Users/berton/Github/Coding-Agents/Hermes-agent/utils.py
+      hermes_yaml= /Users/berton/Github/Coding-Agents/Hermes-agent/hermes_yaml.py
+      HERMES_DIR = /private/tmp/glm54-recheck-20261125/R3/scratch-hermes-home | JOBS_FILE = /private/tmp/glm54-recheck-20261125/R3/scratch-hermes-home/cron/jobs.json
+      load_jobs() -> []
+      resolve_job_ref(ltutor-weekly:TeachF) on empty store -> None
+   ### AUDIT EVENTS  (phase | kind | event | xN | path)
+      load_jobs(empty scratch home) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron
+      load_jobs(empty scratch home) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/output
+      load_jobs(empty scratch home) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron
+      load_jobs(empty scratch home) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron/output
+      resolve(absent name) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron
+      resolve(absent name) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/output
+      resolve(absent name) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron
+      resolve(absent name) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron/output
+   ### MODULES LOADED FROM THE CHECKOUT  (top-level name | n_submodules | file of top-level)
+      agent                  |  15 | <CHECKOUT>/agent/jiter_preload.py
+      cron                   |  24 | <CHECKOUT>/cron/worker_bootstrap.py
+      hermes_cli             |  27 | <CHECKOUT>/hermes_cli/__init__.py
+      hermes_constants       |   1 | <CHECKOUT>/hermes_constants.py
+      hermes_platform        |   5 | <CHECKOUT>/hermes_platform/__init__.py
+      hermes_time            |   1 | <CHECKOUT>/hermes_time.py
+      hermes_yaml            |   1 | <CHECKOUT>/hermes_yaml.py
+      utils                  |   1 | <CHECKOUT>/utils.py
+      top-level from checkout that are stdlib/site names (real shadowing): []
+      in MAPPING: ['agent', 'cron', 'hermes_cli', 'hermes_constants', 'hermes_time', 'utils'] | NOT in MAPPING: ['hermes_platform', 'hermes_yaml']
+   --- scratch tree after:
+   cron/  0o700
+     output/  0o700
+
+====================================================================================================
+### Q3(c)/Q10  ALTERNATIVE: import hermes_bootstrap (mapped by editable finder) ; from cron import jobs
+    HERMES_HOME=/tmp/glm54-recheck-20261125/R3/scratch-hermes-home-alt  cwd=/  python=/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python  -B  PYTHONDONTWRITEBYTECODE=1
+    exit code = 0   wall = 0.2s
+   python 3.11.15 | cwd / | HERMES_HOME /tmp/glm54-recheck-20261125/R3/scratch-hermes-home-alt | sys.path[0] = ''
+      after `import hermes_bootstrap`: sys.path[0] = '/Users/berton/Github/Coding-Agents/Hermes-agent' | cwd entry still on sys.path: False
+   RESULT: import OK via `import hermes_bootstrap` (no hard-coded path)
+   ### AUDIT EVENTS  (phase | kind | event | xN | path)
+      import | ALLOW-META | os.chmod | x1 | <SCRATCH>/cache/scratch
+      import | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cache
+      import | ALLOW-META | os.mkdir | x2 | <SCRATCH>/cache/scratch
+      import | ALLOW-META | os.utime | x1 | <SCRATCH>/cache/scratch/.last_prune
+      import | DENY-PROC-NET | subprocess.Popen | x1 | ('/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python', ['/opt/homebrew/Caskroom/minic
+      import | WRITE-ALLOW | open | x1 | /dev/null
+      import | WRITE-ALLOW | open | x1 | <SCRATCH>/cache/scratch/.last_prune
+      import | putenv | os.putenv | x1 | b'HERMES_SCRATCH_DIR'
+      import | putenv | os.putenv | x1 | b'TEMP'
+      import | putenv | os.putenv | x1 | b'TMP'
+      import | putenv | os.putenv | x1 | b'TMPDIR'
+   ### MODULES LOADED FROM THE CHECKOUT  (top-level name | n_submodules | file of top-level)
+      agent                  |  15 | <CHECKOUT>/agent/jiter_preload.py
+      cron                   |  24 | <CHECKOUT>/cron/worker_bootstrap.py
+      hermes_bootstrap       |   1 | <CHECKOUT>/hermes_bootstrap.py
+      hermes_cli             |  34 | <CHECKOUT>/hermes_cli/__init__.py
+      hermes_constants       |   1 | <CHECKOUT>/hermes_constants.py
+      hermes_constants_scratch |   1 | <CHECKOUT>/hermes_constants_scratch.py
+      hermes_constants_scratch_detach |   1 | <CHECKOUT>/hermes_constants_scratch_detach.py
+      hermes_constants_scratch_stuck |   1 | <CHECKOUT>/hermes_constants_scratch_stuck.py
+      hermes_platform        |   5 | <CHECKOUT>/hermes_platform/__init__.py
+      hermes_time            |   1 | <CHECKOUT>/hermes_time.py
+      hermes_yaml            |   1 | <CHECKOUT>/hermes_yaml.py
+      pm                     |   3 | <CHECKOUT>/pm/__init__.py
+      utils                  |   1 | <CHECKOUT>/utils.py
+      top-level from checkout that are stdlib/site names (real shadowing): []
+      in MAPPING: ['agent', 'cron', 'hermes_bootstrap', 'hermes_cli', 'hermes_constants', 'hermes_time', 'utils'] | NOT in MAPPING: ['hermes_constants_scratch', 'hermes_constants_scratch_detach', 'hermes_constants_scratch_stuck', 'hermes_platform', 'hermes_yaml', 'pm']
+   --- scratch tree after:
+   cache/  0o755
+     scratch/  0o700
+       .last_prune  0o644  0B
+
+====================================================================================================
+### Q5(e)  SYNTHETIC jobs.json with one job named lt-tutor-weekly:teachf ; resolve_job_ref("lt-tutor-weekly:TeachF")
+    HERMES_HOME=/tmp/glm54-recheck-20261125/R3/scratch-hermes-home-e  cwd=/  python=/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python  -B  PYTHONDONTWRITEBYTECODE=1
+    exit code = 0   wall = 0.1s
+   python 3.11.15 | cwd / | HERMES_HOME /tmp/glm54-recheck-20261125/R3/scratch-hermes-home-e | sys.path[0] = ''
+   RESULT: resolve_job_ref("lt-tutor-weekly:TeachF") truthy = True | matched name = 'lt-tutor-weekly:teachf' | id = 'r3-synthetic-0001'
+      "lt-tutor-weekly:TEACHF" truthy = True
+      "lt-tutor-weekly:Nobody" -> None
+      load_jobs() count = 1
+      sha256 before = 96cff057a203c3b9dac4735d381c76c89e030ad0e35053a3f259694a95a08d3b
+      sha256 after  = 96cff057a203c3b9dac4735d381c76c89e030ad0e35053a3f259694a95a08d3b | unchanged = True
+      cron dir entries: ['jobs.json', 'output']
+   ### AUDIT EVENTS  (phase | kind | event | xN | path)
+      load_jobs count | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron
+      load_jobs count | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/output
+      load_jobs count | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron
+      load_jobs count | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron/output
+      resolve_job_ref(TeachF) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron
+      resolve_job_ref(TeachF) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/output
+      resolve_job_ref(TeachF) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron
+      resolve_job_ref(TeachF) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron/output
+      resolve_job_ref(absent) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron
+      resolve_job_ref(absent) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/output
+      resolve_job_ref(absent) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron
+      resolve_job_ref(absent) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron/output
+      resolve_job_ref(uppercase) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron
+      resolve_job_ref(uppercase) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/output
+      resolve_job_ref(uppercase) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron
+      resolve_job_ref(uppercase) | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron/output
+   ### MODULES LOADED FROM THE CHECKOUT  (top-level name | n_submodules | file of top-level)
+      agent                  |  15 | <CHECKOUT>/agent/jiter_preload.py
+      cron                   |  24 | <CHECKOUT>/cron/worker_bootstrap.py
+      hermes_cli             |  27 | <CHECKOUT>/hermes_cli/__init__.py
+      hermes_constants       |   1 | <CHECKOUT>/hermes_constants.py
+      hermes_platform        |   5 | <CHECKOUT>/hermes_platform/__init__.py
+      hermes_time            |   1 | <CHECKOUT>/hermes_time.py
+      hermes_yaml            |   1 | <CHECKOUT>/hermes_yaml.py
+      utils                  |   1 | <CHECKOUT>/utils.py
+      top-level from checkout that are stdlib/site names (real shadowing): []
+      in MAPPING: ['agent', 'cron', 'hermes_cli', 'hermes_constants', 'hermes_time', 'utils'] | NOT in MAPPING: ['hermes_platform', 'hermes_yaml']
+   --- scratch tree after:
+   cron/  0o700
+     jobs.json  0o644  561B
+     output/  0o700
+
+====================================================================================================
+### Q5(e)/Q6  SYNTHETIC create_job then resolve (what a real creation writes)
+    HERMES_HOME=/tmp/glm54-recheck-20261125/R3/scratch-hermes-home-c  cwd=/  python=/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python  -B  PYTHONDONTWRITEBYTECODE=1
+    exit code = 0   wall = 0.1s
+   python 3.11.15 | cwd / | HERMES_HOME /tmp/glm54-recheck-20261125/R3/scratch-hermes-home-c | sys.path[0] = ''
+   RESULT: create_job OK | id = 46996ff548d5 | next_run_at = 2026-11-29T19:05:00+08:00 | keys = 34
+      truthy = True | matched name = lt-tutor-weekly:teachf
+   ### AUDIT EVENTS  (phase | kind | event | xN | path)
+      create_job(synthetic) | ALLOW-META | os.chmod | x3 | <SCRATCH>/cron
+      create_job(synthetic) | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/jobs.json
+      create_job(synthetic) | ALLOW-META | os.chmod | x3 | <SCRATCH>/cron/output
+      create_job(synthetic) | ALLOW-META | os.mkdir | x3 | <SCRATCH>/cron
+      create_job(synthetic) | ALLOW-META | os.mkdir | x3 | <SCRATCH>/cron/output
+      create_job(synthetic) | ALLOW-META | os.rename | x1 | <SCRATCH>/cron/.jobs_ehwk3t1_.tmp
+      create_job(synthetic) | ALLOW-META | os.rename | x1 | <SCRATCH>/cron/jobs.json
+      create_job(synthetic) | DENY-OUTSIDE | fcntl.flock | x2 | /fd:3
+      create_job(synthetic) | DENY-PROC-NET | subprocess.Popen | x1 | ('file', ['file', '-b', '/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python3.11'])
+      create_job(synthetic) | WRITE-ALLOW | open | x1 | /dev/null
+      create_job(synthetic) | WRITE-ALLOW | open | x1 | <SCRATCH>/cron/.jobs.lock
+      create_job(synthetic) | WRITE-ALLOW | open | x1 | <SCRATCH>/cron/.jobs_ehwk3t1_.tmp
+      create_job(synthetic) | tempfile | tempfile.mkstemp | x1 | ('<SCRATCH>/cron/.jobs_ehwk3t1_.tmp',)
+      resolve_job_ref(TeachF) after create | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron
+      resolve_job_ref(TeachF) after create | ALLOW-META | os.chmod | x1 | <SCRATCH>/cron/output
+      resolve_job_ref(TeachF) after create | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron
+      resolve_job_ref(TeachF) after create | ALLOW-META | os.mkdir | x1 | <SCRATCH>/cron/output
+   ### MODULES LOADED FROM THE CHECKOUT  (top-level name | n_submodules | file of top-level)
+      agent                  |  15 | <CHECKOUT>/agent/jiter_preload.py
+      cron                   |  25 | <CHECKOUT>/cron/worker_bootstrap.py
+      hermes_cli             |  29 | <CHECKOUT>/hermes_cli/__init__.py
+      hermes_constants       |   1 | <CHECKOUT>/hermes_constants.py
+      hermes_platform        |   5 | <CHECKOUT>/hermes_platform/__init__.py
+      hermes_time            |   1 | <CHECKOUT>/hermes_time.py
+      hermes_yaml            |   1 | <CHECKOUT>/hermes_yaml.py
+      tools                  |   2 | <CHECKOUT>/tools/__init__.py
+      utils                  |   1 | <CHECKOUT>/utils.py
+      top-level from checkout that are stdlib/site names (real shadowing): []
+      in MAPPING: ['agent', 'cron', 'hermes_cli', 'hermes_constants', 'hermes_time', 'tools', 'utils'] | NOT in MAPPING: ['hermes_platform', 'hermes_yaml']
+   --- scratch tree after:
+   cron/  0o700
+     .jobs.lock  0o644  0B
+     jobs.json  0o600  1306B
+     output/  0o700
+
+====================================================================================================
+### Q6  third-party dependency versions (importlib.metadata + import croniter only; no CLI)
+    HERMES_HOME=/tmp/glm54-recheck-20261125/R3/scratch-hermes-home-f  cwd=/  python=/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python  -B  PYTHONDONTWRITEBYTECODE=1
+    exit code = 0   wall = 0.1s
+   python 3.11.15 | cwd / | HERMES_HOME /tmp/glm54-recheck-20261125/R3/scratch-hermes-home-f | sys.path[0] = ''
+      croniter         6.0.0
+      ruamel.yaml      0.18.17
+      PyYAML           6.0.3
+      jsonschema       4.26.0
+      httpx            0.28.1
+      openai           2.24.0
+      pydantic         2.13.4
+      platformdirs     MISSING
+      python-dotenv    1.2.2
+      python-dateutil  2.9.0.post0
+      import croniter OK: /opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/lib/python3.11/site-packages/croniter/__init__.py
+   RESULT: deps probed
+   ### AUDIT EVENTS  (phase | kind | event | xN | path)
+      import | DENY-PROC-NET | subprocess.Popen | x1 | ('file', ['file', '-b', '/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python3.11'])
+      import | WRITE-ALLOW | open | x1 | /dev/null
+   ### MODULES LOADED FROM THE CHECKOUT  (top-level name | n_submodules | file of top-level)
+      top-level from checkout that are stdlib/site names (real shadowing): []
+      in MAPPING: [] | NOT in MAPPING: []
+   --- scratch tree after:

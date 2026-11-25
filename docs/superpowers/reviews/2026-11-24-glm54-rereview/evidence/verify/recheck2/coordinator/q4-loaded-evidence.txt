@@ -1,0 +1,161 @@
+# Q4 取证：0f17695f 在 11-24 22:00 前是否已加载（协调者，2026-11-25 20:27:29）
+结论见 report.md §十一。本文件只列原始行：时间戳、工具名、URL 实参、字符数；聊天正文与带凭证的行不入档。
+
+## A. 三笔提交的正文（git show -s，live 检出只读）
+--- 0f17695f 2026-11-24 21:35:33 +0800
+fix(mcp): web-clip undici 中途 destroy 崩进程修复（UND_ERR_ABORTED unhandled）
+
+重定向分支 res.destroy() 销毁未消费的 BodyReadable 会 emit UND_ERR_ABORTED，
+无 error 监听即 unhandled 'error' 击杀整个 MCP 进程（2026-11-24 微信 __biz
+老链实证：4 次崩溃，栈 orchestrateClip）。修法=destroy 前挂一次性 noop 监听器；
+正常消费路径的流错误仍由消费方处理。修后同链路优雅报错零新崩溃，343 用例
+全绿；dist 已于 11-24 现场重建并随网关按需重拉生效，本提交收口 live=repo。
+--- e8ee2893 2026-11-24 21:35:38 +0800
+docs(skill): lt-tutor 沉淀微信老链验证码墙与 undici 崩溃坑（回仓）
+
+对齐 11-24 已 live 的全局 lt-teacher-tutor 副本 note 回仓：__biz 老链
+wappoc 验证码墙（≠文章已删；冷却 2h+ 重试/请用户拖一次验证对策；替代源
+勿耗时间）+「stdio subprocess lost」排障路径（tail 对应 profile 的
+logs/mcp-stderr.log 定位崩溃点，勿盲目重试）。已随常规部署双份 cp 至
+live teacher-tutor 副本（正文 skill_view 现读盘即生效）。
+--- 8887af93 2026-11-24 21:42:45 +0800
+test(mcp): web-clip destroy 崩溃回归钉——删 once 监听器即红（变异实跑证真）
+
+直呼 undiciRequestOnce 复刻生产形态：永不 end 的 302 在飞 body +
+redirect 分支同款 destroy 闭包。undici v6 BodyReadable.destroy 对未完成
+流自带 UND_ERR_ABORTED 销毁，无监听器即抛（生产裸异步链=进程击杀点）。
+变异验证：删掉 src 的 once("error") 行 → 本测试以 AbortError
+(UND_ERR_ABORTED) 红；恢复 → 344/344 全绿、dist 复核无残渣。
+SSRF 门不放环回进 fetchWithGuards，故钉在 undiciRequestOnce 触达面
+（与既有正向钉 2 同款；重定向分支销毁的正是该闭包）。
+
+## B. mcp-stderr.log：11-24 20:50 之后的 training / admin 启动行与 Node.js 尾幅
+12080:2026-11-24 20:51:19,252 Node.js v26.12.1
+12082:2026-11-24 20:51:21,318 ===== starting MCP server 'llm-wiki-training' =====
+12109:2026-11-24 20:51:22,268 Node.js v26.12.1
+12111:2026-11-24 20:51:22,308 ===== starting MCP server 'llm-wiki-training' =====
+12138:2026-11-24 20:51:45,482 Node.js v26.12.1
+12140:2026-11-24 20:51:45,522 ===== starting MCP server 'llm-wiki-training' =====
+12167:2026-11-24 20:52:07,061 Node.js v26.12.1
+12169:2026-11-24 20:52:07,105 ===== starting MCP server 'llm-wiki-training' =====
+12173:2026-11-24 20:54:05,489 ===== starting MCP server 'llm-wiki-training' =====
+12177:2026-11-24 21:28:15,442 ===== starting MCP server 'llm-wiki-admin' =====
+12179:2026-11-25 05:31:42,529 ===== starting MCP server 'llm-wiki-training' =====
+12181:2026-11-25 05:31:42,541 ===== starting MCP server 'llm-wiki-admin' =====
+（20:52:07 之后新增的 Node.js 尾幅数见 B 段：无）
+
+## C. agent.log：四个窗口（滤凭证、去 msg=、截 200）
+### C1 四次崩溃与工具报错 20:51:15–20:52:10
+5118:2026-11-24 20:51:11,857 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #1: model=glm-5.3-flash provider=zai-coding-cn in=102282 out=443 total=102725 latency=8.9s cache=95040/102282 
+5119:2026-11-24 20:51:13,017 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__llm_wiki_search completed (0.98s, 2762 chars)
+5120:2026-11-24 20:51:18,941 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #2: model=glm-5.3-flash provider=zai-coding-cn in=104109 out=282 total=104391 latency=5.8s cache=102272/104109
+5121:2026-11-24 20:51:19,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its 
+5122:2026-11-24 20:51:19,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+5123:2026-11-24 20:51:22,059 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (3.10s): {"error": "MCP server 'llm-wiki-training' lo
+5124:2026-11-24 20:51:22,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its 
+5125:2026-11-24 20:51:22,279 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+5126:2026-11-24 20:51:22,605 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.54s): {"error": "MCP server 'llm-wiki-training' lo
+5127:2026-11-24 20:51:26,470 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #3: model=glm-5.3-flash provider=zai-coding-cn in=104667 out=118 total=104785 latency=3.8s cache=104064/104667
+5128:2026-11-24 20:51:26,723 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__llm_wiki_search completed (0.24s, 2996 chars)
+5129:2026-11-24 20:51:45,294 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #4: model=glm-5.3-flash provider=zai-coding-cn in=106275 out=850 total=107125 latency=18.5s cache=104640/10627
+5130:2026-11-24 20:51:45,492 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its 
+5131:2026-11-24 20:51:45,492 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+5132:2026-11-24 20:51:46,080 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.77s): {"error": "MCP server 'llm-wiki-training' lo
+5133:2026-11-24 20:51:58,169 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #5: model=glm-5.3-flash provider=zai-coding-cn in=107321 out=543 total=107864 latency=12.1s cache=106240/10732
+5134:2026-11-24 20:51:58,380 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__llm_wiki_search completed (0.20s, 1487 chars)
+5135:2026-11-24 20:52:06,893 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #6: model=glm-5.3-flash provider=zai-coding-cn in=108608 out=354 total=108962 latency=8.5s cache=107264/108608
+5136:2026-11-24 20:52:07,073 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' closed its 
+5137:2026-11-24 20:52:07,073 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+5138:2026-11-24 20:52:07,396 WARNING [20261025_172801_094d1579] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.49s): {"error": "MCP server 'llm-wiki-training' lo
+
+### C2 补丁到重拉 20:53:40–20:54:14
+5154:2026-11-24 20:53:44,190 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #13: model=glm-5.3-flash provider=zai-coding-cn in=119866 out=540 total=120406 latency=10.4s cache=119424/1198
+5156:2026-11-24 20:53:44,598 INFO [20261025_172801_094d1579] agent.tool_executor: tool patch completed (0.40s, 1276 chars)
+5157:2026-11-24 20:53:47,492 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #14: model=glm-5.3-flash provider=zai-coding-cn in=120824 out=78 total=120902 latency=2.9s cache=119808/120824
+5158:2026-11-24 20:53:49,177 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (1.68s, 397 chars)
+5159:2026-11-24 20:53:52,731 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #15: model=glm-5.3-flash provider=zai-coding-cn in=121044 out=67 total=121111 latency=3.5s cache=120768/121044
+5160:2026-11-24 20:53:54,210 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (1.47s, 169 chars)
+5161:2026-11-24 20:53:59,672 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #16: model=glm-5.3-flash provider=zai-coding-cn in=121175 out=207 total=121382 latency=5.4s cache=121024/12117
+5162:2026-11-24 20:54:02,033 INFO [20261025_172801_094d1579] agent.tool_executor: tool terminal completed (2.35s, 46 chars)
+5163:2026-11-24 20:54:05,221 INFO hermes.lint.lsp: lsp[typescript] active for /Users/berton/Github/kb-obsidian/llm_wiki/mcp-server
+5164:2026-11-24 20:54:05,462 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #17: model=glm-5.3-flash provider=zai-coding-cn in=121404 out=160 total=121564 latency=3.4s cache=121152/12140
+5165:2026-11-24 20:54:05,469 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-training' had already
+5166:2026-11-24 20:54:05,469 INFO tools.mcp_tool: MCP server 'llm-wiki-training': tools/call teacher_tutor_web_clip requesting transport reconnect
+5167:2026-11-24 20:54:06,109 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.64s, 73 chars)
+5168:2026-11-24 20:54:12,793 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #18: model=glm-5.3-flash provider=zai-coding-cn in=121679 out=277 total=121956 latency=6.7s cache=121344/12167
+5169:2026-11-24 20:54:13,177 INFO [20261025_172801_094d1579] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.37s, 73 chars)
+
+### C3 补收任务 21:10:55–21:11:20 与 21:28:05–21:28:46
+5284:2026-11-24 21:10:59,880 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #31: model=glm-5.3-flash provider=zai-coding-cn in=158282 out=1014 total=159296 latency=22.9s cache=146944/158
+5286:2026-11-24 21:10:59,910 INFO [20261025_172801_094d1579] agent.tool_executor: tool cronjob_manage completed (0.02s, 1428 chars)
+5287:2026-11-24 21:10:59,963 INFO cron.scheduler: Running job '补收李陆桂两篇提问文章' (ID: 64bb433bb88a)
+5303:2026-11-24 21:11:05,602 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #32: model=glm-5.3-flash provider=zai-coding-cn in=159880 out=199 total=160079 latency=5.7s cache=158272/15988
+5307:2026-11-24 21:11:10,683 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #1: model=glm-5.3-flash provider=zai-coding-cn in=32473 out=357 
+5308:2026-11-24 21:11:10,713 ERROR tools.mcp_tool: MCP tool llm-wiki-training/teacher_tutor_web_clip call failed: MCP error -32602: wecom_userid is required for system calls
+5309:2026-11-24 21:11:10,715 WARNING [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.02s)
+5310:2026-11-24 21:11:10,721 ERROR tools.mcp_tool: MCP tool llm-wiki-training/teacher_tutor_web_clip call failed: MCP error -32602: wecom_userid is required for system calls
+5311:2026-11-24 21:11:10,721 WARNING [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.00s)
+5312:2026-11-24 21:11:19,439 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #2: model=glm-5.3-flash provider=zai-coding-cn in=33050 out=338 
+5314:2026-11-24 21:11:19,456 WARNING [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_roster_search returned error (0
+5493:2026-11-24 21:28:10,209 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #33: model=Qwen3.6-35B-A3B-4bit provider=omlx-local in=53183 out
+5494:2026-11-24 21:28:10,260 ERROR tools.mcp_tool: MCP tool llm-wiki-training/teacher_tutor_web_clip call failed: MCP error -32602: wecom_userid is required for system calls
+5495:2026-11-24 21:28:10,262 WARNING [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.01s)
+5496:2026-11-24 21:28:10,268 ERROR tools.mcp_tool: MCP tool llm-wiki-training/teacher_tutor_web_clip call failed: MCP error -32602: wecom_userid is required for system calls
+5497:2026-11-24 21:28:10,268 WARNING [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_web_clip returned error (0.00s)
+5499:2026-11-24 21:28:13,375 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #34: model=Qwen3.6-35B-A3B-4bit provider=omlx-local in=53788 out
+5501:2026-11-24 21:28:13,391 WARNING [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: Tool mcp__llm_wiki_training__teacher_tutor_roster_search returned error (0
+5503:2026-11-24 21:28:15,309 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #35: model=Qwen3.6-35B-A3B-4bit provider=omlx-local in=53984 out
+5504:2026-11-24 21:28:15,398 INFO tools.mcp_tool: MCP server 'llm-wiki-admin': tools/call training_overview found the stdio subprocess dead (MCP stdio subprocess for 'llm-wiki-admin' had already exited whe
+5505:2026-11-24 21:28:15,398 INFO tools.mcp_tool: MCP server 'llm-wiki-admin': tools/call training_overview requesting transport reconnect
+5506:2026-11-24 21:28:15,901 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: tool mcp__llm_wiki_admin__training_overview completed (0.51s, 1452 chars)
+5508:2026-11-24 21:28:21,217 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #36: model=Qwen3.6-35B-A3B-4bit provider=omlx-local in=55224 out
+5509:2026-11-24 21:28:21,274 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: tool session_search completed (0.05s, 511 chars)
+5511:2026-11-24 21:28:32,953 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #37: model=Qwen3.6-35B-A3B-4bit provider=omlx-local in=55503 out
+5512:2026-11-24 21:28:33,353 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.38s, 75 char
+5513:2026-11-24 21:28:33,648 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.tool_executor: tool mcp__llm_wiki_training__teacher_tutor_web_clip completed (0.29s, 75 char
+5515:2026-11-24 21:28:42,899 INFO [local-2264eeea83ff97add605d77f6819a361e56ca3bdc0c114b930986ae71e1020ba] agent.conversation_loop: API call #38: model=Qwen3.6-35B-A3B-4bit provider=omlx-local in=56202 out
+5517:2026-11-24 21:28:42,958 INFO cron.scheduler: Job '补收李陆桂两篇提问文章' completed successfully
+5520:2026-11-24 21:28:45,177 INFO cron.scheduler: Job '64bb433bb88a': delivered to wecom:<所有者企微名> via live adapter thread=- message_id=r3rHC-MQQfClfPLByrqk7gAA
+5585:2026-11-24 21:28:45,687 WARNING [20261025_172801_094d1579] agent.conversation_loop: API call failed (attempt 1/3) error_type=RateLimitError thread=hermes-gateway_51:481674539008 provider=zai-coding-cn
+
+### C4 落盘两篇时的工具 21:42:00–21:43:10
+5675:2026-11-24 21:42:04,968 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #14: model=glm-5.3-flash provider=zai-coding-cn in=77197 out=1946 total=79143 latency=22.0s cache=76544/77197 
+5676:2026-11-24 21:42:05,439 INFO [20261025_172801_094d1579] agent.tool_executor: tool write_file completed (0.46s, 281 chars)
+5677:2026-11-24 21:42:15,394 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #15: model=glm-5.3-flash provider=zai-coding-cn in=79232 out=639 total=79871 latency=9.9s cache=77184/79232 (9
+5678:2026-11-24 21:42:15,715 INFO [20261025_172801_094d1579] agent.tool_executor: tool write_file completed (0.31s, 280 chars)
+5679:2026-11-24 21:42:20,420 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #16: model=glm-5.3-flash provider=zai-coding-cn in=79958 out=217 total=80175 latency=4.7s cache=79232/79958 (9
+5680:2026-11-24 21:42:20,729 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.24s, 964 chars)
+5681:2026-11-24 21:42:24,184 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #17: model=glm-5.3-flash provider=zai-coding-cn in=80475 out=105 total=80580 latency=3.4s cache=79936/80475 (9
+5682:2026-11-24 21:42:24,354 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.12s, 1010 chars)
+5683:2026-11-24 21:42:28,273 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #18: model=glm-5.3-flash provider=zai-coding-cn in=80888 out=268 total=81156 latency=3.9s cache=80448/80888 (9
+5684:2026-11-24 21:42:28,656 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.37s, 1142 chars)
+5685:2026-11-24 21:42:34,752 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #19: model=glm-5.3-flash provider=zai-coding-cn in=81518 out=210 total=81728 latency=6.1s cache=80832/81518 (9
+5686:2026-11-24 21:42:34,820 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.06s, 1186 chars)
+5687:2026-11-24 21:42:37,821 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #20: model=glm-5.3-flash provider=zai-coding-cn in=82093 out=60 total=82153 latency=3.0s cache=81472/82093 (99
+5688:2026-11-24 21:42:37,851 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.02s, 4025 chars)
+5689:2026-11-24 21:42:42,516 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #21: model=glm-5.3-flash provider=zai-coding-cn in=83368 out=205 total=83573 latency=4.6s cache=82048/83368 (9
+5690:2026-11-24 21:42:42,585 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.06s, 1285 chars)
+5691:2026-11-24 21:42:47,971 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #22: model=glm-5.3-flash provider=zai-coding-cn in=83979 out=370 total=84349 latency=5.4s cache=83328/83979 (9
+5692:2026-11-24 21:42:48,965 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.98s, 1135 chars)
+5693:2026-11-24 21:43:05,146 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #23: model=glm-5.3-flash provider=zai-coding-cn in=84709 out=836 total=85545 latency=16.1s cache=83968/84709 (
+5694:2026-11-24 21:43:05,937 INFO [20261025_172801_094d1579] agent.tool_executor: tool execute_code completed (0.78s, 681 chars)
+5695:2026-11-24 21:43:15,869 INFO [20261025_172801_094d1579] agent.conversation_loop: API call #24: model=glm-5.3-flash provider=zai-coding-cn in=85826 out=470 total=86296 latency=9.8s cache=84672/85826 (9
+
+## D. 会话库（state.db，immutable 只读）：11-24 20:50–22:00 的 teacher_tutor_web_clip 调用
+2026-11-24 20:51:18  会话=20261025_172801_094d15…  老式 __biz 链 mid=2247494605  工具结果 514 字符 | error=MCP server 'llm-wiki-training' lost its …
+2026-11-24 20:51:18  会话=20261025_172801_094d15…  老式 __biz 链 mid=2247494610  工具结果 514 字符 | error=MCP server 'llm-wiki-training' lost its …
+2026-11-24 20:51:45  会话=20261025_172801_094d15…  老式 __biz 链 mid=2247494605  工具结果 765 字符 | error=MCP server 'llm-wiki-training' lost its …
+2026-11-24 20:52:06  会话=20261025_172801_094d15…  老式 __biz 链 mid=2247494605  工具结果 1068 字符 | error=MCP server 'llm-wiki-training' lost its …
+2026-11-24 20:54:05  会话=20261025_172801_094d15…  老式 __biz 链 mid=2247494605  工具结果 339 字符 | result=这篇提不了正文（可能已删除、需登录或付费墙），可以把正文复制发我\nidenti…
+2026-11-24 20:54:12  会话=20261025_172801_094d15…  老式 __biz 链 mid=2247494610  工具结果 339 字符 | result=这篇提不了正文（可能已删除、需登录或付费墙），可以把正文复制发我\nidenti…
+2026-11-24 21:11:10  会话=local-2264eeea83ff97ad…  老式 __biz 链 mid=2247494605  工具结果 60 字符 | [Duplicate tool output — same content as a more recent call]
+2026-11-24 21:11:10  会话=local-2264eeea83ff97ad…  老式 __biz 链 mid=2247494610  工具结果 112 字符 | [mcp__llm_wiki_training__teacher_tutor_web_clip] url=https:/
+2026-11-24 21:28:10  会话=local-2264eeea83ff97ad…  老式 __biz 链 mid=2247494605  工具结果 365 字符 | error=MCP call failed: MCPError: MCP error -32…
+2026-11-24 21:28:10  会话=local-2264eeea83ff97ad…  老式 __biz 链 mid=2247494610  工具结果 365 字符 | error=MCP call failed: MCPError: MCP error -32…
+2026-11-24 21:28:32  会话=local-2264eeea83ff97ad…  老式 __biz 链 mid=2247494605  工具结果 341 字符 | result=这篇提不了正文（可能已删除、需登录或付费墙），可以把正文复制发我\nidenti…
+2026-11-24 21:28:32  会话=local-2264eeea83ff97ad…  老式 __biz 链 mid=2247494610  工具结果 341 字符 | result=这篇提不了正文（可能已删除、需登录或付费墙），可以把正文复制发我\nidenti…
+2026-11-24 21:30:16  会话=20261025_172801_094d15…  老式 __biz 链 mid=2247494605  工具结果 112 字符 | [mcp__llm_wiki_training__teacher_tutor_web_clip] url=https:/
+
+读法：20:51:18–20:52:06 四次调用 = 四次崩溃（B 段四条尾幅、C1 段四条 lost its stdio subprocess）；
+      20:54:05 起同一批链接的调用全部优雅返回（result=「这篇提不了正文…」），此后 B 段零尾幅；
+      服务这些调用的 training 进程 = 20:54:05 那次无尾幅重拉（C2：派发时「had already exited」，respawning and retrying once）。

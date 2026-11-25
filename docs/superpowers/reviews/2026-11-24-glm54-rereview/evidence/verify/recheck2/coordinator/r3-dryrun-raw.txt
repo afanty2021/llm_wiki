@@ -1,0 +1,7 @@
+$ rc=0 wall=0.12s
+=== DRY RUN（不落盘） ===
+[1/3] 精确路由已存在（chat_id=TeachF）——跳过
+[2/3] platforms.wecom 启用块已存在——跳过
+[3/3] 周报任务已存在（lt-tutor-weekly:TeachF）——跳过
+=== 完成 ===
+--- stderr ---

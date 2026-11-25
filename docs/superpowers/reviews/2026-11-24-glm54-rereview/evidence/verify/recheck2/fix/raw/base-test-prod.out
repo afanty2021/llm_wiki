@@ -1,0 +1,2077 @@
+TAP version 13
+# Subtest: 工具面：恰 1 个 training_overview，空参数 schema
+ok 1 - 工具面：恰 1 个 training_overview，空参数 schema
+  ---
+  duration_ms: 0.540584
+  type: 'test'
+  ...
+# Subtest: handler：GET /training/overview 带 admin 头、无 Bearer；渲染真实档案
+ok 2 - handler：GET /training/overview 带 admin 头、无 Bearer；渲染真实档案
+  ---
+  duration_ms: 20.516875
+  type: 'test'
+  ...
+# Subtest: 错误路径：src-server 不可达 → 正常文本返回不抛错（避熔断，评审 I1）
+ok 3 - 错误路径：src-server 不可达 → 正常文本返回不抛错（避熔断，评审 I1）
+  ---
+  duration_ms: 0.182917
+  type: 'test'
+  ...
+# Subtest: renderOverview：空档案与畸形输入安全
+ok 4 - renderOverview：空档案与畸形输入安全
+  ---
+  duration_ms: 0.0825
+  type: 'test'
+  ...
+# Subtest: renderOverview：管理员（非测试形态）档案保留逐行——不过滤主人
+ok 5 - renderOverview：管理员（非测试形态）档案保留逐行——不过滤主人
+  ---
+  duration_ms: 0.070375
+  type: 'test'
+  ...
+# Subtest: renderOverview：时间戳统一转 Asia/Shanghai；null/畸形回落安全
+ok 6 - renderOverview：时间戳统一转 Asia/Shanghai；null/畸形回落安全
+  ---
+  duration_ms: 0.211625
+  type: 'test'
+  ...
+# Subtest: normalizeBaseUrl trims trailing slashes and falls back to localhost
+ok 7 - normalizeBaseUrl trims trailing slashes and falls back to localhost
+  ---
+  duration_ms: 1.227917
+  type: 'test'
+  ...
+# Subtest: projects sends bearer token and parses current project
+ok 8 - projects sends bearer token and parses current project
+  ---
+  duration_ms: 11.757417
+  type: 'test'
+  ...
+# Subtest: health does not send authorization
+ok 9 - health does not send authorization
+  ---
+  duration_ms: 0.189
+  type: 'test'
+  ...
+# Subtest: search posts JSON body to current project
+ok 10 - search posts JSON body to current project
+  ---
+  duration_ms: 0.462959
+  type: 'test'
+  ...
+# Subtest: embedPage posts a project-relative wiki path
+ok 11 - embedPage posts a project-relative wiki path
+  ---
+  duration_ms: 0.381833
+  type: 'test'
+  ...
+# Subtest: embedPage rejects malformed success payloads
+ok 12 - embedPage rejects malformed success payloads
+  ---
+  duration_ms: 1.239958
+  type: 'test'
+  ...
+# Subtest: writePage posts exact content and requires verified persistence
+ok 13 - writePage posts exact content and requires verified persistence
+  ---
+  duration_ms: 0.239
+  type: 'test'
+  ...
+# Subtest: writePage rejects an unverified success response
+ok 14 - writePage rejects an unverified success response
+  ---
+  duration_ms: 0.171667
+  type: 'test'
+  ...
+# Subtest: chat posts agent request and parses references
+ok 15 - chat posts agent request and parses references
+  ---
+  duration_ms: 0.605667
+  type: 'test'
+  ...
+# Subtest: cancelChat posts to the chat cancellation endpoint
+ok 16 - cancelChat posts to the chat cancellation endpoint
+  ---
+  duration_ms: 0.299208
+  type: 'test'
+  ...
+# Subtest: graph parses nodeType from API graph nodes
+ok 17 - graph parses nodeType from API graph nodes
+  ---
+  duration_ms: 0.284125
+  type: 'test'
+  ...
+# Subtest: graph forwards pagination and exposes page metadata
+ok 18 - graph forwards pagination and exposes page metadata
+  ---
+  duration_ms: 0.180417
+  type: 'test'
+  ...
+# Subtest: files exposes truncated flag
+ok 19 - files exposes truncated flag
+  ---
+  duration_ms: 0.132917
+  type: 'test'
+  ...
+# Subtest: reviews requests unresolved review items with filters
+ok 20 - reviews requests unresolved review items with filters
+  ---
+  duration_ms: 0.190791
+  type: 'test'
+  ...
+# Subtest: network failures include desktop app hint
+ok 21 - network failures include desktop app hint
+  ---
+  duration_ms: 0.076
+  type: 'test'
+  ...
+# Subtest: non-JSON responses include status and body preview
+ok 22 - non-JSON responses include status and body preview
+  ---
+  duration_ms: 0.115375
+  type: 'test'
+  ...
+# Subtest: API errors include status and server message
+ok 23 - API errors include status and server message
+  ---
+  duration_ms: 0.130584
+  type: 'test'
+  ...
+# Subtest: 404 responses throw typed ApiNotFoundError (message unchanged); 5xx stay plain Errors
+ok 24 - 404 responses throw typed ApiNotFoundError (message unchanged); 5xx stay plain Errors
+  ---
+  duration_ms: 0.18725
+  type: 'test'
+  ...
+# Subtest: ① meta{wecom,T1} + 无 args → user 模式（身份取 meta）
+ok 25 - ① meta{wecom,T1} + 无 args → user 模式（身份取 meta）
+  ---
+  duration_ms: 0.751041
+  type: 'test'
+  ...
+# Subtest: ② 同 meta + args 'T1' → user 模式（一致通过）
+ok 26 - ② 同 meta + args 'T1' → user 模式（一致通过）
+  ---
+  duration_ms: 0.062792
+  type: 'test'
+  ...
+# Subtest: ③ 同 meta + args 'T2' → IdentityMismatch（硬拒不降级）
+ok 27 - ③ 同 meta + args 'T2' → IdentityMismatch（硬拒不降级）
+  ---
+  duration_ms: 0.152667
+  type: 'test'
+  ...
+# Subtest: ④ meta{platform:'wecom'}（无 user_id）+ 任意 args → IdentityUnavailable（fail-closed，不落系统模式）
+ok 28 - ④ meta{platform:'wecom'}（无 user_id）+ 任意 args → IdentityUnavailable（fail-closed，不落系统模式）
+  ---
+  duration_ms: 0.082875
+  type: 'test'
+  ...
+# Subtest: ⑤ meta 空 + args 'T1' → system 模式
+ok 29 - ⑤ meta 空 + args 'T1' → system 模式
+  ---
+  duration_ms: 0.056375
+  type: 'test'
+  ...
+# Subtest: ⑥ meta 空 + 无 args → ToolArgumentError（system 必须显式 wecom_userid）
+ok 30 - ⑥ meta 空 + 无 args → ToolArgumentError（system 必须显式 wecom_userid）
+  ---
+  duration_ms: 0.050209
+  type: 'test'
+  ...
+# Subtest: ⑦ meta{platform:'cli'} + args → system 模式
+ok 31 - ⑦ meta{platform:'cli'} + args → system 模式
+  ---
+  duration_ms: 0.042583
+  type: 'test'
+  ...
+# Subtest: 边界：args 空白串视为省略；meta user_id 去空白；platform 去空白
+ok 32 - 边界：args 空白串视为省略；meta user_id 去空白；platform 去空白
+  ---
+  duration_ms: 0.069166
+  type: 'test'
+  ...
+# Subtest: 对抗补遗（评审 S4）：纯空格 user_id 是 truthy 假象——归一后按不可用硬拒，不落系统模式
+ok 33 - 对抗补遗（评审 S4）：纯空格 user_id 是 truthy 假象——归一后按不可用硬拒，不落系统模式
+  ---
+  duration_ms: 0.072125
+  type: 'test'
+  ...
+# Subtest: 对抗补遗（评审 S2/S4）：platform 大小写漂移归一后仍落用户模式（fail-closed 方向）
+ok 34 - 对抗补遗（评审 S2/S4）：platform 大小写漂移归一后仍落用户模式（fail-closed 方向）
+  ---
+  duration_ms: 0.100708
+  type: 'test'
+  ...
+# Subtest: 对抗补遗（评审 S4）：platform 非字符串（如数字）归一为空 → 系统模式须显式 wecom_userid
+ok 35 - 对抗补遗（评审 S4）：platform 非字符串（如数字）归一为空 → 系统模式须显式 wecom_userid
+  ---
+  duration_ms: 0.073125
+  type: 'test'
+  ...
+# Subtest: supervisor·冲突+admin → 目标身份 + identitySource:'supervisor'
+ok 36 - supervisor·冲突+admin → 目标身份 + identitySource:'supervisor'
+  ---
+  duration_ms: 0.064042
+  type: 'test'
+  ...
+# Subtest: supervisor·冲突+非 admin → IdentityMismatch（非 admin 语义文案，照拒不降级）
+ok 37 - supervisor·冲突+非 admin → IdentityMismatch（非 admin 语义文案，照拒不降级）
+  ---
+  duration_ms: 0.062041
+  type: 'test'
+  ...
+# Subtest: supervisor·args 空白/等于会话 → 现行为（返回会话身份，无 identitySource 标记）
+ok 38 - supervisor·args 空白/等于会话 → 现行为（返回会话身份，无 identitySource 标记）
+  ---
+  duration_ms: 0.049208
+  type: 'test'
+  ...
+# Subtest: supervisor·系统模式 → 现行为（显式 wecom_userid 直通；缺参 ToolArgumentError 不受 admin 标志影响）
+ok 39 - supervisor·系统模式 → 现行为（显式 wecom_userid 直通；缺参 ToolArgumentError 不受 admin 标志影响）
+  ---
+  duration_ms: 0.035583
+  type: 'test'
+  ...
+# Subtest: supervisor·wecom 会话身份缺失 → IdentityUnavailable 照旧透传（admin 标志不救，fail-closed）
+ok 40 - supervisor·wecom 会话身份缺失 → IdentityUnavailable 照旧透传（admin 标志不救，fail-closed）
+  ---
+  duration_ms: 0.032709
+  type: 'test'
+  ...
+# Subtest: supervisor·闸辅助谓词：hasWecomSessionIdentity / sessionWecomUserid 归一与 resolveIdentity 同源
+ok 41 - supervisor·闸辅助谓词：hasWecomSessionIdentity / sessionWecomUserid 归一与 resolveIdentity 同源
+  ---
+  duration_ms: 0.053083
+  type: 'test'
+  ...
+# Subtest: extractRequestMeta：对象直通，非对象/数组归 undefined
+ok 42 - extractRequestMeta：对象直通，非对象/数组归 undefined
+  ---
+  duration_ms: 0.038416
+  type: 'test'
+  ...
+# Subtest: 集成·user 通畅：teacher_tutor_progress 省略 wecom_userid + wecom meta → 凭证层用 meta 身份 + identity_source:'user'
+ok 43 - 集成·user 通畅：teacher_tutor_progress 省略 wecom_userid + wecom meta → 凭证层用 meta 身份 + identity_source:'user'
+  ---
+  duration_ms: 6.280167
+  type: 'test'
+  ...
+# Subtest: 集成·user 一致通过：llm_wiki_search 显式等值 wecom_userid → 正常执行 + identity_source:'user'
+ok 44 - 集成·user 一致通过：llm_wiki_search 显式等值 wecom_userid → 正常执行 + identity_source:'user'
+  ---
+  duration_ms: 0.34725
+  type: 'test'
+  ...
+# Subtest: 集成·mismatch 硬拒：teacher_tutor_progress args 'T2' vs meta 'T1' → IdentityMismatch + 零请求
+ok 45 - 集成·mismatch 硬拒：teacher_tutor_progress args 'T2' vs meta 'T1' → IdentityMismatch + 零请求
+  ---
+  duration_ms: 0.0975
+  type: 'test'
+  ...
+# Subtest: 集成·wecom-空-身份硬拒：teacher_tutor_plan_create 任意 args → IdentityUnavailable + 零请求
+ok 46 - 集成·wecom-空-身份硬拒：teacher_tutor_plan_create 任意 args → IdentityUnavailable + 零请求
+  ---
+  duration_ms: 0.095833
+  type: 'test'
+  ...
+# Subtest: 集成·system 模式：teacher_tutor_progress 无 meta + 显式 wecom_userid → identity_source:'system'
+ok 47 - 集成·system 模式：teacher_tutor_progress 无 meta + 显式 wecom_userid → identity_source:'system'
+  ---
+  duration_ms: 0.133667
+  type: 'test'
+  ...
+# Subtest: 集成·system 模式缺 wecom_userid：无 meta 且省略 → ToolArgumentError + 零请求
+ok 48 - 集成·system 模式缺 wecom_userid：无 meta 且省略 → ToolArgumentError + 零请求
+  ---
+  duration_ms: 0.07625
+  type: 'test'
+  ...
+# Subtest: 集成·主管 override 放行：admin 会话 plan_list 带 T2 → member-role 后放行，凭证层用 T2 + identity_source:'supervisor'
+ok 49 - 集成·主管 override 放行：admin 会话 plan_list 带 T2 → member-role 后放行，凭证层用 T2 + identity_source:'supervisor'
+  ---
+  duration_ms: 0.354833
+  type: 'test'
+  ...
+# Subtest: 集成·owner 视同 admin：role=owner → override 放行（controller Ruling 与 role_meets Admin 级对齐）
+ok 50 - 集成·owner 视同 admin：role=owner → override 放行（controller Ruling 与 role_meets Admin 级对齐）
+  ---
+  duration_ms: 0.244625
+  type: 'test'
+  ...
+# Subtest: 集成·必补① 非 admin 传他人 userid 照拒：member 会话 plan_list 带 T2 → IdentityMismatch（非 admin 语义）+ 不触达 plans/凭证
+ok 51 - 集成·必补① 非 admin 传他人 userid 照拒：member 会话 plan_list 带 T2 → IdentityMismatch（非 admin 语义）+ 不触达 plans/凭证
+  ---
+  duration_ms: 0.158
+  type: 'test'
+  ...
+# Subtest: 集成·必补② role 查询失败照拒（文案区分）：member-role 500 → IdentityMismatch（unavailable 语义，区别于普通 mismatch）
+ok 52 - 集成·必补② role 查询失败照拒（文案区分）：member-role 500 → IdentityMismatch（unavailable 语义，区别于普通 mismatch）
+  ---
+  duration_ms: 0.210459
+  type: 'test'
+  ...
+# Subtest: 集成·member-role 404（会话者非本 team 成员）→ 非 admin 臂照拒，文案走「非 admin」语义（复审 Minor-2）
+ok 53 - 集成·member-role 404（会话者非本 team 成员）→ 非 admin 臂照拒，文案走「非 admin」语义（复审 Minor-2）
+  ---
+  duration_ms: 0.218708
+  type: 'test'
+  ...
+# Subtest: 集成·决策② 仅 mismatch 才查：白名单工具本人调用（无冲突）→ member-role 零调用
+ok 54 - 集成·决策② 仅 mismatch 才查：白名单工具本人调用（无冲突）→ member-role 零调用
+  ---
+  duration_ms: 0.133667
+  type: 'test'
+  ...
+# Subtest: 集成·目标预查·404 拒：admin 会话 plan_create 带不在册 T2 → 正常文本拒（isError=false）+ 不触达 plans/凭证
+ok 55 - 集成·目标预查·404 拒：admin 会话 plan_create 带不在册 T2 → 正常文本拒（isError=false）+ 不触达 plans/凭证
+  ---
+  duration_ms: 0.245166
+  type: 'test'
+  ...
+# Subtest: 集成·目标预查·在册放行：目标 member-role 200（普通 member 即可）→ plans 正常建
+ok 56 - 集成·目标预查·在册放行：目标 member-role 200（普通 member 即可）→ plans 正常建
+  ---
+  duration_ms: 0.270917
+  type: 'test'
+  ...
+# Subtest: 集成·目标预查·查询失败 fail-closed：目标 member-role 500 → unavailable 臂抛错 + 不触达 plans
+ok 57 - 集成·目标预查·查询失败 fail-closed：目标 member-role 500 → unavailable 臂抛错 + 不触达 plans
+  ---
+  duration_ms: 0.141917
+  type: 'test'
+  ...
+# Subtest: 集成·目标预查仅 supervisor 路径：教师本人自建（无冲突）与 system 回合均零 member-role 往返
+ok 58 - 集成·目标预查仅 supervisor 路径：教师本人自建（无冲突）与 system 回合均零 member-role 往返
+  ---
+  duration_ms: 0.123875
+  type: 'test'
+  ...
+# Subtest: 集成·roster_search admin 闸·非 admin 拒：member 会话 → IdentityMismatch + 不触达 roster
+ok 59 - 集成·roster_search admin 闸·非 admin 拒：member 会话 → IdentityMismatch + 不触达 roster
+  ---
+  duration_ms: 0.12925
+  type: 'test'
+  ...
+# Subtest: 集成·roster_search admin 闸·admin 过：→ roster 透传 + identity_source:'user'
+ok 60 - 集成·roster_search admin 闸·admin 过：→ roster 透传 + identity_source:'user'
+  ---
+  duration_ms: 0.158959
+  type: 'test'
+  ...
+# Subtest: 集成·roster_search 核验不可用 → unavailable 臂照拒（文案区分）+ 不触达 roster
+ok 61 - 集成·roster_search 核验不可用 → unavailable 臂照拒（文案区分）+ 不触达 roster
+  ---
+  duration_ms: 0.089125
+  type: 'test'
+  ...
+# Subtest: 集成·SUPERVISION_TOOLS 白名单钉桩（决策③：常量在分发层）：恰好三工具、record_ask/search 等不在列
+ok 62 - 集成·SUPERVISION_TOOLS 白名单钉桩（决策③：常量在分发层）：恰好三工具、record_ask/search 等不在列
+  ---
+  duration_ms: 0.018875
+  type: 'test'
+  ...
+# Subtest: schema：18 个 src-server 工具——15 个可选声明 wecom_userid；两个 T2 检索工具与 web_clip（Task 3+4）不声明（检索工具无身份参数；web_clip 会话身份即收藏人、无 cron 流量）
+ok 63 - schema：18 个 src-server 工具——15 个可选声明 wecom_userid；两个 T2 检索工具与 web_clip（Task 3+4）不声明（检索工具无身份参数；web_clip 会话身份即收藏人、无 cron 流量）
+  ---
+  duration_ms: 0.312667
+  type: 'test'
+  ...
+# Subtest: 链路：client callTool _meta 经 SDK 真实管线到达 handler 的 request.params._meta（hermes_* 键不被剥离）
+ok 64 - 链路：client callTool _meta 经 SDK 真实管线到达 handler 的 request.params._meta（hermes_* 键不被剥离）
+  ---
+  duration_ms: 47.754542
+  type: 'test'
+  ...
+# Subtest: 链路：schema 未声明的 wecom_userid 经 SDK 管线原样到达 handler（cron 系统调用依赖）
+ok 65 - 链路：schema 未声明的 wecom_userid 经 SDK 管线原样到达 handler（cron 系统调用依赖）
+  ---
+  duration_ms: 0.903125
+  type: 'test'
+  ...
+# Subtest: speedToRate：带符号整数百分比（评审 R1 正则 ^[+-]\\d+%$）
+ok 66 - speedToRate：带符号整数百分比（评审 R1 正则 ^[+-]\\d+%$）
+  ---
+  duration_ms: 0.43175
+  type: 'test'
+  ...
+# Subtest: sanitizeTitle：白名单清洗 + 长度上限 + 空回落
+ok 67 - sanitizeTitle：白名单清洗 + 长度上限 + 空回落
+  ---
+  duration_ms: 0.192625
+  type: 'test'
+  ...
+# Subtest: edge 主路径：rate/voice 映射、静音段 24kHz mono、concat 行间交错、文件名清洗
+ok 68 - edge 主路径：rate/voice 映射、静音段 24kHz mono、concat 行间交错、文件名清洗
+  ---
+  duration_ms: 22.825208
+  type: 'test'
+  ...
+# Subtest: say 降级：edge 失败整体回落、单人声局限注明
+ok 69 - say 降级：edge 失败整体回落、单人声局限注明
+  ---
+  duration_ms: 10.730833
+  type: 'test'
+  ...
+# Subtest: 双引擎皆败：返回可读聚合错误
+ok 70 - 双引擎皆败：返回可读聚合错误
+  ---
+  duration_ms: 0.467792
+  type: 'test'
+  ...
+# Subtest: 并发有界：12 行合成峰值 ≤ LISTENING_CONCURRENCY
+ok 71 - 并发有界：12 行合成峰值 ≤ LISTENING_CONCURRENCY
+  ---
+  duration_ms: 42.254791
+  type: 'test'
+  ...
+# Subtest: I3 同构: outDir 为普通文件 → ok:false 不抛错（2026-09-10 评审）
+ok 72 - I3 同构: outDir 为普通文件 → ok:false 不抛错（2026-09-10 评审）
+  ---
+  duration_ms: 0.538958
+  type: 'test'
+  ...
+# Subtest: sheetInterval: duration/9 下限 5s、无上限（评审 I-6 回归钉——15min 全覆盖）
+ok 73 - sheetInterval: duration/9 下限 5s、无上限（评审 I-6 回归钉——15min 全覆盖）
+  ---
+  duration_ms: 0.498167
+  type: 'test'
+  ...
+# Subtest: isAllowedMediaPath: 允许根内真/出根假/../逃逸假/符号链接出根假
+ok 74 - isAllowedMediaPath: 允许根内真/出根假/../逃逸假/符号链接出根假
+  ---
+  duration_ms: 1.238292
+  type: 'test'
+  ...
+# Subtest: isAllowedMediaPath: 不存在路径 /var↔/private/var 同根双写互认（评审 Minor 7 回归钉）
+ok 75 - isAllowedMediaPath: 不存在路径 /var↔/private/var 同根双写互认（评审 Minor 7 回归钉）
+  ---
+  duration_ms: 0.178792
+  type: 'test'
+  ...
+# Subtest: mediaSha1: 流式哈希与内容对应
+ok 76 - mediaSha1: 流式哈希与内容对应
+  ---
+  duration_ms: 4.762416
+  type: 'test'
+  ...
+# Subtest: modelPathFromModulePath: 模块文件 4 层 dirname 至仓根（计划评审 I-7）
+ok 77 - modelPathFromModulePath: 模块文件 4 层 dirname 至仓根（计划评审 I-7）
+  ---
+  duration_ms: 0.103833
+  type: 'test'
+  ...
+# Subtest: remainingTimeoutMs: 段内剩余预算、下限 1ms
+ok 78 - remainingTimeoutMs: 段内剩余预算、下限 1ms
+  ---
+  duration_ms: 0.05475
+  type: 'test'
+  ...
+# Subtest: args 构造 golden：wav/mp3/sheet/whisper（transcriber 同参钉死）
+ok 79 - args 构造 golden：wav/mp3/sheet/whisper（transcriber 同参钉死）
+  ---
+  duration_ms: 0.335583
+  type: 'test'
+  ...
+# Subtest: 分段预算权威表：20+60+200=280 ≤ 300（计划评审 C1）
+ok 80 - 分段预算权威表：20+60+200=280 ≤ 300（计划评审 C1）
+  ---
+  duration_ms: 0.040833
+  type: 'test'
+  ...
+# Subtest: stripHallucinationSegments: 黑名单段剥后 ≤2 字丢、>2 字留、净段零误杀
+ok 81 - stripHallucinationSegments: 黑名单段剥后 ≤2 字丢、>2 字留、净段零误杀
+  ---
+  duration_ms: 0.131208
+  type: 'test'
+  ...
+# Subtest: analyzeWindowDegeneration: 高频 8-gram 循环判退化（maxFreq ≥250）
+ok 82 - analyzeWindowDegeneration: 高频 8-gram 循环判退化（maxFreq ≥250）
+  ---
+  duration_ms: 0.322958
+  type: 'test'
+  ...
+# Subtest: analyzeWindowDegeneration: 教材型自然复现零误杀（众数间距计数 <3 → 链覆盖 0）
+ok 83 - analyzeWindowDegeneration: 教材型自然复现零误杀（众数间距计数 <3 → 链覆盖 0）
+  ---
+  duration_ms: 0.307875
+  type: 'test'
+  ...
+# Subtest: parseWhisperJson: -oj 形态解析 + strip 开关
+ok 84 - parseWhisperJson: -oj 形态解析 + strip 开关
+  ---
+  duration_ms: 0.12
+  type: 'test'
+  ...
+# Subtest: analyzeDegeneration: 窗聚合 + coverage ≥0.4 判拒
+ok 85 - analyzeDegeneration: 窗聚合 + coverage ≥0.4 判拒
+  ---
+  duration_ms: 0.295083
+  type: 'test'
+  ...
+# Subtest: cleanupMediaRoot: >7 天自清扫 + 1GB LRU 淘汰最旧
+ok 86 - cleanupMediaRoot: >7 天自清扫 + 1GB LRU 淘汰最旧
+  ---
+  duration_ms: 3.313583
+  type: 'test'
+  ...
+# Subtest: cleanupMediaRoot: LRU 分支——超帽按 mtime 淘汰最旧（cap 注入触发真实淘汰，评审 I-5）
+ok 87 - cleanupMediaRoot: LRU 分支——超帽按 mtime 淘汰最旧（cap 注入触发真实淘汰，评审 I-5）
+  ---
+  duration_ms: 1.230042
+  type: 'test'
+  ...
+# Subtest: resolveToolBinary: env 覆盖优先（含存在性校验）、候选目录探测、缺件 null
+ok 88 - resolveToolBinary: env 覆盖优先（含存在性校验）、候选目录探测、缺件 null
+  ---
+  duration_ms: 0.478583
+  type: 'test'
+  ...
+# Subtest: extractMedia: 输入卫门（空/相对/越界/不存在/图片/不支持格式）→ ok:false 且不触管线
+ok 89 - extractMedia: 输入卫门（空/相对/越界/不存在/图片/不支持格式）→ ok:false 且不触管线
+  ---
+  duration_ms: 1.796958
+  type: 'test'
+  ...
+# Subtest: extractMedia: 视频全管线成功（sheet+mp3+转写剥幻觉+wav 即删）
+ok 90 - extractMedia: 视频全管线成功（sheet+mp3+转写剥幻觉+wav 即删）
+  ---
+  duration_ms: 3.877667
+  type: 'test'
+  ...
+# Subtest: extractMedia: 无音轨视频 → transcript 空数组、无 mp3、sheet 在
+ok 91 - extractMedia: 无音轨视频 → transcript 空数组、无 mp3、sheet 在
+  ---
+  duration_ms: 1.929666
+  type: 'test'
+  ...
+# Subtest: extractMedia: 时长超 15min → 引导截片段/入库
+ok 92 - extractMedia: 时长超 15min → 引导截片段/入库
+  ---
+  duration_ms: 0.829709
+  type: 'test'
+  ...
+# Subtest: extractMedia: 转写退化（coverage ≥0.4）→ ok:false 质量异常
+ok 93 - extractMedia: 转写退化（coverage ≥0.4）→ ok:false 质量异常
+  ---
+  duration_ms: 2.005167
+  type: 'test'
+  ...
+# Subtest: extractMedia: 段数 >400 截断并置 transcript_truncated
+ok 94 - extractMedia: 段数 >400 截断并置 transcript_truncated
+  ---
+  duration_ms: 3.496833
+  type: 'test'
+  ...
+# Subtest: extractMedia: 互斥在跑即拒（D9 排队深度=1）
+ok 95 - extractMedia: 互斥在跑即拒（D9 排队深度=1）
+  ---
+  duration_ms: 33.998375
+  type: 'test'
+  ...
+# Subtest: extractMedia: 二进制缺失 → 环境故障文案（勿重试）
+ok 96 - extractMedia: 二进制缺失 → 环境故障文案（勿重试）
+  ---
+  duration_ms: 0.981875
+  type: 'test'
+  ...
+# Subtest: extractMedia: 模型缺失 → 同款友好文案
+ok 97 - extractMedia: 模型缺失 → 同款友好文案
+  ---
+  duration_ms: 0.84925
+  type: 'test'
+  ...
+# Subtest: 真冒烟: lavfi testsrc+sine 3s 视频全管线真跑（sheet JPEG 完好/transcript 结构在/mp3 头合法）
+ok 98 - 真冒烟: lavfi testsrc+sine 3s 视频全管线真跑（sheet JPEG 完好/transcript 结构在/mp3 头合法） # SKIP
+  ---
+  duration_ms: 0.021167
+  type: 'test'
+  ...
+# Subtest: outlineToMarkdown: \# 主题 + 两空格缩进列表
+ok 99 - outlineToMarkdown: \# 主题 + 两空格缩进列表
+  ---
+  duration_ms: 1.443625
+  type: 'test'
+  ...
+# Subtest: outlineToMarkdown: 换行/制表压空格（列表行结构唯一硬约束）
+ok 100 - outlineToMarkdown: 换行/制表压空格（列表行结构唯一硬约束）
+  ---
+  duration_ms: 0.14475
+  type: 'test'
+  ...
+# Subtest: buildMarkmapHtml: 本地资产引用/base64 内联/画布尺寸/fit 与色板在页
+ok 101 - buildMarkmapHtml: 本地资产引用/base64 内联/画布尺寸/fit 与色板在页
+  ---
+  duration_ms: 0.136666
+  type: 'test'
+  ...
+# Subtest: I-A 注入用例: <!-- 与 <script>/</script> 内容不再以任何可解析形态进 HTML
+ok 102 - I-A 注入用例: <!-- 与 <script>/</script> 内容不再以任何可解析形态进 HTML
+  ---
+  duration_ms: 0.080584
+  type: 'test'
+  ...
+# Subtest: ASSET_BASE 三资产实存（拦资产漂移，M4'）
+ok 103 - ASSET_BASE 三资产实存（拦资产漂移，M4'）
+  ---
+  duration_ms: 0.079041
+  type: 'test'
+  ...
+# Subtest: renderMindmapMarkmap: 资产缺失 → ok:false 预检失败（不启动 Chrome）
+ok 104 - renderMindmapMarkmap: 资产缺失 → ok:false 预检失败（不启动 Chrome）
+  ---
+  duration_ms: 0.282167
+  type: 'test'
+  ...
+# Subtest: renderMindmapMarkmap: 成功——engine/path 命名/rename 落终名/nodes+depth
+ok 105 - renderMindmapMarkmap: 成功——engine/path 命名/rename 落终名/nodes+depth
+  ---
+  duration_ms: 3.4095
+  type: 'test'
+  ...
+# Subtest: I-A 半截 PNG: 截图缺 IEND 尾 → ok:false 走回落（不 ok:true 直送教师）
+ok 106 - I-A 半截 PNG: 截图缺 IEND 尾 → ok:false 走回落（不 ok:true 直送教师）
+  ---
+  duration_ms: 0.820334
+  type: 'test'
+  ...
+# Subtest: renderMindmapMarkmap: 截图失败 → ok:false（不抛错）
+ok 107 - renderMindmapMarkmap: 截图失败 → ok:false（不抛错）
+  ---
+  duration_ms: 0.710708
+  type: 'test'
+  ...
+# Subtest: renderMindmapAuto: markmap 成功 → 直接用、不碰 graphviz
+ok 108 - renderMindmapAuto: markmap 成功 → 直接用、不碰 graphviz
+  ---
+  duration_ms: 0.862375
+  type: 'test'
+  ...
+# Subtest: renderMindmapAuto: markmap 失败 → 回落 graphviz
+ok 109 - renderMindmapAuto: markmap 失败 → 回落 graphviz
+  ---
+  duration_ms: 1.928417
+  type: 'test'
+  ...
+# Subtest: renderMindmapAuto: 双败 → 聚合两个引擎的错误（M2'：内部路径已被 friendly 化）
+ok 110 - renderMindmapAuto: 双败 → 聚合两个引擎的错误（M2'：内部路径已被 friendly 化）
+  ---
+  duration_ms: 1.0715
+  type: 'test'
+  ...
+# [mindmap] markmap headless 截图失败: Chrome 提前退出且未产出截图（安装损坏或参数异常）
+# Subtest: I-B: Chrome 提前退出无截图 → 立即失败（非 20s 慢败）
+ok 111 - I-B: Chrome 提前退出无截图 → 立即失败（非 20s 慢败）
+  ---
+  duration_ms: 8.352666
+  type: 'test'
+  ...
+# Subtest: chromeScreenshotRunner: Chrome 缺失 → 可读错误
+ok 112 - chromeScreenshotRunner: Chrome 缺失 → 可读错误
+  ---
+  duration_ms: 0.206333
+  type: 'test'
+  ...
+# Subtest: renderMindmapMarkmap: 真实 Chrome 冒烟（本地资产 + headless 截图 + IEND 判据）
+ok 113 - renderMindmapMarkmap: 真实 Chrome 冒烟（本地资产 + headless 截图 + IEND 判据）
+  ---
+  duration_ms: 1294.260541
+  type: 'test'
+  ...
+# Subtest: renderMindmap(graphviz): engine 字段 = graphviz
+ok 114 - renderMindmap(graphviz): engine 字段 = graphviz
+  ---
+  duration_ms: 0.838417
+  type: 'test'
+  ...
+# Subtest: I-A 内容保真: HTML 标签字面文本经实体转义可见（不 被 markdown 吃掉）
+ok 115 - I-A 内容保真: HTML 标签字面文本经实体转义可见（不 被 markdown 吃掉）
+  ---
+  duration_ms: 0.046792
+  type: 'test'
+  ...
+# Subtest: rmRfBestEffort：清理竞态（ENOTEMPTY 类）吞掉不外抛——渲染成功不得被清理失败误报（§九加固）
+ok 116 - rmRfBestEffort：清理竞态（ENOTEMPTY 类）吞掉不外抛——渲染成功不得被清理失败误报（§九加固）
+  ---
+  duration_ms: 0.055083
+  type: 'test'
+  ...
+# Subtest: normalizeOutline: 归一形状——root.label 即 title、缺 children 补空、递归展开
+ok 117 - normalizeOutline: 归一形状——root.label 即 title、缺 children 补空、递归展开
+  ---
+  duration_ms: 1.153167
+  type: 'test'
+  ...
+# Subtest: normalizeOutline: 形状非法 → OutlineFormatError
+ok 118 - normalizeOutline: 形状非法 → OutlineFormatError
+  ---
+  duration_ms: 0.219458
+  type: 'test'
+  ...
+# Subtest: outlineCapsError: 61 节点超限、恰好 60 通过
+ok 119 - outlineCapsError: 61 节点超限、恰好 60 通过
+  ---
+  duration_ms: 0.210166
+  type: 'test'
+  ...
+# Subtest: outlineCapsError: 深度超限（root=0 层，最深许可 4）
+ok 120 - outlineCapsError: 深度超限（root=0 层，最深许可 4）
+  ---
+  duration_ms: 0.074667
+  type: 'test'
+  ...
+# Subtest: outlineCapsError: 标签/标题超长——指明位置
+ok 121 - outlineCapsError: 标签/标题超长——指明位置
+  ---
+  duration_ms: 0.073375
+  type: 'test'
+  ...
+# Subtest: compileDot: 结构/根样式/深度配色/中文与转义
+ok 122 - compileDot: 结构/根样式/深度配色/中文与转义
+  ---
+  duration_ms: 0.202833
+  type: 'test'
+  ...
+# Subtest: compileDot: 撞名 label 生成独立节点 id
+ok 123 - compileDot: 撞名 label 生成独立节点 id
+  ---
+  duration_ms: 0.080958
+  type: 'test'
+  ...
+# Subtest: renderMindmap: 成功——dot 参数/产物落 outDir/文件名 sha1 前 12 位幂等/nodes+depth
+ok 124 - renderMindmap: 成功——dot 参数/产物落 outDir/文件名 sha1 前 12 位幂等/nodes+depth
+  ---
+  duration_ms: 1.823334
+  type: 'test'
+  ...
+# Subtest: renderMindmap: dot 失败 → ok:false + tmp 清理
+ok 125 - renderMindmap: dot 失败 → ok:false + tmp 清理
+  ---
+  duration_ms: 0.626542
+  type: 'test'
+  ...
+# Subtest: I1: title 41-60 区间通过、61 拒——root 不再撞 40 闸
+ok 126 - I1: title 41-60 区间通过、61 拒——root 不再撞 40 闸
+  ---
+  duration_ms: 0.11175
+  type: 'test'
+  ...
+# Subtest: I3 洞二: 嵌套 >100 层 → OutlineFormatError（不爆 RangeError）
+ok 127 - I3 洞二: 嵌套 >100 层 → OutlineFormatError（不爆 RangeError）
+  ---
+  duration_ms: 0.132958
+  type: 'test'
+  ...
+# Subtest: M1: 控制字符（\\x01 等）压空格，不进 DOT 字符串
+ok 128 - M1: 控制字符（\\x01 等）压空格，不进 DOT 字符串
+  ---
+  duration_ms: 0.067042
+  type: 'test'
+  ...
+# Subtest: I3 洞一: outDir 为普通文件 → ok:false 不抛错（mkdir ECONFIG 不进熔断器）
+ok 129 - I3 洞一: outDir 为普通文件 → ok:false 不抛错（mkdir ECONFIG 不进熔断器）
+  ---
+  duration_ms: 0.279584
+  type: 'test'
+  ...
+# Subtest: M6: dot ENOENT → 中文「渲染组件未安装」引导
+ok 130 - M6: dot ENOENT → 中文「渲染组件未安装」引导
+  ---
+  duration_ms: 0.619417
+  type: 'test'
+  ...
+# Subtest: normalizePptx: trim 语义 + 空串可选项归一 + theme 回落
+ok 131 - normalizePptx: trim 语义 + 空串可选项归一 + theme 回落
+  ---
+  duration_ms: 0.99575
+  type: 'test'
+  ...
+# Subtest: normalizePptx: 标题剥「课件/PPT」字样（worksheet 剥「学案」先例）
+ok 132 - normalizePptx: 标题剥「课件/PPT」字样（worksheet 剥「学案」先例）
+  ---
+  duration_ms: 0.187291
+  type: 'test'
+  ...
+# Subtest: normalizePptx: 剥除边角——全角 ＰＰＴ 与尾点（评审 M-5）
+ok 133 - normalizePptx: 剥除边角——全角 ＰＰＴ 与尾点（评审 M-5）
+  ---
+  duration_ms: 0.070167
+  type: 'test'
+  ...
+# Subtest: normalizePptx: 标题只剩「课件/PPT」→ 拒
+ok 134 - normalizePptx: 标题只剩「课件/PPT」→ 拒
+  ---
+  duration_ms: 0.169375
+  type: 'test'
+  ...
+# Subtest: normalizePptx: 形状非法 → PptxFormatError
+ok 135 - normalizePptx: 形状非法 → PptxFormatError
+  ---
+  duration_ms: 0.141208
+  type: 'test'
+  ...
+# Subtest: normalizePptx: 控制字符压空格（换行也压——bullets 是单行语义）
+ok 136 - normalizePptx: 控制字符压空格（换行也压——bullets 是单行语义）
+  ---
+  duration_ms: 0.054875
+  type: 'test'
+  ...
+# Subtest: caps: 内容页 3-10 边界（2 拒 / 3 过 / 10 过 / 11 拒）
+ok 137 - caps: 内容页 3-10 边界（2 拒 / 3 过 / 10 过 / 11 拒）
+  ---
+  duration_ms: 0.351709
+  type: 'test'
+  ...
+# Subtest: caps: 每页要点数（1 过 / 6 过 / 7 拒）
+ok 138 - caps: 每页要点数（1 过 / 6 过 / 7 拒）
+  ---
+  duration_ms: 0.085625
+  type: 'test'
+  ...
+# Subtest: caps: 字段长度帽（title/subtitle/heading/bullet/note）
+ok 139 - caps: 字段长度帽（title/subtitle/heading/bullet/note）
+  ---
+  duration_ms: 0.136833
+  type: 'test'
+  ...
+# Subtest: caps: 全字段最大合法值合成用例（评审 I-1 防回归钉）——6×80+30=510 ≤ 550 必须过
+ok 140 - caps: 全字段最大合法值合成用例（评审 I-1 防回归钉）——6×80+30=510 ≤ 550 必须过
+  ---
+  duration_ms: 0.120625
+  type: 'test'
+  ...
+# Subtest: caps: 单页上限 ≥ 字段级最大合计（510）——页级帽是字段帽未来放宽时的护栏，当前不可被合法输入触达
+ok 141 - caps: 单页上限 ≥ 字段级最大合计（510）——页级帽是字段帽未来放宽时的护栏，当前不可被合法输入触达
+  ---
+  duration_ms: 0.07225
+  type: 'test'
+  ...
+# Subtest: caps: 总量超限拒（10 页 × 短要点构造 >2500）
+ok 142 - caps: 总量超限拒（10 页 × 短要点构造 >2500）
+  ---
+  duration_ms: 0.129333
+  type: 'test'
+  ...
+# Subtest: 文件名幂等: 同内容两次渲染同 sha1 名 + 键序漂移不影响
+ok 143 - 文件名幂等: 同内容两次渲染同 sha1 名 + 键序漂移不影响
+  ---
+  duration_ms: 20.046875
+  type: 'test'
+  ...
+# Subtest: 真渲染: slide 数=slides+1（封面）/ CJK 完好 / note 在 notesSlide / <script> 被转义 / 严格 <a:t> 清单无多余文本
+ok 144 - 真渲染: slide 数=slides+1（封面）/ CJK 完好 / note 在 notesSlide / <script> 被转义 / 严格 <a:t> 清单无多余文本
+  ---
+  duration_ms: 8.444583
+  type: 'test'
+  ...
+# Subtest: 真渲染: 引擎自身错误路径——outDir 指向普通文件 → ok:false、绝对路径剥除（评审 M-2）
+ok 145 - 真渲染: 引擎自身错误路径——outDir 指向普通文件 → ok:false、绝对路径剥除（评审 M-2）
+  ---
+  duration_ms: 0.607292
+  type: 'test'
+  ...
+# Subtest: 真渲染: 字节级不保证确定（docProps 时间戳）——只断言结构有效可再解包
+ok 146 - 真渲染: 字节级不保证确定（docProps 时间戳）——只断言结构有效可再解包
+  ---
+  duration_ms: 5.802083
+  type: 'test'
+  ...
+# Subtest: v2 caps: image 页数 ≤4 / 单图 5MB / 音频 6MB / 嵌入总量 8MB
+ok 147 - v2 caps: image 页数 ≤4 / 单图 5MB / 音频 6MB / 嵌入总量 8MB
+  ---
+  duration_ms: 0.332125
+  type: 'test'
+  ...
+# Subtest: v2 允许根校验走 caps 文本通道（实施评审 C1：勿进熔断器）
+ok 148 - v2 允许根校验走 caps 文本通道（实施评审 C1：勿进熔断器）
+  ---
+  duration_ms: 0.105334
+  type: 'test'
+  ...
+# Subtest: v2 幂等: 媒体内容 sha1 进规范形——同内容异路径同文件名、异内容异文件名
+ok 149 - v2 幂等: 媒体内容 sha1 进规范形——同内容异路径同文件名、异内容异文件名
+  ---
+  duration_ms: 13.504708
+  type: 'test'
+  ...
+# Subtest: v2 真渲染: 图片页 <a:blip> / 封面音频 <a:audioFile>（zip 后处理）/ rels 不动对偶断言
+ok 150 - v2 真渲染: 图片页 <a:blip> / 封面音频 <a:audioFile>（zip 后处理）/ rels 不动对偶断言
+  ---
+  duration_ms: 28.537
+  type: 'test'
+  ...
+# Subtest: v2 渲染后实测超投递帽 → 剥嵌入降级纯文字版（实施评审 I-2，计划 §三-2/§八兜底）
+ok 151 - v2 渲染后实测超投递帽 → 剥嵌入降级纯文字版（实施评审 I-2，计划 §三-2/§八兜底）
+  ---
+  duration_ms: 27.847958
+  type: 'test'
+  ...
+# Subtest: v3 版式推断: image > compare > layout > 缺省 bullets（effectiveLayout 单一事实）
+ok 152 - v3 版式推断: image > compare > layout > 缺省 bullets（effectiveLayout 单一事实）
+  ---
+  duration_ms: 0.127667
+  type: 'test'
+  ...
+# Subtest: v3 normalize: compare/section 归一 + bullets 按版式分化
+ok 153 - v3 normalize: compare/section 归一 + bullets 按版式分化
+  ---
+  duration_ms: 0.123959
+  type: 'test'
+  ...
+# Subtest: v3 normalize: 矛盾/非法组合 fail-fast（PptxFormatError）
+ok 154 - v3 normalize: 矛盾/非法组合 fail-fast（PptxFormatError）
+  ---
+  duration_ms: 0.20425
+  type: 'test'
+  ...
+# Subtest: v3 caps: section 副句 ≤2 条 ×60 字 / compare 栏 ≤4 条 ×60 字 + 栏标题 ≤12
+ok 155 - v3 caps: section 副句 ≤2 条 ×60 字 / compare 栏 ≤4 条 ×60 字 + 栏标题 ≤12
+  ---
+  duration_ms: 0.16075
+  type: 'test'
+  ...
+# Subtest: v3 真渲染: 混合版式清单断言——section 居中/compare 两栏文本恰等于入参、无多余文本
+ok 156 - v3 真渲染: 混合版式清单断言——section 居中/compare 两栏文本恰等于入参、无多余文本
+  ---
+  duration_ms: 4.874708
+  type: 'test'
+  ...
+# Subtest: v3 哈希: 版式与 compare 内容进规范形——改 compare 一条要点即轮换文件名
+ok 157 - v3 哈希: 版式与 compare 内容进规范形——改 compare 一条要点即轮换文件名
+  ---
+  duration_ms: 9.009667
+  type: 'test'
+  ...
+# Subtest: pin resolves current to a stable project id
+ok 158 - pin resolves current to a stable project id
+  ---
+  duration_ms: 0.839708
+  type: 'test'
+  ...
+# Subtest: pinned sessions reject cross-project overrides
+ok 159 - pinned sessions reject cross-project overrides
+  ---
+  duration_ms: 0.218375
+  type: 'test'
+  ...
+# Subtest: unbound sessions preserve the current-project compatibility default
+ok 160 - unbound sessions preserve the current-project compatibility default
+  ---
+  duration_ms: 0.056083
+  type: 'test'
+  ...
+# Subtest: responses carry a structural active-project reminder
+ok 161 - responses carry a structural active-project reminder
+  ---
+  duration_ms: 0.58825
+  type: 'test'
+  ...
+# Subtest: resolveApiForm: 默认 desktop，显式 src-server
+ok 162 - resolveApiForm: 默认 desktop，显式 src-server
+  ---
+  duration_ms: 0.597875
+  type: 'test'
+  ...
+# Subtest: store: 并发 3 次 getAccess 只发一次 refresh（single-flight），且轮换持久化
+ok 163 - store: 并发 3 次 getAccess 只发一次 refresh（single-flight），且轮换持久化
+  ---
+  duration_ms: 28.258667
+  type: 'test'
+  ...
+# Subtest: store: 首次建档走 bind——请求形状 + 文件 600 / 目录 700
+ok 164 - store: 首次建档走 bind——请求形状 + 文件 600 / 目录 700
+  ---
+  duration_ms: 1.467334
+  type: 'test'
+  ...
+# Subtest: store: 持久化原子写——无临时文件残留，内容/权限完好
+ok 165 - store: 持久化原子写——无临时文件残留，内容/权限完好
+  ---
+  duration_ms: 0.902334
+  type: 'test'
+  ...
+# Subtest: store: refresh 失败（401）回落 bind 并轮换
+ok 166 - store: refresh 失败（401）回落 bind 并轮换
+  ---
+  duration_ms: 1.010584
+  type: 'test'
+  ...
+# Subtest: store: access 内存缓存提前 60s 过期，重刷新使用轮换后的 refresh token
+ok 167 - store: access 内存缓存提前 60s 过期，重刷新使用轮换后的 refresh token
+  ---
+  duration_ms: 1.533708
+  type: 'test'
+  ...
+# Subtest: healthSrc: GET /health（无 /api/v1 前缀、无鉴权头），接受 {status:"ok"}
+ok 168 - healthSrc: GET /health（无 /api/v1 前缀、无鉴权头），接受 {status:"ok"}
+  ---
+  duration_ms: 0.186916
+  type: 'test'
+  ...
+# Subtest: healthSrc: 响应含 degraded 字段 → 结构化降级结果（ok:false + degraded 透传），不再一律健康
+ok 169 - healthSrc: 响应含 degraded 字段 → 结构化降级结果（ok:false + degraded 透传），不再一律健康
+  ---
+  duration_ms: 0.21575
+  type: 'test'
+  ...
+# Subtest: authRefresh: expires_in 缺失/无效（非正有限数）→ 按失败抛错（上层走 bind 重建），不再静默 0
+ok 170 - authRefresh: expires_in 缺失/无效（非正有限数）→ 按失败抛错（上层走 bind 重建），不再静默 0
+  ---
+  duration_ms: 0.5815
+  type: 'test'
+  ...
+# Subtest: authRefresh: expires_in 有效 → 正常返回（回归护栏，1800 秒不被误杀）
+ok 171 - authRefresh: expires_in 有效 → 正常返回（回归护栏，1800 秒不被误杀）
+  ---
+  duration_ms: 0.107709
+  type: 'test'
+  ...
+# Subtest: llm_wiki_search（src-server 形态）: GET /api/v1/search?project_id&query&limit&rerank=false + Bearer
+ok 172 - llm_wiki_search（src-server 形态）: GET /api/v1/search?project_id&query&limit&rerank=false + Bearer
+  ---
+  duration_ms: 0.618458
+  type: 'test'
+  ...
+# Subtest: llm_wiki_read_file: search 返回的 DB 页路径 → 页命中（正文+类型+来源原文），不再打 storage 读
+ok 173 - llm_wiki_read_file: search 返回的 DB 页路径 → 页命中（正文+类型+来源原文），不再打 storage 读
+  ---
+  duration_ms: 0.267875
+  type: 'test'
+  ...
+# Subtest: llm_wiki_read_file: 页 404 → 回落 storage 源文件读（旧语义保持）
+ok 174 - llm_wiki_read_file: 页 404 → 回落 storage 源文件读（旧语义保持）
+  ---
+  duration_ms: 0.198584
+  type: 'test'
+  ...
+# Subtest: llm_wiki_read_file 双 404（页+storage）→ 正常返回（isError=false）+ 未找到文案，不抛 MCP 错误
+ok 175 - llm_wiki_read_file 双 404（页+storage）→ 正常返回（isError=false）+ 未找到文案，不抛 MCP 错误
+  ---
+  duration_ms: 0.176875
+  type: 'test'
+  ...
+# Subtest: llm_wiki_read_file 页接口 500 → 仍抛错（服务故障不回落 storage，照常计熔断）
+ok 176 - llm_wiki_read_file 页接口 500 → 仍抛错（服务故障不回落 storage，照常计熔断）
+  ---
+  duration_ms: 0.088667
+  type: 'test'
+  ...
+# Subtest: 工具 401 后失效重试一次（invalidate + 新 token）
+ok 177 - 工具 401 后失效重试一次（invalidate + 新 token）
+  ---
+  duration_ms: 1.5005
+  type: 'test'
+  ...
+# Subtest: teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、item_complete、plan_link、progress
+ok 178 - teacher_tutor 工具透传：profile_get/put、record_ask、plan_list、item_complete、plan_link、progress
+  ---
+  duration_ms: 1.17025
+  type: 'test'
+  ...
+# Subtest: teacher_tutor_plan_create: POST /plans 透传 + 返回含完整 /s/ 短链
+ok 179 - teacher_tutor_plan_create: POST /plans 透传 + 返回含完整 /s/ 短链
+  ---
+  duration_ms: 0.224959
+  type: 'test'
+  ...
+# Subtest: teacher_tutor_plan_link: 服务端未回 link 时抛错，不输出裸 base URL
+ok 180 - teacher_tutor_plan_link: 服务端未回 link 时抛错，不输出裸 base URL
+  ---
+  duration_ms: 0.170042
+  type: 'test'
+  ...
+# Subtest: joinTLink: 尾斜杠归一 + 绝对链接直通
+ok 181 - joinTLink: 尾斜杠归一 + 绝对链接直通
+  ---
+  duration_ms: 0.025208
+  type: 'test'
+  ...
+# Subtest: src-server 形态：只注册 18 工具（16 teacher_tutor_* + 2 llm_wiki），10 个桌面工具不在 ListTools
+ok 182 - src-server 形态：只注册 18 工具（16 teacher_tutor_* + 2 llm_wiki），10 个桌面工具不在 ListTools
+  ---
+  duration_ms: 0.252042
+  type: 'test'
+  ...
+# Subtest: desktop 形态：12 个桌面工具（上游 v0.6.10 新增 set_project/chat/embed_page；v0.6.13 新增 write_page）且无 teacher_tutor_*
+ok 183 - desktop 形态：12 个桌面工具（上游 v0.6.10 新增 set_project/chat/embed_page；v0.6.13 新增 write_page）且无 teacher_tutor_*
+  ---
+  duration_ms: 0.102625
+  type: 'test'
+  ...
+# Subtest: src-server 形态缺失 LLM_WIKI_API_BASE_URL → 启动 fail-fast；显式设置/桌面形态不抛
+ok 184 - src-server 形态缺失 LLM_WIKI_API_BASE_URL → 启动 fail-fast；显式设置/桌面形态不抛
+  ---
+  duration_ms: 0.102708
+  type: 'test'
+  ...
+# Subtest: listening_audio: 合成成功 → MEDIA 行 + 引擎摘要 + identity_source（C1 回显约定）
+ok 185 - listening_audio: 合成成功 → MEDIA 行 + 引擎摘要 + identity_source（C1 回显约定）
+  ---
+  duration_ms: 0.177792
+  type: 'test'
+  ...
+# Subtest: listening_audio: 行数超限 → 正常文本引导、不调引擎
+ok 186 - listening_audio: 行数超限 → 正常文本引导、不调引擎
+  ---
+  duration_ms: 0.063792
+  type: 'test'
+  ...
+# Subtest: listening_audio: 总字符超限 → 正常文本引导
+ok 187 - listening_audio: 总字符超限 → 正常文本引导
+  ---
+  duration_ms: 0.038709
+  type: 'test'
+  ...
+# Subtest: listening_audio: 单行超长 → 指明行号
+ok 188 - listening_audio: 单行超长 → 指明行号
+  ---
+  duration_ms: 0.029375
+  type: 'test'
+  ...
+# Subtest: listening_audio: 非法 speaker / 缺 text → ToolArgumentError
+ok 189 - listening_audio: 非法 speaker / 缺 text → ToolArgumentError
+  ---
+  duration_ms: 0.065041
+  type: 'test'
+  ...
+# Subtest: listening_audio: 引擎双败 → 失败文案（不抛错）
+ok 190 - listening_audio: 引擎双败 → 失败文案（不抛错）
+  ---
+  duration_ms: 0.041542
+  type: 'test'
+  ...
+# Subtest: mindmap: 渲染成功 → MEDIA 行 + 节点/层数摘要 + identity_source
+ok 191 - mindmap: 渲染成功 → MEDIA 行 + 节点/层数摘要 + identity_source
+  ---
+  duration_ms: 0.192792
+  type: 'test'
+  ...
+# Subtest: mindmap: 节点超限 → 正常文本引导、不调渲染
+ok 192 - mindmap: 节点超限 → 正常文本引导、不调渲染
+  ---
+  duration_ms: 0.07025
+  type: 'test'
+  ...
+# Subtest: mindmap: 形状非法 → ToolArgumentError（缺 label / root 非对象）
+ok 193 - mindmap: 形状非法 → ToolArgumentError（缺 label / root 非对象）
+  ---
+  duration_ms: 0.054166
+  type: 'test'
+  ...
+# Subtest: mindmap: 渲染失败 → 失败文案、无 MEDIA 行（不抛错）
+ok 194 - mindmap: 渲染失败 → 失败文案、无 MEDIA 行（不抛错）
+  ---
+  duration_ms: 0.04875
+  type: 'test'
+  ...
+# Subtest: mindmap schema: 递归 children 不被 additionalProperties:false 禁绝（I2）
+ok 195 - mindmap schema: 递归 children 不被 additionalProperties:false 禁绝（I2）
+  ---
+  duration_ms: 0.07075
+  type: 'test'
+  ...
+# Subtest: worksheet: 渲染成功 → MEDIA 行 + 板块/内容块计数 + identity_source（无引擎字样 M3'）
+ok 196 - worksheet: 渲染成功 → MEDIA 行 + 板块/内容块计数 + identity_source（无引擎字样 M3'）
+  ---
+  duration_ms: 0.691375
+  type: 'test'
+  ...
+# Subtest: worksheet: sections 少于 2 → 正常文本引导、不调渲染
+ok 197 - worksheet: sections 少于 2 → 正常文本引导、不调渲染
+  ---
+  duration_ms: 0.23525
+  type: 'test'
+  ...
+# Subtest: worksheet: 形状非法 → ToolArgumentError（坏块型/缺 heading）
+ok 198 - worksheet: 形状非法 → ToolArgumentError（坏块型/缺 heading）
+  ---
+  duration_ms: 0.169
+  type: 'test'
+  ...
+# Subtest: worksheet: 渲染失败 → 环境性故障引导文字版（I-7b 不刷屏）
+ok 199 - worksheet: 渲染失败 → 环境性故障引导文字版（I-7b 不刷屏）
+  ---
+  duration_ms: 0.092167
+  type: 'test'
+  ...
+# Subtest: pptx: 渲染成功 → MEDIA 行 + 页数含封面 + identity_source（无引擎字样）
+ok 200 - pptx: 渲染成功 → MEDIA 行 + 页数含封面 + identity_source（无引擎字样）
+  ---
+  duration_ms: 0.603417
+  type: 'test'
+  ...
+# Subtest: pptx: slides 少于 3 → 正常文本引导、不调渲染（不进熔断器）
+ok 201 - pptx: slides 少于 3 → 正常文本引导、不调渲染（不进熔断器）
+  ---
+  duration_ms: 0.103542
+  type: 'test'
+  ...
+# Subtest: pptx: 形状非法 → ToolArgumentError（缺 bullets/坏类型）
+ok 202 - pptx: 形状非法 → ToolArgumentError（缺 bullets/坏类型）
+  ---
+  duration_ms: 0.119708
+  type: 'test'
+  ...
+# Subtest: pptx: 渲染失败 → 环境性故障引导文字版大纲（勿刷屏）
+ok 203 - pptx: 渲染失败 → 环境性故障引导文字版大纲（勿刷屏）
+  ---
+  duration_ms: 0.068417
+  type: 'test'
+  ...
+# Subtest: video_search: GET /api/v1/training/media/search?q&limit + admin header，候选数组原样透传
+ok 204 - video_search: GET /api/v1/training/media/search?q&limit + admin header，候选数组原样透传
+  ---
+  duration_ms: 0.24575
+  type: 'test'
+  ...
+# Subtest: video_search: 空白 q → ToolArgumentError 且零请求（schema 必填非空白的服务端前置闸）
+ok 205 - video_search: 空白 q → ToolArgumentError 且零请求（schema 必填非空白的服务端前置闸）
+  ---
+  duration_ms: 0.06375
+  type: 'test'
+  ...
+# Subtest: roster_search: GET /api/v1/training/roster?q + admin header，两键名册原样透传（系统模式不触发会话闸）
+ok 206 - roster_search: GET /api/v1/training/roster?q + admin header，两键名册原样透传（系统模式不触发会话闸）
+  ---
+  duration_ms: 0.167333
+  type: 'test'
+  ...
+# Subtest: video_search 端点 404 → 正常返回（isError=false）+「检索服务暂时不可用」文案，不抛错
+ok 207 - video_search 端点 404 → 正常返回（isError=false）+「检索服务暂时不可用」文案，不抛错
+  ---
+  duration_ms: 0.115083
+  type: 'test'
+  ...
+# Subtest: roster_search 端点 404 → 正常返回（isError=false）+ 同款文案，不抛错
+ok 208 - roster_search 端点 404 → 正常返回（isError=false）+ 同款文案，不抛错
+  ---
+  duration_ms: 0.085541
+  type: 'test'
+  ...
+# Subtest: 检索端点 500 → 仍抛错（服务故障照常计熔断，404 臂不吞服务故障）
+ok 209 - 检索端点 500 → 仍抛错（服务故障照常计熔断，404 臂不吞服务故障）
+  ---
+  duration_ms: 0.078417
+  type: 'test'
+  ...
+# Subtest: pending 提示：plan_list 有 active 计划 → 尾块 pending_hint（N active / M 未完成），主负载原样在前
+ok 210 - pending 提示：plan_list 有 active 计划 → 尾块 pending_hint（N active / M 未完成），主负载原样在前
+  ---
+  duration_ms: 0.113167
+  type: 'test'
+  ...
+# Subtest: pending 提示：plan_list 零 active / 行形状意外 → 不附提示块（尽力而为，不倒打主负载）
+ok 211 - pending 提示：plan_list 零 active / 行形状意外 → 不附提示块（尽力而为，不倒打主负载）
+  ---
+  duration_ms: 0.160958
+  type: 'test'
+  ...
+# Subtest: pending 提示：profile_get 成功 → 额外取 plans 附提示；404（档案未建）→ 抛错无提示
+ok 212 - pending 提示：profile_get 成功 → 额外取 plans 附提示；404（档案未建）→ 抛错无提示
+  ---
+  duration_ms: 0.220333
+  type: 'test'
+  ...
+# Subtest: media_extract: 提取成功 → 结构化内容无 MEDIA 行 + identity_source
+ok 213 - media_extract: 提取成功 → 结构化内容无 MEDIA 行 + identity_source
+  ---
+  duration_ms: 0.125208
+  type: 'test'
+  ...
+# Subtest: media_extract: 路径越界 → 正常文本返回、勿抛 ToolArgumentError（计划评审 C3 负向断言）
+ok 214 - media_extract: 路径越界 → 正常文本返回、勿抛 ToolArgumentError（计划评审 C3 负向断言）
+  ---
+  duration_ms: 0.042208
+  type: 'test'
+  ...
+# Subtest: media_extract: 截断标记如实透出（transcript_truncated）
+ok 215 - media_extract: 截断标记如实透出（transcript_truncated）
+  ---
+  duration_ms: 0.043458
+  type: 'test'
+  ...
+# Subtest: pptx v2: 嵌入状态进成功文案（N 张配图/封面音频）+ image 传入渲染
+ok 216 - pptx v2: 嵌入状态进成功文案（N 张配图/封面音频）+ image 传入渲染
+  ---
+  duration_ms: 0.850458
+  type: 'test'
+  ...
+# Subtest: pptx v2: image 越界路径 → ok:false 文本、不抛 ToolArgumentError（实施评审 C1）
+ok 217 - pptx v2: image 越界路径 → ok:false 文本、不抛 ToolArgumentError（实施评审 C1）
+  ---
+  duration_ms: 0.464375
+  type: 'test'
+  ...
+# Subtest: web_clip·工具定义：schema 只有 url 且必填（R12：v1 无 force、无 wecom_userid 声明）
+ok 218 - web_clip·工具定义：schema 只有 url 且必填（R12：v1 无 force、无 wecom_userid 声明）
+  ---
+  duration_ms: 0.159166
+  type: 'test'
+  ...
+# Subtest: web_clip·created：透传 url/actor/token → 结构化结果 + 现成 reply + identity_source
+ok 219 - web_clip·created：透传 url/actor/token → 结构化结果 + 现成 reply + identity_source
+  ---
+  duration_ms: 0.3545
+  type: 'test'
+  ...
+# Subtest: web_clip·already：reply 带收藏人+日期（共享库语境 M5），payload 含 prev 两字段
+ok 220 - web_clip·already：reply 带收藏人+日期（共享库语境 M5），payload 含 prev 两字段
+  ---
+  duration_ms: 0.114083
+  type: 'test'
+  ...
+# Subtest: web_clip·already 异常页无 prev 字段 → 回复优雅降级（不输出 undefined）
+ok 221 - web_clip·already 异常页无 prev 字段 → 回复优雅降级（不输出 undefined）
+  ---
+  duration_ms: 0.082417
+  type: 'test'
+  ...
+# Subtest: web_clip·回执防御（W3-I1）：title 经同款清洗后才进 reply——不可见字符剥除、换行折叠、超长截断 120
+ok 222 - web_clip·回执防御（W3-I1）：title 经同款清洗后才进 reply——不可见字符剥除、换行折叠、超长截断 120
+  ---
+  duration_ms: 0.248041
+  type: 'test'
+  ...
+# Subtest: web_clip·错误码全集 → 老师可读文案映射（任务书 B.5 硬契约；正常返回不进熔断）
+ok 223 - web_clip·错误码全集 → 老师可读文案映射（任务书 B.5 硬契约；正常返回不进熔断）
+  ---
+  duration_ms: 0.402292
+  type: 'test'
+  ...
+# Subtest: web_clip·未知 code → 通用兜底文案（不裸抛机器码给老师）
+ok 224 - web_clip·未知 code → 通用兜底文案（不裸抛机器码给老师）
+  ---
+  duration_ms: 0.0595
+  type: 'test'
+  ...
+# Subtest: web_clip·缺 url → ToolArgumentError（同既有 required 参数口径）
+ok 225 - web_clip·缺 url → ToolArgumentError（同既有 required 参数口径）
+  ---
+  duration_ms: 0.054792
+  type: 'test'
+  ...
+# Subtest: web_clip·非 WebClipError（服务端 5xx/网络）照抛上抛（计熔断口径不变）
+ok 226 - web_clip·非 WebClipError（服务端 5xx/网络）照抛上抛（计熔断口径不变）
+  ---
+  duration_ms: 0.047708
+  type: 'test'
+  ...
+# [llm-wiki-mcp] package.json version not found; using fallback 0.0.0
+# [llm-wiki-mcp] package.json version not found; using fallback 0.0.0
+# Subtest: MCP server version is read from package.json
+ok 227 - MCP server version is read from package.json
+  ---
+  duration_ms: 0.323375
+  type: 'test'
+  ...
+# Subtest: MCP server version supports source-layout execution
+ok 228 - MCP server version supports source-layout execution
+  ---
+  duration_ms: 1.667208
+  type: 'test'
+  ...
+# Subtest: MCP server version falls back when package.json cannot be found
+ok 229 - MCP server version falls back when package.json cannot be found
+  ---
+  duration_ms: 0.356958
+  type: 'test'
+  ...
+# Subtest: MCP server version falls back for invalid meta URLs
+ok 230 - MCP server version falls back for invalid meta URLs
+  ---
+  duration_ms: 0.073709
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·200 成功：chunk 拼接 / CT 归一 / finalUrl / 钉首个过门地址
+ok 231 - fetchWithGuards·200 成功：chunk 拼接 / CT 归一 / finalUrl / 钉首个过门地址
+  ---
+  duration_ms: 1.552541
+  type: 'test'
+  ...
+# Subtest: pinnedLookup·恒返回已验证地址（DNS 答案无法左右 socket 目标，anti-rebinding）
+ok 232 - pinnedLookup·恒返回已验证地址（DNS 答案无法左右 socket 目标，anti-rebinding）
+  ---
+  duration_ms: 0.155125
+  type: 'test'
+  ...
+# Subtest: undici Agent·connect.lookup 钉 IP 接缝构造受纳（零网络；undici 6 buildConnector 透传 net/tls.connect）
+ok 233 - undici Agent·connect.lookup 钉 IP 接缝构造受纳（零网络；undici 6 buildConnector 透传 net/tls.connect）
+  ---
+  duration_ms: 0.277958
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·非 http/https scheme 拒（bad_scheme，DNS 未发起）
+ok 234 - fetchWithGuards·非 http/https scheme 拒（bad_scheme，DNS 未发起）
+  ---
+  duration_ms: 0.272833
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·DNS 解析私网地址 → ssrf_blocked（message 带 explainRejection 的 CIDR）
+ok 235 - fetchWithGuards·DNS 解析私网地址 → ssrf_blocked（message 带 explainRejection 的 CIDR）
+  ---
+  duration_ms: 0.233584
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·多地址任一不过门即拒（含公网+私网混合 AAAA 场景）
+ok 236 - fetchWithGuards·多地址任一不过门即拒（含公网+私网混合 AAAA 场景）
+  ---
+  duration_ms: 0.210458
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·字面量 IP host 跳过 DNS 直接校验：环回拒、公网过且钉住
+ok 237 - fetchWithGuards·字面量 IP host 跳过 DNS 直接校验：环回拒、公网过且钉住
+  ---
+  duration_ms: 0.147208
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·IPv6 字面量（含 [] 括号）直接校验：::1 拒、全球单播放行
+ok 238 - fetchWithGuards·IPv6 字面量（含 [] 括号）直接校验：::1 拒、全球单播放行
+  ---
+  duration_ms: 3.285459
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·DNS 失败 / 空记录 → dns_failed
+ok 239 - fetchWithGuards·DNS 失败 / 空记录 → dns_failed
+  ---
+  duration_ms: 0.193084
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·重定向目标私网 → 逐跳复验拒绝（302 → 内网地址）
+ok 240 - fetchWithGuards·重定向目标私网 → 逐跳复验拒绝（302 → 内网地址）
+  ---
+  duration_ms: 0.216458
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·https→http 降级一律拒绝（redirect_downgrade）
+ok 241 - fetchWithGuards·https→http 降级一律拒绝（redirect_downgrade）
+  ---
+  duration_ms: 0.107542
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·重定向超 3 跳 → too_many_redirects（恰 3 跳放行）
+ok 242 - fetchWithGuards·重定向超 3 跳 → too_many_redirects（恰 3 跳放行）
+  ---
+  duration_ms: 0.312
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·相对 Location 按 RFC 3986 相对解析（M7）
+ok 243 - fetchWithGuards·相对 Location 按 RFC 3986 相对解析（M7）
+  ---
+  duration_ms: 0.153167
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·重定向到非 http(s) scheme → bad_scheme
+ok 244 - fetchWithGuards·重定向到非 http(s) scheme → bad_scheme
+  ---
+  duration_ms: 0.075541
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·畸形 Location 头 → invalid_url（统一错误族，不漏裸 TypeError）
+ok 245 - fetchWithGuards·畸形 Location 头 → invalid_url（统一错误族，不漏裸 TypeError）
+  ---
+  duration_ms: 0.100792
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·Content-Type 白名单外拒（bad_content_type）
+ok 246 - fetchWithGuards·Content-Type 白名单外拒（bad_content_type）
+  ---
+  duration_ms: 0.18775
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·三种白名单媒体类型放行（含分段参数）
+ok 247 - fetchWithGuards·三种白名单媒体类型放行（含分段参数）
+  ---
+  duration_ms: 0.179917
+  type: 'test'
+  ...
+# Subtest: parseContentType·charset 参数「分段→小写→去引号」（产物供 T1 sniffCharset 复核）
+ok 248 - parseContentType·charset 参数「分段→小写→去引号」（产物供 T1 sniffCharset 复核）
+  ---
+  duration_ms: 0.22575
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·10MB 流式帽：恰 10MB 放行，+1 字节即撕流拒（不得先整缓冲）
+ok 249 - fetchWithGuards·10MB 流式帽：恰 10MB 放行，+1 字节即撕流拒（不得先整缓冲）
+  ---
+  duration_ms: 1.042
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·流式帽对 node:stream Readable 同样生效（伪造 undici body 形态）
+ok 250 - fetchWithGuards·流式帽对 node:stream Readable 同样生效（伪造 undici body 形态）
+  ---
+  duration_ms: 1.030042
+  type: 'test'
+  ...
+# Subtest: fetchWithGuards·响应体中途断流（socket 断裂）→ fetch_failed，不漏裸 undici 错误（评审 Minor）
+ok 251 - fetchWithGuards·响应体中途断流（socket 断裂）→ fetch_failed，不漏裸 undici 错误（评审 Minor）
+  ---
+  duration_ms: 0.218125
+  type: 'test'
+  ...
+# Subtest: extractArticle·普通文章：title 与正文 markdown 提取，中文原样
+ok 252 - extractArticle·普通文章：title 与正文 markdown 提取，中文原样
+  ---
+  duration_ms: 33.050917
+  type: 'test'
+  ...
+# Subtest: extractArticle·表格保留（turndown-plugin-gfm）
+ok 253 - extractArticle·表格保留（turndown-plugin-gfm）
+  ---
+  duration_ms: 13.206417
+  type: 'test'
+  ...
+# Subtest: extractArticle·微信真实形态（N-1 回归钉）：\#js_content 行内 visibility:hidden;opacity:0 → 正文全量提取，页头署名不混入
+ok 254 - extractArticle·微信真实形态（N-1 回归钉）：\#js_content 行内 visibility:hidden;opacity:0 → 正文全量提取，页头署名不混入
+  ---
+  duration_ms: 12.973875
+  type: 'test'
+  ...
+# Subtest: extractArticle·微信正文低于阈值（失效/验证壳：容器里只剩一行提示，或容器揭开失败只剩页头署名）→ empty_content，不得报成功
+ok 255 - extractArticle·微信正文低于阈值（失效/验证壳：容器里只剩一行提示，或容器揭开失败只剩页头署名）→ empty_content，不得报成功
+  ---
+  duration_ms: 15.360917
+  type: 'test'
+  ...
+# Subtest: extractArticle·微信正文阈值 = 200 非空白字符（199 拒 / 200 收）
+ok 256 - extractArticle·微信正文阈值 = 200 非空白字符（199 拒 / 200 收）
+  ---
+  duration_ms: 10.898875
+  type: 'test'
+  ...
+# Subtest: extractArticle·阈值只约束微信域名：其他站点的短页照常提取
+ok 257 - extractArticle·阈值只约束微信域名：其他站点的短页照常提取
+  ---
+  duration_ms: 3.374458
+  type: 'test'
+  ...
+# Subtest: extractArticle·揭开只认微信主机名：同款 HTML 从非微信主机名取回时正文不揭开；普通页内的 visibility:hidden 段落不进库
+ok 258 - extractArticle·揭开只认微信主机名：同款 HTML 从非微信主机名取回时正文不揭开；普通页内的 visibility:hidden 段落不进库
+  ---
+  duration_ms: 28.973708
+  type: 'test'
+  ...
+# Subtest: extractArticle·微信页只揭开 \#js_content 自身：其内有意隐藏的子节点（display:none 或行内 visibility:hidden，如 mp-style-type 标记）照旧不进库
+ok 259 - extractArticle·微信页只揭开 \#js_content 自身：其内有意隐藏的子节点（display:none 或行内 visibility:hidden，如 mp-style-type 标记）照旧不进库
+  ---
+  duration_ms: 6.140958
+  type: 'test'
+  ...
+# Subtest: extractArticle·title 清洗（W3-I1）：控制符/零宽符剥除、空白折叠、超长按码点截断 120；纯不可见 title 回落 'clip'
+ok 260 - extractArticle·title 清洗（W3-I1）：控制符/零宽符剥除、空白折叠、超长按码点截断 120；纯不可见 title 回落 'clip'
+  ---
+  duration_ms: 11.065
+  type: 'test'
+  ...
+# Subtest: extractArticle·script/style 剥除
+ok 261 - extractArticle·script/style 剥除
+  ---
+  duration_ms: 5.852958
+  type: 'test'
+  ...
+# Subtest: extractArticle·空壳页面（微信失效文=200 空壳）→ WebClipError('empty_content')
+ok 262 - extractArticle·空壳页面（微信失效文=200 空壳）→ WebClipError('empty_content')
+  ---
+  duration_ms: 2.626292
+  type: 'test'
+  ...
+# Subtest: extractArticle·title 回落链：无 title/h1 → 'clip'
+ok 263 - extractArticle·title 回落链：无 title/h1 → 'clip'
+  ---
+  duration_ms: 2.777083
+  type: 'test'
+  ...
+# Subtest: orchestrateClip·新建流：调用序与精确路径；frontmatter 组稿；embed 不 force；恒 enqueue
+ok 264 - orchestrateClip·新建流：调用序与精确路径；frontmatter 组稿；embed 不 force；恒 enqueue
+  ---
+  duration_ms: 11.349292
+  type: 'test'
+  ...
+# Subtest: orchestrateClip·同文重存：skipped 零写放大但仍 enqueue，clipped_at/by 原样保留（I5/I6）
+ok 265 - orchestrateClip·同文重存：skipped 零写放大但仍 enqueue，clipped_at/by 原样保留（I5/I6）
+  ---
+  duration_ms: 7.869125
+  type: 'test'
+  ...
+# Subtest: orchestrateClip·正文变更：updated + embed force=true，clipped_at 不 bump
+ok 266 - orchestrateClip·正文变更：updated + embed force=true，clipped_at 不 bump
+  ---
+  duration_ms: 4.136917
+  type: 'test'
+  ...
+# Subtest: orchestrateClip·空壳正文：empty_content 立即抛，零写入零入队
+ok 267 - orchestrateClip·空壳正文：empty_content 立即抛，零写入零入队
+  ---
+  duration_ms: 2.129
+  type: 'test'
+  ...
+# Subtest: orchestrateClip·微信壳页正文低于阈值（N-1）：empty_content 立即抛，零写入零入队
+ok 268 - orchestrateClip·微信壳页正文低于阈值（N-1）：empty_content 立即抛，零写入零入队
+  ---
+  duration_ms: 4.398958
+  type: 'test'
+  ...
+# Subtest: orchestrateClip·微信真实形态端到端：揭开的正文全量写入源文件与页面，正文前带不可信围栏行
+ok 269 - orchestrateClip·微信真实形态端到端：揭开的正文全量写入源文件与页面，正文前带不可信围栏行
+  ---
+  duration_ms: 6.264917
+  type: 'test'
+  ...
+# Subtest: orchestrateClip·库内页缺 frontmatter（异常页）：clipped_at/by 补当前值，仍走写入
+ok 270 - orchestrateClip·库内页缺 frontmatter（异常页）：clipped_at/by 补当前值，仍走写入
+  ---
+  duration_ms: 3.832334
+  type: 'test'
+  ...
+# Subtest: writeSource·POST /files/:id/write，body {path, contents}（对照 src-server files.rs）
+ok 271 - writeSource·POST /files/:id/write，body {path, contents}（对照 src-server files.rs）
+  ---
+  duration_ms: 5.669583
+  type: 'test'
+  ...
+# Subtest: getPage·200 返回 {content, updated_at}；404 → null；其他错误照抛
+ok 272 - getPage·200 返回 {content, updated_at}；404 → null；其他错误照抛
+  ---
+  duration_ms: 0.591625
+  type: 'test'
+  ...
+# Subtest: upsertPage·POST 直建 → created（无后续 GET/PUT）
+ok 273 - upsertPage·POST 直建 → created（无后续 GET/PUT）
+  ---
+  duration_ms: 0.166541
+  type: 'test'
+  ...
+# Subtest: upsertPage·409 + 服务端同文（sha256 一致）→ skipped
+ok 274 - upsertPage·409 + 服务端同文（sha256 一致）→ skipped
+  ---
+  duration_ms: 0.215083
+  type: 'test'
+  ...
+# Subtest: upsertPage·409 + 内容漂移 → PUT 带 if-match: <GET updated_at> → updated
+ok 275 - upsertPage·409 + 内容漂移 → PUT 带 if-match: <GET updated_at> → updated
+  ---
+  duration_ms: 0.273209
+  type: 'test'
+  ...
+# Subtest: upsertPage·PUT 连续 409 → 整轮重试 ≤3 后成功（镜像 transcriber 轮次）
+ok 276 - upsertPage·PUT 连续 409 → 整轮重试 ≤3 后成功（镜像 transcriber 轮次）
+  ---
+  duration_ms: 0.300208
+  type: 'test'
+  ...
+# Subtest: upsertPage·3 轮 PUT 均 409 → 抛错（有界重试）
+ok 277 - upsertPage·3 轮 PUT 均 409 → 抛错（有界重试）
+  ---
+  duration_ms: 0.259042
+  type: 'test'
+  ...
+# Subtest: upsertPage·非 409 错误（如 401/500）原样上抛
+ok 278 - upsertPage·非 409 错误（如 401/500）原样上抛
+  ---
+  duration_ms: 0.067917
+  type: 'test'
+  ...
+# Subtest: createIngestJob·POST /projects/:id/ingest {source_paths} → {job_id}（畸形响应拒）
+ok 279 - createIngestJob·POST /projects/:id/ingest {source_paths} → {job_id}（畸形响应拒）
+  ---
+  duration_ms: 0.122375
+  type: 'test'
+  ...
+# Subtest: 真网络·负向：假域名解析到环回 → ssrf_blocked 且服务端零连接（评审 Important-1① 主测试）
+ok 280 - 真网络·负向：假域名解析到环回 → ssrf_blocked 且服务端零连接（评审 Important-1① 主测试）
+  ---
+  duration_ms: 2.426375
+  type: 'test'
+  ...
+# Subtest: 真网络·负向：字面量环回零 deps 全生产路径 → ssrf_blocked 且零连接
+ok 281 - 真网络·负向：字面量环回零 deps 全生产路径 → ssrf_blocked 且零连接
+  ---
+  duration_ms: 0.334291
+  type: 'test'
+  ...
+# Subtest: 真网络·正向：假域名 + 钉 lookup 真连本地服务；Host 头取 URL 域名与 socket 目标分离
+ok 282 - 真网络·正向：假域名 + 钉 lookup 真连本地服务；Host 头取 URL 域名与 socket 目标分离
+  ---
+  duration_ms: 8.962792
+  type: 'test'
+  ...
+# Subtest: 真网络·总墙钟：慢滴 body 被 AbortSignal 撕断于帽内（闲歇型 bodyTimeout 帽不住的形态）
+ok 283 - 真网络·总墙钟：慢滴 body 被 AbortSignal 撕断于帽内（闲歇型 bodyTimeout 帽不住的形态）
+  ---
+  duration_ms: 404.048625
+  type: 'test'
+  ...
+# Subtest: 真网络·remainingMs 收窄单跳 headersTimeout：响应头迟于剩余预算 → fetch_failed 于帽内
+ok 284 - 真网络·remainingMs 收窄单跳 headersTimeout：响应头迟于剩余预算 → fetch_failed 于帽内
+  ---
+  duration_ms: 590.149041
+  type: 'test'
+  ...
+# Subtest: 总墙钟·跨跳预算：预算耗尽即拒（fetch_failed budget），不再发起任何一跳
+ok 285 - 总墙钟·跨跳预算：预算耗尽即拒（fetch_failed budget），不再发起任何一跳
+  ---
+  duration_ms: 0.17325
+  type: 'test'
+  ...
+# Subtest: DNS 超时：解析悬挂超 dnsTimeoutMs → dns_failed（Minor-2：不吃满 OS resolver 默认 30s+）
+ok 286 - DNS 超时：解析悬挂超 dnsTimeoutMs → dns_failed（Minor-2：不吃满 OS resolver 默认 30s+）
+  ---
+  duration_ms: 150.697333
+  type: 'test'
+  ...
+# Subtest: 真网络·destroy 闭包：销毁未完成的 302 body 不以 unhandled error 击杀进程（2026-11-24 崩溃钉）
+ok 287 - 真网络·destroy 闭包：销毁未完成的 302 body 不以 unhandled error 击杀进程（2026-11-24 崩溃钉）
+  ---
+  duration_ms: 173.850375
+  type: 'test'
+  ...
+# Subtest: normalizeUrl·微信短路径：`/s/abc` 的两种带参变体归一为同一无参结果
+ok 288 - normalizeUrl·微信短路径：`/s/abc` 的两种带参变体归一为同一无参结果
+  ---
+  duration_ms: 0.595875
+  type: 'test'
+  ...
+# Subtest: normalizeUrl·微信非短路径：白名单参数照剥，语义参数保留
+ok 289 - normalizeUrl·微信非短路径：白名单参数照剥，语义参数保留
+  ---
+  duration_ms: 0.119584
+  type: 'test'
+  ...
+# Subtest: normalizeUrl·剥 utm 前缀与精确名白名单，其余参数保留
+ok 290 - normalizeUrl·剥 utm 前缀与精确名白名单，其余参数保留
+  ---
+  duration_ms: 0.135
+  type: 'test'
+  ...
+# Subtest: normalizeUrl·大小写/默认端口/fragment/参数排序
+ok 291 - normalizeUrl·大小写/默认端口/fragment/参数排序
+  ---
+  duration_ms: 0.118083
+  type: 'test'
+  ...
+# Subtest: normalizeUrl·非法 URL → WebClipError('invalid_url')
+ok 292 - normalizeUrl·非法 URL → WebClipError('invalid_url')
+  ---
+  duration_ms: 0.215125
+  type: 'test'
+  ...
+# Subtest: normalizeUrl·剥 userinfo（实现评审 Minor-3）：凭证不进 source_url/LLM 输入/外发请求
+ok 293 - normalizeUrl·剥 userinfo（实现评审 Minor-3）：凭证不进 source_url/LLM 输入/外发请求
+  ---
+  duration_ms: 0.231208
+  type: 'test'
+  ...
+# Subtest: normalizeUrl·尾点 host 归一（DNS 根标签）：example.com. ≡ example.com
+ok 294 - normalizeUrl·尾点 host 归一（DNS 根标签）：example.com. ≡ example.com
+  ---
+  duration_ms: 0.107459
+  type: 'test'
+  ...
+# Subtest: urlHash8·sha256 hex 前 8 字符（含已知答案）+ 确定性
+ok 295 - urlHash8·sha256 hex 前 8 字符（含已知答案）+ 确定性
+  ---
+  duration_ms: 0.115792
+  type: 'test'
+  ...
+# Subtest: kebabSlug·小写/分隔/压缩/去首尾/空结果回退
+ok 296 - kebabSlug·小写/分隔/压缩/去首尾/空结果回退
+  ---
+  duration_ms: 0.304542
+  type: 'test'
+  ...
+# Subtest: kebabSlug·R10 修订：保留 CJK（Han），标点/空白归分隔符
+ok 297 - kebabSlug·R10 修订：保留 CJK（Han），标点/空白归分隔符
+  ---
+  duration_ms: 0.141917
+  type: 'test'
+  ...
+# Subtest: kebabSlug·截断 60 字符（CJK 每字计 1）
+ok 298 - kebabSlug·截断 60 字符（CJK 每字计 1）
+  ---
+  duration_ms: 0.063875
+  type: 'test'
+  ...
+# Subtest: clipFileName·`<slug>-<hash8>.md`（CJK 标题保留 CJK slug）
+ok 299 - clipFileName·`<slug>-<hash8>.md`（CJK 标题保留 CJK slug）
+  ---
+  duration_ms: 0.081334
+  type: 'test'
+  ...
+# Subtest: isPublicUnicast·负向：环回/私网/CGNAT/链路本地/组播/保留/v6 特殊段全拒
+ok 300 - isPublicUnicast·负向：环回/私网/CGNAT/链路本地/组播/保留/v6 特殊段全拒
+  ---
+  duration_ms: 0.24775
+  type: 'test'
+  ...
+# Subtest: isPublicUnicast·负向补遗：边界与回退段
+ok 301 - isPublicUnicast·负向补遗：边界与回退段
+  ---
+  duration_ms: 0.11225
+  type: 'test'
+  ...
+# Subtest: isPublicUnicast·正向：公网单播放行（含段边界）
+ok 302 - isPublicUnicast·正向：公网单播放行（含段边界）
+  ---
+  duration_ms: 0.081667
+  type: 'test'
+  ...
+# Subtest: isPublicUnicast·乱串/畸形 → false（默认拒绝）
+ok 303 - isPublicUnicast·乱串/畸形 → false（默认拒绝）
+  ---
+  duration_ms: 0.097917
+  type: 'test'
+  ...
+# Subtest: explainRejection·命中段给出 CIDR 标注，放行返回 null，与 isPublicUnicast 一致
+ok 304 - explainRejection·命中段给出 CIDR 标注，放行返回 null，与 isPublicUnicast 一致
+  ---
+  duration_ms: 0.102375
+  type: 'test'
+  ...
+# Subtest: sniffCharset·Content-Type charset 最优先（含 GBK 家族归一）
+ok 305 - sniffCharset·Content-Type charset 最优先（含 GBK 家族归一）
+  ---
+  duration_ms: 0.185417
+  type: 'test'
+  ...
+# Subtest: sniffCharset·BOM：header 无 charset 时按 BOM 判 UTF-8/UTF-16LE/BE
+ok 306 - sniffCharset·BOM：header 无 charset 时按 BOM 判 UTF-8/UTF-16LE/BE
+  ---
+  duration_ms: 0.029792
+  type: 'test'
+  ...
+# Subtest: sniffCharset·meta charset / meta http-equiv（ASCII 不区分大小写，前 2048 字节）
+ok 307 - sniffCharset·meta charset / meta http-equiv（ASCII 不区分大小写，前 2048 字节）
+  ---
+  duration_ms: 0.112709
+  type: 'test'
+  ...
+# Subtest: sniffCharset·meta 超出前 2048 字节不扫；恰好在内可用
+ok 308 - sniffCharset·meta 超出前 2048 字节不扫；恰好在内可用
+  ---
+  duration_ms: 0.138625
+  type: 'test'
+  ...
+# Subtest: sniffCharset·无任何线索 → utf-8（含空 body）
+ok 309 - sniffCharset·无任何线索 → utf-8（含空 body）
+  ---
+  duration_ms: 0.028334
+  type: 'test'
+  ...
+# Subtest: decodeBody·GBK 夹具（手写 hex）解出正确中文
+ok 310 - decodeBody·GBK 夹具（手写 hex）解出正确中文
+  ---
+  duration_ms: 0.087541
+  type: 'test'
+  ...
+# Subtest: decodeBody·干净 UTF-8 原样返回（含中文与空 body）
+ok 311 - decodeBody·干净 UTF-8 原样返回（含中文与空 body）
+  ---
+  duration_ms: 0.031542
+  type: 'test'
+  ...
+# Subtest: decodeBody·替换字符占比 >2% → WebClipError('undecodable')
+ok 312 - decodeBody·替换字符占比 >2% → WebClipError('undecodable')
+  ---
+  duration_ms: 0.046375
+  type: 'test'
+  ...
+# Subtest: decodeBody·占比 ≤2% 容忍（阈值是严格大于）
+ok 313 - decodeBody·占比 ≤2% 容忍（阈值是严格大于）
+  ---
+  duration_ms: 0.034625
+  type: 'test'
+  ...
+# Subtest: decodeBody·非法编码标签 → WebClipError（所有错误走 WebClipError）
+ok 314 - decodeBody·非法编码标签 → WebClipError（所有错误走 WebClipError）
+  ---
+  duration_ms: 0.045542
+  type: 'test'
+  ...
+# Subtest: buildSourceMarkdown·快照：frontmatter 全字段 + 围栏行 + 空行 + body 原样
+ok 315 - buildSourceMarkdown·快照：frontmatter 全字段 + 围栏行 + 空行 + body 原样
+  ---
+  duration_ms: 0.07125
+  type: 'test'
+  ...
+# Subtest: buildSourceMarkdown·正文围栏行（W3-I1）：固定一行、引用块形态、明示 untrusted，位于 body 之前且 body 原样收尾
+ok 316 - buildSourceMarkdown·正文围栏行（W3-I1）：固定一行、引用块形态、明示 untrusted，位于 body 之前且 body 原样收尾
+  ---
+  duration_ms: 0.040666
+  type: 'test'
+  ...
+# Subtest: sanitizeClipTitle·C0/C1 控制符折空格；格式符（零宽/双向控制/词连接符/BOM/软连字符/标签符）与变体选择符直接剥除
+ok 317 - sanitizeClipTitle·C0/C1 控制符折空格；格式符（零宽/双向控制/词连接符/BOM/软连字符/标签符）与变体选择符直接剥除
+  ---
+  duration_ms: 0.181042
+  type: 'test'
+  ...
+# Subtest: sanitizeClipTitle·空白折叠去首尾；幂等；纯不可见字符 → 空串
+ok 318 - sanitizeClipTitle·空白折叠去首尾；幂等；纯不可见字符 → 空串
+  ---
+  duration_ms: 0.057416
+  type: 'test'
+  ...
+# Subtest: sanitizeClipTitle·按码点截断 120（不劈代理对）；恰好 120 原样
+ok 319 - sanitizeClipTitle·按码点截断 120（不劈代理对）；恰好 120 原样
+  ---
+  duration_ms: 0.052959
+  type: 'test'
+  ...
+# Subtest: buildSourceMarkdown·标题内双引号 YAML 转义；via 恒为 teacher-tutor
+ok 320 - buildSourceMarkdown·标题内双引号 YAML 转义；via 恒为 teacher-tutor
+  ---
+  duration_ms: 0.02725
+  type: 'test'
+  ...
+# Subtest: WebClipError·code 机器可读，message 缺省 = code
+ok 321 - WebClipError·code 机器可读，message 缺省 = code
+  ---
+  duration_ms: 0.030166
+  type: 'test'
+  ...
+# Subtest: normalizeWorksheet: trim 语义 + 空串可选项归一
+ok 322 - normalizeWorksheet: trim 语义 + 空串可选项归一
+  ---
+  duration_ms: 0.78325
+  type: 'test'
+  ...
+# Subtest: normalizeWorksheet: 形状非法 → WorksheetFormatError
+ok 323 - normalizeWorksheet: 形状非法 → WorksheetFormatError
+  ---
+  duration_ms: 0.229916
+  type: 'test'
+  ...
+# Subtest: caps: sections 2-4 边界（1 拒 / 4 过 / 5 拒）
+ok 324 - caps: sections 2-4 边界（1 拒 / 4 过 / 5 拒）
+  ---
+  duration_ms: 0.290167
+  type: 'test'
+  ...
+# Subtest: caps: 每卡块数（0 拒 / 4 过 / 5 拒）
+ok 325 - caps: 每卡块数（0 拒 / 4 过 / 5 拒）
+  ---
+  duration_ms: 0.091125
+  type: 'test'
+  ...
+# Subtest: caps: 各字段帽与总量
+ok 326 - caps: 各字段帽与总量
+  ---
+  duration_ms: 0.249333
+  type: 'test'
+  ...
+# Subtest: esc: 五件套 + 控制字符压空格（经 buildWorksheetHtml 断言产物）
+ok 327 - esc: 五件套 + 控制字符压空格（经 buildWorksheetHtml 断言产物）
+  ---
+  duration_ms: 6.286666
+  type: 'test'
+  ...
+# Subtest: I-3 emojiFe0f 五例：单码位补 / 已带变体不动 / 旗不动 / ZWJ 不动 / CJK 不动
+ok 328 - I-3 emojiFe0f 五例：单码位补 / 已带变体不动 / 旗不动 / ZWJ 不动 / CJK 不动
+  ---
+  duration_ms: 0.232458
+  type: 'test'
+  ...
+# Subtest: I-8b 文字准确性: fixture 全字段 esc 后逐字存在于 page.html
+ok 329 - I-8b 文字准确性: fixture 全字段 esc 后逐字存在于 page.html
+  ---
+  duration_ms: 0.621167
+  type: 'test'
+  ...
+# Subtest: I-2 全局毒饼: 模板级字段 + 六块全字段灌毒 → 产物零裸毒串
+ok 330 - I-2 全局毒饼: 模板级字段 + 六块全字段灌毒 → 产物零裸毒串
+  ---
+  duration_ms: 0.419792
+  type: 'test'
+  ...
+# Subtest: renderWorksheet: 成功——path 命名 sha1(html)/rename/sections+blocks 计数
+ok 331 - renderWorksheet: 成功——path 命名 sha1(html)/rename/sections+blocks 计数
+  ---
+  duration_ms: 3.272542
+  type: 'test'
+  ...
+# Subtest: I-A 半截 PNG → ok:false（不 ok:true 直送教师）
+ok 332 - I-A 半截 PNG → ok:false（不 ok:true 直送教师）
+  ---
+  duration_ms: 1.298709
+  type: 'test'
+  ...
+# Subtest: M-3: 异常消息剥绝对路径
+ok 333 - M-3: 异常消息剥绝对路径
+  ---
+  duration_ms: 0.955916
+  type: 'test'
+  ...
+# Subtest: M-1: theme 非字符串 → WorksheetFormatError
+ok 334 - M-1: theme 非字符串 → WorksheetFormatError
+  ---
+  duration_ms: 0.053083
+  type: 'test'
+  ...
+# Subtest: renderWorksheet: 截图异常 → ok:false 透传友好文案（不抛错）
+ok 335 - renderWorksheet: 截图异常 → ok:false 透传友好文案（不抛错）
+  ---
+  duration_ms: 1.29325
+  type: 'test'
+  ...
+# Subtest: renderWorksheet: 真实 Chrome 冒烟（fixture → PNG + IEND 完整）
+ok 336 - renderWorksheet: 真实 Chrome 冒烟（fixture → PNG + IEND 完整）
+  ---
+  duration_ms: 1389.559292
+  type: 'test'
+  ...
+# Subtest: I-1 歪表: 行列数与表头不等 → WorksheetFormatError（超列/短列都拒）
+ok 337 - I-1 歪表: 行列数与表头不等 → WorksheetFormatError（超列/短列都拒）
+  ---
+  duration_ms: 0.189459
+  type: 'test'
+  ...
+# Subtest: I-2 numbered 带 after → WorksheetFormatError（渲染只用 before，接受即静默丢内容）
+ok 338 - I-2 numbered 带 after → WorksheetFormatError（渲染只用 before，接受即静默丢内容）
+  ---
+  duration_ms: 0.052083
+  type: 'test'
+  ...
+# Subtest: I-4 空数组拒 + cell 文案带位置与真实长度
+ok 339 - I-4 空数组拒 + cell 文案带位置与真实长度
+  ---
+  duration_ms: 0.196167
+  type: 'test'
+  ...
+# Subtest: C-1 布局预算闸: 对抗密度文档被拒、fixture 通过（评审双数据点标定）
+ok 340 - C-1 布局预算闸: 对抗密度文档被拒、fixture 通过（评审双数据点标定）
+  ---
+  duration_ms: 0.32275
+  type: 'test'
+  ...
+# Subtest: title 剥「学案」字样（确定性清洗）；剥空则拒
+ok 341 - title 剥「学案」字样（确定性清洗）；剥空则拒
+  ---
+  duration_ms: 0.051958
+  type: 'test'
+  ...
+# Subtest: numbered 剥前导题号（1./1、/① 防与自动编号重复）；剥空则拒；非题号数字不动
+ok 342 - numbered 剥前导题号（1./1、/① 防与自动编号重复）；剥空则拒；非题号数字不动
+  ---
+  duration_ms: 0.073
+  type: 'test'
+  ...
+# Subtest: 兜底（2026-09-11 TeachX 回合实发形态）：text 块误携 items 数组 → 拼接还原为 text，勿拒
+ok 343 - 兜底（2026-09-11 TeachX 回合实发形态）：text 块误携 items 数组 → 拼接还原为 text，勿拒
+  ---
+  duration_ms: 0.035583
+  type: 'test'
+  ...
+# Subtest: 兜底（同实发）：numbered/fill 的字符串 items → {before} 归一，numbered 前导题号仍剥
+ok 344 - 兜底（同实发）：numbered/fill 的字符串 items → {before} 归一，numbered 前导题号仍剥
+  ---
+  duration_ms: 0.038792
+  type: 'test'
+  ...
+1..344
+# tests 344
+# suites 0
+# pass 343
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 1635.467167

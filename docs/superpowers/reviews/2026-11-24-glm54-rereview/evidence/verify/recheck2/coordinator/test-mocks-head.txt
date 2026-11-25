@@ -1,0 +1,428 @@
+$ rc=0
+, API key, and connectivity.'
+}
+
+stderr | src/lib/project-file-sync.test.ts > project file sync > consumes a proven move even when one wiki reference cannot be rewritten
+[file-sync] failed to migrate unchanged source move: Error: permission denied
+    at /private/tmp/glm54-recheck-20261125/C/tree/src/lib/project-file-sync.test.ts:417:43
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > retries a truncated FILE block with a targeted generation request
+[lib/logger.ts:161:26] FILE block "wiki/concepts/recovered.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > retries a truncated FILE block with a targeted generation request
+[lib/logger.ts:161:26] FILE block "wiki/concepts/recovered.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+(node:16333) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > rejects an ingest when a truncated FILE block cannot be repaired
+[lib/logger.ts:161:26] FILE block "wiki/concepts/incomplete.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > rejects an ingest when a truncated FILE block cannot be repaired
+[lib/logger.ts:161:26] FILE block "wiki/concepts/incomplete.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > falls back to built-in PDF extraction when MinerU fails for a non-cancelled ingest
+[lib/logger.ts:161:26] MinerU parsing failed, falling back to pdfium { message: 'network failure from MinerU' }
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > falls back to built-in PDF extraction when MinerU fails for a non-cancelled ingest
+[lib/logger.ts:161:26] Image extraction failed { fileName: 'report.pdf', error: 'window is not defined' }
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > uses a configured local MinerU backend without a cloud token
+[lib/logger.ts:161:26] Image extraction failed { fileName: 'local.pdf', error: 'window is not defined' }
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > rejects unsafe and application-managed paths from interactive writes
+[lib/logger.ts:161:26] executeIngestWrites rejected unsafe or app-managed path { relativePath: 'wiki/INDEX.md' }
+[lib/logger.ts:161:26] executeIngestWrites rejected unsafe or app-managed path { relativePath: 'wiki/overview.MD' }
+[lib/logger.ts:161:26] executeIngestWrites rejected unsafe or app-managed path { relativePath: '../escape.md' }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > updates successful pages without clearing existing chunks when some pages fail
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed {
+  error: 'API 500 Error — embedding server down at http://localhost:1234/v1/embeddings'
+}
+
+stderr | src/lib/project-file-sync.test.ts > project file sync > invalidates the background snapshot when inactive enqueue persistence fails
+[lib/logger.ts:162:27] failed to enqueue raw source ingest { error: 'Error: disk full' }
+
+stderr | src/lib/project-file-sync.test.ts > project file sync > deduplicates recent projects that point to the same path
+[logger] Failed to send logs: ReferenceError: window is not defined
+    at invoke (file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@tauri-apps/api/core.js:202:5)
+    at flushBatch (/private/tmp/glm54-recheck-20261125/C/tree/src/lib/logger.ts:106:11)
+    at Timeout.<anonymous> (/private/tmp/glm54-recheck-20261125/C/tree/src/lib/logger.ts:127:10)
+    at listOnTimeout (node:internal/timers:685:17)
+    at processTimers (node:internal/timers:618:7)
+
+stderr | src/lib/source-preprocess.test.ts > source preprocessing > continues after one extractor fails
+[source-preprocess] failed to pre-process "bad.pdf"; ingest will retry when reading it: bad file
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | tools/transcriber/__tests__/whisper.test.ts > 窗级退化守门（2026-09-07 刘飞雪试点 04/06 双例后落地） > 人工复核出口：TRANSCRIBER_GATE_ALLOW 精确 slug 命中才放行，近似 slug 仍拒（防同名 lesson 误扫）
+⚠ 儿歌分享-What-s-your-favourite-color-f30ce801 退化守门人工复核放行（TRANSCRIBER_GATE_ALLOW 精确命中）：窗字占 100%——复核人已确认重复为内容本征
+⚠ what-s-your-favourite-color-3a6e19e5 退化守门人工复核放行（TRANSCRIBER_GATE_ALLOW 精确命中）：窗字占 100%——复核人已确认重复为内容本征
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-dbdcf949', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-dbdcf949', error: 'ApiRequestError: HTTP 400' }
+
+stderr | src/lib/deep-research.test.ts > collectResearchSources > keeps web results when AnyTXT fails and exposes the source error
+Source search failed in DeepResearch { error: 'Check that ATGUI.exe is running' }
+
+stderr | src/lib/deep-research.test.ts > filterResearchSourcesByRelevance > accepts numeric string indexes and fails open on zero-based output
+[DeepResearch] source relevance gate failed; retaining search results: Error: quality gate returned zero-based indexes
+    at Module.filterResearchSourcesByRelevance (/private/tmp/glm54-recheck-20261125/C/tree/src/lib/deep-research.ts:199:13)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-dbdcf949', error: 'ApiRequestError: HTTP 400' }
+
+(node:16300) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > LLM 改字 → 二分兜底到底后碎片回填原文（A：不拖垮整块，partial 标记）
+[punctuate] 碎片（26ch）仍校验失败（verify: [00:00] 完全不同的内容），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > LLM 改字 → 二分兜底到底后碎片回填原文（A：不拖垮整块，partial 标记）
+[punctuate] 碎片（17ch）仍校验失败（verify: [00:00] 完全不同的内容），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > LLM 改字 → 二分兜底到底后碎片回填原文（A：不拖垮整块，partial 标记）
+[punctuate] 碎片（27ch）仍校验失败（verify: [00:00] 完全不同的内容），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 段落门：长块未分段 → 重试；两次都未分段但校验通过 → 接受不二分
+[punctuate] 6 行块校验通过但两次都未分段，保留整块（仅标点）
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 密度门：≥400 字块偷懒回显（骨架校验通过但零标点）→ 重试仍懒判失败，不进二分；整章回原文（B）
+[punctuate] 519ch 块重试后仍偷懒回显（verify: [00:00] 语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料），判失败
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 密度门：≥400 字块偷懒回显（骨架校验通过但零标点）→ 重试仍懒判失败，不进二分；整章回原文（B）
+[punctuate] 章「## [00:00] 单章」标点失败，本章保留原文（部分接受）
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 懒章回原文 + 好章正常加工（B：混合体，好章不被坏章拖垮）
+[punctuate] 519ch 块重试后仍偷懒回显（verify: [00:00] 语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料），判失败
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 懒章回原文 + 好章正常加工（B：混合体，好章不被坏章拖垮）
+[punctuate] 章「## [00:00] 偷懒章」标点失败，本章保留原文（部分接受）
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 传输错误（5xx）重试一次后文件级快速失败——不进二分
+[punctuate] 传输错误重试耗尽（Error: zai HTTP 500: {}），整文件回落原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 字符级二分：单行超长块 verify 恒败 → 递归切半，碎片 <200 字回填原文（A）
+[punctuate] 碎片（147ch）仍校验失败（verify: [00:00] 词组0 词组1 词组2 词组3 词组4 词组5 词组6 词组7 词组8 词组9 词组10 词组11 词组），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 字符级二分：单行超长块 verify 恒败 → 递归切半，碎片 <200 字回填原文（A）
+[punctuate] 碎片（149ch）仍校验失败（verify: 词组30 词组31 词组32 词组33 词组34 词组35 词组36 词组37 词组38 词组39 词组40 词组41 ），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 快照存在 → 字节回用不调 LLM；成功后落快照；失败回落原文
+[punctuate] 传输错误重试耗尽（Error: zai HTTP 500: {}），整文件回落原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 快照存在 → 字节回用不调 LLM；成功后落快照；失败回落原文
+[punctuate] s2: 快照与当前正文不一致（重转写/重切章后），重新标点并覆盖快照
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 部分接受：返回混合体但不落快照（残留保未来重试通道）
+[punctuate] 519ch 块重试后仍偷懒回显（verify: [00:00] 语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料），判失败
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 部分接受：返回混合体但不落快照（残留保未来重试通道）
+[punctuate] 章「## [00:00] 偷懒章」标点失败，本章保留原文（部分接受）
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 部分接受：返回混合体但不落快照（残留保未来重试通道）
+[punctuate] s9: 部分内容保留原文（见上方 warn），不落快照
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | src/lib/image-caption-pipeline.test.ts > captionMarkdownImages > continues batch when one caption call fails, reporting failed count
+[lib/logger.ts:161:26] Caption failed for image { absPath: '/abs/b.png', error: 'HTTP 500' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > removes reserved example-domain URLs invented by the merge model
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > removes only the invented URL range and preserves legitimate longer URLs
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > preserves lookalike domains while removing reserved subdomains
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/image-caption-pipeline.test.ts > captionMarkdownImages > skips Codex CLI captioning once before reading image bytes
+[lib/logger.ts:161:26] Skipped image captioning: Codex CLI transport does not support image input 
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > cleans invented Markdown URL forms without changing fenced examples
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/image-caption-pipeline.test.ts > captionMarkdownImages > recovers from corrupt cache JSON (logs and starts fresh)
+[lib/logger.ts:161:26] Corrupt caption cache, starting empty {
+  cachePath: '/proj/.llm-wiki/image-caption-cache.json',
+  error: "Expected property name or '}' in JSON at position 2 (line 1 column 3)"
+}
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > falls back to array-merged incoming when LLM throws
+[lib/logger.ts:161:26] LLM merge failed, falling back to incoming + array-field union { pagePath: 'wiki/entities/foo.md', error: 'LLM rate limited' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > rejects LLM output that shrinks body below 70% of max(old, new)
+[lib/logger.ts:161:26] LLM merge body too short — rejecting, falling back {
+  pagePath: 'wiki/entities/foo.md',
+  llmBodyLen: 16,
+  minThreshold: 2547,
+  maxInputLen: 3639
+}
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > rejects LLM output that has no frontmatter at all
+[lib/logger.ts:161:26] LLM output has no frontmatter — rejecting, falling back { pagePath: 'wiki/entities/foo.md' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > calls the optional backup callback when falling back
+[lib/logger.ts:161:26] LLM merge failed, falling back to incoming + array-field union { pagePath: 'wiki/entities/foo.md', error: 'network error' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > backup failure is swallowed (best-effort, never blocks the write)
+[lib/logger.ts:161:26] LLM merge failed, falling back to incoming + array-field union { pagePath: 'wiki/entities/foo.md', error: 'network error' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > backup failure is swallowed (best-effort, never blocks the write)
+[lib/logger.ts:161:26] backup failed { pagePath: 'wiki/entities/foo.md', error: 'disk full' }
+
+stderr | src/lib/dedup-runner.test.ts > runDuplicateDetection embedding prefilter > falls back to the full LLM scan when the embedding prefilter fails
+[dedup] embedding prefilter failed; falling back to full LLM scan: Error: embedding endpoint unavailable
+    at /private/tmp/glm54-recheck-20261125/C/tree/src/lib/dedup-runner.test.ts:231:42
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64
+
+stderr | src/lib/dedup-runner.test.ts > runDuplicateDetection embedding prefilter > does not fall back to the full LLM scan for large wikis when embedding coverage is too low
+[dedup] embedding prefilter coverage too low; skipping full fallback for large wiki: Error: Duplicate prefilter embedded only 2/251 pages
+    at /private/tmp/glm54-recheck-20261125/C/tree/src/lib/dedup-runner.test.ts:295:42
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — H2: truncated streams (surface, don't hide) > emits a warning when the final block has no closer
+[lib/logger.ts:161:26] FILE block "wiki/concepts/moe.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — H2: truncated streams (surface, don't hide) > warns when the only block is unclosed
+[lib/logger.ts:161:26] FILE block "wiki/concepts/rope.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — H6: empty-path blocks > surfaces a warning instead of silently dropping empty-path blocks
+[lib/logger.ts:161:26] FILE block with empty path skipped (LLM omitted the path after `---FILE:`). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > drops blocks with ../ paths and surfaces a warning
+[lib/logger.ts:161:26] FILE block with unsafe path "../../etc/passwd" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > drops blocks with absolute paths
+[lib/logger.ts:161:26] FILE block with unsafe path "/etc/passwd" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > drops blocks not under wiki/
+[lib/logger.ts:161:26] FILE block with unsafe path "src-tauri/src/main.rs" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > an LLM mixing safe + unsafe paths writes only the safe ones
+[lib/logger.ts:161:26] FILE block with unsafe path "../config.json" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+(node:16436) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+stderr | src/lib/project-file-tree-refresh.test.ts > refreshProjectFileTree > keeps the existing full resolver index when shallow refresh succeeds but full refresh fails
+Failed to refresh project path index: Error: full scan failed
+    at /private/tmp/glm54-recheck-20261125/C/tree/src/lib/project-file-tree-refresh.test.ts:170:15
+    at Mock (file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/spy/dist/index.js:332:34)
+    at listDirectoryWithRetry (/private/tmp/glm54-recheck-20261125/C/tree/src/lib/project-file-tree-refresh.ts:24:20)
+    at async Promise.all (index 0)
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'API 500 Error — embedding server down at http://localhost:1234/v1/embeddings'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | tools/transcriber/__tests__/abstract.test.ts > maybeAbstract（快照幂等） > LLM 失败回落原 md（不落快照、不 fail 批次）
+[abstract] s-fail: Error: zai HTTP 500: boom，页无课例摘要
+
+stderr | src/lib/source-lifecycle.test.ts > source import skip reporting > reports a file whose copy fails instead of only logging it
+[lib/logger.ts:162:27] Failed to import file {
+  originalName: 'locked.pdf',
+  error: 'Error: EACCES: permission denied'
+}
+
+stderr | src/lib/source-lifecycle.test.ts > source import skip reporting > continues a folder import after one nested file cannot be copied
+Failed to import nested/locked.md: Error: EACCES
+    at /private/tmp/glm54-recheck-20261125/C/tree/src/lib/source-lifecycle.test.ts:576:47
+    at Mock (file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/spy/dist/index.js:332:34)
+    at Module.importSourceFolder (/private/tmp/glm54-recheck-20261125/C/tree/src/lib/source-lifecycle.ts:428:13)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at /private/tmp/glm54-recheck-20261125/C/tree/src/lib/source-lifecycle.test.ts:579:20
+    at file:///private/tmp/glm54-recheck-20261125/C/tree/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > does not mark changed files imported when enqueue fails
+[lib/logger.ts:162:27] Scheduled import scan failed { error: 'Error: queue stopped' }
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > does not leave the scanner locked after a managed project path is skipped
+[lib/logger.ts:161:26] Skipped self-referential scheduled import path { importRoot: '/Users/me/wiki-project/raw/sources' }
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > does not leave the scanner locked after a managed project path is skipped
+[lib/logger.ts:162:27] Scheduled import scan failed { error: 'Error: queue stopped' }
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > continues scanning when one file is locked or unreadable
+[lib/logger.ts:161:26] Skipped file during import scan {
+  path: '/Users/me/inbox/locked.pdf',
+  error: 'Error: sharing violation'
+}
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > skips large files before hashing or copying
+[lib/logger.ts:161:26] skipping file exceeding size limit {
+  sourcePath: '/Users/me/inbox/paper.pdf',
+  sizeMB: '101.0',
+  limitMB: 100
+}
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > keeps an existing source record when the file is temporarily unreadable
+[lib/logger.ts:161:26] Skipped file during import scan {
+  path: '/Users/me/inbox/paper.pdf',
+  error: 'Error: sharing violation'
+}
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > uses the lower scheduled-import and source-watch file size limit
+[lib/logger.ts:161:26] skipping file exceeding size limit { sourcePath: '/Users/me/inbox/paper.pdf', sizeMB: '6.0', limitMB: 5 }
+
+stderr | tools/transcriber/__tests__/cli.test.ts > parseTranscribeArgs > --dir 结尾缺值 → 报错退出
+✗ 预检失败：--dir 需带值（收到 无值）
+
+stderr | tools/transcriber/__tests__/cli.test.ts > 参数缺值校验（M2 前置：末位缺值报错退出，不再静默默认） > --concurrency 正常解析；非正整数报错退出
+✗ 预检失败：--concurrency 需为正整数（收到 0）
+✗ 预检失败：--concurrency 需为正整数（收到 abc）
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retries on failure up to MAX_RETRIES (3) before marking failed
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'LLM boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retries on failure up to MAX_RETRIES (3) before marking failed
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 2, maxRetries: 3, error: 'LLM boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retries on failure up to MAX_RETRIES (3) before marking failed
+[lib/logger.ts:161:26] task failed permanently { slugs: 'a,b', retryCount: 3, error: 'LLM boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > succeeds after a transient failure within retry budget
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'flaky' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > succeeds after a transient failure within retry budget
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 2, maxRetries: 3, error: 'flaky' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retryTask resets a failed task to pending and runs it again
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retryTask resets a failed task to pending and runs it again
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 2, maxRetries: 3, error: 'boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retryTask resets a failed task to pending and runs it again
+[lib/logger.ts:161:26] task failed permanently { slugs: 'a,b', retryCount: 3, error: 'boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — cancel / delete > cancelTask aborts an in-flight processing task
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'aborted' }
+
+stderr | src/lib/__tests__/logger.test.ts > Logger Facade > should respect log level filtering
+[lib/logger.ts:161:26] should log 
+[lib/logger.ts:162:27] should log 
+
+stderr | src/lib/__tests__/logging-integration.test.ts > Logging Integration > Log level filtering > should filter out messages below the configured level
+[lib/logger.ts:162:27] error message 
+
+stderr | src/lib/anytxt-search.test.ts > AnyTXT query rewrite > falls back to original queries when rewrite fails
+[lib/logger.ts:161:26] AnyTXT query rewrite failed, using original queries { error: 'model offline' }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+

@@ -1,0 +1,246 @@
+(node:79934) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+vite v8.0.3 building client environment for development...
+[2Ktransforming...✓ 4265 modules transformed.
+
+(!) outDir /tmp/glm54-fix-20261126/mut-dist/m3 is not inside project root and will not be emptied.
+Use --emptyOutDir to override.
+
+rendering chunks...
+computing gzip size...
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/lint-structural.worker-DKL_jKGh.js              3.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/index.html                                             3.65 kB │ gzip:   0.91 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size3-Regular-CTq5MqoE.woff               4.42 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size4-Regular-Dl5lxZxV.woff2              4.92 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size2-Regular-Dy4dx90m.woff2              5.20 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size1-Regular-mCD8mA8B.woff2              5.46 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size4-Regular-BF-4gkZK.woff               5.98 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size2-Regular-oD1tc_U0.woff               6.18 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size1-Regular-C195tn64.woff               6.49 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Caligraphic-Regular-Di6jR-x-.woff2        6.90 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Caligraphic-Bold-Dq_IR9rO.woff2           6.91 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size3-Regular-DgpXs0kz.ttf                7.58 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Caligraphic-Regular-CTRA-rTL.woff         7.65 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Caligraphic-Bold-BEiXGLvX.woff            7.71 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Script-Regular-D3wIWfF6.woff2             9.64 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Regular-DDBCnlJ7.woff2         10.34 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size4-Regular-DWFBv043.ttf               10.36 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Script-Regular-D5yQViql.woff             10.58 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Fraktur-Regular-CTYiF6lA.woff2           11.31 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Fraktur-Bold-CL6g_b3V.woff2              11.34 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size2-Regular-B7gKUWhC.ttf               11.50 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Italic-C3H0VqGB.woff2          12.02 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Bold-D1sUS0GD.woff2            12.21 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Size1-Regular-Dbsnue_I.ttf               12.22 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff          12.31 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf         12.34 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf            12.36 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff            13.20 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Fraktur-Bold-BsDP51OF.woff               13.29 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2        13.56 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Italic-DN2j7dab.woff           14.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff             14.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/geist-cyrillic-wght-normal-CHSlOQsW.woff2      14.69 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/geist-latin-ext-wght-normal-DMtmJ5ZE.woff2     15.30 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff         16.02 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2           16.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Math-Italic-t53AETM-.woff2               16.44 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Script-Regular-C5JkGWo-.ttf              16.64 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2           16.78 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Italic-NWA7e6Wa.woff2               16.98 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff            18.66 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Math-Italic-DA0__PXp.woff                18.74 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-BoldItalic-SpSLRI95.woff            19.41 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf           19.43 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Fraktur-Regular-CB_wures.ttf             19.57 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf                19.58 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Italic-BMLOBm91.woff                19.67 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf            22.36 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf              24.50 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Bold-Cx986IdX.woff2                 25.32 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Regular-B22Nviop.woff2              26.27 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf          27.55 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2               28.07 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/geist-latin-wght-normal-Dm3htQBi.woff2         28.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Bold-Jm3AIy58.woff                  29.91 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/logo-DuXFhhUB.jpg                              30.49 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Regular-Dr94JaBh.woff               30.77 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf             31.19 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Math-Italic-flOr_0UB.ttf                 31.30 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf             32.96 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_AMS-Regular-DMm9YOAa.woff                33.51 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Italic-3WenGoN9.ttf                 33.58 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Bold-waoOVXN0.ttf                   51.33 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_Main-Regular-ypZvNtVU.ttf                53.58 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/KaTeX_AMS-Regular-DRggAlZN.ttf                 63.63 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/graph-layout-worker-DL8gAcqz.js                78.21 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wiki-graph-analysis.worker-CANlRHXm.js         92.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/pdf.worker.min-Dr1KORA9.mjs                 1,286.28 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/index-BaWE2aQH.css                            135.86 kB │ gzip:  25.13 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/ingest-nZklwqHd.js                              0.06 kB │ gzip:   0.07 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/pdf.worker.min-C6OepQvg.js                      0.06 kB │ gzip:   0.08 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/update-store-CCQM36Y4.js                        0.06 kB │ gzip:   0.08 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/persist-DhB82TUS.js                             0.07 kB │ gzip:   0.08 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wiki-store-6-kDsJPF.js                          0.07 kB │ gzip:   0.08 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/web-path-index-C6nLZZ6B.js                      0.07 kB │ gzip:   0.09 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/llm-task-routing-CENrqY2D.js                    0.08 kB │ gzip:   0.10 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/clone-D3411OOe.js                               0.09 kB │ gzip:   0.10 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/concurrency-limits-B-39-c-J.js                  0.10 kB │ gzip:   0.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/update-check-Je1RuiSy.js                        0.10 kB │ gzip:   0.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/array-EwOBvLK4.js                               0.10 kB │ gzip:   0.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/auto-save-C1G9CIS4.js                           0.11 kB │ gzip:   0.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/channel-B28XpIHb.js                             0.11 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/pie-ZZUOXDRM-DJrVfTNn.js                        0.11 kB │ gzip:   0.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/info-OMHHGYJF-DoWgIAqX.js                       0.11 kB │ gzip:   0.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/radar-PYXPWWZC-NZ7wNyLK.js                      0.11 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/packet-4T2RLAQJ-BznA1lhu.js                     0.12 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/treemap-W4RFUUIX-B0S7bSEB.js                    0.12 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wardley-RL74JXVD-DU-xS5dB.js                    0.12 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/gitGraph-7Q5UKJZL-BcwDwHpT.js                   0.12 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/treeView-SZITEDCU-BCwzQ1Wg.js                   0.12 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wiki-page-delete-CeUKx9sM.js                    0.12 kB │ gzip:   0.11 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/architecture-YZFGNWBL-Db3UluOb.js               0.12 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/has-usable-llm-6RbgZuIL.js                      0.14 kB │ gzip:   0.14 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/init-BbbW95L5.js                                0.14 kB │ gzip:   0.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-QZHKN3VN-CoRT3UQX.js                      0.18 kB │ gzip:   0.15 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-4BX2VUAB-CgNjPWvs.js                      0.21 kB │ gzip:   0.16 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/project-file-sync-vOacrmuz.js                   0.21 kB │ gzip:   0.14 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-55IACEB6-fK8yHHmp.js                      0.22 kB │ gzip:   0.19 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-426QAEUC-Q4gED6LA.js                      0.27 kB │ gzip:   0.23 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/dedup-queue-CjJXl3Fg.js                         0.28 kB │ gzip:   0.19 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-FMBD7UC4-Dh_RD4a5.js                      0.35 kB │ gzip:   0.26 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/capabilities-Dx_8kP66.js                        0.39 kB │ gzip:   0.23 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/activity-store--G0JbEYJ.js                      0.42 kB │ gzip:   0.26 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/scheduled-import-C_2igaTO.js                    0.42 kB │ gzip:   0.23 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-FOC6F5B3-uJl6OkZd.js                      0.45 kB │ gzip:   0.31 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-2KRD3SAO-DSXpgLRH.js                      0.45 kB │ gzip:   0.31 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-67CJDMHE-CR6sXSJo.js                      0.46 kB │ gzip:   0.31 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-KGLVRYIC-DHJicrSo.js                      0.46 kB │ gzip:   0.32 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-CIAEETIT-BhwjNaNU.js                      0.50 kB │ gzip:   0.35 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-EDXVE4YY-C_9wuF_w.js                      0.53 kB │ gzip:   0.38 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/flatten-Dykt1_hx.js                             0.57 kB │ gzip:   0.35 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-AA7GKIK3-D6CoHSAh.js                      0.60 kB │ gzip:   0.39 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/infoDiagram-42DDH7IO-C1CRdIOE.js                0.61 kB │ gzip:   0.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/path-utils-X0zpSSQl.js                          0.65 kB │ gzip:   0.32 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-ORNJ4GCN-D2jIvDnB.js                      0.65 kB │ gzip:   0.41 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/stateDiagram-v2-QKLJ7IA2-Dtm_GUx6.js            0.67 kB │ gzip:   0.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/llm-task-routing-CduUeTO2.js                    0.69 kB │ gzip:   0.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wiki-cleanup-BL9cfUAa.js                        0.71 kB │ gzip:   0.41 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/lint-store-B7IpCTWn.js                          0.71 kB │ gzip:   0.42 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/classDiagram-6PBFFD2Q-BVq6JjvD.js               0.74 kB │ gzip:   0.43 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/classDiagram-v2-HSJHXN6E-Cw4elNi6.js            0.74 kB │ gzip:   0.43 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/ingest-queue-yhC7Q8sL.js                        0.90 kB │ gzip:   0.44 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-7N4EOEYR-DFyJeI8u.js                      0.90 kB │ gzip:   0.49 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/line-CI6abXyB.js                                0.94 kB │ gzip:   0.47 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/project-store-5dDfUWIT.js                       0.94 kB │ gzip:   0.43 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-ZZ45TVLE-D8pwkrDw.js                      0.95 kB │ gzip:   0.58 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/core-Ct1eoHIS.js                                1.11 kB │ gzip:   0.53 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/isEmpty-D79XMYPp.js                             1.16 kB │ gzip:   0.63 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/ordinal-DZwwLmFm.js                             1.17 kB │ gzip:   0.56 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/preload-helper-CsoeaaUJ.js                      1.19 kB │ gzip:   0.68 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/azure-openai-DHMyhhg6.js                        1.20 kB │ gzip:   0.55 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-Bj-mKKzh.js                               1.26 kB │ gzip:   0.69 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/tauri-fetch-C8NCMAa4.js                         1.33 kB │ gzip:   0.71 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/event-CgZIaT2O.js                               1.43 kB │ gzip:   0.67 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-LIHQZDEY-BLISSEoJ.js                      1.46 kB │ gzip:   0.78 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/dist-js-Cm0bjNai.js                             1.49 kB │ gzip:   0.50 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/sources-merge-n4Zf6HQH.js                       1.82 kB │ gzip:   0.86 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-X2U36JSP-DVUjjIgN.js                      1.83 kB │ gzip:   0.89 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/dist-js-C7_KYp-P.js                             1.86 kB │ gzip:   0.84 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/logger-CLShg24f.js                              1.91 kB │ gzip:   1.02 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-YZCP3GAM-BlZceBnW.js                      1.93 kB │ gzip:   0.86 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-BSJP7CBP-Bz-if-6k.js                      2.09 kB │ gzip:   0.81 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/dist-CTNPsmqz.js                                2.16 kB │ gzip:   0.97 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/preset-resolver-BwGI_InM.js                     2.30 kB │ gzip:   0.74 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/path-BMC90ub1.js                                2.31 kB │ gzip:   0.99 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/diagram-5BDNPKRD-BN2KdcD6.js                    2.78 kB │ gzip:   1.35 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wiki-page-delete-BMlOycym.js                    2.83 kB │ gzip:   1.40 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/source-watch-config-DPS-yIxS.js                 2.99 kB │ gzip:   1.26 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/review-store-ImCpE7vD.js                        3.04 kB │ gzip:   1.32 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/codex-cli-transport-zwL09jNN.js                 3.15 kB │ gzip:   1.58 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-336JU56O-Co3yEFXZ.js                      3.43 kB │ gzip:   1.50 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/arc-B_-BpNyC.js                                 3.47 kB │ gzip:   1.46 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/persist-BKC2E5I2.js                             3.99 kB │ gzip:   1.42 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/reset-project-state-OZ8rRgiL.js                 4.10 kB │ gzip:   1.48 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/diagram-TYMM5635-WyDAL8Tq.js                    4.24 kB │ gzip:   1.83 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/graph-relevance-Hmjjsrni.js                     4.48 kB │ gzip:   1.96 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/mermaid-parser.core-DdlMbVm2.js                 4.53 kB │ gzip:   1.43 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/claude-cli-transport-ZRji14Iq.js                4.62 kB │ gzip:   2.05 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/defaultLocale-DubBQDt1.js                       4.64 kB │ gzip:   2.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/pieDiagram-DEJITSTG-DhjksWoE.js                 5.22 kB │ gzip:   2.28 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/sweep-reviews-CcxmeII4.js                       5.43 kB │ gzip:   2.44 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/linear-Cl-h8j0z.js                              5.52 kB │ gzip:   2.25 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/diagram-MMDJMWI5-Dy8P1kEL.js                    5.77 kB │ gzip:   2.39 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/api-client-Cpj5Gy3Y.js                          5.93 kB │ gzip:   1.83 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/project-file-sync-ChIh1uKM.js                   6.84 kB │ gzip:   2.63 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/project-store-C1NfUpZ8.js                       7.24 kB │ gzip:   2.49 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/_baseFor-z9JBFFmU.js                            7.51 kB │ gzip:   2.83 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/scheduled-import-w62ARuuz.js                    7.52 kB │ gzip:   3.23 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/react--Q-fVDN6.js                               8.10 kB │ gzip:   3.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/llm-presets-Dx72TnZC.js                         8.20 kB │ gzip:   2.21 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/reduce-LOvG5HcC.js                              8.59 kB │ gzip:   3.57 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/graphlib-Bz1EP096.js                            9.35 kB │ gzip:   3.16 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wiki-store-GbcmhPIR.js                          9.85 kB │ gzip:   3.16 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/stateDiagram-FHFEXIEX-BglhbX79.js              10.52 kB │ gzip:   3.68 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/dagre-KV5264BT-BM17ziQJ.js                     11.08 kB │ gzip:   4.14 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/source-lifecycle-Cqjnz3Dh.js                   11.11 kB │ gzip:   4.39 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/embedding-CbOx9zlE.js                          13.98 kB │ gzip:   5.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/ingest-queue-CAajEuaE.js                       15.37 kB │ gzip:   5.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/diagram-G4DWMVQ6-TKKqcBRH.js                   15.51 kB │ gzip:   5.42 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/ishikawaDiagram-UXIWVN3A-BU2M4zgE.js           17.30 kB │ gzip:   6.51 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/dedup-queue-CJ_F3yPd.js                        17.91 kB │ gzip:   7.13 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/kanban-definition-6JOO6SKY-BWwZnuye.js         20.22 kB │ gzip:   7.13 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/sankeyDiagram-XADWPNL6-D7K7-HnJ.js             21.69 kB │ gzip:   7.81 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/journeyDiagram-VCZTEJTY-BQQsGOYW.js            23.16 kB │ gzip:   8.16 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/mindmap-definition-QFDTVHPH-Cq-UjrZ5.js        23.66 kB │ gzip:   8.06 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/llm-client-9GJ-6S3R.js                         23.81 kB │ gzip:   7.69 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/wardleyDiagram-NUSXRM2D-BA8dxNvt.js            23.87 kB │ gzip:   6.29 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/erDiagram-SMLLAGMA-B7vhTJVD.js                 26.81 kB │ gzip:   9.33 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/rough.esm-BA8ITbOG.js                          27.10 kB │ gzip:   8.85 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-5PVQY5BW-CNbCx8Si.js                     28.17 kB │ gzip:   8.13 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/gitGraphDiagram-UUTBAWPF-E05a07Z3.js           28.97 kB │ gzip:   8.55 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/timeline-definition-GMOUNBTQ-sPfgHNQ-.js       30.39 kB │ gzip:   9.97 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/dagre-_AqNyNy9.js                              30.41 kB │ gzip:  10.98 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/requirementDiagram-MS252O5E-jRm7sTHx.js        30.96 kB │ gzip:   9.76 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/mermaid.core-5MVVa3aZ.js                       31.74 kB │ gzip:  10.95 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/quadrantDiagram-34T5L4WZ-CRJe8vLk.js           33.34 kB │ gzip:   9.70 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-ENJZ2VHE-D2hzll52.js                     33.40 kB │ gzip:   7.07 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-OYMX7WX6-DeGAI_Gb.js                     36.59 kB │ gzip:  11.80 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/xychartDiagram-5P7HB3ND-D0HVES1D.js            40.04 kB │ gzip:  11.20 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/vennDiagram-DHZGUBPP-YpNL6Wlu.js               40.63 kB │ gzip:  14.89 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-XPW4576I-BOJWvhux.js                     41.85 kB │ gzip:  14.22 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/src-Dr5vxqOJ.js                                45.80 kB │ gzip:  16.04 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-4TB4RGXK-B-YiBrQr.js                     46.88 kB │ gzip:  15.12 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/fs-B6s3ZLh6.js                                 49.50 kB │ gzip:  17.13 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-U2HBQHQK-CNMOTlh4.js                     52.52 kB │ gzip:  17.15 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/flowDiagram-DWJPFMVM-DtWHb9OU.js               60.22 kB │ gzip:  19.52 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/ganttDiagram-T4ZO3ILL-CxSI9_QP.js              69.14 kB │ gzip:  22.63 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/c4Diagram-AHTNJAMY-6h4_kOC8.js                 69.17 kB │ gzip:  19.33 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/blockDiagram-DXYQGD6D-PvIASp3_.js              69.86 kB │ gzip:  19.65 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/cose-bilkent-S5V4N54A-DXFp1usY.js              81.39 kB │ gzip:  21.56 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-5FUZZQ4R-ESy-kn_w.js                     97.91 kB │ gzip:  23.96 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/sequenceDiagram-FGHM5R23-BweIkNze.js          115.51 kB │ gzip:  30.46 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/architectureDiagram-Q4EWVU46-DrDJbJxk.js      146.78 kB │ gzip:  40.23 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/ingest-ChOKt9s_.js                            213.75 kB │ gzip:  69.87 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-ICPOFSXX-BE2LpKVT.js                    214.90 kB │ gzip:  33.81 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/katex-xmBtCgh8.js                             257.04 kB │ gzip:  76.96 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chat-store-CLcGN2fp.js                        308.83 kB │ gzip: 103.20 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/cytoscape.esm-82YB42Nd.js                     434.29 kB │ gzip: 137.56 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/pdf-Cy8Pr9wB.js                               468.40 kB │ gzip: 141.48 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/chunk-K5T4RW27-FizU8EAl.js                    474.02 kB │ gzip: 102.04 kB
+../../../../tmp/glm54-fix-20261126/mut-dist/m3/assets/index-BVRLdDbi.js                           1,393.37 kB │ gzip: 398.40 kB
+
+[33m[INEFFECTIVE_DYNAMIC_IMPORT] Warning:[0m src/lib/auto-save.ts is dynamically imported by src/App.tsx but also statically imported by src/App.tsx, dynamic import will not move module into another chunk.
+
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+[33m[INEFFECTIVE_DYNAMIC_IMPORT] Warning:[0m src/stores/update-store.ts is dynamically imported by src/App.tsx but also statically imported by src/components/layout/icon-sidebar.tsx, src/components/layout/update-banner.tsx, src/components/settings/sections/about-section.tsx, src/components/settings/settings-view.tsx, dynamic import will not move module into another chunk.
+
+[33m[INEFFECTIVE_DYNAMIC_IMPORT] Warning:[0m src/lib/update-check.ts is dynamically imported by src/App.tsx but also statically imported by src/components/layout/update-banner.tsx, src/components/settings/sections/about-section.tsx, dynamic import will not move module into another chunk.
+
+[33m[INEFFECTIVE_DYNAMIC_IMPORT] Warning:[0m src/lib/web-path-index.ts is dynamically imported by src/App.tsx but also statically imported by src/components/layout/knowledge-tree.tsx, dynamic import will not move module into another chunk.
+
+✓ built in 521ms

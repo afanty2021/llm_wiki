@@ -1,0 +1,87 @@
+== LIGHT start 2026-11-25 18:14:37 ==
+git archive cb78ed06 -> head.tar rc=0 
+tar -xf rc=0 
+cp -cR node_modules rc=0 
+  与 live 同字节: vite.config.ts True
+  与 live 同字节: package.json True
+  与 live 同字节: src/lib/build-form.test.ts True
+  与 live 同字节: src-tauri/tauri.conf.json True
+  与 live 同字节: src-tauri/tauri.macos.conf.json True
+  与 live 同字节: src-tauri/tauri.windows.conf.json True
+  与 live 同字节: src-tauri/tauri.linux.conf.json True
+原钉 it( 数 = 4
+NAIL ORIG-baseline-nogit: rc=1 | Tests  1 failed | 3 passed (4)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > 桌面形态（npm run build）的产物不落 dist/，目录独立且已 gitignore 23ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > 桌面形态（npm run build）的产物不落 dist/，目录独立且已 gitignore
+git init (copy) rc=0
+NAIL ORIG-baseline: rc=0 | Tests  4 passed (4)
+NAIL ORIG--e-mode-flip: rc=0 | Tests  4 passed (4)
+NAIL ORIG--a1-macos-frontendDist: rc=0 | Tests  4 passed (4)
+NAIL ORIG--a2-windows-beforeBuild: rc=0 | Tests  4 passed (4)
+NAIL ORIG--f1-prebuild: rc=0 | Tests  4 passed (4)
+NAIL ORIG--f2-outDir-flag: rc=0 | Tests  4 passed (4)
+NAIL ORIG--f4-web-outDir-flag: rc=0 | Tests  4 passed (4)
+NAIL ORIG--X-f1b-pretypecheck: rc=0 | Tests  4 passed (4)
+NAIL ORIG--X-f2b-out-dir-kebab: rc=0 | Tests  4 passed (4)
+NAIL ORIG--X-env-web-base: rc=0 | Tests  4 passed (4)
+NAIL A-R1-proposal-baseline: rc=0 | Tests  8 passed (8)
+NAIL A-R1-proposal--e-mode-flip: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A1 不变量：除 web 外任何 mode 都不写 dist/ 8ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A1 不变量：除 web 外任何 mode 都不写 dist/
+NAIL A-R1-proposal--a1-macos-frontendDist: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A2 平台 conf 不得覆盖 build 段 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A2 平台 conf 不得覆盖 build 段
+NAIL A-R1-proposal--a2-windows-beforeBuild: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A2 平台 conf 不得覆盖 build 段 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A2 平台 conf 不得覆盖 build 段
+NAIL A-R1-proposal--f1-prebuild: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A4 生命周期钩子里不得重建 mcp 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A4 生命周期钩子里不得重建 mcp
+NAIL A-R1-proposal--f2-outDir-flag: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A3 vite build 命令行不得带会盖掉配置的 flag 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A3 vite build 命令行不得带会盖掉配置的 flag
+NAIL A-R1-proposal--f4-web-outDir-flag: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A3 vite build 命令行不得带会盖掉配置的 flag 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > A3 vite build 命令行不得带会盖掉配置的 flag
+NAIL A-R1-proposal--X-f1b-pretypecheck: rc=0 | Tests  8 passed (8)
+NAIL A-R1-proposal--X-f2b-out-dir-kebab: rc=0 | Tests  8 passed (8)
+NAIL A-R1-proposal--X-env-web-base: rc=0 | Tests  8 passed (8)
+NAIL B-hardened-baseline: rc=0 | Tests  8 passed (8)
+NAIL B-hardened--e-mode-flip: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B1 不变量：除 web 外任何 mode 都不写 dist/ 10ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B1 不变量：除 web 外任何 mode 都不写 dist/
+NAIL B-hardened--a1-macos-frontendDist: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B2 任何 tauri.<platform>.conf.json 都不得覆盖 build 段 3ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B2 任何 tauri.<platform>.conf.json 都不得覆盖 build 段
+NAIL B-hardened--a2-windows-beforeBuild: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B2 任何 tauri.<platform>.conf.json 都不得覆盖 build 段 3ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B2 任何 tauri.<platform>.conf.json 都不得覆盖 build 段
+NAIL B-hardened--f1-prebuild: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B4 链上每个脚本（递归）的 pre/post 钩子都不得碰 mcp 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B4 链上每个脚本（递归）的 pre/post 钩子都不得碰 mcp
+NAIL B-hardened--f2-outDir-flag: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B3 vite build 命令行不得带会盖掉配置的 flag（含 kebab-case） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B3 vite build 命令行不得带会盖掉配置的 flag（含 kebab-case）
+NAIL B-hardened--f4-web-outDir-flag: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B3 vite build 命令行不得带会盖掉配置的 flag（含 kebab-case） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B3 vite build 命令行不得带会盖掉配置的 flag（含 kebab-case）
+NAIL B-hardened--X-f1b-pretypecheck: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B4 链上每个脚本（递归）的 pre/post 钩子都不得碰 mcp 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B4 链上每个脚本（递归）的 pre/post 钩子都不得碰 mcp
+NAIL B-hardened--X-f2b-out-dir-kebab: rc=1 | Tests  1 failed | 7 passed (8)
+      RED: × src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B3 vite build 命令行不得带会盖掉配置的 flag（含 kebab-case） 2ms
+      RED: FAIL  src/lib/build-form.test.ts > build 形态 × 产物目录分流 > B3 vite build 命令行不得带会盖掉配置的 flag（含 kebab-case）
+NAIL B-hardened--X-env-web-base: rc=0 | Tests  8 passed (8)
+NAIL ORIG-restored-final: rc=0 | Tests  4 passed (4)
+
+== 矩阵（钉子结果：绿=变异体存活 / 红=被杀）==
+e-mode-flip                [R1存活体]  ORIG: green(4)  A-R1-proposal: RED(1 failed)  B-hardened: RED(1 failed)
+a1-macos-frontendDist      [R1存活体]  ORIG: green(4)  A-R1-proposal: RED(1 failed)  B-hardened: RED(1 failed)
+a2-windows-beforeBuild     [R1存活体]  ORIG: green(4)  A-R1-proposal: RED(1 failed)  B-hardened: RED(1 failed)
+f1-prebuild                [R1存活体]  ORIG: green(4)  A-R1-proposal: RED(1 failed)  B-hardened: RED(1 failed)
+f2-outDir-flag             [R1存活体]  ORIG: green(4)  A-R1-proposal: RED(1 failed)  B-hardened: RED(1 failed)
+f4-web-outDir-flag         [R1存活体]  ORIG: green(4)  A-R1-proposal: RED(1 failed)  B-hardened: RED(1 failed)
+X-f1b-pretypecheck         [协调者加码]  ORIG: green(4)  A-R1-proposal: green(8)  B-hardened: RED(1 failed)
+X-f2b-out-dir-kebab        [协调者加码]  ORIG: green(4)  A-R1-proposal: green(8)  B-hardened: RED(1 failed)
+X-env-web-base             [协调者加码]  ORIG: green(4)  A-R1-proposal: green(8)  B-hardened: green(8)
+== LIGHT end 2026-11-25 18:15:11 ==

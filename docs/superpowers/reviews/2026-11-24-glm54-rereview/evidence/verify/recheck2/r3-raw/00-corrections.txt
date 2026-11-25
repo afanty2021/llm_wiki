@@ -1,0 +1,6 @@
+CORRECTIONS to raw files of this review
+1. raw/03-source.txt section A2 ("mapping entries: 0") and section C flags IN/NOT-IN-MAPPING are VOID: that script parsed MAPPING as ast.Assign, but the finder uses an annotated assignment. Corrected data: raw/05-hermes-src.txt section 1 (MAPPING = 23 keys) and section 2. The first-added dates in 03-source.txt section C are valid.
+2. raw/05-hermes-src2.txt section 1: "MISSING" for module targets is a false flag of that script (module targets are stored without .py). Correct existence test: raw/06-hermes-src2.txt section 1 (only mcp_serve is unresolved).
+3. raw/08-ops.txt: 26 lines of launchd *default environment* values (SSH_AUTH_SOCK, PATH) captured by a filter gap were removed after the fact; the launchctl filter in scripts/s08_ops.py was patched.
+4. raw/11-dryrun-and-more.txt section 4: the first "variant" probe failed because of a bug in the probe (dirname applied once). Corrected probe: raw/13-variant.txt.
+5. raw/10-probe.txt create_job probe: fcntl.flock was denied by the probe hook (fd->path mapping failed), so that probe ran with in-process locking only. Probe artefact, not a property of the code under review.

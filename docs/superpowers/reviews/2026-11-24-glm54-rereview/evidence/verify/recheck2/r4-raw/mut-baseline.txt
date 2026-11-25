@@ -1,0 +1,17 @@
+
+ RUN  v4.1.4 /private/tmp/glm54-recheck-20261125/R4/tree
+
+ ✓ src/lib/build-form.test.ts > build 形态 × 产物目录分流 > build:web 显式走 --mode web，产物落 dist/ —— src-server :8080 读盘的静态根 54ms
+ ✓ src/lib/build-form.test.ts > build 形态 × 产物目录分流 > 桌面形态（npm run build）的产物不落 dist/，目录独立且已 gitignore 20ms
+ ✓ src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build：frontendDist 指向 beforeBuildCommand 链实际构建出的目录，且不是 dist/ 0ms
+ ✓ src/lib/build-form.test.ts > build 形态 × 产物目录分流 > tauri build 不重建 mcp-server —— bundle 只读拷贝检出的 mcp-server/（Hermes live 进程入口） 0ms
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  19:47:46
+   Duration  289ms (transform 14ms, setup 13ms, import 62ms, tests 75ms, environment 0ms)
+
+(node:48716) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:48717) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)

@@ -1,0 +1,53 @@
+== HEAVY start 2026-11-25 18:51:05 ==
+setup: tree 已存在，复用
+live: dist 221 文件, dist-desktop 221 文件
+BUILD H1-build-web: `npm run build:web` rc=0
+    dist/        : files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+    dist-desktop/: ABSENT
+  副本 dist vs live dist: 同字节 221/221（live 221）; dist-desktop 存在=False
+BUILD H2-build-desktop: `npm run build` rc=0
+    dist/        : files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+    dist-desktop/: files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+  副本 dist-desktop vs live dist-desktop: 同字节 221/221（live 221）; dist/ 在桌面构建后 变化=0/221; dist-desktop 内部 web/桌面两套交集同字节 0
+BUILD H3-f2-flag-outDir-dist: `npx vite build --outDir dist` rc=0
+    dist/        : files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+    dist-desktop/: files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+  dist/ 变化=57/249; dist-desktop/ 变化=0/221
+BUILD H4-build-web-again: `npm run build:web` rc=0
+    dist/        : files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+    dist-desktop/: files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+  dist/ 变化=57/249
+BUILD H5-mutant-e-dev-mode: `npx vite build --mode development` rc=0
+    dist/        : files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+    dist-desktop/: files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+  dist/ 变化=57/249; dist-desktop/ 变化=0/221
+  vite.config.ts 还原后与 live 同字节: True
+BUILD H6-build-web-restore: `npm run build:web` rc=0
+    dist/        : files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+    dist-desktop/: files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+BUILD H7-f4-flag-web-outDir-dist-desktop: `npx vite build --mode web --outDir dist-desktop` rc=0
+    dist/        : files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+    dist-desktop/: files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+  dist/ 变化=0/221; dist-desktop/ 变化=57/249
+BUILD H8-build-desktop-restore: `npm run build` rc=0
+    dist/        : files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+    dist-desktop/: files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+M-6 preview: served_index==dist/index.html? False | ==dist-desktop/index.html? True | served=True
+npm 钩子检查（npm 11.20.0）: rc=0 执行顺序=['HOOK-RAN', 'HOOK-RAN', 'REAL-BUILD', 'REAL-BUILD']
+TEST:MOCKS HEAD(cb78ed06 副本): rc=0 | Test Files  182 passed (182) | Tests  2592 passed (2592) | Duration  12.63s (transform 8.25s, setup 1.78s, import 16.13s, tests 25.14s, environment 2.31s) | wall=13s
+  build-form 行: [' ✓ src/lib/build-form.test.ts (4 tests) 125ms']
+710111b0..cb78ed06 变更文件 10 个；落在 test:mocks 口径（src/ 且非 real-llm、非 mcp-server）的: ['A\tsrc/lib/build-form.test.ts']
+Minor 抽查:
+  src-server/src/routes/mod.rs:57: // 开发期 dist 可能不存在（未 npm run build）→ 前端路由 404 属正常；web 适配靠 build:web/CI 产出 dist。
+  docker-compose.prod.yml:76: - ./dist:/usr/share/nginx/html:ro
+  .dockerignore:15: dist
+  report.md 总行数 330
+  report.md:49: - 修法：`npm run build:web`；发版配方补「`tauri build` 之后必须重跑 `build:web`」。 **→ 13:07 已执行并验证，live 已是同源形态，见 §九；根因（`tauri build` 覆盖 `dist/`）在仓内尚无成文防线，见 §十 R4-I3。**
+  report.md:182: 1. **N-2**：`npm run build:web`（恢复硬约束 3；发版配方补一步）——build:web 已于 11-24 13:07 执行；**发版配方补一步未做**（仓内零处成文，见 §十 R4-I3）。
+live 终态:
+  HEAD cb78ed06
+  live dist/      : files=221 api-client=api-client-BPKp9pE6.js entry=index-C_Bt6V8i.js WEB (n(``))
+  live dist-desktop/: files=221 api-client=api-client-Cpj5Gy3Y.js entry=index-BVRLdDbi.js DESKTOP (n(void 0))
+  live dist 本次前后 变化=0/221; dist-desktop 变化=0/221
+  git status --short: ?? docs/superpowers/reviews/2026-10-25-hermes-day-fixes/ | ?? docs/superpowers/reviews/2026-10-25-hermes-v0.22.5-merge/ | ?? docs/superpowers/reviews/2026-10-26-hermes-gate-fixes/ | ?? docs/superpowers/reviews/2026-11-04-hermes-v0.22.7-merge/
+== HEAVY end 2026-11-25 18:51:55 ==

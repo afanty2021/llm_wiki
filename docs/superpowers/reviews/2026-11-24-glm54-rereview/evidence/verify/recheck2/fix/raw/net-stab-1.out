@@ -1,0 +1,76 @@
+TAP version 13
+# Subtest: 真网络·负向：假域名解析到环回 → ssrf_blocked 且服务端零连接（评审 Important-1① 主测试）
+ok 1 - 真网络·负向：假域名解析到环回 → ssrf_blocked 且服务端零连接（评审 Important-1① 主测试）
+  ---
+  duration_ms: 2.097083
+  type: 'test'
+  ...
+# Subtest: 真网络·负向：字面量环回零 deps 全生产路径 → ssrf_blocked 且零连接
+ok 2 - 真网络·负向：字面量环回零 deps 全生产路径 → ssrf_blocked 且零连接
+  ---
+  duration_ms: 0.300958
+  type: 'test'
+  ...
+# Subtest: 真网络·正向：假域名 + 钉 lookup 真连本地服务；Host 头取 URL 域名与 socket 目标分离
+ok 3 - 真网络·正向：假域名 + 钉 lookup 真连本地服务；Host 头取 URL 域名与 socket 目标分离
+  ---
+  duration_ms: 7.265667
+  type: 'test'
+  ...
+# Subtest: 真网络·总墙钟：慢滴 body 被 AbortSignal 撕断于帽内（闲歇型 bodyTimeout 帽不住的形态）
+ok 4 - 真网络·总墙钟：慢滴 body 被 AbortSignal 撕断于帽内（闲歇型 bodyTimeout 帽不住的形态）
+  ---
+  duration_ms: 404.671958
+  type: 'test'
+  ...
+# Subtest: 真网络·remainingMs 收窄单跳 headersTimeout：响应头迟于剩余预算 → fetch_failed 于帽内
+ok 5 - 真网络·remainingMs 收窄单跳 headersTimeout：响应头迟于剩余预算 → fetch_failed 于帽内
+  ---
+  duration_ms: 595.919417
+  type: 'test'
+  ...
+# Subtest: 总墙钟·跨跳预算：预算耗尽即拒（fetch_failed budget），不再发起任何一跳
+ok 6 - 总墙钟·跨跳预算：预算耗尽即拒（fetch_failed budget），不再发起任何一跳
+  ---
+  duration_ms: 0.63825
+  type: 'test'
+  ...
+# Subtest: DNS 超时：解析悬挂超 dnsTimeoutMs → dns_failed（Minor-2：不吃满 OS resolver 默认 30s+）
+ok 7 - DNS 超时：解析悬挂超 dnsTimeoutMs → dns_failed（Minor-2：不吃满 OS resolver 默认 30s+）
+  ---
+  duration_ms: 153.430375
+  type: 'test'
+  ...
+# Subtest: 真网络·destroy 闭包：销毁在飞未完成的 302 body 不以未捕获 error 击杀进程，且连接被释放（2026-11-24 崩溃钉）
+ok 8 - 真网络·destroy 闭包：销毁在飞未完成的 302 body 不以未捕获 error 击杀进程，且连接被释放（2026-11-24 崩溃钉）
+  ---
+  duration_ms: 188.236959
+  type: 'test'
+  ...
+# Subtest: 真网络·destroy 闭包：销毁已收完但未读的 302 body 同样不击杀进程（评审 R2b-M2：修前这种形态也崩，钉子的触发条件不该比生产更严）
+ok 9 - 真网络·destroy 闭包：销毁已收完但未读的 302 body 同样不击杀进程（评审 R2b-M2：修前这种形态也崩，钉子的触发条件不该比生产更严）
+  ---
+  duration_ms: 155.488625
+  type: 'test'
+  ...
+# Subtest: 真网络·全路径：fetchWithGuards 重定向分支销毁在飞 302 body 不击杀进程（评审 R2b-I1：钉生产路径，不只钉闭包）
+ok 10 - 真网络·全路径：fetchWithGuards 重定向分支销毁在飞 302 body 不击杀进程（评审 R2b-I1：钉生产路径，不只钉闭包）
+  ---
+  duration_ms: 182.627083
+  type: 'test'
+  ...
+# Subtest: 真网络·契约层：头已到、调用方既不消费也不 destroy，socket 随后出错（FIN / RST / chunked 提前关闭）→ 不击杀进程
+ok 11 - 真网络·契约层：头已到、调用方既不消费也不 destroy，socket 随后出错（FIN / RST / chunked 提前关闭）→ 不击杀进程
+  ---
+  duration_ms: 569.583083
+  type: 'test'
+  ...
+1..11
+# tests 11
+# suites 0
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2413.789083

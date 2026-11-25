@@ -1,0 +1,329 @@
+== R3 PRE start 2026-11-25 19:35:18 ==
+live HEAD cb78ed06 | branch main | 脚本与 HEAD blob 同字节: True
+修复行所在行: [43] | Hermes import 行: [41, 101] | 总行数: 158
+Hermes HEAD 2da13543a3 | status --porcelain 行数: 1
+live 快照（开工）:
+   file ~/.hermes/config.yaml {'sha': '2f71befe213ba01e', 'mtime': '2026-11-22 15:52:15', 'size': 17936}
+   file ~/.hermes/profiles/lt-tutor/config.yaml {'sha': '8d70827ee7e776e3', 'mtime': '2026-10-31 13:06:17', 'size': 6850}
+   file ~/.hermes/profiles/lt-tutor/cron/jobs.json {'sha': 'c96e374d52076608', 'mtime': '2026-11-22 19:05:22', 'size': 17346}
+   dir  ~/.hermes/profiles/lt-tutor/cron {'ctime': '2026-11-25 19:34:48', 'mode': '0o700', 'inode': 88928847}
+   dir  ~/.hermes/profiles/lt-tutor/cron/output {'ctime': '2026-11-25 19:34:48', 'mode': '0o700', 'inode': 88928884}
+   list ~/.hermes/profiles/lt-tutor entries=44
+   list ~/.hermes/profiles/lt-tutor/cron entries=30
+   list ~/.hermes entries=35
+-- 承重数字复算
+  巡检日志: 字节=19400 换行数=380 splitlines=380 | 巡检开始=20 巡检完成=0 自动开办行=20
+  巡检日期数=20 首=2026-11-06 末=2026-11-25 | ≤11-24 的趟数=19
+  日志文件 birth=2026-11-06 03:17:05
+  ~/.hermes 根下 03:17 时刻的 config 备份: ['config.yaml.bak-20260907-031701', 'config.yaml.bak-20260910-031705', 'config.yaml.bak-20260910-031706'] | 根下 .bak-* 总数: 26
+  jobs: [('TeachA', '2026-08-21T09:36:11', '0 19 * * 0'), ('teachf', '2026-09-05T10:28:09', '5 19 * * 0'), ('TeachC', '2026-09-07T03:17:01', '1 19 * * 0'), ('TeachB', '2026-09-10T03:17:05', '2 19 * * 0'), ('TeachD', '2026-09-10T03:17:06', '3 19 * * 0'), ('TeachE', '2026-09-10T03:17:06', '4 19 * * 0')]
+  Traceback (most recent call last):
+    File "<string>", line 8, in <module>
+  AttributeError: 'NoneType' object has no attribute 'group'
+  (STATIC rc=1)
+-- 沙箱 import 探针（HOME=假目录、HERMES_HOME=沙箱、cwd=/、-I -B；审计钩子拒绝沙箱外写入/子进程/联网/读真 ~/.hermes）
+  探针 nofix: rc=0
+     EXC ModuleNotFoundError No module named 'hermes_yaml'
+     FRAME <string> 42 <module>
+     FRAME cron/__init__.py 13 <module>
+     FRAME cron/jobs.py 49 <module>
+     FRAME utils.py 20 <module>
+     AUDIT-EVENTS []
+  探针 fix: rc=1
+     IMPORT-OK
+     Traceback (most recent call last):
+       File "<string>", line 57, in <module>
+     AttributeError: 'NoneType' object has no attribute 'group'
+-- 监控覆盖（launchctl print 只取状态键）
+  wiki.ltutor-weekly-audit: rc=0 | state = not running | runs = 1 | last exit code = 1 | state = active | state = active
+  ai.hermes.gateway.monitor: rc=113 | 
+  wiki.pg-watchdog: rc=0 | state = not running | runs = 1 | last exit code = 0 | state = active | state = active
+-- 相邻历史（只读 sqlite：只取状态与时间列，不取任何内容列）
+  job TeachA | last_status error | failure_streak 1 | last_run 2026-11-22T19:00:24 | last_delivery_error None | last_failure.detail RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。
+  job teachf | last_status error | failure_streak 1 | last_run 2026-11-22T19:05:22 | last_delivery_error None | last_failure.detail RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。
+  job TeachC | last_status error | failure_streak 1 | last_run 2026-11-22T19:01:22 | last_delivery_error None | last_failure.detail RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。
+  job TeachB | last_status error | failure_streak 1 | last_run 2026-11-22T19:02:24 | last_delivery_error None | last_failure.detail RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。
+  job TeachD | last_status error | failure_streak 1 | last_run 2026-11-22T19:03:24 | last_delivery_error None | last_failure.detail RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。
+  job TeachE | last_status error | failure_streak 1 | last_run 2026-11-22T19:04:24 | last_delivery_error None | last_failure.detail RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。
+  executions.db mtime=2026-11-22 19:05:22
+    table cron_incidents: rows=9 cols=['id', 'job_id', 'error_sig', 'state', 'failure_type', 'first_seen_at', 'last_seen_at', 'acked_at', 'closed_at', 'error', 'output_file', 'alerted_at']
+      [TeachA] 共 2 行；末 7 行:
+           | resolved | RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: | 
+           | detected | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [TeachD] 共 2 行；末 7 行:
+           | resolved | RuntimeError: HTTP 401: Invalid API key | 
+           | detected | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [TeachE] 共 2 行；末 7 行:
+           | resolved | RuntimeError: HTTP 401: Invalid API key | 
+           | detected | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [TeachC] 共 1 行；末 7 行:
+           | detected | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [TeachB] 共 1 行；末 7 行:
+           | detected | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [teachf] 共 1 行；末 7 行:
+           | detected | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+    table executions: rows=92 cols=['id', 'job_id', 'source', 'process_id', 'pid', 'process_started_at', 'status', 'claimed_at', 'started_at', 'finished_at', 'error', 'handoff_pending', 'handoff_started_at', 'delivery_outcome', 'scheduled_instant', 'progress_at']
+      [c7f6bc88284c] 共 1 行；末 7 行:
+          2026-08-21T09:40 | failed | [blocked_config] delivery platform 'wecom' has no gateway credentials  | 
+      [5cb3a7e14124] 共 1 行；末 7 行:
+          2026-08-21T09:47 | completed |  | 
+      [9f3a228517f8] 共 1 行；末 7 行:
+          2026-08-21T09:56 | completed |  | 
+      [75f0958aa3fc] 共 1 行；末 7 行:
+          2026-08-21T11:26 | completed |  | 
+      [3b20fedf3dad] 共 1 行；末 7 行:
+          2026-08-21T11:32 | completed |  | 
+      [8aa7a21f9dbb] 共 1 行；末 7 行:
+          2026-08-22T11:24 | completed |  | 
+      [3dd4e3826ffe] 共 1 行；末 7 行:
+          2026-08-22T11:34 | completed |  | 
+      [4081132099f2] 共 1 行；末 7 行:
+          2026-08-22T11:48 | completed |  | 
+      [b8cb915539d2] 共 1 行；末 7 行:
+          2026-08-22T11:54 | completed |  | 
+      [64017aec38de] 共 1 行；末 7 行:
+          2026-08-22T17:34 | completed |  | 
+      [TeachA] 共 23 行；末 7 行:
+          2026-10-11T19:00 | completed |  | 
+          2026-10-18T19:00 | completed |  | 
+          2026-10-25T19:00 | completed |  | 
+          2026-11-01T19:00 | completed |  | 
+          2026-11-08T19:00 | completed |  | 
+          2026-11-15T19:00 | completed |  | 
+          2026-11-22T19:00 | failed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [9b4967e96a89] 共 2 行；末 7 行:
+          2026-08-28T09:13 | failed | RuntimeError: [drift_skip] Skipped to prevent unintended spend: global | 
+          2026-09-04T09:13 | failed | [blocked_config] delivery platform 'wecom' has no gateway credentials  | 
+      [teachf] 共 12 行；末 7 行:
+          2026-10-11T19:05 | completed |  | 
+          2026-10-18T19:05 | completed |  | 
+          2026-10-25T19:05 | completed |  | 
+          2026-11-01T19:05 | completed |  | 
+          2026-11-08T19:05 | completed |  | 
+          2026-11-15T19:05 | completed |  | 
+          2026-11-22T19:05 | failed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [06b6506a2450] 共 1 行；末 7 行:
+          2026-09-13T19:00 | completed |  | 
+      [TeachC] 共 11 行；末 7 行:
+          2026-10-11T19:01 | completed |  | 
+          2026-10-18T19:01 | completed |  | 
+          2026-10-25T19:01 | completed |  | 
+          2026-11-01T19:01 | completed |  | 
+          2026-11-08T19:01 | completed |  | 
+          2026-11-15T19:01 | completed |  | 
+          2026-11-22T19:01 | failed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [TeachB] 共 11 行；末 7 行:
+          2026-10-11T19:02 | completed |  | 
+          2026-10-18T19:02 | completed |  | 
+          2026-10-25T19:02 | completed |  | 
+          2026-11-01T19:02 | completed |  | 
+          2026-11-08T19:02 | completed |  | 
+          2026-11-15T19:02 | completed |  | 
+          2026-11-22T19:02 | failed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [TeachD] 共 11 行；末 7 行:
+          2026-10-11T19:03 | completed |  | 
+          2026-10-18T19:03 | completed |  | 
+          2026-10-25T19:03 | completed |  | 
+          2026-11-01T19:03 | completed |  | 
+          2026-11-08T19:03 | completed |  | 
+          2026-11-15T19:03 | completed |  | 
+          2026-11-22T19:03 | failed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+      [TeachE] 共 11 行；末 7 行:
+          2026-10-11T19:04 | completed |  | 
+          2026-10-18T19:04 | completed |  | 
+          2026-10-25T19:04 | completed |  | 
+          2026-11-01T19:04 | completed |  | 
+          2026-11-08T19:04 | completed |  | 
+          2026-11-15T19:04 | completed |  | 
+          2026-11-22T19:04 | failed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:03:46 重置。 | 
+  deliveries.db mtime=2026-11-15 19:06:29
+    table deliveries: rows=24 cols=['execution_id', 'job_json', 'content', 'for_failure', 'status', 'owner_process_id', 'owner_pid', 'owner_started_at', 'created_at', 'finished_at', 'error']
+    table delivery_tombstones: rows=0 cols=['execution_id', 'terminal_status', 'finished_at']
+-- TeachF 投递旁证（lt-tutor 与主网关日志按文件+日期计数，只数不抄内容）
+    ('agent.log', '2026-09-06') 1
+    ('agent.log', '2026-09-09') 1
+    ('agent.log', '2026-09-11') 4
+    ('agent.log', '2026-09-13') 1
+    ('agent.log', '2026-09-15') 2
+    ('agent.log', '2026-09-20') 1
+    ('agent.log', '2026-09-27') 1
+    ('agent.log', '2026-10-04') 1
+    ('agent.log', '2026-10-11') 1
+    ('agent.log', '2026-10-18') 1
+    ('agent.log', '2026-10-25') 1
+    ('agent.log', '2026-11-01') 1
+    ('agent.log', '2026-11-08') 1
+    ('agent.log', '2026-11-15') 1
+    ('gateway.log', '2026-09-09') 1
+    ('gateway.log', '2026-09-11') 4
+    ('gateway.log', '2026-09-15') 2
+pre 阶段 live 变化: [('dir', '~/.hermes/profiles/lt-tutor/cron', {'ctime': '2026-11-25 19:34:48', 'mode': '0o700', 'inode': 88928847}, {'ctime': '2026-11-25 19:35:19', 'mode': '0o700', 'inode': 88928847}), ('listing', '~/.hermes/profiles/lt-tutor/cron', ['executions.db-shm', 'executions.db-wal'], '')]
+pre 阶段 Hermes 检出内比快照新的文件数: 0 []
+== R3 PRE end 2026-11-25 19:35:21 ==
+== R3 PRE2 start 2026-11-25 19:38:14 ==
+-- 承重数字复算
+  巡检日志: 字节=19400 换行数=380 splitlines=380 | 巡检开始=20 巡检完成=0 自动开办行=20
+  巡检日期数=20 首=2026-11-06 末=2026-11-25 | ≤11-24 的趟数=19
+  日志文件 birth=2026-11-06 03:17:05
+  ~/.hermes 根下 03:17 时刻的 config 备份: ['config.yaml.bak-20260907-031701', 'config.yaml.bak-20260910-031705', 'config.yaml.bak-20260910-031706'] | 根下 .bak-* 总数: 26
+  jobs: [('TeachA', '2026-08-21T09:36:11', '0 19 * * 0'), ('teachf', '2026-09-05T10:28:09', '5 19 * * 0'), ('TeachC', '2026-09-07T03:17:01', '1 19 * * 0'), ('TeachB', '2026-09-10T03:17:05', '2 19 * * 0'), ('TeachD', '2026-09-10T03:17:06', '3 19 * * 0'), ('TeachE', '2026-09-10T03:17:06', '4 19 * * 0')]
+  finder __editable___hermes_agent_0_19_0_finder.py | mtime 2026-07-24 11:48:37 | MAPPING 项数 23 | 顶层名 23 | 含 hermes_yaml=False 含 mcp_serve=True
+  MAPPING 顶层名: ['acp_adapter', 'agent', 'batch_runner', 'cli', 'cron', 'gateway', 'hermes_bootstrap', 'hermes_cli', 'hermes_constants', 'hermes_logging', 'hermes_state', 'hermes_time', 'mcp_serve', 'model_tools', 'plugins', 'providers', 'run_agent', 'tools', 'toolset_distributions', 'toolsets', 'trajectory_compressor', 'tui_gateway', 'utils']
+  MAPPING 目标都在检出下: True | 目标不存在的: ['batch_runner', 'cli', 'hermes_bootstrap', 'hermes_constants', 'hermes_logging', 'hermes_state', 'hermes_time', 'mcp_serve', 'model_tools', 'run_agent', 'toolset_distributions', 'toolsets', 'trajectory_compressor', 'utils']
+  检出根可 import 顶层名 99 = py 85 + pkg 14 | 在映射 22 | 不在映射 77
+  hermes_yaml 在根 True | hermes_platform 在根 True | hermes_platform 在映射 False
+  根名 ∩ stdlib [] | 根名 ∩ site-packages 顶层 ['hermes_agent'] | site 顶层名数 195
+  python 3.11.15
+-- 沙箱 import 探针（HOME=假目录、HERMES_HOME=沙箱、cwd=/、-I -B；审计钩子拒绝沙箱外写入/子进程/联网/读真 ~/.hermes）
+  探针 nofix: rc=0
+     EXC ModuleNotFoundError No module named 'hermes_yaml'
+     FRAME <string> 43 <module>
+     FRAME cron/__init__.py 13 <module>
+     FRAME cron/jobs.py 49 <module>
+     FRAME utils.py 20 <module>
+     AUDIT-EVENTS []
+  探针 fix: rc=0
+     IMPORT-OK
+     FROM cron ~/Github/Coding-Agents/Hermes-agent/cron/__init__.py
+     FROM cron.jobs ~/Github/Coding-Agents/Hermes-agent/cron/jobs.py
+     FROM utils ~/Github/Coding-Agents/Hermes-agent/utils.py
+     FROM hermes_yaml ~/Github/Coding-Agents/Hermes-agent/hermes_yaml.py
+     FROM hermes_platform (未载入)
+     ORIGIN 从检出载入的顶层名 7 ['agent', 'cron', 'hermes_cli', 'hermes_constants', 'hermes_time', 'hermes_yaml', 'utils']
+     ORIGIN 其中不在映射 ['hermes_yaml']
+     FROM-LIVE-HERMES-HOME []
+     AUDIT-EVENTS(import 段) []
+     RESOLVE lt-tutor-weekly:TeachF -> True lt-tutor-weekly:teachf
+     RESOLVE lt-tutor-weekly:TEACHF -> True lt-tutor-weekly:teachf
+     RESOLVE lt-tutor-weekly:Nobody -> False None
+     JOBSFILE 未变 True 721a48bf4c4f | 仍是 1 条 1
+     AUDIT-EVENTS(resolve 段) []
+-- 相邻历史（immutable 只读；只取状态与时间列，job_json 只取 name）
+  [TeachA] executions 共 23；末 8 行:
+       2026-10-04T19:00 | completed | delivery_outcome= delivered | 
+       2026-10-11T19:00 | completed | delivery_outcome= delivered | 
+       2026-10-18T19:00 | completed | delivery_outcome= delivered | 
+       2026-10-25T19:00 | completed | delivery_outcome= failed | 
+       2026-11-01T19:00 | completed | delivery_outcome= failed | 
+       2026-11-08T19:00 | completed | delivery_outcome= delivered | 
+       2026-11-15T19:00 | completed | delivery_outcome= delivered | 
+       2026-11-22T19:00 | failed | delivery_outcome= suppressed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:0
+  [teachf] executions 共 12；末 8 行:
+       2026-10-04T19:05 | completed | delivery_outcome= delivered | 
+       2026-10-11T19:05 | completed | delivery_outcome= delivered | 
+       2026-10-18T19:05 | completed | delivery_outcome= delivered | 
+       2026-10-25T19:05 | completed | delivery_outcome= failed | 
+       2026-11-01T19:05 | completed | delivery_outcome= failed | 
+       2026-11-08T19:05 | completed | delivery_outcome= delivered | 
+       2026-11-15T19:05 | completed | delivery_outcome= delivered | 
+       2026-11-22T19:05 | failed | delivery_outcome= suppressed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:0
+  [TeachC] executions 共 11；末 8 行:
+       2026-10-04T19:01 | completed | delivery_outcome= delivered | 
+       2026-10-11T19:01 | completed | delivery_outcome= delivered | 
+       2026-10-18T19:01 | completed | delivery_outcome= delivered | 
+       2026-10-25T19:01 | completed | delivery_outcome= failed | 
+       2026-11-01T19:01 | completed | delivery_outcome= failed | 
+       2026-11-08T19:01 | completed | delivery_outcome= delivered | 
+       2026-11-15T19:01 | completed | delivery_outcome= delivered | 
+       2026-11-22T19:01 | failed | delivery_outcome= suppressed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:0
+  [TeachB] executions 共 11；末 8 行:
+       2026-10-04T19:02 | completed | delivery_outcome= delivered | 
+       2026-10-11T19:02 | completed | delivery_outcome= delivered | 
+       2026-10-18T19:02 | completed | delivery_outcome= delivered | 
+       2026-10-25T19:02 | completed | delivery_outcome= failed | 
+       2026-11-01T19:02 | completed | delivery_outcome= failed | 
+       2026-11-08T19:02 | completed | delivery_outcome= delivered | 
+       2026-11-15T19:02 | completed | delivery_outcome= delivered | 
+       2026-11-22T19:02 | failed | delivery_outcome= suppressed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:0
+  [TeachD] executions 共 11；末 8 行:
+       2026-10-04T19:03 | completed | delivery_outcome= delivered | 
+       2026-10-11T19:03 | completed | delivery_outcome= delivered | 
+       2026-10-18T19:03 | completed | delivery_outcome= delivered | 
+       2026-10-25T19:03 | completed | delivery_outcome= failed | 
+       2026-11-01T19:03 | completed | delivery_outcome= failed | 
+       2026-11-08T19:03 | completed | delivery_outcome= delivered | 
+       2026-11-15T19:03 | completed | delivery_outcome= delivered | 
+       2026-11-22T19:03 | failed | delivery_outcome= suppressed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:0
+  [TeachE] executions 共 11；末 8 行:
+       2026-10-04T19:04 | completed | delivery_outcome= delivered | 
+       2026-10-11T19:04 | completed | delivery_outcome= delivered | 
+       2026-10-18T19:04 | completed | delivery_outcome= delivered | 
+       2026-10-25T19:04 | completed | delivery_outcome= failed | 
+       2026-11-01T19:04 | completed | delivery_outcome= failed | 
+       2026-11-08T19:04 | completed | delivery_outcome= delivered | 
+       2026-11-15T19:04 | completed | delivery_outcome= delivered | 
+       2026-11-22T19:04 | failed | delivery_outcome= suppressed | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-11-22 20:0
+  cron_incidents:
+       TeachA | resolved | config | first 2026-09-05T09:33 | last 2026-09-05T09:33 | alerted_at None | acked_at None | closed_at 2026-09-20T19:01 | RuntimeError: [drift_skip:silent] Skipped to preve
+       TeachD | resolved | auth | first 2026-09-13T19:00 | last 2026-09-13T19:00 | alerted_at None | acked_at None | closed_at 2026-09-20T19:04 | RuntimeError: HTTP 401: Invalid API key
+       TeachE | resolved | auth | first 2026-09-13T19:00 | last 2026-09-13T19:00 | alerted_at None | acked_at None | closed_at 2026-09-20T19:05 | RuntimeError: HTTP 401: Invalid API key
+       TeachA | detected | rate_limit | first 2026-11-22T19:00 | last 2026-11-22T19:00 | alerted_at None | acked_at None | closed_at None | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-
+       TeachC | detected | rate_limit | first 2026-11-22T19:01 | last 2026-11-22T19:01 | alerted_at None | acked_at None | closed_at None | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-
+       TeachB | detected | rate_limit | first 2026-11-22T19:02 | last 2026-11-22T19:02 | alerted_at None | acked_at None | closed_at None | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-
+       TeachD | detected | rate_limit | first 2026-11-22T19:03 | last 2026-11-22T19:03 | alerted_at None | acked_at None | closed_at None | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-
+       TeachE | detected | rate_limit | first 2026-11-22T19:04 | last 2026-11-22T19:04 | alerted_at None | acked_at None | closed_at None | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-
+       teachf | detected | rate_limit | first 2026-11-22T19:05 | last 2026-11-22T19:05 | alerted_at None | acked_at None | closed_at None | RuntimeError: HTTP 429: 已达到 5 小时的使用上限。您的限额将在 2026-
+  deliveries 共 24 行:
+      [?] 共 24；末 6 行:
+           2026-11-15T19:00 | report | delivered | 
+           2026-11-15T19:01 | report | delivered | 
+           2026-11-15T19:02 | report | delivered | 
+           2026-11-15T19:03 | report | delivered | 
+           2026-11-15T19:04 | report | delivered | 
+           2026-11-15T19:05 | report | delivered | 
+-- TeachF 投递日志行（按文件；滤凭证；截 230）
+   [profile/agent.log] 共 18 行；末 12 行:
+        2026-09-13 19:01:12,325 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf via live adapter thread=- message_id=aibot_send_msg-2258143d6788488a87df7375651dc459
+        2026-09-15 15:23:42,353 INFO plugins.platforms.wecom.adapter: [Wecom] Stream age 995s >= safe duration 330s for chat TeachF — declining finalize frame, falling back to proactive send (Layer 2 clock fallback).
+        2026-09-15 15:23:42,632 INFO gateway.run: Suppressing normal final send for session agent:lt-tutor:wecom:dm:TeachF: final delivery already confirmed (streamed=True previewed=False content_delivered=True).
+        2026-09-20 19:06:53,037 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf
+        2026-09-27 19:06:53,349 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf
+        2026-10-04 19:06:36,753 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf
+        2026-10-11 19:07:53,717 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf
+        2026-10-18 19:06:23,426 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf
+        2026-10-25 19:06:28,401 ERROR cron.scheduler: Job '5526c808e3f9': delivery error: WeCom: failed to connect - WeCom startup failed: WECOM_BOT_ID and WECOM_SECRET are required (target wecom:teachf)
+        2026-11-01 19:06:29,954 ERROR cron.scheduler: Job '5526c808e3f9': delivery error: WeCom: failed to connect - WeCom startup failed: WECOM_BOT_ID and WECOM_SECRET are required (target wecom:teachf)
+        2026-11-08 19:06:50,895 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf
+        2026-11-15 19:06:29,886 INFO cron.scheduler: Job '5526c808e3f9': delivered to wecom:teachf
+   [profile/gateway.log] 共 7 行；末 12 行:
+        2026-09-09 14:03:30,140 INFO gateway.run: Suppressing normal final send for session agent:lt-tutor:wecom:dm:TeachF: final delivery already confirmed (streamed=True previewed=False content_delivered=True).
+        2026-09-11 14:20:05,344 INFO gateway.run: Suppressing normal final send for session agent:lt-tutor:wecom:dm:TeachF: final delivery already confirmed (streamed=True previewed=False content_delivered=True).
+        2026-09-11 14:21:01,700 INFO gateway.run: Suppressing normal final send for session agent:lt-tutor:wecom:dm:TeachF: final delivery already confirmed (streamed=True previewed=False content_delivered=True).
+        2026-09-11 14:28:47,613 INFO gateway.run: Suppressing normal final send for session agent:lt-tutor:wecom:dm:TeachF: final delivery already confirmed (streamed=True previewed=False content_delivered=True).
+        2026-09-11 14:30:05,539 INFO gateway.run: Suppressing normal final send for session agent:lt-tutor:wecom:dm:TeachF: final delivery already confirmed (streamed=True previewed=False content_delivered=True).
+        2026-09-15 15:23:42,353 INFO plugins.platforms.wecom.adapter: [Wecom] Stream age 995s >= safe duration 330s for chat TeachF — declining finalize frame, falling back to proactive send (Layer 2 clock fallback).
+        2026-09-15 15:23:42,632 INFO gateway.run: Suppressing normal final send for session agent:lt-tutor:wecom:dm:TeachF: final delivery already confirmed (streamed=True previewed=False content_delivered=True).
+-- 协调者首轮 sqlite 打开的副作用核查（executions.db* 现状）
+    deliveries.db size=69632 mtime=2026-11-15 19:06:29 birth=2026-10-25 19:01:37
+    executions.db size=114688 mtime=2026-11-22 19:05:22 birth=2026-08-19 18:22:30
+    lsof rc=1 输出行数=2
+       lsof: status
+pre2 阶段 live 变化（相对 pre2 开工）: 无
+Hermes 检出内比首轮快照新的文件数: 0 []
+== R3 PRE2 end 2026-11-25 19:38:16 ==
+== R3 DRYRUN start 2026-11-25 19:38:57 ==
+前置: HEAD cb78ed06 | branch main | 脚本 = HEAD blob 且含修复行: True
+Hermes 检出 status --porcelain: ['?? .zcode/']
+live 快照（dry-run 前）:
+   file ~/.hermes/config.yaml {'sha': '2f71befe213ba01e', 'mtime': '2026-11-22 15:52:15', 'size': 17936}
+   file ~/.hermes/profiles/lt-tutor/config.yaml {'sha': '8d70827ee7e776e3', 'mtime': '2026-10-31 13:06:17', 'size': 6850}
+   file ~/.hermes/profiles/lt-tutor/cron/jobs.json {'sha': 'c96e374d52076608', 'mtime': '2026-11-22 19:05:22', 'size': 17346}
+   dir  ~/.hermes/profiles/lt-tutor/cron {'ctime': '2026-11-25 19:38:48', 'mode': '0o700', 'inode': 88928847}
+   dir  ~/.hermes/profiles/lt-tutor/cron/output {'ctime': '2026-11-25 19:38:48', 'mode': '0o700', 'inode': 88928884}
+   list ~/.hermes/profiles/lt-tutor entries=44
+   list ~/.hermes/profiles/lt-tutor/cron entries=30
+   list ~/.hermes entries=35
+cron 目录清单相对首轮开工快照的差异: 无（首轮 mode=ro 打开留下的 -wal/-shm 已不在）
+命令: /bin/bash /Users/berton/Github/kb-obsidian/llm_wiki/tools/ltutor/provision-teacher-weekly.sh TeachF --dry-run | cwd=/ | env=HOME,PATH(launchd 默认),PYTHONDONTWRITEBYTECODE=1
+dry-run: rc=0 wall=0.12s | stdout 行数=5 stderr 字节=0
+   | === DRY RUN（不落盘） ===
+   | [1/3] 精确路由已存在（chat_id=TeachF）——跳过
+   | [2/3] platforms.wecom 启用块已存在——跳过
+   | [3/3] 周报任务已存在（lt-tutor-weekly:TeachF）——跳过
+   | === 完成 ===
+dry-run 前后 live 变化:
+   ('dir', '~/.hermes/profiles/lt-tutor/cron', {'ctime': '2026-11-25 19:38:48', 'mode': '0o700', 'inode': 88928847}, {'ctime': '2026-11-25 19:38:57', 'mode': '0o700', 'inode': 88928847})
+   ('dir', '~/.hermes/profiles/lt-tutor/cron/output', {'ctime': '2026-11-25 19:38:48', 'mode': '0o700', 'inode': 88928884}, {'ctime': '2026-11-25 19:38:57', 'mode': '0o700', 'inode': 88928884})
+dry-run 期间 Hermes 检出内新写入的文件数: 0 []
+终态: live HEAD cb78ed06 | Hermes 检出 status 行数: 1
+== R3 DRYRUN end 2026-11-25 19:38:58 ==

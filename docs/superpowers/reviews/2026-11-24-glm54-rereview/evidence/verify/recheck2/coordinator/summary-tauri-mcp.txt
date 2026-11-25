@@ -1,0 +1,34 @@
+== TAURI-MCP start 2026-11-25 20:33:39 ==
+    S0 开工 源: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+    S0 开工 target 暂存: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+    S0 开工 bundle: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+[S1-warm-unchanged] tauri build rc=0 wall=445s (7.4 min)
+    > Finished `release` profile [optimized] target(s) in 7m 16s
+    > Bundling LLM Wiki.app (/private/tmp/glm54-recheck-20261125/C/tree/src-tauri/target/release/bundle/macos/LLM Wiki.app)
+    S1 源: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+    S1 target 暂存: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+    S1 bundle: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+    S2 施变后 源: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    S2 施变后 target 暂存: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+    S2 施变后 bundle: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 18:57:31 | PROBE.txt=无
+[S2-modified] tauri build rc=0 wall=445s (7.4 min)
+    > Finished `release` profile [optimized] target(s) in 7m 16s
+    > Bundling LLM Wiki.app (/private/tmp/glm54-recheck-20261125/C/tree/src-tauri/target/release/bundle/macos/LLM Wiki.app)
+    S2 源: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    S2 target 暂存: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    S2 bundle: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    S3 挪走后 源: dist 文件数=ABSENT | admin.js sha=ABSENT mtime=None | PROBE.txt=无
+    S3 挪走后 target 暂存: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    S3 挪走后 bundle: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+[S3-dist-missing] tauri build rc=1 wall=8s (0.1 min)
+    > error: failed to run custom build command for `llm-wiki v0.6.13 (/private/tmp/glm54-recheck-20261125/C/tree/src-tauri)`
+    > panicked at build.rs:5:35:
+    > resource path `../mcp-server/dist` doesn't exist
+    S3 源: dist 文件数=ABSENT | admin.js sha=ABSENT mtime=None | PROBE.txt=无
+    S3 target 暂存: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    S3 bundle: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    复原后 源: dist 文件数=31 | admin.js sha=6adb1db66e52 mtime=11-25 20:48:36 | PROBE.txt=无
+    复原后 target 暂存: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+    复原后 bundle: dist 文件数=32 | admin.js sha=3ed00865a520 mtime=11-25 20:41:04 | PROBE.txt=在
+live mcp-server/dist 未被触碰: admin.js sha 同=True，live 无 PROBE.txt=True
+== TAURI-MCP end 2026-11-25 20:48:36 ==

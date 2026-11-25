@@ -1,0 +1,1292 @@
+
+> llm-wiki@0.6.13 test:mocks
+> vitest run --exclude='**/*.real-llm.test.ts' --exclude='**/mcp-server/**'
+
+(node:78936) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+ RUN  v4.1.4 /private/tmp/glm54-fix-20261126/repo
+
+ ❯ tools/transcriber/__tests__/audio.real-ffmpeg.test.ts (1 test | 1 failed) 88ms
+     × 60s 样本 → wav 存在且 ffprobe 报 16000Hz / 1 channel / pcm_s16le 87ms
+stderr | src/lib/embedding.test.ts > searchByEmbedding — aggregation > returns [] when embedding call fails (null vector)
+embedding fetch failed {
+  error: 'API 401 Error — Unauthorized at http://localhost:1234/v1/embeddings'
+}
+
+stdout | src/lib/embedding.test.ts > searchByEmbedding — aggregation > groups chunks by page and ranks by max-pool score
+LanceDB chunk search completed { rawChunks: 4, pages: 3, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > searchByEmbedding — aggregation > caps tail contribution so the blended score cannot exceed 1.0
+LanceDB chunk search completed { rawChunks: 6, pages: 2, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > searchByEmbedding — aggregation > applies the tail contribution below the cap when weighted tail < (1 - top)
+LanceDB chunk search completed { rawChunks: 3, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > searchByEmbedding — aggregation > returns [] when the LanceDB search command throws (doesn't leak the error)
+LanceDB chunk search failed { error: 'lancedb: could not open table' }
+
+stdout | src/lib/embedding.test.ts > searchByEmbedding — aggregation > sorts matchedChunks by score descending regardless of server return order
+LanceDB chunk search completed { rawChunks: 3, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > searchByEmbedding — aggregation > attaches up to 3 matched chunks with metadata
+LanceDB chunk search completed { rawChunks: 4, pages: 1, elapsedMs: 0 }
+
+ ✓ src/i18n/i18n-parity.test.ts (6 tests) 66ms
+stdout | src/lib/embedding.test.ts > searchByEmbedding — aggregation > respects the topK cutoff
+LanceDB chunk search completed { rawChunks: 10, pages: 10, elapsedMs: 0 }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding — provider wire formats > reports the Doubao multimodal response shape when the vector is missing
+embedding fetch failed { error: 'Embedding response missing data.embedding' }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding — provider wire formats > rejects empty Gemini embedding vectors
+embedding fetch failed { error: 'Embedding response missing embedding.values' }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding — provider wire formats > rejects Gemini embedding vectors with NaN or Infinity values
+embedding fetch failed { error: 'Embedding response missing embedding.values' }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding — provider wire formats > rejects Gemini embedding vectors with NaN or Infinity values
+embedding fetch failed { error: 'Embedding response missing embedding.values' }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding — provider wire formats > rejects Gemini embedding vectors with mixed value types
+embedding fetch failed { error: 'Embedding response missing embedding.values' }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding — provider wire formats > surfaces Gemini auth errors with HTTP status
+embedding fetch failed {
+  error: 'API 403 Forbidden — {"error":{"message":"API key not valid"}} at https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent'
+}
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > retries after an oversize 400 with halved text and succeeds
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > recognises HTTP 413 as oversize and halves
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > does NOT halve on auth errors (401) — retries there would be pointless
+embedding fetch failed {
+  error: 'API 401 Unauthorized — {"error":"Invalid API key"} at http://localhost:1234/v1/embeddings'
+}
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > gives up after 3 halvings and surfaces the 'rejected at N chars' message
+embedding fetch failed {
+  error: 'Endpoint rejected input even at 250 chars — server context smaller than expected. Lower Settings → Embedding → Max Chunk Chars.'
+}
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > halving floor: 128-char input stops after 2 attempts (128 → 64; 64 is not > 64 so no further halving)
+embedding fetch failed {
+  error: 'Endpoint rejected input even at 64 chars — server context smaller than expected. Lower Settings → Embedding → Max Chunk Chars.'
+}
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > halving floor: 130-char input produces 3 attempts (130 → 65 is > 64 so halves once more to 32)
+embedding fetch failed {
+  error: 'Endpoint rejected input even at 32 chars — server context smaller than expected. Lower Settings → Embedding → Max Chunk Chars.'
+}
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > recognizes a variety of oversize error phrases (not just 'exceeds maximum context')
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > recognizes a variety of oversize error phrases (not just 'exceeds maximum context')
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > recognizes a variety of oversize error phrases (not just 'exceeds maximum context')
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > recognizes a variety of oversize error phrases (not just 'exceeds maximum context')
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > recognizes a variety of oversize error phrases (not just 'exceeds maximum context')
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > recognizes a variety of oversize error phrases (not just 'exceeds maximum context')
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > surfaces a 'Network error' message when the fetch itself throws a TypeError
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > returns null + surfaces a descriptive error when 200 response is missing data[0].embedding
+embedding fetch failed { error: 'Embedding response missing data[0].embedding' }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > clears lastEmbeddingError after a successful fetch following a failure
+embedding fetch failed {
+  error: 'API 401 Unauthorized — {"error":"Invalid API key"} at http://localhost:1234/v1/embeddings'
+}
+
+stdout | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > clears lastEmbeddingError after a successful fetch following a failure
+LanceDB chunk search completed { rawChunks: 1, pages: 1, elapsedMs: 0 }
+
+stderr | src/lib/embedding.test.ts > fetchEmbedding (via searchByEmbedding) — auto-halve > does not let a concurrent success erase a later failure
+embedding fetch failed { error: 'concurrent embedding failed' }
+
+stdout | src/lib/embedding.test.ts > embedPage > chunks the page, embeds each, and upserts
+Indexed page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 1 }
+
+stderr | src/lib/mineru.test.ts > MinerU API helpers > keeps parsed Markdown when extracted image saving fails
+[lib/logger.ts:161:26] MinerU failed to save extracted images; keeping parsed Markdown text { error: 'disk full' }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-0', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-1', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-2', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-3', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-4', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-5', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-6', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-7', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-8', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-9', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-10', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-11', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-12', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-13', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-14', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-15', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-16', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-17', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-18', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > optimizes periodically for incremental page embeddings
+Indexed page chunks { pageId: 'page-19', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-0', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-1', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-2', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-3', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-4', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-5', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-6', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-7', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-8', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-9', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-10', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-11', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-12', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-13', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-14', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-15', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-16', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-17', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > does not optimize before the incremental threshold is reached
+Indexed page chunks { pageId: 'page-18', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-0', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-1', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-2', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-3', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-4', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-5', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-6', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-7', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-8', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-9', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-10', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-11', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-12', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-13', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-14', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-15', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-16', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-17', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-18', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > tracks incremental optimization thresholds per project
+Indexed page chunks { pageId: 'page-b', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+ ✓ tools/transcriber/__tests__/api-client.test.ts (31 tests) 90ms
+stderr | src/lib/embedding.test.ts > embedPage > keeps successful chunks even when some fail, preserving original chunk_index gaps
+embedding fetch failed {
+  error: 'API 404 Not Found — not found at http://localhost:1234/v1/embeddings'
+}
+
+stdout | src/lib/embedding.test.ts > embedPage > keeps successful chunks even when some fail, preserving original chunk_index gaps
+Indexed page chunks { pageId: 'page', rows: 2, chunkCount: 3, skipped: 1, elapsedMs: 1 }
+
+stderr | src/lib/embedding.test.ts > embedPage > skips LanceDB call when all chunks fail to embed
+embedding fetch failed {
+  error: 'API 500 Error — internal at http://localhost:1234/v1/embeddings'
+}
+
+stdout | src/lib/embedding.test.ts > embedPage > skips LanceDB call when all chunks fail to embed
+Indexed nothing for page — no chunks could be embedded { pageId: 'rope' }
+
+stdout | src/lib/embedding.test.ts > embedPage > passes page title + heading path + chunk text joined by blank lines to the embed request
+Indexed page chunks {
+  pageId: 'attention',
+  rows: 1,
+  chunkCount: 1,
+  skipped: 0,
+  elapsedMs: 0
+}
+
+stdout | src/lib/embedding.test.ts > embedPage > omits the heading-path prefix when the chunk is preamble (empty headingPath)
+Indexed page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > omits the title prefix when pageTitle is empty/whitespace
+Indexed page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > honors cfg.maxChunkChars: smaller value produces more chunks
+Indexed page chunks { pageId: 'p', rows: 2, chunkCount: 2, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > honors cfg.maxChunkChars: smaller value produces more chunks
+Indexed page chunks { pageId: 'p', rows: 5, chunkCount: 5, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > honors cfg.overlapChunkChars: larger overlap produces longer subsequent chunks
+Indexed page chunks { pageId: 'p', rows: 7, chunkCount: 7, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedPage > honors cfg.overlapChunkChars: larger overlap produces longer subsequent chunks
+Indexed page chunks { pageId: 'p', rows: 7, chunkCount: 7, skipped: 0, elapsedMs: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > uses OpenAI-compatible batch requests and preserves chunk order
+Indexed page chunks {
+  pageId: 'batched',
+  rows: 24,
+  chunkCount: 24,
+  skipped: 0,
+  elapsedMs: 1
+}
+
+ ✓ src/commands/fs.test.ts (37 tests) 115ms
+stdout | src/lib/embedding.test.ts > embedAllPages > embeds chunks from one page concurrently without exceeding the limit
+Indexed page chunks {
+  pageId: 'concurrent',
+  rows: 24,
+  chunkCount: 24,
+  skipped: 0,
+  elapsedMs: 91
+}
+
+stdout | src/lib/embedding.test.ts > embedAllPages > clears the chunk table before a forced rebuild
+Rebuilt page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > clears the chunk table before a forced rebuild
+Rebuilt page chunks { pageId: 'sub/attention', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > optimizes the chunk table after a forced rebuild succeeds
+Rebuilt page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > optimizes the chunk table after a forced rebuild succeeds
+Rebuilt page chunks { pageId: 'sub/attention', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > does not fail forced rebuild when chunk table optimization fails
+Rebuilt page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > does not fail forced rebuild when chunk table optimization fails
+Rebuilt page chunks { pageId: 'sub/attention', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > drops the legacy per-page table after a successful forced rebuild
+Rebuilt page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > drops the legacy per-page table after a successful forced rebuild
+Rebuilt page chunks { pageId: 'sub/attention', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > does not fail a successful forced rebuild when legacy table cleanup fails
+Rebuilt page chunks { pageId: 'rope', rows: 1, chunkCount: 1, skipped: 0 }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > does not fail a successful forced rebuild when legacy table cleanup fails
+Rebuilt page chunks { pageId: 'sub/attention', rows: 1, chunkCount: 1, skipped: 0 }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > updates successful pages without clearing existing chunks when some pages fail
+embedding fetch failed {
+  error: 'API 500 Error — embedding server down at http://localhost:1234/v1/embeddings'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — enqueue & basic processing > does not let a queue subscriber failure block persistence
+[Ingest Queue] Queue subscriber failed: Error: subscriber failed
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.test.ts:153:13
+    at Module.subscribeIngestQueue (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:49:5)
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.test.ts:152:25
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20
+    at new Promise (<anonymous>)
+[Ingest Queue] Queue subscriber failed: Error: subscriber failed
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.test.ts:153:13
+    at notifyQueueListeners (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:39:7)
+    at saveQueue (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:132:3)
+    at Module.enqueueIngest (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:311:9)
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.test.ts:156:18
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — enqueue & basic processing > does not let a queue subscriber failure block persistence
+[Ingest Queue] Queue subscriber failed: Error: subscriber failed
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.test.ts:153:13
+    at notifyQueueListeners (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:39:7)
+    at saveQueue (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:132:3)
+    at startTask (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:1223:9)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at processNext (/private/tmp/glm54-fix-20261126/repo/src/lib/ingest-queue.ts:1265:13)
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — enqueue & basic processing > recovers the inactive-project write chain after a persistence failure
+[lib/logger.ts:161:26] failed to persist inactive-project tasks { error: 'Error: disk temporarily unavailable' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > retries a failing task up to MAX_RETRIES=3 then marks failed
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'bad.md',
+  retryCount: 1,
+  maxRetries: 3,
+  error: 'LLM error'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > retries a failing task up to MAX_RETRIES=3 then marks failed
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'bad.md',
+  retryCount: 2,
+  maxRetries: 3,
+  error: 'LLM error'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > retries a failing task up to MAX_RETRIES=3 then marks failed
+[lib/logger.ts:161:26] task failed permanently { sourcePath: 'bad.md', retryCount: 3, error: 'LLM error' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > succeeds on retry after transient failure
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'flaky.md',
+  retryCount: 1,
+  maxRetries: 3,
+  error: 'transient'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > succeeds on retry after transient failure
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'flaky.md',
+  retryCount: 2,
+  maxRetries: 3,
+  error: 'transient'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > treats autoIngest resolving to an empty array as a failure (not silent success)
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'refresh-abort.md',
+  retryCount: 1,
+  maxRetries: 3,
+  error: 'Ingest produced no output files'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > treats autoIngest resolving to an empty array as a failure (not silent success)
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'refresh-abort.md',
+  retryCount: 2,
+  maxRetries: 3,
+  error: 'Ingest produced no output files'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > treats autoIngest resolving to an empty array as a failure (not silent success)
+[lib/logger.ts:161:26] task failed permanently {
+  sourcePath: 'refresh-abort.md',
+  retryCount: 3,
+  error: 'Ingest produced no output files'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > retryTask resets a failed task to pending and reprocesses it
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'x.md',
+  retryCount: 1,
+  maxRetries: 3,
+  error: 'always fails'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > retryTask resets a failed task to pending and reprocesses it
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'x.md',
+  retryCount: 2,
+  maxRetries: 3,
+  error: 'always fails'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — retry & failure > retryTask resets a failed task to pending and reprocesses it
+[lib/logger.ts:161:26] task failed permanently { sourcePath: 'x.md', retryCount: 3, error: 'always fails' }
+
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > missing-page/filename-match
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-missing-attention', error: 'ApiRequestError: HTTP 400' }
+
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > missing-page/title-match
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-missing-attn-mech', error: 'ApiRequestError: HTTP 400' }
+
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > missing-page/chinese-prefix-variant
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-missing-zh', error: 'ApiRequestError: HTTP 400' }
+
+stdout | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > prevents schema routing from overwriting an already-written source summary
+[ingest] Auto-routed page type "source" from "wiki/concepts/" to "wiki/sources/".
+
+ ✓ src/lib/__tests__/claude-cli-transport.test.ts (31 tests) 226ms
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > missing-page/case-insensitive
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-uppercase', error: 'ApiRequestError: HTTP 400' }
+
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > missing-page/kebab-vs-space
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-kebab', error: 'ApiRequestError: HTTP 400' }
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > does not repair an unexpected truncated source summary onto the current source
+[lib/logger.ts:161:26] FILE block "wiki/sources/cited-work.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > does not repair an unexpected truncated source summary onto the current source
+[lib/logger.ts:161:26] FILE block "wiki/sources/cited-work.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > duplicate/one-page-deleted
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-dup-resolved', error: 'ApiRequestError: HTTP 400' }
+
+stdout | src/lib/ingest.scenarios.test.ts > ingest scenarios (fixture-driven) > drops generated pages whose frontmatter type disagrees with schema routing
+[ingest] Auto-routed page type "source" from "wiki/concepts/" to "wiki/sources/".
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — clearCompletedTasks & summary > getQueueSummary returns accurate counts
+[lib/logger.ts:161:26] task error (will retry) { sourcePath: 'fail.md', retryCount: 1, maxRetries: 3, error: 'fail' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — clearCompletedTasks & summary > getQueueSummary returns accurate counts
+[lib/logger.ts:161:26] task error (will retry) { sourcePath: 'fail.md', retryCount: 2, maxRetries: 3, error: 'fail' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — clearCompletedTasks & summary > getQueueSummary returns accurate counts
+[lib/logger.ts:161:26] task failed permanently { sourcePath: 'fail.md', retryCount: 3, error: 'fail' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — clearCompletedTasks & summary > clearCompletedTasks drops failed tasks
+[lib/logger.ts:161:26] task error (will retry) { sourcePath: 'f.md', retryCount: 1, maxRetries: 3, error: 'fail' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — clearCompletedTasks & summary > clearCompletedTasks drops failed tasks
+[lib/logger.ts:161:26] task error (will retry) { sourcePath: 'f.md', retryCount: 2, maxRetries: 3, error: 'fail' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — clearCompletedTasks & summary > clearCompletedTasks drops failed tasks
+[lib/logger.ts:161:26] task failed permanently { sourcePath: 'f.md', retryCount: 3, error: 'fail' }
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — queue-drain triggers review sweep > does NOT trigger sweep when all tasks fail (nothing was successfully ingested)
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'bad.md',
+  retryCount: 1,
+  maxRetries: 3,
+  error: 'always fails'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — queue-drain triggers review sweep > does NOT trigger sweep when all tasks fail (nothing was successfully ingested)
+[lib/logger.ts:161:26] task error (will retry) {
+  sourcePath: 'bad.md',
+  retryCount: 2,
+  maxRetries: 3,
+  error: 'always fails'
+}
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — queue-drain triggers review sweep > does NOT trigger sweep when all tasks fail (nothing was successfully ingested)
+[lib/logger.ts:161:26] task failed permanently { sourcePath: 'bad.md', retryCount: 3, error: 'always fails' }
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > protects the source summary while repairing a different truncated page
+[lib/logger.ts:161:26] FILE block "wiki/concepts/recovered.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > protects the source summary while repairing a different truncated page
+[lib/logger.ts:161:26] FILE block "wiki/concepts/recovered.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-queue.test.ts > ingest-queue — restoreQueue > keeps restored tasks pending when the ingest model is not configured
+[lib/logger.ts:161:26] restored pending tasks, but ingest LLM is not configured; leaving them pending { pending: 2 }
+
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > llm-judged/semantic-match
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-context-window', error: 'ApiRequestError: HTTP 400' }
+
+ ✓ src/lib/ingest-queue.test.ts (69 tests) 79ms
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > mixed-batch/partial-resolution
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-mix-rule', error: 'ApiRequestError: HTTP 400' }
+
+stderr | src/lib/sweep-reviews.scenarios.test.ts > sweep scenarios (fixture-driven) > mixed-batch/partial-resolution
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'r-mix-llm', error: 'ApiRequestError: HTTP 400' }
+
+ ✓ src/lib/sweep-reviews.scenarios.test.ts (12 tests) 87ms
+ ✓ src/lib/ingest.scenarios.test.ts (10 tests) 98ms
+ ✓ src/components/web/web-ingest-panel.test.tsx (5 tests) 244ms
+(node:78960) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ ✓ src/lib/build-form.test.ts (10 tests) 100ms
+ ✓ src/lib/persist.integration.test.ts (32 tests) 67ms
+stderr | src/lib/embedding.test.ts > embedAllPages > updates successful pages without clearing existing chunks when some pages fail
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > retries a truncated FILE block with a targeted generation request
+[lib/logger.ts:161:26] FILE block "wiki/concepts/recovered.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > retries a truncated FILE block with a targeted generation request
+[lib/logger.ts:161:26] FILE block "wiki/concepts/recovered.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stdout | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > auto-routes a generated typed page into its schema directory
+[ingest] Auto-routed page type "goal" from "wiki/concepts/" to "wiki/goals/".
+
+stderr | src/lib/project-file-sync.test.ts > project file sync > consumes a proven move even when one wiki reference cannot be rewritten
+[file-sync] failed to migrate unchanged source move: Error: permission denied
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/project-file-sync.test.ts:417:43
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > rejects an ingest when a truncated FILE block cannot be repaired
+[lib/logger.ts:161:26] FILE block "wiki/concepts/incomplete.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > rejects an ingest when a truncated FILE block cannot be repaired
+[lib/logger.ts:161:26] FILE block "wiki/concepts/incomplete.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+ ✓ src/lib/__tests__/dedup_embedding.test.ts (22 tests) 72ms
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > falls back to built-in PDF extraction when MinerU fails for a non-cancelled ingest
+[lib/logger.ts:161:26] MinerU parsing failed, falling back to pdfium { message: 'network failure from MinerU' }
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > falls back to built-in PDF extraction when MinerU fails for a non-cancelled ingest
+[lib/logger.ts:161:26] Image extraction failed { fileName: 'report.pdf', error: 'window is not defined' }
+
+ ✓ src/lib/__tests__/wiki-graph.test.ts (8 tests) 54ms
+ ✓ src/lib/lint.scenarios.test.ts (5 tests) 31ms
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > uses a configured local MinerU backend without a cloud token
+[lib/logger.ts:161:26] Image extraction failed { fileName: 'local.pdf', error: 'window is not defined' }
+
+stderr | src/lib/ingest-source-path-collision.test.ts > autoIngest source summary paths > rejects unsafe and application-managed paths from interactive writes
+[lib/logger.ts:161:26] executeIngestWrites rejected unsafe or app-managed path { relativePath: 'wiki/INDEX.md' }
+[lib/logger.ts:161:26] executeIngestWrites rejected unsafe or app-managed path { relativePath: 'wiki/overview.MD' }
+[lib/logger.ts:161:26] executeIngestWrites rejected unsafe or app-managed path { relativePath: '../escape.md' }
+
+ ✓ src/lib/ingest-source-path-collision.test.ts (36 tests) 315ms
+ ✓ src/stores/review-store.property.test.ts (3 tests) 52ms
+ ✓ src/lib/sweep-reviews.property.test.ts (5 tests) 52ms
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-c8bf079a', error: 'ApiRequestError: HTTP 400' }
+
+ ✓ src/lib/codex-cli-transport.test.ts (17 tests) 585ms
+ ✓ src/lib/reset-project-state.test.ts (10 tests) 66ms
+ ✓ src/components/web/web-image.test.tsx (2 tests) 32ms
+ ✓ src/lib/sweep-reviews-build-wiki-index.test.ts (2 tests) 33ms
+ ✓ src/lib/ingest-queue.integration.test.ts (12 tests) 40ms
+ ✓ src/stores/review-store.web.test.ts (3 tests) 23ms
+ ✓ src/lib/lint-structural-core.test.ts (5 tests) 33ms
+ ✓ src/lib/wiki-graph.test.ts (12 tests) 8ms
+stderr | src/lib/source-preprocess.test.ts > source preprocessing > continues after one extractor fails
+[source-preprocess] failed to pre-process "bad.pdf"; ingest will retry when reading it: bad file
+
+stderr | tools/transcriber/__tests__/whisper.test.ts > 窗级退化守门（2026-09-07 刘飞雪试点 04/06 双例后落地） > 人工复核出口：TRANSCRIBER_GATE_ALLOW 精确 slug 命中才放行，近似 slug 仍拒（防同名 lesson 误扫）
+⚠ 儿歌分享-What-s-your-favourite-color-f30ce801 退化守门人工复核放行（TRANSCRIBER_GATE_ALLOW 精确命中）：窗字占 100%——复核人已确认重复为内容本征
+⚠ what-s-your-favourite-color-3a6e19e5 退化守门人工复核放行（TRANSCRIBER_GATE_ALLOW 精确命中）：窗字占 100%——复核人已确认重复为内容本征
+
+ ✓ src/lib/source-preprocess.test.ts (4 tests) 33ms
+ ✓ tools/transcriber/__tests__/whisper.test.ts (34 tests) 29ms
+ ✓ src/lib/llm-client.test.ts (28 tests) 27ms
+ ✓ src/components/web/project-picker.test.tsx (3 tests) 36ms
+stderr | src/lib/project-file-sync.test.ts > project file sync > invalidates the background snapshot when inactive enqueue persistence fails
+[lib/logger.ts:162:27] failed to enqueue raw source ingest { error: 'Error: disk full' }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > updates successful pages without clearing existing chunks when some pages fail
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed {
+  error: 'API 500 Error — embedding server down at http://localhost:1234/v1/embeddings'
+}
+
+(node:78939) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/lib/enrich-wikilinks.scenarios.test.ts (4 tests) 58ms
+stderr | src/lib/deep-research.test.ts > collectResearchSources > keeps web results when AnyTXT fails and exposes the source error
+Source search failed in DeepResearch { error: 'Check that ATGUI.exe is running' }
+
+stdout | src/lib/deep-research.test.ts > collectResearchSources > applies the relevance filter after deduplication and capping
+[DeepResearch] relevance gate removed 1 of 2 candidate source(s).
+
+stderr | src/lib/deep-research.test.ts > filterResearchSourcesByRelevance > accepts numeric string indexes and fails open on zero-based output
+[DeepResearch] source relevance gate failed; retaining search results: Error: quality gate returned zero-based indexes
+    at Module.filterResearchSourcesByRelevance (/private/tmp/glm54-fix-20261126/repo/src/lib/deep-research.ts:199:13)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+stdout | src/lib/deep-research.test.ts > collectResearchSources relevance origins > filters web candidates but always preserves local AnyTXT results
+[DeepResearch] relevance gate removed 1 of 2 candidate source(s).
+
+ ✓ src/lib/deep-research.test.ts (35 tests) 29ms
+ ✓ src/lib/raw-source-resolver.test.ts (6 tests) 28ms
+stderr | unknown test
+resolveReview 同步失败 { id: 'review-1', error: 'ApiRequestError: HTTP 400' }
+
+stderr | src/lib/project-file-sync.test.ts > project file sync > deduplicates recent projects that point to the same path
+[logger] Failed to send logs: ReferenceError: window is not defined
+    at invoke (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@tauri-apps/api/core.js:202:5)
+    at flushBatch (/private/tmp/glm54-fix-20261126/repo/src/lib/logger.ts:106:11)
+    at Timeout.<anonymous> (/private/tmp/glm54-fix-20261126/repo/src/lib/logger.ts:127:10)
+    at listOnTimeout (node:internal/timers:685:17)
+    at processTimers (node:internal/timers:618:7)
+
+ ✓ src/lib/project-store-source-watch.test.ts (1 test) 10ms
+ ✓ src/stores/review-store.test.ts (31 tests) 23ms
+ ✓ src/lib/okf-export.test.ts (59 tests) 20ms
+ ✓ src/components/settings/settings-view.test.tsx (3 tests) 956ms
+     ✓ web 平台隐藏 api-server / source-watch / scheduled-import / mineru section tab  882ms
+ ✓ src/lib/sweep-reviews.race.test.ts (14 tests) 28ms
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-dbdcf949', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-fb0cc0cd', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-fa0cbf3a', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-f90cbda7', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-19d73a4e', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-17d73728', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-18d738bb', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-1dd7409a', error: 'ApiRequestError: HTTP 400' }
+
+stderr | unknown test
+[lib/logger.ts:161:26] resolveReview 同步失败 { id: 'review-a3dacb9e', error: 'ApiRequestError: HTTP 400' }
+
+ ✓ src/lib/search.test.ts (1 test) 23ms
+ ✓ src/lib/project-file-sync.test.ts (23 tests) 1188ms
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > LLM 改字 → 二分兜底到底后碎片回填原文（A：不拖垮整块，partial 标记）
+[punctuate] 碎片（26ch）仍校验失败（verify: [00:00] 完全不同的内容），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > LLM 改字 → 二分兜底到底后碎片回填原文（A：不拖垮整块，partial 标记）
+[punctuate] 碎片（17ch）仍校验失败（verify: [00:00] 完全不同的内容），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > LLM 改字 → 二分兜底到底后碎片回填原文（A：不拖垮整块，partial 标记）
+[punctuate] 碎片（27ch）仍校验失败（verify: [00:00] 完全不同的内容），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 段落门：长块未分段 → 重试；两次都未分段但校验通过 → 接受不二分
+[punctuate] 6 行块校验通过但两次都未分段，保留整块（仅标点）
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 密度门：≥400 字块偷懒回显（骨架校验通过但零标点）→ 重试仍懒判失败，不进二分；整章回原文（B）
+[punctuate] 519ch 块重试后仍偷懒回显（verify: [00:00] 语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料），判失败
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 密度门：≥400 字块偷懒回显（骨架校验通过但零标点）→ 重试仍懒判失败，不进二分；整章回原文（B）
+[punctuate] 章「## [00:00] 单章」标点失败，本章保留原文（部分接受）
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 懒章回原文 + 好章正常加工（B：混合体，好章不被坏章拖垮）
+[punctuate] 519ch 块重试后仍偷懒回显（verify: [00:00] 语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料），判失败
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 懒章回原文 + 好章正常加工（B：混合体，好章不被坏章拖垮）
+[punctuate] 章「## [00:00] 偷懒章」标点失败，本章保留原文（部分接受）
+
+stderr | src/lib/image-caption-pipeline.test.ts > captionMarkdownImages > continues batch when one caption call fails, reporting failed count
+[lib/logger.ts:161:26] Caption failed for image { absPath: '/abs/b.png', error: 'HTTP 500' }
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 传输错误（5xx）重试一次后文件级快速失败——不进二分
+[punctuate] 传输错误重试耗尽（Error: zai HTTP 500: {}），整文件回落原文
+
+stderr | src/lib/image-caption-pipeline.test.ts > captionMarkdownImages > skips Codex CLI captioning once before reading image bytes
+[lib/logger.ts:161:26] Skipped image captioning: Codex CLI transport does not support image input 
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 字符级二分：单行超长块 verify 恒败 → 递归切半，碎片 <200 字回填原文（A）
+[punctuate] 碎片（147ch）仍校验失败（verify: [00:00] 词组0 词组1 词组2 词组3 词组4 词组5 词组6 词组7 词组8 词组9 词组10 词组11 词组），碎片保留原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > punctuateMd（LLM mock） > 字符级二分：单行超长块 verify 恒败 → 递归切半，碎片 <200 字回填原文（A）
+[punctuate] 碎片（149ch）仍校验失败（verify: 词组30 词组31 词组32 词组33 词组34 词组35 词组36 词组37 词组38 词组39 词组40 词组41 ），碎片保留原文
+
+stderr | src/lib/image-caption-pipeline.test.ts > captionMarkdownImages > recovers from corrupt cache JSON (logs and starts fresh)
+[lib/logger.ts:161:26] Corrupt caption cache, starting empty {
+  cachePath: '/proj/.llm-wiki/image-caption-cache.json',
+  error: "Expected property name or '}' in JSON at position 2 (line 1 column 3)"
+}
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 快照存在 → 字节回用不调 LLM；成功后落快照；失败回落原文
+[punctuate] 传输错误重试耗尽（Error: zai HTTP 500: {}），整文件回落原文
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 快照存在 → 字节回用不调 LLM；成功后落快照；失败回落原文
+[punctuate] s2: 快照与当前正文不一致（重转写/重切章后），重新标点并覆盖快照
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 部分接受：返回混合体但不落快照（残留保未来重试通道）
+[punctuate] 519ch 块重试后仍偷懒回显（verify: [00:00] 语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料语料），判失败
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 部分接受：返回混合体但不落快照（残留保未来重试通道）
+[punctuate] 章「## [00:00] 偷懒章」标点失败，本章保留原文（部分接受）
+
+stderr | tools/transcriber/__tests__/punctuation.test.ts > 快照幂等（maybePunctuate） > 部分接受：返回混合体但不落快照（残留保未来重试通道）
+[punctuate] s9: 部分内容保留原文（见上方 warn），不落快照
+
+ ✓ tools/transcriber/__tests__/punctuation.test.ts (21 tests) 23ms
+ ✓ src/lib/image-caption-pipeline.test.ts (30 tests) 25ms
+stderr | src/lib/dedup-runner.test.ts > runDuplicateDetection embedding prefilter > falls back to the full LLM scan when the embedding prefilter fails
+[dedup] embedding prefilter failed; falling back to full LLM scan: Error: embedding endpoint unavailable
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/dedup-runner.test.ts:231:42
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64
+
+stderr | src/lib/dedup-runner.test.ts > runDuplicateDetection embedding prefilter > does not fall back to the full LLM scan for large wikis when embedding coverage is too low
+[dedup] embedding prefilter coverage too low; skipping full fallback for large wiki: Error: Duplicate prefilter embedded only 2/251 pages
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/dedup-runner.test.ts:295:42
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+    at new Promise (<anonymous>)
+    at runWithCancel (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64
+
+ ✓ src/lib/dedup-runner.test.ts (14 tests) 23ms
+ ✓ src/components/layout/file-tree.test.tsx (6 tests) 24ms
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > removes reserved example-domain URLs invented by the merge model
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > removes only the invented URL range and preserves legitimate longer URLs
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > preserves lookalike domains while removing reserved subdomains
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM merge > cleans invented Markdown URL forms without changing fenced examples
+[page-merge] removed invented reserved example-domain URL(s) from merge output
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > falls back to array-merged incoming when LLM throws
+[lib/logger.ts:161:26] LLM merge failed, falling back to incoming + array-field union { pagePath: 'wiki/entities/foo.md', error: 'LLM rate limited' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > rejects LLM output that shrinks body below 70% of max(old, new)
+[lib/logger.ts:161:26] LLM merge body too short — rejecting, falling back {
+  pagePath: 'wiki/entities/foo.md',
+  llmBodyLen: 16,
+  minThreshold: 2547,
+  maxInputLen: 3639
+}
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > rejects LLM output that has no frontmatter at all
+[lib/logger.ts:161:26] LLM output has no frontmatter — rejecting, falling back { pagePath: 'wiki/entities/foo.md' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > calls the optional backup callback when falling back
+[lib/logger.ts:161:26] LLM merge failed, falling back to incoming + array-field union { pagePath: 'wiki/entities/foo.md', error: 'network error' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > backup failure is swallowed (best-effort, never blocks the write)
+[lib/logger.ts:161:26] LLM merge failed, falling back to incoming + array-field union { pagePath: 'wiki/entities/foo.md', error: 'network error' }
+
+stderr | src/lib/page-merge.test.ts > mergePageContent — LLM failure fallback > backup failure is swallowed (best-effort, never blocks the write)
+[lib/logger.ts:161:26] backup failed { pagePath: 'wiki/entities/foo.md', error: 'disk full' }
+
+ ✓ src/lib/page-merge.test.ts (33 tests) 18ms
+ ✓ src/lib/detect-language.property.test.ts (5 tests) 13ms
+ ✓ src/lib/url-source-import.test.ts (9 tests) 21ms
+ ✓ src/lib/source-lifecycle-delete.test.ts (1 test) 21ms
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — H2: truncated streams (surface, don't hide) > emits a warning when the final block has no closer
+[lib/logger.ts:161:26] FILE block "wiki/concepts/moe.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — H2: truncated streams (surface, don't hide) > warns when the only block is unclosed
+[lib/logger.ts:161:26] FILE block "wiki/concepts/rope.md" was not closed before end of stream — likely truncation (model hit max_tokens, timeout, or connection dropped). Block dropped. 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — H6: empty-path blocks > surfaces a warning instead of silently dropping empty-path blocks
+[lib/logger.ts:161:26] FILE block with empty path skipped (LLM omitted the path after `---FILE:`). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > drops blocks with ../ paths and surfaces a warning
+[lib/logger.ts:161:26] FILE block with unsafe path "../../etc/passwd" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > drops blocks with absolute paths
+[lib/logger.ts:161:26] FILE block with unsafe path "/etc/passwd" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > drops blocks not under wiki/
+[lib/logger.ts:161:26] FILE block with unsafe path "src-tauri/src/main.rs" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+stderr | src/lib/ingest-parse.test.ts > parseFileBlocks — path-traversal guard end-to-end > an LLM mixing safe + unsafe paths writes only the safe ones
+[lib/logger.ts:161:26] FILE block with unsafe path "../config.json" rejected (must be under wiki/, no .., no absolute paths, and Windows-safe file names). 
+
+ ✓ src/lib/ingest-parse.test.ts (50 tests) 18ms
+ ✓ src/lib/source-identity.test.ts (16 tests) 9ms
+(node:79025) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/lib/api-client.test.ts (19 tests) 17ms
+stderr | src/lib/project-file-tree-refresh.test.ts > refreshProjectFileTree > keeps the existing full resolver index when shallow refresh succeeds but full refresh fails
+Failed to refresh project path index: Error: full scan failed
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/project-file-tree-refresh.test.ts:170:15
+    at Mock (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/spy/dist/index.js:332:34)
+    at listDirectoryWithRetry (/private/tmp/glm54-fix-20261126/repo/src/lib/project-file-tree-refresh.ts:24:20)
+    at async Promise.all (index 0)
+
+ ✓ src/components/auth/LoginPage.test.tsx (2 tests) 21ms
+ ✓ src/lib/project-file-tree-refresh.test.ts (8 tests) 10ms
+ ✓ src/lib/markdown-image-resolver.test.ts (38 tests) 16ms
+ ✓ src/lib/file-url.test.ts (3 tests) 15ms
+stderr | tools/transcriber/__tests__/abstract.test.ts > maybeAbstract（快照幂等） > LLM 失败回落原 md（不落快照、不 fail 批次）
+[abstract] s-fail: Error: zai HTTP 500: boom，页无课例摘要
+
+ ✓ tools/transcriber/__tests__/abstract.test.ts (12 tests) 15ms
+ ✓ tools/transcriber/__tests__/chaptering.test.ts (19 tests) 17ms
+stderr | src/lib/source-lifecycle.test.ts > source import skip reporting > reports a file whose copy fails instead of only logging it
+[lib/logger.ts:162:27] Failed to import file {
+  originalName: 'locked.pdf',
+  error: 'Error: EACCES: permission denied'
+}
+
+stderr | src/lib/source-lifecycle.test.ts > source import skip reporting > continues a folder import after one nested file cannot be copied
+Failed to import nested/locked.md: Error: EACCES
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/source-lifecycle.test.ts:576:47
+    at Mock (file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/spy/dist/index.js:332:34)
+    at Module.importSourceFolder (/private/tmp/glm54-fix-20261126/repo/src/lib/source-lifecycle.ts:428:13)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at /private/tmp/glm54-fix-20261126/repo/src/lib/source-lifecycle.test.ts:579:20
+    at file:///private/tmp/glm54-fix-20261126/repo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20
+
+ ✓ src/lib/source-lifecycle.test.ts (22 tests) 12ms
+ ✓ src/lib/path-utils.property.test.ts (7 tests) 13ms
+ ✓ src/lib/extract-source-images.test.ts (3 tests) 6ms
+stderr | tools/transcriber/__tests__/cli.test.ts > parseTranscribeArgs > --dir 结尾缺值 → 报错退出
+✗ 预检失败：--dir 需带值（收到 无值）
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > does not mark changed files imported when enqueue fails
+[lib/logger.ts:162:27] Scheduled import scan failed { error: 'Error: queue stopped' }
+
+stderr | tools/transcriber/__tests__/cli.test.ts > 参数缺值校验（M2 前置：末位缺值报错退出，不再静默默认） > --concurrency 正常解析；非正整数报错退出
+✗ 预检失败：--concurrency 需为正整数（收到 0）
+✗ 预检失败：--concurrency 需为正整数（收到 abc）
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > does not leave the scanner locked after a managed project path is skipped
+[lib/logger.ts:161:26] Skipped self-referential scheduled import path { importRoot: '/Users/me/wiki-project/raw/sources' }
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > does not leave the scanner locked after a managed project path is skipped
+[lib/logger.ts:162:27] Scheduled import scan failed { error: 'Error: queue stopped' }
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > continues scanning when one file is locked or unreadable
+[lib/logger.ts:161:26] Skipped file during import scan {
+  path: '/Users/me/inbox/locked.pdf',
+  error: 'Error: sharing violation'
+}
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > skips large files before hashing or copying
+[lib/logger.ts:161:26] skipping file exceeding size limit {
+  sourcePath: '/Users/me/inbox/paper.pdf',
+  sizeMB: '101.0',
+  limitMB: 100
+}
+
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > keeps an existing source record when the file is temporarily unreadable
+[lib/logger.ts:161:26] Skipped file during import scan {
+  path: '/Users/me/inbox/paper.pdf',
+  error: 'Error: sharing violation'
+}
+
+ ✓ src/components/layout/icon-sidebar.test.tsx (2 tests) 21ms
+stderr | src/lib/scheduled-import.test.ts > scanAndImport failure handling > uses the lower scheduled-import and source-watch file size limit
+[lib/logger.ts:161:26] skipping file exceeding size limit { sourcePath: '/Users/me/inbox/paper.pdf', sizeMB: '6.0', limitMB: 5 }
+
+ ✓ src/lib/scheduled-import.test.ts (26 tests) 13ms
+ ✓ tools/transcriber/__tests__/cli.test.ts (38 tests) 12ms
+ ✓ src/lib/wiki-page-delete.test.ts (23 tests) 11ms
+ ✓ src/components/layout/knowledge-tree.test.tsx (2 tests) 21ms
+ ✓ src/lib/graph-relevance.test.ts (10 tests) 19ms
+ ✓ src/lib/tauri-fetch.test.ts (11 tests) 16ms
+ ✓ src/lib/okf-export-tauri.test.ts (12 tests) 11ms
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retries on failure up to MAX_RETRIES (3) before marking failed
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'LLM boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retries on failure up to MAX_RETRIES (3) before marking failed
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 2, maxRetries: 3, error: 'LLM boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retries on failure up to MAX_RETRIES (3) before marking failed
+[lib/logger.ts:161:26] task failed permanently { slugs: 'a,b', retryCount: 3, error: 'LLM boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > succeeds after a transient failure within retry budget
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'flaky' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > succeeds after a transient failure within retry budget
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 2, maxRetries: 3, error: 'flaky' }
+
+ ✓ src/lib/review-utils.property.test.ts (5 tests) 11ms
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retryTask resets a failed task to pending and runs it again
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retryTask resets a failed task to pending and runs it again
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 2, maxRetries: 3, error: 'boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — retries > retryTask resets a failed task to pending and runs it again
+[lib/logger.ts:161:26] task failed permanently { slugs: 'a,b', retryCount: 3, error: 'boom' }
+
+stderr | src/lib/dedup-queue.test.ts > dedup-queue — cancel / delete > cancelTask aborts an in-flight processing task
+[lib/logger.ts:161:26] task error (will retry) { slugs: 'a,b', retryCount: 1, maxRetries: 3, error: 'aborted' }
+
+ ✓ src/lib/dedup-queue.test.ts (15 tests) 13ms
+stderr | src/lib/__tests__/logger.test.ts > Logger Facade > should respect log level filtering
+[lib/logger.ts:161:26] should log 
+[lib/logger.ts:162:27] should log 
+
+stdout | src/lib/__tests__/logger.test.ts > Logger Facade > should generate trace_id when not provided
+[lib/logger.ts:160:26] test message 
+
+stdout | src/lib/__tests__/logger.test.ts > Logger Facade > should use provided trace_id
+[lib/logger.ts:160:26] test message { trace_id: 'existing-id' }
+
+ ✓ src/lib/__tests__/logger.test.ts (4 tests) 10ms
+ ✓ src/lib/ingest-cache.test.ts (5 tests) 7ms
+stdout | src/lib/__tests__/logging-integration.test.ts > Logging Integration > Batch logging > should batch multiple log messages and flush them
+[lib/logger.ts:160:26] Batch test message 0 
+[lib/logger.ts:160:26] Batch test message 1 
+[lib/logger.ts:160:26] Batch test message 2 
+[lib/logger.ts:160:26] Batch test message 3 
+[lib/logger.ts:160:26] Batch test message 4 
+[lib/logger.ts:160:26] Batch test message 5 
+[lib/logger.ts:160:26] Batch test message 6 
+[lib/logger.ts:160:26] Batch test message 7 
+[lib/logger.ts:160:26] Batch test message 8 
+[lib/logger.ts:160:26] Batch test message 9 
+[lib/logger.ts:160:26] Batch test message 10 
+[lib/logger.ts:160:26] Batch test message 11 
+[lib/logger.ts:160:26] Batch test message 12 
+[lib/logger.ts:160:26] Batch test message 13 
+[lib/logger.ts:160:26] Batch test message 14 
+
+stderr | src/lib/__tests__/logging-integration.test.ts > Logging Integration > Log level filtering > should filter out messages below the configured level
+[lib/logger.ts:162:27] error message 
+
+ ✓ src/lib/__tests__/logging-integration.test.ts (3 tests) 9ms
+ ✓ src/lib/dedup.test.ts (36 tests) 9ms
+stderr | src/lib/anytxt-search.test.ts > AnyTXT query rewrite > falls back to original queries when rewrite fails
+[lib/logger.ts:161:26] AnyTXT query rewrite failed, using original queries { error: 'model offline' }
+
+ ✓ src/lib/anytxt-search.test.ts (10 tests) 8ms
+ ✓ src/components/editor/frontmatter-panel.test.tsx (2 tests) 13ms
+ ✓ src/lib/llm-providers.test.ts (65 tests) 8ms
+ ✓ src/lib/auto-save.test.ts (6 tests) 7ms
+ ✓ src/lib/knowledge-source-filter.test.ts (3 tests) 7ms
+ ✓ src/lib/__tests__/llm-providers.test.ts (59 tests) 7ms
+ ✓ src/lib/lint.test.ts (14 tests) 8ms
+ ✓ src/lib/lint-fixes.test.ts (10 tests) 6ms
+ ✓ src/lib/api-token.test.ts (3 tests) 6ms
+ ✓ src/lib/ingest.prompt.test.ts (36 tests) 8ms
+ ✓ docs/superpowers/deploy/lib/normalize-core.test.mjs (41 tests) 5ms
+ ✓ src/lib/text-chunker.test.ts (42 tests) 6ms
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+ ✓ src/lib/wiki-cleanup.test.ts (38 tests) 7ms
+ ✓ src/lib/web-path-index.test.ts (4 tests) 3ms
+ ✓ src/lib/wiki-page-types.test.ts (6 tests) 2ms
+ ✓ src/lib/detect-language.test.ts (27 tests) 10ms
+ ✓ src/lib/frontmatter.test.ts (21 tests) 6ms
+ ✓ src/lib/sources-merge.test.ts (56 tests) 5ms
+ ✓ src/lib/connection-tests.test.ts (14 tests) 5ms
+ ✓ src/lib/proxy-config.test.ts (15 tests) 3ms
+ ✓ tools/transcriber/__tests__/scan.test.ts (3 tests) 8ms
+ ✓ src/lib/context-budget.test.ts (9 tests) 3ms
+ ✓ src/lib/chat-save-to-wiki.test.ts (7 tests) 3ms
+ ✓ tools/transcriber/__tests__/manifest.test.ts (28 tests) 5ms
+ ✓ src/lib/output-language.test.ts (18 tests) 5ms
+ ✓ src/stores/chat-store.test.ts (9 tests) 5ms
+ ✓ src/lib/selection-edit.test.ts (9 tests) 5ms
+ ✓ src/lib/file-types.test.ts (5 tests) 2ms
+ ✓ src/lib/wiki-page-resolver.test.ts (54 tests) 4ms
+ ✓ src/lib/optimize-research-topic.test.ts (9 tests) 5ms
+ ✓ src/lib/enrich-wikilinks.test.ts (11 tests) 4ms
+ ✓ src/lib/reasoning-detector.test.ts (15 tests) 2ms
+ ✓ src/lib/wiki-filename.test.ts (16 tests) 4ms
+ ✓ src/stores/wiki-store.test.ts (16 tests) 4ms
+ ✓ src/lib/research-query-grounding.test.ts (7 tests) 3ms
+ ✓ src/lib/capabilities.test.ts (4 tests) 4ms
+ ✓ src/lib/search-rrf.test.ts (3 tests) 3ms
+ ✓ src/lib/endpoint-normalizer.test.ts (24 tests) 3ms
+ ✓ src/components/lint/lint-view.test.ts (4 tests) 2ms
+ ✓ src/lib/ingest-sanitize.test.ts (36 tests) 4ms
+ ✓ src/lib/vision-caption.test.ts (14 tests) 4ms
+ ✓ src/lib/greeting-detector.test.ts (70 tests) 4ms
+ ✓ docs/superpowers/deploy/lib/translate-core.test.mjs (37 tests) 4ms
+ ✓ src/components/layout/research-panel-nav.test.ts (3 tests) 2ms
+ ✓ src/lib/source-watch-config.test.ts (7 tests) 4ms
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when forced rebuild cannot embed any page
+embedding fetch failed { error: 'Body is unusable: Body has already been read' }
+
+stdout | src/lib/embedding.test.ts > embedAllPages > skips empty content pages during forced rebuild without treating them as failures
+Rebuilt page chunks { pageId: 'body', rows: 1, chunkCount: 1, skipped: 0 }
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'API 500 Error — embedding server down at http://localhost:1234/v1/embeddings'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+ ✓ src/lib/web-search.test.ts (7 tests) 4ms
+ ✓ src/lib/wiki-graph-analysis.test.ts (2 tests) 4ms
+ ✓ src/lib/path-utils.test.ts (33 tests) 3ms
+ ✓ src/lib/lint-config.test.ts (2 tests) 1ms
+ ✓ src/lib/wiki-schema.test.ts (8 tests) 3ms
+ ✓ src/stores/lint-store.test.ts (13 tests) 3ms
+ ✓ src/lib/__tests__/invoke-traced.test.ts (5 tests) 3ms
+ ✓ src/lib/ingest-reasoning.test.ts (6 tests) 2ms
+ ✓ src/lib/review-create-page.test.ts (5 tests) 4ms
+ ✓ src/components/chat/chat-input.test.ts (9 tests) 3ms
+ ✓ src/stores/app-dialog-store.test.ts (3 tests) 3ms
+ ✓ src/lib/source-filter.test.ts (2 tests) 2ms
+ ✓ src/lib/has-usable-llm.test.ts (13 tests) 2ms
+ ✓ src/lib/project-mutex.test.ts (4 tests) 3ms
+ ✓ src/components/settings/preset-resolver.test.ts (13 tests) 3ms
+ ✓ src/lib/wikilink-transform.test.ts (24 tests) 3ms
+ ✓ src/lib/graph-filters.test.ts (8 tests) 3ms
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+ ✓ src/lib/parsed-source-output.test.ts (5 tests) 3ms
+ ✓ src/components/settings/sections/okf-export-helpers.test.ts (12 tests) 3ms
+ ✓ src/lib/sweep-reviews.test.ts (24 tests) 7ms
+ ✓ tools/transcriber/__tests__/transcript.test.ts (8 tests) 3ms
+ ✓ src/lib/sources-tree-delete.test.ts (12 tests) 4ms
+ ✓ src/lib/reasoning-capabilities.test.ts (6 tests) 5ms
+ ✓ src/lib/llm-task-routing.test.ts (9 tests) 3ms
+ ✓ src/stores/research-store.test.ts (4 tests) 2ms
+ ✓ src/lib/update-check.test.ts (19 tests) 2ms
+ ✓ tools/transcriber/__tests__/bucket.test.ts (13 tests) 4ms
+ ✓ src/lib/natural-sort.test.ts (3 tests) 2ms
+ ✓ src/lib/review-utils.test.ts (19 tests) 3ms
+ ✓ src/lib/ingest-commit-coordinator.test.ts (3 tests) 2ms
+ ✓ src/lib/graph-search.test.ts (3 tests) 4ms
+ ✓ src/lib/wiki-type-style.test.ts (8 tests) 3ms
+ ✓ src/lib/source-delete-decision.test.ts (11 tests) 2ms
+ ✓ src/App.test.tsx (2 tests) 2ms
+ ✓ src/lib/agent-file-activity.test.ts (4 tests) 2ms
+ ✓ src/lib/search.scenarios.test.ts (1 test) 2ms
+ ✓ src/lib/project-store.test.ts (6 tests) 4ms
+ ✓ src/lib/graph-insights.test.ts (4 tests) 2ms
+ ✓ tools/transcriber/__tests__/probe.test.ts (4 tests) 2ms
+ ✓ src/lib/review-batch-research.test.ts (4 tests) 2ms
+ ✓ tools/transcriber/__tests__/audio.test.ts (7 tests) 2ms
+ ✓ src/components/project/create-project-dialog.test.ts (8 tests) 4ms
+ ✓ src/components/sources/sources-view.test.ts (8 tests) 2ms
+ ✓ src/lib/changelog.test.ts (1 test) 2ms
+ ✓ src/stores/chat-messages-to-llm.test.ts (4 tests) 2ms
+ ✓ tools/transcriber/__tests__/slug.test.ts (4 tests) 2ms
+ ✓ src/lib/language-metadata.test.ts (4 tests) 2ms
+ ✓ src/lib/file-tree-order.test.ts (2 tests) 2ms
+ ✓ src/lib/__tests__/logger-sampler.test.ts (5 tests) 3ms
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stderr | src/lib/embedding.test.ts > embedAllPages > does not clear existing chunks when a forced rebuild page only embeds partially
+embedding fetch failed {
+  error: 'Network error reaching http://localhost:1234/v1/embeddings. Check endpoint URL, API key, and connectivity.'
+}
+
+stdout | src/lib/embedding.test.ts > embedAllPages > surfaces an incomplete-index warning when forced rebuild write fails after clearing
+Rebuilt page chunks { pageId: 'a', rows: 1, chunkCount: 1, skipped: 0 }
+
+ ✓ src/lib/embedding.test.ts (99 tests) 3181ms
+     ✓ updates successful pages without clearing existing chunks when some pages fail  753ms
+     ✓ does not clear existing chunks when forced rebuild cannot embed any page  1505ms
+     ✓ does not clear existing chunks when a forced rebuild page only embeds partially  754ms
+ ✓ src/components/layout/file-tree-utils.test.ts (3 tests) 2ms
+ ✓ src/lib/azure-openai.test.ts (3 tests) 2ms
+ ✓ src/components/layout/app-layout-visibility.test.ts (4 tests) 2ms
+ ✓ src/lib/web-gates.test.ts (3 tests) 2ms
+ ✓ src/lib/theme.test.ts (1 test) 1ms
+ ✓ src/lib/keyboard-utils.test.ts (5 tests) 2ms
+ ✓ src/lib/graph-visibility.test.ts (4 tests) 2ms
+ ✓ src/components/settings/sections/llm-provider-section.test.ts (2 tests) 2ms
+ ✓ src/components/mermaid-diagram.test.tsx (3 tests) 2ms
+ ✓ src/lib/macos-release-verification.test.ts (1 test) 1ms
+ ✓ src/lib/concurrency-limits.test.ts (1 test) 1ms
+ ✓ src/components/settings/sections/api-server-section.test.ts (1 test) 1ms
+ ✓ src/components/editor/file-preview.test.ts (3 tests) 2ms
+ ✓ src/lib/mineru.test.ts (49 tests) 12080ms
+     ✓ handles official pending, waiting-file, converting, and running states before completion  12010ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tools/transcriber/__tests__/audio.real-ffmpeg.test.ts > extractAudio real ffmpeg smoke（Task 10 同源样本） > 60s 样本 → wav 存在且 ffprobe 报 16000Hz / 1 channel / pcm_s16le
+Error: Command failed: ffmpeg -y -v error -t 60 -i /Users/berton/Github/L T师训 2024-2025（HEVC）/【2024-2025】LT年度师训会员（高年级版）/教学新知班级管理专栏/116. 如何准备公开课.mp4 -c copy /var/folders/x5/tyqwwxl901v15c2hqmdw3hp80000gn/T/t11-audio-x51nuN/sample60.mp4
+dyld[78956]: Library not loaded: /opt/homebrew/opt/ggml/lib/libggml.0.dylib
+  Referenced from: <CD6EA64D-F682-32A9-9C66-57C44B562C48> /opt/homebrew/Cellar/ffmpeg-full/9.0.2/bin/ffmpeg
+  Reason: tried: '/opt/homebrew/opt/ggml/lib/libggml.0.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/opt/homebrew/opt/ggml/lib/libggml.0.dylib' (no such file), '/opt/homebrew/opt/ggml/lib/libggml.0.dylib' (no such file), '/opt/homebrew/Cellar/ggml/1.0.0/lib/libggml.0.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/opt/homebrew/Cellar/ggml/1.0.0/lib/libggml.0.dylib' (no such file), '/opt/homebrew/Cellar/ggml/1.0.0/lib/libggml.0.dylib' (no such file)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 181 passed (182)
+      Tests  1 failed | 2597 passed (2598)
+   Start at  05:33:52
+   Duration  12.51s (transform 4.60s, setup 1.10s, import 8.44s, tests 21.31s, environment 1.30s)
+
+npm run test:mocks  34.08s user 7.01s system 291% cpu 14.106 total

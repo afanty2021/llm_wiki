@@ -1,0 +1,87 @@
+== AUDIT-SANDBOX start 2026-11-25 21:22:29 ==
+PASS 守卫自检：沙箱外写入被拒 | rc=1 ": {p}')\nPermissionError: sandbox guard: write denied outside sandbox: /private/tmp/glm54-fix-20261125/guard-selftest.txt"
+PASS 检出根推导 = 期望路径 | rc=0 '/Users/berton/Github/Coding-Agents/Hermes-agent' ''
+== provision-teacher-weekly.sh ==
+PASS P1 dry-run 三步全跳过 rc=0 | rc=0 '=== DRY RUN（不改配置、不建任务、不备份；对 live 目录零写入） ===\n[1/3] 精确路由已存在（chat_id=Casey）——跳过\n[2/3] platforms.wecom 启用块已存在——跳过\n[3/3] 周报任务已存在（lt-tutor-weekly:Casey）——跳过\n=== 完成 ==='
+PASS P1 dry-run 对 HOME 零写入（含 ctime） | []
+PASS P1 干跑横幅写明零写入
+PASS P2 dry-run 全新教师 rc=0、两行「将」+platforms 已存在 | rc=0 '=== DRY RUN（不改配置、不建任务、不备份；对 live 目录零写入） ===\n[1/3] 将新增精确路由 lt-tutor-wecom-newbie（chat_id=Newbie）\n[2/3] platforms.wecom 启用块已存在——跳过\n[3/3] 将创建周报任务 lt-tutor-weekly:Newbie（周日 19:01，deliver wecom:Newbie，钉 5.3-flash）\n=== 完成 ==='
+PASS P2 dry-run 零写入 | []
+PASS P2 槽位=下一个空分钟（已有 0）
+PASS P3 真跑 rc=0 且三步 ✓ + 重启提示 | rc=0 '[1/3] ✓ 精确路由已补（备份 /private/tmp/glm54-fix-20261125/audit-sandbox/cases/P3/home/.hermes/config.yaml.bak-20261125-212229；即时生效无需重启）\n[2/3] ✓ platforms.wecom 启用块已补（备份 /private/tmp/glm54-fix-20261125/audit-sandbox/cases/P3/home/.hermes/profiles/lt-tutor/config.yaml.bak-20261125-212229）⚠ 需重启网关\n[3/3] ✓ 周报任务已建：lt-tutor-weekly:Newbie（id=06e967e671ba，schedule=0 19 * * 0，next=2026-11-29T19:00:00+08:00）\n=== 完成 ===\n⚠ 本次新增了 platforms 块——重启网关后投递闸门才认：\n  launchctl bootout gui/$(id -u)/ai.hermes.gateway && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.hermes.gateway.plist' ''
+PASS P3 路由落在锚点之后、形态正确 | '# sandbox: structure only\ngateway:\n    - name: lt-tutor-wecom\n      platform: wecom\n      profile: lt-tutor\n      enabled: true\n    - name: lt-tutor-wecom-newbie\n      platform: wecom\n      chat_id: Newbie\n      profile: lt-tutor\n      enabled: true\n'
+PASS P3 platforms 块追加
+PASS P3 任务已建 19:00 | [('lt-tutor-weekly:Newbie', '0 19 * * 0')]
+PASS P3 两份备份（jobs.json 尚不存在，无从备份） | ['config.yaml.bak-20261125-212229'] ['config.yaml.bak-20261125-212229'] []
+PASS P3 主 config 权限位保留 0600、inode 已换（原子替换） | mode=0o600 ino 159995863->159995868
+PASS P3 profile config 权限位保留 0600
+PASS P3 无残留临时文件 | []
+PASS P3 备份内容=写前原文
+PASS P4 重跑幂等 rc=0 三跳过、无新备份、除 cron 两目录 ctime 外零变化 | rc=0 ['~.hermes/profiles/lt-tutor/cron(ctime)', '~.hermes/profiles/lt-tutor/cron/output(ctime)']
+PASS P5 --dryrun 笔误 exit=2 且零写入 | rc=2 '✗ 第二个参数只能是 --dry-run（收到：--dryrun）——已中止，未写任何文件\n用法: /private/tmp/glm54-fix-20261125/audit-sandbox/cases/P5/scripts/provision-teacher-weekly.sh <教师企微id> [--dry-run]'
+PASS P5 --dry-run=1 exit=2 | rc=2
+PASS P5 多余参数 exit=2 | rc=2 '✗ 多余的参数：extra——已中止，未写任何文件\n用法: /private/tmp/glm54-fix-20261125/audit-sandbox/cases/P5/scripts/provision-teacher-weekly.sh <教师企微id> [--dry-run]'
+PASS P5 缺教师 id exit=1 | rc=1
+PASS P6 cron 断链 → rc=1、零写盘、带说明 | rc=1 'guard-nocron/sitecustomize.py", line 49, in find_spec\n    raise ImportError(\'sandbox: cron import blocked on purpose\')\nImportError: sandbox: cron import blocked on purpose\n✗ import cron.jobs 失败——Hermes 检出根 /Users/berton/Github/Coding-Agents/Hermes-agent；未写任何文件'
+PASS P6 检出根推导失败 → rc=1、零写盘、带说明 | rc=1 "✗ 从 hermes_cli.__file__ 推导出的检出根不对：''（缺 hermes_cli/main.py）；未写任何文件"
+PASS P7 锚点丢失 → rc=1、零写盘 | rc=1
+PASS P8 dry-run 无 jobs.json → rc=0、19:00、零写入 | rc=0 '=== DRY RUN（不改配置、不建任务、不备份；对 live 目录零写入） ===\n[1/3] 将新增精确路由 lt-tutor-wecom-newbie（chat_id=Newbie）\n[2/3] 将新增 platforms.wecom 启用块（新增后需重启网关生效）\n[3/3] 将创建周报任务 lt-tutor-weekly:Newbie（周日 19:00，deliver wecom:Newbie，钉 5.3-flash）\n=== 完成 ==='
+PASS P9 目录不可写 → rc=1、主 config 完好 | rc=1
+PASS P10 任务名仅大小写不同 → ③ 跳过、不建第二个任务 | rc=0 '[1/3] ✓ 精确路由已补（备份 /private/tmp/glm54-fix-20261125/audit-sandbox/cases/P10/home/.hermes/config.yaml.bak-20261125-212230；即时生效无需重启）\n[2/3] platforms.wecom 启用块已存在——跳过\n[3/3] 周报任务已存在（lt-tutor-weekly:Casey）——跳过\n=== 完成 ==='
+== auto-provision-weekly.sh ==
+PASS A1 全部已有（含大小写不一致） | rc=0
+── 2026-11-25 21:22:31 巡检开始 ──
+候选（surveyed、非测试、非主人）：wecom_amy wecom_Casey wecom_pat1 
+  已有任务：amy
+  已有任务：Casey
+  已有任务：pat1
+── 巡检完成：新开办 0 个、失败 0 个 ──
+── 巡检结束 exit=0 ──
+
+PASS A1 每趟三行标记齐全
+PASS A2 新教师真开办 rc=0 | rc=0
+── 2026-11-25 21:22:31 巡检开始 ──
+候选（surveyed、非测试、非主人）：wecom_amy wecom_casey wecom_Newbie 
+  已有任务：amy
+  已有任务：casey
+  ▶ 自动开办：Newbie
+[1/3] ✓ 精确路由已补（备份 /private/tmp/glm54-fix-20261125/audit-sandbox/cases/A2/home/.hermes/config.yaml.bak-20261125-212231；即时生效无需重启）
+[2/3] platforms.wecom 启用块已存在——跳过
+[3/3] ✓ 周报任务已建：lt-tutor-weekly:Newbie（id=204aac144f0a，schedule=2 19 * * 0，next=2026-11-29T19:02:00+08:00）
+=== 完成 ===
+── 巡检完成：新开办 1 个、失败 0 个 ──
+── 巡检结束 exit=0 ──
+
+PASS A2 jobs.json 建前备份已留
+PASS A3 单个失败不拖垮整轮 | rc=1 stub_ok=['GoodOne']
+── 2026-11-25 21:22:31 巡检开始 ──
+候选（surveyed、非测试、非主人）：wecom_amy wecom_BadOne wecom_GoodOne wecom_BadTwo 
+  已有任务：amy
+  ▶ 自动开办：BadOne
+stub: fail BadOne
+  ✗ 开办失败：BadOne（exit=3）
+  ▶ 自动开办：GoodOne
+stub: ok GoodOne
+  ▶ 自动开办：BadTwo
+stub: fail BadTwo
+  ✗ 开办失败：BadTwo（exit=3）
+── 巡检完成：新开办 1 个、失败 2 个 ──
+── 巡检结束 exit=1 ──
+
+PASS A4 停发名单：名单内任务在→告警、不在→不开办 | rc=0
+── 2026-11-25 21:22:32 巡检开始 ──
+候选（surveyed、非测试、非主人）：wecom_amy wecom_Pat wecom_Quinn 
+  已有任务：amy
+  [停发-告警] 名单内但任务仍在跑：Pat —— 长期停发请 hermes cron remove（runbook §6.2）
+  [停发] Quinn 不自动开办（恢复=名单删行，次日巡检重建）
+── 巡检完成：新开办 0 个、失败 0 个 ──
+── 巡检结束 exit=0 ──
+
+PASS A5 docker 失败 → 非零退出、有 exit 行、无「巡检完成」 | rc=1
+── 2026-11-25 21:22:32 巡检开始 ──
+Cannot connect to the Docker daemon at sandbox
+── 巡检结束 exit=1 ──
+
+PASS 干跑的临时目录全部已清（P1/P2/P8 三次干跑） | []
+== 结果：36 过 / 0 败 [] ==
+== AUDIT-SANDBOX end 2026-11-25 21:22:32 ==

@@ -1,0 +1,7 @@
+# :8080 实际下发形态（协调者，2026-11-25 19:41:54，本机回环 curl）
+served entry chunk: index-C_Bt6V8i.js
+entry references api-client chunk: api-client-BPKp9pE6.js
+http://localhost:8080`}var r=n(``),
+HTTP/1.1 200 OK
+content-type: text/html
+cache-control: no-cache
