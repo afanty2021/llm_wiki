@@ -54,7 +54,8 @@ async fn spa_html_no_cache(req: Request, next: Next) -> Response {
 pub fn create_router(state: AppState) -> Router {
     // Layer 5：ServeDir 同源托管前端 dist（SPA history mode fallback）。
     // API 路由在 Router::new() 内显式声明，优先于 fallback_service。
-    // 开发期 dist 可能不存在（未 npm run build）→ 前端路由 404 属正常；web 适配靠 build:web/CI 产出 dist。
+    // 开发期 dist 可能不存在（未 npm run build:web）→ 前端路由 404 属正常；web 形态只有 build:web 产出
+    // （npm run build 自 2026-11-25 起产桌面形态、落 dist-desktop/，不进这里）。
     // 注意：tower 0.4 无 LayerExt（service.layer(...) 不可用），Layer::layer 参数序为 (layer, service)。
     let dist_dir = state.config.dist_dir().to_string();
     let index_html = state.config.index_html().to_string();

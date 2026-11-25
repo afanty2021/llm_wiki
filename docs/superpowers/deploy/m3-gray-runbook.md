@@ -29,7 +29,7 @@
    ```bash
    ./tools/ltutor/provision-teacher-weekly.sh <教师企微userid>   # --dry-run 可预演
    ```
-   排程 `0 19 * * 0`（周日 19:00；工作周周日 18:00 截止，2026-09-05 裁定）。现 live job：TuoMaSi、wendy 均 `0 19 * * 0`，下次发火均为周日 19:00。（旧脚本 `docs/superpowers/deploy/weekly-report-register.sh` 已废弃——周五排程 + 旧 prompt，执行即被拦截。）
+   排程为周日 19:00 起的错峰槽位（`N 19 * * 0`，N 为分钟；工作周周日 18:00 截止，2026-09-05 裁定）。现 live job 共 6 个、分钟 0–5 各一个（2026-11-26 核对 `jobs.json`），下次发火为周日 19:00–19:05。（旧脚本 `docs/superpowers/deploy/weekly-report-register.sh` 已废弃——周五排程 + 旧 prompt，执行即被拦截。）
    - 列表核对：`HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list`（CLI 尾部「Gateway is not running」告警为 multiplex 模式误报——gateway 由主 config 以 multiplex_profiles 运行，`launchctl list | grep ai.hermes.gateway` 有输出即正常）。
 
 **注意**：开办脚本只写 lt-tutor profile 的 config/cron store，不另起任何服务进程（MCP 单实例约束见 §5.1）。
@@ -87,7 +87,8 @@ T8 已修 read_file 404 误计熔断（990eac2b：应用级未找到改正常返
 ### 5.3 周报周日 19:00 到达情况
 
 - 到达核对（周日 19:20 前后）：① 教师企微收到推送（无系统包装头尾、带「<名>老师好」称呼）；② overview `items_7d` 出现本周单；③ `learning_plans` 该教师 `origin='weekly'` 且 `period_key` = 当周（幂等：重复 fire 不新建，话术自动改口"本周清单已生成"）。
-- 排程核对：`HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list` 应见每教师 `0 19 * * 0`、enabled、next=周日 19:00（旧分钟散列机制已随排程变更退役）。
+- 排程核对：`HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron list` 应见每教师一个 `N 19 * * 0`（N 为分钟，各教师错峰、现共 6 个占 0–5）、enabled、next=周日 19:00–19:05。
+- 巡检存活核对（每日 03:17 的 `wiki.ltutor-weekly-audit`）：`~/Library/Logs/ltutor-weekly-audit.log` 最后一趟应以「巡检完成：新开办 N 个、失败 M 个」与「巡检结束 exit=0」收尾；`pg-watchdog.sh` 第 6 查每日 09:00 自动核对，异常会弹「周报巡检看门」通知（2026-11-06 到 11-25 连败 20 趟无人知道，教训见 `docs/development.md`「定时任务」节）。
 - 未到达处置：先 `hermes cron list` 看 job 是否 active → 手动兜底走一次性 job（与正式触发完全相同的 gateway ticker + live 投递路径）：`HERMES_HOME=~/.hermes/profiles/lt-tutor hermes cron create '+2m' '<prompt>' --name lt-tutor-weekly-oneshot:<uid> --deliver wecom:<uid> --skill teacher-tutor`，prompt 取 `tools/ltutor/provision-teacher-weekly.sh` 的模板段（勿用已废弃旧脚本的旧模板）→ 仍失败按 §4.2 日志定位。
 - 失败告警去向（2026-09-05 起）：任务 failure_deliver=local，失败摘要不再裸进教师企微，运维侧看 `hermes cron runs` 与 gateway 日志。
 - 补跑语义（T9 实测锚定）：gateway 停机盖过触发时刻时，起动后自动补跑**单次**（错过的当期拾起，非累计队列）；手动 fire 是另一条兜底通道，二者并集覆盖（spec §5.3 已回写）。

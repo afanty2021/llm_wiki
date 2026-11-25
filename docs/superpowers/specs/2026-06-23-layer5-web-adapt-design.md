@@ -12,6 +12,8 @@ llm_wiki 是 React 19 + Tauri v2 (Rust) 桌面应用,前端长期绑定 Tauri �
 
 **目标**: 同一份前端代码 → 同一份 `dist/` → 桌面版(Tauri 壳,全能力) + web 版(src-server 托管,降级运行)。
 
+> **现状指引（2026-11-26 注）**：本文按「同一份 `dist/`」设计，那是 2026-11-25 之前的布局。现在桌面与 web 分目录——`npm run build` → `dist-desktop/`（Tauri 打包用），`npm run build:web` → `dist/`（src-server :8080 的静态根）。下文所有「一份 dist」「`npm run build` 产 `dist/`」的说法均指旧布局，正文保持历史原样。
+
 **非目标**: 不做移动端适配;不做离线/PWA;不替换桌面版为本设计的产物。
 
 ---

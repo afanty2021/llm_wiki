@@ -54,8 +54,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Check frontend build
+      - name: Check frontend build (desktop form → dist-desktop/)
         run: npx vite build
+
+      # web 形态单独构建并断言（2026-11-26，评审 R1 建议 3）：此前 CI 没有任何 job 构建过
+      # web 形态。build:web → dist/（src-server :8080 的静态根）；check-web-bundle 断言
+      # api-client chunk 的 API base 取自 .env.web（字符串字面量），不是桌面形态的 void 0。
+      - name: Check web build (dist/ = src-server static root, web form)
+        run: |
+          npm run build:web
+          node scripts/check-web-bundle.mjs dist
 
       - name: Prepare MCP server resources
         run: |
@@ -129,7 +137,7 @@ jobs:
         working-directory: src-server
         run: cargo test --lib --test integration
 
-  # JS 测试补覆盖：check 只验证 vite build,根 vitest(2239 个 mock 用例)
+  # JS 测试补覆盖：check 只验证两种形态的 vite build,根 vitest(2598 个 mock 用例)
   # 与 mcp-server 的 node --test 从不进 CI → 此 job 补齐。
   # LLM 门控：只跑 test:mocks,该脚本自带 --exclude '**/*.real-llm.test.ts'
   # 文件名排除。真实 LLM 用例依赖 .env.test.local 凭证/局域网端点,无凭证
@@ -155,7 +163,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # mock 子集全量:本地 164 文件 / 2239 用例 ≈ 12s
+      # mock 子集全量:本地 182 文件 / 2598 用例 ≈ 12s
       - name: Run vitest (mock subset)
         run: npm run test:mocks
 
@@ -164,6 +172,6 @@ jobs:
         run: npm --prefix mcp-server ci
 
       # 根脚本 mcp:test = 先 tsc build 再 node --test dist/test/*.test.js
-      # (本地 65/65),测试命令内部已含构建,无需单独 mcp:build 步
+      # (本地 353 测:352 过 1 跳),测试命令内部已含构建,无需单独 mcp:build 步
       - name: Test mcp-server (node --test)
         run: npm run mcp:test

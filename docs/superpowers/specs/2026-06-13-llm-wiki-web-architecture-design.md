@@ -917,6 +917,7 @@ echo "运行数据库迁移..."
 docker-compose exec -T api sqlx migrate run
 
 # 构建前端
+# 现状指引（2026-11-26 注）：部署 web 用 npm run build:web（产物 dist/）；下面的 npm run build 自 2026-11-25 起产出桌面形态、落 dist-desktop/，不是可部署的 web 产物
 cd ../
 npm run build
 
