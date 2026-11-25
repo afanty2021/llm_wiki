@@ -11,7 +11,7 @@ const host = process.env.TAURI_DEV_HOST
 const pkgJson = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf-8"))
 
 // https://vitejs.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig(async ({ mode }) => ({
   plugins: [react(), tailwindcss()],
 
   resolve: {
@@ -20,6 +20,17 @@ export default defineConfig(async () => ({
 
   define: {
     __APP_VERSION__: JSON.stringify(pkgJson.version),
+  },
+
+  // 产物目录按形态分流：本仓检出同时是 live 运行目录，dist/ 是 src-server :8080 运行时
+  // 读盘的静态根，只有 web 形态（--mode web，.env.web 置空 VITE_API_BASE_URL → 同源请求）
+  // 可以写它；桌面形态（默认 production 模式）一律落 dist-desktop/（Tauri frontendDist）。
+  // 分流放在这里而非只改 npm 脚本，是为了让任何入口（npm run build / tauri build /
+  // 裸 npx vite build）的桌面产物都进不了 dist/——写进去 = :8080 被静默换成桌面形态
+  // （API base 烤死 localhost:8080，127.0.0.1 打开跨源被 CORS 拒）。
+  // 回归钉：src/lib/build-form.test.ts
+  build: {
+    outDir: mode === "web" ? "dist" : "dist-desktop",
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

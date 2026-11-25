@@ -3,6 +3,8 @@ node_modules/
 
 # Build outputs
 dist/
+# 桌面形态前端产物（Tauri frontendDist）；dist/ 只留 web 形态 = src-server :8080 静态根
+dist-desktop/
 dist-ssr/
 # RC artifacts pulled from CI for local Windows / Intel Mac verification.
 # These are pre-release binaries downloaded via `gh run download`, never

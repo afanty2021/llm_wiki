@@ -31,12 +31,20 @@ cargo fmt
 
 ### 生产构建
 
-```bash
-# 构建前端
-npm run build
+前端有两种形态，产物落**不同目录**（`vite.config.ts` 按 mode 分流）。本仓检出同时是 live 运行目录——`dist/` 就是 src-server :8080 运行时读盘的静态根，所以只有 web 形态可以写它：
 
-# 构建 Tauri 应用
+| 形态 | 命令 | 产物目录 | 消费方 |
+|------|------|---------|------|
+| web（API 同源相对请求） | `npm run build:web`（`vite build --mode web`） | `dist/` | src-server `frontend.dist_dir`；运行时读盘，构建完即部署、无需重启 |
+| 桌面（API base = `http://localhost:8080`） | `npm run build` / `build:desktop`（`vite build`） | `dist-desktop/` | Tauri `frontendDist`，`tauri build` 编译期内嵌 |
+
+```bash
+# 构建 web 形态 → dist/（即 :8080 部署）
+npm run build:web
+
+# 构建 Tauri 应用（beforeBuildCommand 自动构建桌面前端 → dist-desktop/ 并内嵌）
 npm run tauri build
+# 只要 .app、不造 DMG：npm run tauri -- build --bundles app（flag 须写在 -- 之后，否则被 npm 吃掉）
 
 # 生成的安装包位置:
 # - macOS: src-tauri/target/release/bundle/dmg/
@@ -44,7 +52,9 @@ npm run tauri build
 # - Linux: src-tauri/target/release/bundle/deb/ 或 .AppImage
 ```
 
-> ⚠️ **桌面打包会覆盖 :8080 的 web 部署**：`npm run build`（含 `build:desktop` 链）与 `npm run build:web` 写同一个 `dist/`，而 `dist/` 既是 Tauri frontendDist 又是 src-server :8080 的静态根。按本节打包后 :8080 变桌面形态（`http://127.0.0.1:8080` 跨源被 CORS 拒）——**打完桌面包必须补跑 `npm run build:web`**（src-server 无需重启，dist 运行时读盘）。验收：`dist/assets/api-client-*.js` 里 `resolveApiBase` 默认值字面量之后的调用处实参为空串（勿 grep `void 0` 字面量，对 web 形态漏报）。2026-11-24 实锺。
+> **桌面包内的 MCP server 是只读拷进来的**：三个平台的 tauri conf 把检出里的 `mcp-server/{package.json,dist,node_modules}` 作为 resources 打进 bundle，`tauri build` **不重建**它们——本仓这两处是 Hermes 网关 live 加载的进程入口，`npm ci` 会清掉运行中进程的 node_modules、重建会直接改写线上。要让 bundle 带上新的 MCP 代码，打包前显式 `npm run mcp:build`（CI 另有显式的 "Prepare MCP server resources" 步骤）。
+>
+> 回归钉 `src/lib/build-form.test.ts`（在 `npm run test:mocks` 内）：上游合并若吞掉产物目录分流、让 `beforeBuildCommand` 重新去建 mcp-server、或 `frontendDist` 与实际产物目录脱节，测试即红。历史：2026-11-24 前两种形态同写 `dist/`，10-25 本地打包后 :8080 被静默换成桌面形态近一月（2026-11-25 结构性根治）。
 
 ### Chrome 扩展安装
 
