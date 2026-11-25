@@ -11,7 +11,7 @@
 |---|---|---|
 | `pg-backup.sh` | 容器内 `pg_dump -Fc` → 归档校验 → 原子发布 → 尺寸护栏 → 轮转 → 存储镜像 → 第二副本 | `wiki.pg-backup` 每日 04:30 |
 | `pg-verify.sh` | 最新 dump 真恢复进 scratch 库 `llmwiki_verify`，十表对账后 drop | `wiki.pg-verify` 每周日 05:00 |
-| `pg-watchdog.sh` | 停摆自愈+告警（备份 >26h / 第二副本 / 存储镜像心跳 / 体积下限 / 演练 >8d） | `wiki.pg-watchdog` 每日 09:00 |
+| `pg-watchdog.sh` | 停摆自愈+告警（备份 >26h / 第二副本 / 存储镜像心跳 / 体积下限 / 演练 >8d / ltutor 周报巡检存活） | `wiki.pg-watchdog` 每日 09:00 |
 
 - **双份部署**（同 SKILL 双份 cp 纪律）：**仓 `tools/pg-backup/` = 版本化源**；launchd 实跑
   `~/kb-ops/pg-backup/`（仓外稳定路径——本仓有并行会话切分支/git clean 的先例，仓内路径不可作运行时依赖）。
@@ -27,9 +27,10 @@
 3. **双校验，硬门唯一**：每次 dump 后容器内 `pg_restore --list` 解析 TOC 是**唯一硬门**（截断/坏档当场暴露）；尺寸 <50% 是启发式——拦一次留 `.size-acked` 标记并通知，**次日仍小且 ≥10MB、±25% 内即确认合法缩库自愈放行**；随机截断不复现则持续拦截。绝不因合法缩库永久锁死。
 4. **原子发布 + 互斥锁**：dump 先落 `.part` 再同卷 `mv`（半拷贝永不占用正式名）；backup/verify 共用 `.lock`（>30min 视为崩溃残留强夺），周日 wake 补火并发不可能互相踩。
 5. **每周真恢复 + 十表对账**：`--exit-on-error` 恢复进容器内独立 DB `llmwiki_verify`（不碰 llmwiki）。**状态表**（users / teams / team_members / teacher_profiles / llm_providers / projects——不可再生）逐表精确相等；**再生表**（wiki_pages / embeddings / ingested_files / review_items）≥90% 且 >0。DROP 全部 `WITH (FORCE)`，孤儿连接不卡演练。
-6. **停摆自愈+告警**：看门每日 09:00 盯四个信号；备份陈旧先 kickstart 自愈重试一次再告警；所有失败路径（脚本内 fail()）即时 macOS 通知。告警通道 = 本机通知（无外部依赖）。
+6. **停摆自愈+告警**：看门每日 09:00 盯六个信号（备份新鲜度 / 第二副本 / 存储镜像心跳 / dump 体积下限 / 恢复演练新鲜度 / ltutor 周报巡检存活）；备份陈旧先 kickstart 自愈重试一次再告警；所有失败路径（脚本内 fail()）即时 macOS 通知。告警通道 = 本机通知（无外部依赖）。
 7. **Redis 不备（有意排除）**：内容仅 ingest 队列等瞬态（评审实测 1184 键全为 `ingest:cache:*`）；恢复后空队列 + `recover_pending` 从 PG 自愈重建才是正确状态。
 8. **bash 3.2 兼容**：macOS 自带 `/bin/bash` 无 mapfile/关联数组，脚本保持 POSIX 写法；`set -eu` 无 pipefail 为刻意（轮转 `ls|tail` 空匹配本就该忽略，记档）。
+9. **第 6 查：ltutor 周报巡检存活（2026-11-26 起）**：`wiki.ltutor-weekly-audit` 每日 03:17 跑 `tools/ltutor/auto-provision-weekly.sh`（会写主 config 与 cron 任务），产物只有一份日志——2026-11-06 到 11-25 连败 20 趟无人知道。看门**只读、不 kickstart**（巡检不该由看门代跑）：查 launchd 的最近退出码、日志最后一趟走没走到「巡检完成」、日志记的退出码、有无「停发-告警」、日志新鲜度。新鲜度阈值 26h 的来由：03:17 → 09:00 只隔 5h43m，漏跑一趟时上一份日志已有 29h43m，26h 当天上午就报。睡醒补火时巡检若还在跑，最多等 2 分钟。新开办数 >0 另发一次静默通知（标题「周报巡检看门」，凭 `watchdog.log` 里的 `NOTIFY:` 行对同一趟去重）。旋钮：`LTUTOR_AUDIT_LABEL`（默认 `wiki.ltutor-weekly-audit`）、`LTUTOR_AUDIT_LOG`（默认 `~/Library/Logs/ltutor-weekly-audit.log`）。
 
 ## 恢复 runbook（真实事故时照抄）
 
@@ -71,7 +72,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/wiki.pg-backup.plist
 # 停用：plist 改名防自动加载
 mv ~/Library/LaunchAgents/wiki.pg-backup.plist{,.disabled}
 
-# 看门手动跑一次（正常 <5s；备份陈旧时会先自愈重试，轮询最多 8 分钟）
+# 看门手动跑一次（正常 <5s；备份陈旧时会先自愈重试，轮询最多 8 分钟；03:17 巡检还在跑时最多再等 2 分钟）
+# 看门的第 6 查在 1–5 查全过时才跑；只读巡检日志与 launchd 状态，不会代跑巡检
 ~/kb-ops/pg-backup/pg-watchdog.sh
 
 # 沙箱演练（PG_* 旋钮重定向落点，不碰真实备份）——安全分支必须离线实测：
