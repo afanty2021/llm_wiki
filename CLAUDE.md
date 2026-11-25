@@ -3,7 +3,7 @@
 > 跨平台桌面应用（React 19 + Tauri v2 + Rust），把文档自动转化为结构化、互联的知识库。
 > 基于 Andrej Karpathy 的 [llm-wiki.md](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 设计模式——Human curates, LLM maintains。
 
-**Version**: 0.6.13+fork · **Last Updated**: 2026-10-24 · **Project Type**: Desktop (Tauri v2) + 独立服务端 (src-server) + MCP Server
+**Version**: 0.6.13+fork · **Last Updated**: 2026-11-25 · **Project Type**: Desktop (Tauri v2) + 独立服务端 (src-server) + MCP Server
 
 ---
 
@@ -40,7 +40,7 @@
 
 1. **三个互不相通的 cargo workspace**：根（members 仅 `crates/llm-wiki-parser`，`exclude` src-tauri/src-server）、`src-tauri/`（Tauri 应用）、`src-server/`（llm-wiki-server）。cargo 门禁必须分跑三条：根 `cargo test --workspace` + `cd src-tauri && cargo test` + `cd src-server && cargo test`——根 workspace **不编译桌面侧**，漏跑 src-tauri 会放过跨文件类型断裂（2026-10-24 合并评审 Critical 教训：page_embedding 调 fork 3 参签名、根门禁全绿却编译即炸）。
 2. **src-server 集成测试连 live PG**（docker 5433 = 生产库），跑集成测试前知情。
-3. **web 部署**：同源 :8080 必须 `npm run build:web`（dist 运行时读盘）——纯前端改动 build:web 即完成部署；web/desktop 双门控（WEB-1 型）别被桌面侧重构吞掉。
+3. **web 部署**：同源 :8080 必须 `npm run build:web`（dist 运行时读盘）——纯前端改动 build:web 即完成部署；web/desktop 双门控（WEB-1 型）别被桌面侧重构吞掉。**`npm run tauri build`/`build:desktop` 会用桌面形态覆盖同一个 `dist/`（它既是 Tauri frontendDist 又是 :8080 静态根）——打完桌面包必须补跑 `npm run build:web`，否则 :8080 静默回桌面形态（`127.0.0.1:8080` 打开跨源被 CORS 拒）；2026-11-24 实锺。**
 4. **MCP 非热生效**：改 mcp-server 后必须 `npm run mcp:build`，消费方（Hermes 网关）重启才吃到新工具。
 5. **SKILL 热部署**：`docs/superpowers/hermes/lt-tutor/SKILL.md` 双份 cp 即生效（仓源 + `~/.hermes/profiles/lt-tutor/skills/teacher-tutor/SKILL.md` 运行副本）；`references/` linked 流程文件目录一并双份 cp（skill_view linked_files 按需加载）——**正文**经 skill_view 每回合现读盘即生效，无需重启；**索引/description** 走进程内 LRU+磁盘 snapshot 两层缓存，随下一次会话 prompt 构建刷新，会话活跃期改 description/触发词需重启网关；live 副本以 `~/.hermes/profiles/lt-tutor/.skills_prompt_snapshot.json` 核验（manifest 指向即实际加载路径）。**回滚必须 git revert 仓源后随常规部署，禁止只回写 live 副本**——并行会话的一次例行双份 cp 就会把只回写 live 的回滚打回（收口评审 I1）。
 6. **git 纪律**：`git add` 禁 `-A`；提交前必查 `git branch --show-current`（本仓库有并行会话共存，分支会被切走）。

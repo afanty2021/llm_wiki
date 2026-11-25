@@ -44,6 +44,8 @@ npm run tauri build
 # - Linux: src-tauri/target/release/bundle/deb/ 或 .AppImage
 ```
 
+> ⚠️ **桌面打包会覆盖 :8080 的 web 部署**：`npm run build`（含 `build:desktop` 链）与 `npm run build:web` 写同一个 `dist/`，而 `dist/` 既是 Tauri frontendDist 又是 src-server :8080 的静态根。按本节打包后 :8080 变桌面形态（`http://127.0.0.1:8080` 跨源被 CORS 拒）——**打完桌面包必须补跑 `npm run build:web`**（src-server 无需重启，dist 运行时读盘）。验收：`dist/assets/api-client-*.js` 里 `resolveApiBase` 默认值字面量之后的调用处实参为空串（勿 grep `void 0` 字面量，对 web 形态漏报）。2026-11-24 实锺。
+
 ### Chrome 扩展安装
 
 1. 打开 `chrome://extensions`

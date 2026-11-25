@@ -105,6 +105,7 @@ launchctl bootout gui/$(id -u)/com.cloudflare.cloudflared
 
 - **CORS**：default.json 只放行 `localhost:1420/5173`；tunnel 域名对外访问需把 `https://<tunnel-host>` 加进 `CORS__ALLOWED_ORIGINS`（plist env 加一行即可，注意逗号串列表语义）。
 - **二进制更新**：launchd 跑的是 release 产物快照，rebuild 后需 `launchctl kickstart -k gui/$(id -u)/wiki.src-server`（或 bootout+bootstrap）才吃到新二进制。
+- **dist 目录共享陷阱（2026-11-24 实锺）**：:8080 静态根 = 仓库 `dist/`，与 Tauri frontendDist 同一个目录——`npm run tauri build`/`build:desktop` 会用桌面形态覆盖它（API base 被烤死成 `http://localhost:8080`），:8080 静默变桌面形态、`127.0.0.1` 打开跨源被 CORS 拒。**任何桌面打包后必须补跑 `npm run build:web`**（src-server 无需重启，dist 运行时读盘；验收=api-client chunk `resolveApiBase` 调用处实参为空串）。
 - `.env` 的 `JWT__SECRET` 是黑名单占位符：仅当 plist env 缺失时才会被 dotenvy 采用并触发启动拒绝——内联 env 在位即安全。
 
 ## iogpu wired limit（2026-08-20）
