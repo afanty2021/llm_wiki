@@ -182,6 +182,27 @@ DELETE FROM ingested_files WHERE project_id = <PID> AND original_path LIKE '<目
 
 ---
 
+## 🕗 定时任务（launchd）
+
+### 脚本里 import Hermes 模块：先补检出根
+
+`tools/ltutor/` 下的脚本由 launchd 直接从工作树执行（改了即生效，没有部署这一步），运行时 cwd 是 `/`、环境近乎为空。hermes-3.11 里的 hermes-agent 是 editable 安装（import-hook 映射），映射里没有检出根下的顶层模块（如 `hermes_yaml`）——cwd 不在检出里的脚本，在 `from cron import jobs` 这类 import 之前**必须先把检出根插到 `sys.path[0]`**：
+
+- 检出根从 `hermes_cli.__file__` 往上两级推导（`hermes_cli/main.py` 启动时也这么做），不要写死路径；`import hermes_cli` 失败就带着 traceback 退出。
+- import 放在一切写入之前：import 失败时不能留下半截状态。
+- 落盘前校验 `cron.jobs` 实际使用的 store 落在预期目录下（`_current_cron_store().jobs_file`），防止写到别的 profile。
+
+教训：2026-11-06 到 11-25，03:17 周报巡检的开办步连败 20 趟无人发现——就是 `from cron import jobs` 这条链在 launchd 的 cwd 下断在 `hermes_yaml`。
+
+### 怎么判断 03:17 周报巡检还活着
+
+- 日志 `~/Library/Logs/ltutor-weekly-audit.log`：每趟以「巡检开始」起头，正常收尾有两行——「巡检完成：新开办 N 个、失败 M 个」与「巡检结束 exit=0」。
+- `launchctl print gui/$(id -u)/wiki.ltutor-weekly-audit` 看 `last exit code`。
+- 自动兜底：`tools/pg-backup/pg-watchdog.sh` 第 6 查每日 09:00 核对上面几项（退出码、走没走到「巡检完成」、停发告警、日志新鲜度），异常即 macOS 通知「周报巡检看门」并非零退出。
+- 「任务存在」不等于「兜底有效」：长驻 launchd 任务必须挂进看门，并且拿一次真实成功记录验证过。
+
+---
+
 ## 📐 编码规范
 
 ### TypeScript/JavaScript

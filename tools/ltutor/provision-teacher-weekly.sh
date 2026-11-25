@@ -1,8 +1,9 @@
 #!/bin/bash
-# provision-teacher-weekly.sh — 为新教师开办周报任务（三件事原子完成）
+# provision-teacher-weekly.sh — 为新教师开办周报任务（三件事依次完成；全部幂等，可重跑）
 #
 # 用法: bash provision-teacher-weekly.sh <教师企微id> [--dry-run]
 #   示例: bash provision-teacher-weekly.sh WendyTest123
+#         bash provision-teacher-weekly.sh WendyTest123 --dry-run
 #
 # 三件事（全部幂等，重复跑无害）：
 #   ① 主 config profile_routes 补目标精确路由（cron 投递解析只认带 chat_id
@@ -10,6 +11,12 @@
 #   ② lt-tutor profile 的 platforms.wecom 启用块确认（投递闸门查卫星自身
 #      platforms 配置；无凭据=卫星形态，传输仍走主网关）
 #   ③ lt-tutor cron 建周报任务（钉 provider/model，绕开 drift_skip 守卫）
+#
+# 顺序：③ 用到的 Hermes 模块先于 ①② 的任何写盘接好——import 断链时零写盘，
+# 不留「有路由、无任务」的半成品（巡检 2026-11-06 起日败 20 趟的教训）。两份
+# config 都经同目录临时文件原子替换（网关每个 tick 都在读主 config；权限位原样保留）。
+# --dry-run：不改配置、不建任务、不备份；cron 存储先拷到一次性临时目录再查，
+# 对 live 目录零写入。
 #
 # 路由即时生效（_primary_profile_routes_for_current_home 每次 tick 现读磁盘，
 # 无需重启网关）；platforms 块若为本次新增才需要重启网关。
@@ -19,28 +26,42 @@
 set -euo pipefail
 
 USERID="${1:-}"
-DRY_RUN="${2:-}"
+MODE="${2:-}"
 HERMES_PY="/opt/homebrew/Caskroom/miniconda/base/envs/hermes-3.11/bin/python"
 MAIN_CFG="$HOME/.hermes/config.yaml"
 PROFILE_CFG="$HOME/.hermes/profiles/lt-tutor/config.yaml"
 PROFILE_HOME="$HOME/.hermes/profiles/lt-tutor"
 
+usage() { echo "用法: $0 <教师企微id> [--dry-run]" >&2; }
+
 if [ -z "$USERID" ]; then
-  echo "用法: $0 <教师企微id> [--dry-run]" >&2; exit 1
+  usage
+  exit 1
 fi
-if [ "$DRY_RUN" = "--dry-run" ]; then
-  echo "=== DRY RUN（不落盘） ==="
+# 第二个参数只认逐字的 --dry-run：--dryrun、--dry-run=1 这类笔误会在这里中止，
+# 不会被当成真跑而写盘（exit 2 = 用法错，区别于运行失败的 1）
+DRY_RUN=""
+case "$MODE" in
+  "") ;;
+  --dry-run) DRY_RUN="--dry-run" ;;
+  *)
+    echo "✗ 第二个参数只能是 --dry-run（收到：$MODE）——已中止，未写任何文件" >&2
+    usage
+    exit 2
+    ;;
+esac
+if [ "$#" -gt 2 ]; then
+  echo "✗ 多余的参数：${*:3}——已中止，未写任何文件" >&2
+  usage
+  exit 2
+fi
+if [ -n "$DRY_RUN" ]; then
+  echo "=== DRY RUN（不改配置、不建任务、不备份；对 live 目录零写入） ==="
 fi
 
 $HERMES_PY - "$USERID" "$DRY_RUN" <<'PYEOF'
-import json, os, re, shutil, sys, tempfile
+import atexit, os, re, shutil, stat, sys, tempfile
 from datetime import datetime
-
-# hermes-3.11 的 editable 安装是 import-hook 映射（Jul 24 装，映射无根级 hermes_yaml.py），
-# 而 utils.py 自 284dbaf537（09-11）起 import hermes_yaml——launchd cwd=/ 下
-# `from cron import jobs` 链必断（03:17 巡检 11-06 起日败根因）。
-# 显式补检出根，让 cron/utils/hermes_yaml 都从检出解析（与网关 cwd=检出 同语义）。
-sys.path.insert(0, os.path.expanduser("~/Github/Coding-Agents/Hermes-agent"))
 
 userid, dry_run = sys.argv[1], sys.argv[2] == "--dry-run"
 main_cfg = os.path.expanduser("~/.hermes/config.yaml")
@@ -48,9 +69,84 @@ profile_cfg = os.path.expanduser("~/.hermes/profiles/lt-tutor/config.yaml")
 profile_home = os.path.expanduser("~/.hermes/profiles/lt-tutor")
 ts = datetime.now().strftime("%Y%m%d-%H%M%S")
 
+
+def die(msg):
+    print(f"✗ {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
 def backup(path):
     if not dry_run:
         shutil.copy2(path, f"{path}.bak-{ts}")
+
+
+def atomic_write(path, text):
+    """同目录临时文件 → 原权限位 → os.replace：读者永远看不到写了一半的文件。"""
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# ── Hermes 模块：先接好，再动盘（以下任何一步失败都发生在写盘之前）──
+# hermes-3.11 的 editable 安装是 import-hook 映射（07-24 装的静态快照，其后新增的
+# 根级模块不在映射里——如 284dbaf537 起被 utils.py import 的 hermes_yaml）。cwd 不在
+# 检出里的脚本 `from cron import jobs` 必断（03:17 巡检 2026-11-06 起日败 20 趟的根因）。
+# 网关与 hermes CLI 的做法是把检出根显式插到 sys.path 最前（hermes_cli/main.py:44-46；
+# 网关 cwd 是 ~/.hermes，与 cwd 无关），这里与之等效。检出根从 hermes_cli 自身的安装
+# 位置推导，不写死绝对路径：搬家、换 worktree 后对不上就报错退出，不静默回到
+# ModuleNotFoundError。
+try:
+    import hermes_cli
+except Exception as exc:
+    die(f"import hermes_cli 失败（{exc!r}）——hermes-3.11 环境异常；未写任何文件")
+cli_file = getattr(hermes_cli, "__file__", "") or ""
+checkout_root = os.path.dirname(os.path.dirname(os.path.realpath(cli_file))) if cli_file else ""
+if not os.path.isfile(os.path.join(checkout_root, "hermes_cli", "main.py")):
+    die(f"从 hermes_cli.__file__ 推导出的检出根不对：{checkout_root!r}（缺 hermes_cli/main.py）；未写任何文件")
+if checkout_root not in [os.path.realpath(p) for p in sys.path if p]:
+    sys.path.insert(0, checkout_root)
+
+# cron 存储落点：真跑 = lt-tutor profile；dry-run = 一次性临时目录（live 的 jobs.json
+# 只读拷入）。HERMES_HOME 必须在 import cron 之前设好——cron 包的模块级路径经
+# get_hermes_home() 锚定到它。load_jobs() / resolve_job_ref() 每次调用都会对存储目录
+# mkdir + chmod（jobs.json 非规范时还会加锁重写），所以 dry-run 必须换目录，不能直查 live。
+scratch = None
+if dry_run:
+    scratch = tempfile.mkdtemp(prefix="ltutor-provision-dryrun-")
+    atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+    os.makedirs(os.path.join(scratch, "cron"))
+    live_jobs = os.path.join(profile_home, "cron", "jobs.json")
+    if os.path.exists(live_jobs):
+        shutil.copy2(live_jobs, os.path.join(scratch, "cron", "jobs.json"))
+    os.environ["HERMES_HOME"] = scratch
+else:
+    os.environ["HERMES_HOME"] = profile_home
+try:
+    from cron import jobs as cron_jobs
+except Exception:
+    import traceback
+    traceback.print_exc()
+    die(f"import cron.jobs 失败——Hermes 检出根 {checkout_root}；未写任何文件")
+
+# 防线：存储确实落在预期目录之下，否则宁可中止——真跑写错 profile、dry-run 碰到 live 都不可接受
+store_fn = getattr(cron_jobs, "_current_cron_store", None)
+store_file = store_fn().jobs_file if store_fn else cron_jobs.JOBS_FILE
+store_root = os.path.realpath(str(store_file))
+expected = os.path.realpath(scratch if dry_run else profile_home)
+if store_root != expected and not store_root.startswith(expected + os.sep):
+    die(f"cron 存储不在预期目录下：{store_root}（应在 {expected} 之下）；未写任何文件")
 
 # ── ① 主 config 精确路由（幂等：查 chat_id 是否已在某条 lt-tutor 路由上）──
 src = open(main_cfg).read()
@@ -75,7 +171,7 @@ else:
         print(f"[1/3] 将新增精确路由 lt-tutor-wecom-{userid.lower()}（chat_id={userid}）")
     else:
         backup(main_cfg)
-        open(main_cfg, "w").write(src.replace(anchor, anchor + route_yaml))
+        atomic_write(main_cfg, src.replace(anchor, anchor + route_yaml))
         print(f"[1/3] ✓ 精确路由已补（备份 {main_cfg}.bak-{ts}；即时生效无需重启）")
 
 # ── ② lt-tutor platforms.wecom 启用块（幂等）──
@@ -92,14 +188,11 @@ else:
         platforms_block_added = True
     else:
         backup(profile_cfg)
-        open(profile_cfg, "w").write(psrc.rstrip() + "\n\n" + block)
+        atomic_write(profile_cfg, psrc.rstrip() + "\n\n" + block)
         print(f"[2/3] ✓ platforms.wecom 启用块已补（备份 {profile_cfg}.bak-{ts}）⚠ 需重启网关")
         platforms_block_added = True
 
 # ── ③ 周报 cron 任务（幂等：按 name 查重）──
-os.environ["HERMES_HOME"] = profile_home
-from cron import jobs as cron_jobs
-
 job_name = f"lt-tutor-weekly:{userid}"
 existing = cron_jobs.resolve_job_ref(job_name)
 if existing:
