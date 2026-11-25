@@ -36,6 +36,12 @@ $HERMES_PY - "$USERID" "$DRY_RUN" <<'PYEOF'
 import json, os, re, shutil, sys, tempfile
 from datetime import datetime
 
+# hermes-3.11 的 editable 安装是 import-hook 映射（Jul 24 装，映射无根级 hermes_yaml.py），
+# 而 utils.py 自 284dbaf537（09-11）起 import hermes_yaml——launchd cwd=/ 下
+# `from cron import jobs` 链必断（03:17 巡检 11-06 起日败根因）。
+# 显式补检出根，让 cron/utils/hermes_yaml 都从检出解析（与网关 cwd=检出 同语义）。
+sys.path.insert(0, os.path.expanduser("~/Github/Coding-Agents/Hermes-agent"))
+
 userid, dry_run = sys.argv[1], sys.argv[2] == "--dry-run"
 main_cfg = os.path.expanduser("~/.hermes/config.yaml")
 profile_cfg = os.path.expanduser("~/.hermes/profiles/lt-tutor/config.yaml")
