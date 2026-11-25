@@ -1,0 +1,83 @@
+N-2 结构性根治：桌面产物落独立 outDir + tauri build 与 mcp-server 解耦（2026-11-25 08:47–10:15 执行）
+==========================================================================================
+口令：用户 11-25「结构性根治（桌面产物落独立 outDir，连带解决 build:desktop 顺手重写 live mcp-server/dist 的问题），修」
+
+改动（已提交 e9738730）：
+- vite.config.ts               build.outDir = mode === "web" ? "dist" : "dist-desktop"
+                               （分流放在配置层：任何入口——npm run build / tauri build / 裸 npx vite build——的桌面产物都进不了 dist/）
+- package.json                 build:desktop = "npm run build"（去掉 `npm --prefix mcp-server ci && npm run mcp:build &&`）
+- src-tauri/tauri.conf.json    frontendDist: ../dist → ../dist-desktop（beforeBuildCommand 不变，仍是 npm run build:desktop）
+- .gitignore                   + dist-desktop/
+- src/lib/build-form.test.ts   回归钉（新文件，4 例）
+- CLAUDE.md 硬约束 3 / docs/development.md 生产构建节 / docs/superpowers/deploy/launchd-notes.md   三处说明改写
+
+设计依据（取证）：
+- 三个平台 src-tauri/tauri.{linux,macos,windows}.conf.json 的 bundle.resources 都把
+  ../mcp-server/{package.json,dist,node_modules} 打进 bundle，打包器在 bundle 阶段只读拷贝；
+  beforeBuildCommand 里的 ci + build 只起「保证检出里有一份」的作用（上游 52b4cfda，2026-06-18）。
+  本仓检出里的那一份就是 Hermes 网关 live 加载的进程入口。
+- 基线快照：mcp-server/node_modules inode=89736671 mtime=1792890167（= 10-25 09:0x，上次本地打包时
+  npm ci 清掉重装留下的——当时 live MCP 子进程正从该目录加载）。
+- CI build.yml:107-110 另有显式 "Prepare MCP server resources"（npm ci + mcp:build），本次未动。
+
+一、回归钉 + 变异实跑
+------------------------------------------------------------------------------------------
+  npx vitest run src/lib/build-form.test.ts → ✓ 4 tests（68ms）
+
+  变异（逐个改回坏形态 → 跑钉子 → 逐字节还原）：
+  KILLED  | M-a vite 分流被吞（outDir 恒 dist）        红 2：桌面形态不落 dist / tauri 接线
+  KILLED  | M-b frontendDist 退回 ../dist              红 1：tauri 接线
+  KILLED  | M-c build:desktop 退回串 mcp ci+build      红 1：tauri build 不重建 mcp-server
+  KILLED  | M-d build:web 丢 --mode web                红 1：web 钉
+  KILLED  | M-e 裸 npm run build 改成 web 形态         红 2：桌面形态不落 dist / tauri 接线
+  KILLED  | M-f .gitignore 丢 dist-desktop             红 1：gitignore 钉
+  还原校验：vite.config.ts / package.json / tauri.conf.json / .gitignore 四文件 sha 全同；复跑 4 passed (4)
+
+二、真构建（快照项：dist/ 221 文件 sha256、mcp-server/dist 31 文件 sha256、两目录全部 mtime、
+          mcp-server/node_modules 的 inode + .package-lock.json）
+------------------------------------------------------------------------------------------
+  [V2] npm run build（含 typecheck）
+       ✓ built in 4.26s → dist-desktop/，api-client-Cpj5Gy3Y.js
+       调用处：function n(e){return e??`http://localhost:8080`}var r=n(void 0)      → 桌面形态
+       快照：dist.sha / mcpdist.sha / mtimes / inodes 四项未变
+
+  [V3] npm run build:web
+       ✓ built in 2.22s → dist/
+       快照：dist.sha 未变（221 文件内容与基线逐一同；前端源码自 11-24 13:07 起零改动；
+             mtime 因它正常重写自己的目录而变）、mcpdist.sha / inodes 未变；dist-desktop/ 未被碰
+
+  [V4-失败] npm run tauri build --bundles app
+       ← 调用写错（非修复问题）：npm 11.20.0 把 --bundles 当成自己的配置项吞掉，Tauri 收到 `build app`，
+         把 app 转给 cargo → `error: unexpected argument 'app' found`，Rust 编译未开始，日志记 exit=1
+       （任务通知报 exit 0 是收尾 `echo "exit=$?"` 的退出码）
+       该次运行已先跑完 beforeBuildCommand：产物列表全为 dist-desktop/assets/…；四项快照未变
+
+  [V4] npm run tauri -- build --bundles app（CARGO_BUILD_JOBS=7，工作日上午给 live 留余量）
+       Running beforeBuildCommand `npm run build:desktop`
+       Finished `release` profile [optimized] target(s) in 7m 21s
+       Built application at: src-tauri/target/release/llm-wiki
+       Bundling LLM Wiki.app → Finished 1 bundle                                   exit=0
+       快照：四项未变（整趟 tauri build 对 live dist/、mcp-server/dist、node_modules 零写入）
+       git status：无构建带出的杂散改动（Cargo.lock / gen/schemas 未变）
+       产物：src-tauri/target/release/bundle/macos/LLM Wiki.app（10:11）
+       既有 warning（与本次无关）：unused imports `LogDisplayEntry` and `LogLevel`
+
+三、产物与线上核对
+------------------------------------------------------------------------------------------
+  [5] 两份产物的资源名：桌面独有 28 / web 独有 28
+      release 二进制内嵌：桌面独有 28/28、web 独有 0/28      → 内嵌的正是 dist-desktop/ 那份
+      样例：桌面 api-client-Cpj5Gy3Y.js / auto-save-C1G9CIS4.js ；web api-client-BPKp9pE6.js / auto-save-B5J-dcoI.js
+  [4] bundle 内 mcp-server/ = {dist, node_modules, package.json}
+      package.json、dist/src/index.js、dist/src/web-clip.js、node_modules/.package-lock.json 四项与检出逐字节相同
+      bundle 内 web-clip.js 含 once("error" 修复标记（即带着 0f17695f）
+  [6] :8080 下发入口 assets/index-C_Bt6V8i.js = dist/(web)，≠ dist-desktop/(assets/index-BVRLdDbi.js)
+      线上 api-client-BPKp9pE6.js：function n(e){return e??`http://localhost:8080`}var r=n(``)
+  live MCP 子进程 pid 47051 / 47052 / 47071（05:31:42–43 拉起）全程未重启；GET /health → 200
+
+未验（如实留档）：
+- CI 三平台打包（tauri-action / Windows portable / Linux）未跑，本地不可达。按配置读：build.yml 的显式 mcp 准备步骤
+  未动、各平台 resources 读取路径未动、tauri-action 经 beforeBuildCommand → dist-desktop/ → frontendDist。
+- `npm run tauri build`（默认 bundles，含 DMG）未跑：本次只出 .app 以避开 DMG 环节；前端分流与资源拷贝两环
+  已由 .app 路径覆盖。
+- 桌面包未启动冒烟（产物是验证的副产品，不是交付物）。
+- 桌面包内 MCP 代码的新鲜度现在依赖打包前的显式 `npm run mcp:build`（此前由 beforeBuildCommand 强制重建保证）。
