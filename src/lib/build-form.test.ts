@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveConfig } from "vite"
@@ -38,7 +38,9 @@ function outDirFor(mode: string): Promise<string> {
   return p
 }
 
-/** 把 `a && b` 链展开到实际执行的外部命令（`npm run x` 递归代入 scripts.x） */
+/** 把 `a && b` 链展开到实际执行的外部命令（`npm run x` 递归代入 scripts.x）。
+ *  `npm run x -- <参数>` 的透传参数由 npm 接到 x 展开后的最后一条命令上，必须一起带下去：
+ *  丢了它，`build:desktop = npm run build -- --mode web` 这种写法会让桌面构建改写 dist/ 而本文件全绿。 */
 function expand(command: string): string[] {
   return command
     .split("&&")
@@ -47,7 +49,10 @@ function expand(command: string): string[] {
       if (tokens[0] === "npm" && tokens[1] === "run") {
         const script = pkg.scripts[tokens[2]]
         if (script === undefined) throw new Error(`package.json 缺脚本 ${tokens[2]}`)
-        return expand(script)
+        const chain = expand(script)
+        const at = tokens.indexOf("--")
+        if (at !== -1 && chain.length > 0) chain[chain.length - 1] += ` ${tokens.slice(at + 1).join(" ")}`
+        return chain
       }
       return [tokens.join(" ")]
     })
@@ -59,6 +64,19 @@ function viteBuildModes(commands: string[]): string[] {
   return commands.flatMap((cmd) =>
     /\bvite build\b/.test(cmd) ? [/--mode[=\s]+(\S+)/.exec(cmd)?.[1] ?? "production"] : [],
   )
+}
+
+
+/** 链上出现过的脚本名（递归） */
+function referencedScripts(command: string, seen: Set<string>): Set<string> {
+  for (const part of command.split("&&")) {
+    const tokens = part.trim().split(/\s+/)
+    if (tokens[0] === "npm" && tokens[1] === "run" && tokens[2] !== undefined && !seen.has(tokens[2])) {
+      seen.add(tokens[2])
+      referencedScripts(pkg.scripts[tokens[2]] ?? "", seen)
+    }
+  }
+  return seen
 }
 
 describe("build 形态 × 产物目录分流", () => {
@@ -74,7 +92,7 @@ describe("build 形态 × 产物目录分流", () => {
     const dir = await outDirFor(modes[0])
     expect(dir).not.toBe(WEB_OUT_DIR)
     expect(() =>
-      execFileSync("git", ["check-ignore", "-q", path.join(ROOT, dir, "probe")], { stdio: "ignore" }),
+      execFileSync("git", ["check-ignore", "-q", path.join(ROOT, dir, "probe")], { cwd: ROOT, stdio: "ignore" }),
     ).not.toThrow()
   })
 
@@ -91,5 +109,50 @@ describe("build 形态 × 产物目录分流", () => {
     const commands = expand(tauri.build.beforeBuildCommand ?? "")
     expect(commands.length).toBeGreaterThan(0)
     for (const cmd of commands) expect(cmd).not.toMatch(/mcp/)
+  })
+
+  it("C1 不变量：除 web 外任何 mode 都不写 dist/ —— 上游若把分流改成按别的条件判，即红", async () => {
+    for (const m of ["production", "development", "staging", "test"]) {
+      expect(await outDirFor(m), `mode=${m}`).not.toBe(WEB_OUT_DIR)
+    }
+  })
+  it("C2 任何平台的 tauri.<platform>.conf.json 都不得覆盖 build 段（frontendDist / beforeBuildCommand）", () => {
+    const names = readdirSync(path.join(ROOT, "src-tauri")).filter((n) => /^tauri\.[^.]+\.conf\.json$/.test(n))
+    expect(names.length).toBeGreaterThan(0)
+    for (const f of names) {
+      const c = readJson(`src-tauri/${f}`) as { build?: Record<string, string> }
+      expect(c.build ?? {}).not.toHaveProperty("frontendDist")
+      expect(c.build ?? {}).not.toHaveProperty("beforeBuildCommand")
+    }
+  })
+  it("C3 三条构建链展开后，vite build 命令行不得带会盖掉配置的 flag（--outDir / --out-dir / --config / -c）", () => {
+    const chains = [pkg.scripts.build, pkg.scripts["build:web"], tauri.build.beforeBuildCommand ?? ""]
+    for (const cmd of chains.flatMap((c) => expand(c))) {
+      expect(cmd).not.toMatch(/--out-?dir|--config\b|\s-c\b/i)
+    }
+  })
+  it("C4 桌面链（npm run build、build:desktop、tauri beforeBuildCommand 链）里的 vite build 不得用 --mode web", () => {
+    for (const c of [pkg.scripts.build, pkg.scripts["build:desktop"], tauri.build.beforeBuildCommand ?? ""]) {
+      expect(viteBuildModes(expand(c))).not.toContain("web")
+    }
+  })
+  it("C5 链上每个脚本（递归）的 pre/post 生命周期钩子都不得碰 mcp-server", () => {
+    const names = new Set<string>()
+    for (const c of [pkg.scripts.build, pkg.scripts["build:web"], tauri.build.beforeBuildCommand ?? ""]) {
+      referencedScripts(c, names)
+    }
+    expect(names.has("build")).toBe(true)
+    for (const n of names) {
+      for (const hook of [`pre${n}`, `post${n}`]) {
+        if (pkg.scripts[hook] !== undefined) {
+          for (const cmd of expand(pkg.scripts[hook])) expect(cmd, hook).not.toMatch(/mcp/)
+        }
+      }
+    }
+  })
+  it("C6 web 构建必须同源：.env.web 的 VITE_API_BASE_URL 恰有一行且为空", () => {
+    const env = readFileSync(path.join(ROOT, ".env.web"), "utf8")
+    expect(env.match(/^VITE_API_BASE_URL=[ \t]*$/gm) ?? []).toHaveLength(1)
+    expect(env).not.toMatch(/^VITE_API_BASE_URL=\S/m)
   })
 })
