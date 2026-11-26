@@ -545,12 +545,12 @@ test("extractArticle·微信正文阈值只数可见字符：零宽/填充符凑
   // 这种「正文」会让 Readability 连页头署名区一起选中（N-1 的原始症状），可见字符数不是 0
   // 而是页头那几十个；重点是塞了多少零宽/填充符都数不进 200
   const zeroWidth = String.fromCodePoint(0x200b)
-  const hangulFill = String.fromCodePoint(0x3164)
+  const hangulFill = String.fromCodePoint(0x3164) + String.fromCodePoint(0x1160)
   const variationSelector = String.fromCodePoint(0xfe0f)
   const cases: Array<[string, string]> = [
     ["零宽空格 ×300（Cf）", zeroWidth.repeat(300)],
     ["零宽空格 ×250 + 真字符 ×10", zeroWidth.repeat(250) + "字".repeat(10)],
-    ["谚文填充符 ×300（Lo）", hangulFill.repeat(300)],
+    ["谚文填充符（含 U+1160）×300（Lo）", hangulFill.repeat(300)],
     ["变体选择符 ×300（Mn）", variationSelector.repeat(300)],
   ]
   for (const [label, body] of cases) {

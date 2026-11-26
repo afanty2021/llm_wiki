@@ -791,10 +791,10 @@ export const WEIXIN_MIN_BODY_CHARS = 200
 /**
  * 计数前剥除的不可见字符（首轮评审 R1：修前 300 个零宽空格即可过阈值，落一个检索不到东西
  * 的页却回「已收藏」）。Unicode「其它」类（Cc 控制 / Cf 格式——零宽空格、软连字符、双向
- * 控制等 / Co 私用 / Cs 代理 / Cn 未分配），加不属该类的空壳字符：谚文填充符、盲文空白、
- * 组合符连接符与变体选择符（Mn）。
+ * 控制等 / Co 私用 / Cs 代理 / Cn 未分配），加不属该类的空壳字符：谚文填充符（含
+ * U+1160 HANGUL JUNGSEONG FILLER，同为 Lo 且非 \s）、盲文空白、组合符连接符与变体选择符（Mn）。
  */
-const INVISIBLE_CHARS = /[\p{C}\u115F\u3164\uFFA0\u2800]|[\u034F\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu
+const INVISIBLE_CHARS = /[\p{C}\u115F\u1160\u3164\uFFA0\u2800]|[\u034F\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu
 
 /** 微信公众号文章判定（取回终 URL 的主机名；非微信页不享受揭开与阈值的待遇）。 */
 function isWeixinArticle(url: string): boolean {

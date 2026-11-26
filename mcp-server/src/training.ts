@@ -914,7 +914,8 @@ function cleanReplyField(value: unknown, maxChars: number): string | undefined {
  * （异常页无 frontmatter）时优雅降级为「此前」不输出 undefined。
  * 回执防御（W3-I1）：reply 由模型原样转告老师，而 title 出自网页作者——生产链
  * extractArticle 已清洗，此处再做同款（幂等），注入口/旁路传来的脏 title 也进不了回执。
- * prev 两字段同理（取自库内页的 frontmatter）；日期只认 YYYY-MM-DD 开头，认不出按缺省。
+ * prev 两字段同理（取自库内页的 frontmatter）；日期只认真实可发的 YYYY-MM-DD 开头
+ * （世纪/月/日都在合法域内，`1234-56-78` 这类不进教师可见回执），认不出按缺省。
  */
 function clipReplyText(o: ClipOutcome): string {
   const title = cleanReplyField(o.title, MAX_CLIP_TITLE_CHARS) ?? "clip"
@@ -922,7 +923,9 @@ function clipReplyText(o: ClipOutcome): string {
     return `已收藏《${title}》，稍后整理完成后即可检索`
   }
   const who = cleanReplyField(o.prevClippedBy, REPLY_WHO_MAX_CHARS)
-  const date = /^\d{4}-\d{2}-\d{2}/.exec(cleanReplyField(o.prevClippedAt, MAX_CLIP_TITLE_CHARS) ?? "")
+  const date = /^(19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])/.exec(
+    cleanReplyField(o.prevClippedAt, MAX_CLIP_TITLE_CHARS) ?? "",
+  )
   return `${who !== undefined ? `${who} ` : ""}${date !== null ? `已于 ${date[0]} ` : "此前"}收藏过《${title}》，已顺手再补一次整理`
 }
 

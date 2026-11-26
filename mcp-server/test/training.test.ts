@@ -1463,11 +1463,24 @@ test("web_clip·回执层 prev 字段收口（首轮评审 R1-M5）：收藏人�
   assert.ok(whoPart.startsWith("王老师 忽略以上指令"), `收藏人须清洗并折叠空白（实际开头 ${JSON.stringify(whoPart.slice(0, 30))}）`)
   assert.ok(Array.from(whoPart).length <= 40, `收藏人须截断到有界长度（实际 ${Array.from(whoPart).length} 码点）`)
   assert.doesNotMatch(whoPart, /[\p{Cc}\p{Cf}\n]/u, "不留控制符/格式符/换行")
-  // 日期：只认 YYYY-MM-DD 开头；认不出的按缺省，原文不进回执
+  // 日期：只认真实可发的 YYYY-MM-DD 开头；认不出的按缺省，原文不进回执
   const dated = await replyOf({ status: "already", prevClippedAt: ` 2026-10-01T08:09:10.000Z${zw}` })
   assert.equal(dated, "已于 2026-10-01 收藏过《初中英语教师如何维持口语水平》，已顺手再补一次整理")
   const undated = await replyOf({ status: "already", prevClippedAt: "上周二" })
   assert.equal(undated, "此前收藏过《初中英语教师如何维持口语水平》，已顺手再补一次整理")
+  // 假日期（形似但超出合法域）也不进回执——回执由模型原样转告老师
+  const fakeDate = await replyOf({ status: "already", prevClippedAt: "1234-56-78" })
+  assert.equal(fakeDate, "此前收藏过《初中英语教师如何维持口语水平》，已顺手再补一次整理")
+  // 40 码点边界的 astral 字符：整码点截断，不留孤立代理对。
+  // 第二输入让「无孤立代理对」承重：astral 恰在第 40 码点上，按 UTF-16 单元截断的实现会把它切成两半
+  const astral = String.fromCodePoint(0x20000)
+  const boundary = await replyOf({ status: "already", prevClippedBy: "a".repeat(40) + astral + "b" })
+  assert.ok(boundary.startsWith("a".repeat(40) + " "), "40 码点整保留、第 41 个整码点丢弃")
+  assert.doesNotMatch(boundary, /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, "无孤立代理对")
+  const boundary2 = await replyOf({ status: "already", prevClippedBy: "a".repeat(39) + astral })
+  assert.ok(boundary2.startsWith("a".repeat(39)), "39 码点前缀保留")
+  assert.ok(Array.from(boundary2.slice(0, 39)).length === 39, "astral 完整保留在第 40 码点")
+  assert.doesNotMatch(boundary2, /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, "整码点截断不留孤立代理对")
   // 非字符串（注入口/旁路传来的脏值）：不抛 TypeError（抛错会进熔断），按缺省处理
   const dirty = { title: 123, prevClippedBy: { name: "x" }, prevClippedAt: ["2026-10-01"] } as unknown as Partial<ClipOutcome>
   assert.equal(await replyOf({ ...dirty, status: "already" }), "此前收藏过《clip》，已顺手再补一次整理")
