@@ -11,7 +11,7 @@
     "build:desktop": "npm run build",
     "preview": "vite preview",
     "test": "npm run test:mocks && npm run test:llm",
-    "test:mocks": "vitest run --exclude='**/*.real-llm.test.ts' --exclude='**/mcp-server/**'",
+    "test:mocks": "vitest run --exclude='**/*.real-llm.test.ts' --exclude='**/mcp-server/**' --exclude='**/evidence/**'",
     "test:llm": "vitest run real-llm --no-file-parallelism --reporter=verbose",
     "mcp:build": "npm --prefix mcp-server run build",
     "mcp:test": "npm --prefix mcp-server test",
