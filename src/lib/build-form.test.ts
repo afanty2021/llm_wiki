@@ -19,7 +19,7 @@ const readJson = (rel: string) => JSON.parse(readFileSync(path.join(ROOT, rel), 
 
 const pkg = readJson("package.json") as { scripts: Record<string, string> }
 const tauri = readJson("src-tauri/tauri.conf.json") as {
-  build: { beforeBuildCommand?: string; frontendDist: string }
+  build: { beforeDevCommand?: string; beforeBuildCommand?: string; frontendDist: string }
 }
 const serverCfg = readJson("src-server/config/default.json") as { frontend: { dist_dir: string } }
 
@@ -59,10 +59,10 @@ function expand(command: string): string[] {
     .flat()
 }
 
-/** 命令里 `vite build` 用的 mode（CLI 缺省 = production） */
+/** 命令里 `vite build` 用的 mode（CLI 缺省 = production）；`--mode` 与短写 `-m` 两种拼法都算 */
 function viteBuildModes(commands: string[]): string[] {
   return commands.flatMap((cmd) =>
-    /\bvite build\b/.test(cmd) ? [/--mode[=\s]+(\S+)/.exec(cmd)?.[1] ?? "production"] : [],
+    /\bvite build\b/.test(cmd) ? [/(?:--mode|-m)[=\s]+(\S+)/.exec(cmd)?.[1] ?? "production"] : [],
   )
 }
 
@@ -146,6 +146,21 @@ describe("build 形态 × 产物目录分流", () => {
       for (const hook of [`pre${n}`, `post${n}`]) {
         if (pkg.scripts[hook] !== undefined) {
           for (const cmd of expand(pkg.scripts[hook])) expect(cmd, hook).not.toMatch(/mcp/)
+        }
+      }
+    }
+  })
+  it("C7 tauri dev 的 beforeDevCommand 不得跑 vite build（会把产物写进 dist/ 或 dist-desktop/）也不得碰 mcp-server", () => {
+    const commands = expand(tauri.build.beforeDevCommand ?? "")
+    expect(commands.length).toBeGreaterThan(0)
+    for (const cmd of commands) {
+      expect(cmd).not.toMatch(/\bvite build\b/)
+      expect(cmd).not.toMatch(/mcp/)
+    }
+    for (const n of referencedScripts(tauri.build.beforeDevCommand ?? "", new Set())) {
+      for (const hook of [`pre${n}`, `post${n}`]) {
+        if (pkg.scripts[hook] !== undefined) {
+          for (const cmd of expand(pkg.scripts[hook])) expect(cmd, hook).not.toMatch(/\bvite build\b|mcp/)
         }
       }
     }

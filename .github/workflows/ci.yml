@@ -137,7 +137,7 @@ jobs:
         working-directory: src-server
         run: cargo test --lib --test integration
 
-  # JS 测试补覆盖：check 只验证两种形态的 vite build,根 vitest(2598 个 mock 用例)
+  # JS 测试补覆盖：check 只验证两种形态的 vite build,根 vitest(2599 个 mock 用例)
   # 与 mcp-server 的 node --test 从不进 CI → 此 job 补齐。
   # LLM 门控：只跑 test:mocks,该脚本自带 --exclude '**/*.real-llm.test.ts'
   # 文件名排除。真实 LLM 用例依赖 .env.test.local 凭证/局域网端点,无凭证
@@ -163,7 +163,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # mock 子集全量:本地 182 文件 / 2598 用例 ≈ 12s
+      # mock 子集全量:本地 182 文件 / 2599 用例 ≈ 12s
       - name: Run vitest (mock subset)
         run: npm run test:mocks
 

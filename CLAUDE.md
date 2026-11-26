@@ -30,7 +30,7 @@
 
 - **技术栈**：React 19 + Tauri v2 (Rust) + LanceDB + Milkdown + sigma.js + Zustand
 - **启动开发**：`npm run tauri dev`（前端热重载 1420）
-- **测试**：`npm run test:mocks`（CI 门，2598 用例 / 182 文件）/ `npm run test:llm`（真模型，慢）/ `npm --prefix mcp-server test`（353 用例）/ `cargo test` ×3 条（根 / src-tauri / src-server，见硬约束 1）
+- **测试**：`npm run test:mocks`（CI 门，2599 用例 / 182 文件）/ `npm run test:llm`（真模型，慢）/ `npm --prefix mcp-server test`（353 用例）/ `cargo test` ×3 条（根 / src-tauri / src-server，见硬约束 1）
 - **核心文件**：`src/lib/ingest.ts`（两步摄取）/ `wiki-graph.ts`（图谱 + Louvain）/ `search.ts`（多阶段检索）/ `graph-relevance.ts`（四信号相关性）
 - **Rust 后端**：`src-tauri/src/commands/`（fs / project / search / vectorstore 等）+ `api_server.rs`（本地 HTTP API）+ `clip_server.rs`（Web Clipper）
 - **服务端**：`src-server/`（axum + Postgres docker :5433；API + web 同源 :8080；launchd `wiki.src-server`）。files 端点路径安全 = `services/storage.rs::safe_resolve`，现行口径：缺失中间目录祖先上溯（base 随项目创建即落盘）、`..` 叠缺失段 400 穿越、base 缺失/真 IO 错 500
