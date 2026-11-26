@@ -14,7 +14,12 @@
 # 后下一个巡检周期自动开通）。
 # 判重不分大小写：provision 脚本按任务名查重本就不分大小写（resolve_job_ref），这里若
 # 分大小写，仅大小写不同的教师每晚都会被误判成「缺任务」，空走一遍开办并在日志里假报
-# 「新开办 1 个」。单个教师开办失败不中止整轮，末尾汇总并以非零退出。
+# 「新开办 1 个」。停用（enabled=false）的任务同样算「已有」——provision 按任务名命中
+# 它也会跳过，这里若不算，被手动停用的教师每晚都会假报「▶ 自动开办/新开办 1 个」；
+# 停发名单的「任务仍在跑」告警则只看启用中的任务（停用≠在跑）。
+# 单个教师开办失败不中止整轮，末尾汇总并以非零退出。
+# 提醒（pg-watchdog.sh 同款坑）：bash 3.2 在 UTF-8 locale 下，$var 后紧跟全角字符会把
+# 字节并进变量名、set -u 直接 abort——$var 后接全角标点必须写成 ${var}。
 #
 # 存活判据：每趟日志以「巡检开始」起头，正常收尾有两行——「巡检完成：新开办 N 个、失败
 # M 个」与 trap 打的「巡检结束 exit=0」（set -e 中途退出的趟同样有这一行）。
@@ -44,16 +49,19 @@ TEACHERS="$($DOCKER exec $PG psql -U llmwiki -d llmwiki -At \
   | grep -vE '^wecom_(.)\1+_' \
   | grep -v '^wecom_HuangZhengBo$')"
 
-# 已有任务清单（jobs.json 侧）
-EXISTING="$($PY -c "
+# 已有任务清单（jobs.json 侧）。EXISTING_ANY=全部 lt-tutor-weekly 任务（含停用，判重用）；
+# EXISTING=仅启用中的（停发-告警用：停用≠在跑）
+JOBS_RAW="$($PY -c "
 import json
 d = json.load(open('$HOME/.hermes/profiles/lt-tutor/cron/jobs.json'))
 jobs = d if isinstance(d, list) else d.get('jobs', [d])
 for j in jobs:
     n = j.get('name','')
-    if n.startswith('lt-tutor-weekly:') and j.get('enabled', True):
-        print('wecom_' + n.split(':',1)[1])
+    if n.startswith('lt-tutor-weekly:'):
+        print(('Y' if j.get('enabled', True) else 'N') + ' wecom_' + n.split(':',1)[1])
 " 2>/dev/null || true)"
+EXISTING_ANY="$(printf '%s\n' "$JOBS_RAW" | sed -n 's/^[YN] //p')"
+EXISTING="$(printf '%s\n' "$JOBS_RAW" | sed -n 's/^Y //p')"
 
 # 停发名单（同目录 paused-weekly.txt；精确整行匹配防子串误伤）
 PAUSED_FILE="$(cd "$(dirname "$0")" && pwd)/paused-weekly.txt"
@@ -69,7 +77,7 @@ failed=0
 while IFS= read -r u; do
   [ -z "$u" ] && continue
   id="${u#wecom_}"
-  if [ -n "$PAUSED" ] && echo "$PAUSED" | grep -qx "$id"; then
+  if [ -n "$PAUSED" ] && echo "$PAUSED" | grep -qix "$id"; then
     if echo "$EXISTING" | grep -qix "$u"; then
       echo "  [停发-告警] 名单内但任务仍在跑：$id —— 长期停发请 hermes cron remove（runbook §6.2）"
     else
@@ -77,8 +85,8 @@ while IFS= read -r u; do
     fi
     continue
   fi
-  # EXISTING 的比对不分大小写（见文件头）
-  if echo "$EXISTING" | grep -qix "$u"; then
+  # EXISTING_ANY 的比对不分大小写（见文件头；停用任务也算已有）
+  if echo "$EXISTING_ANY" | grep -qix "$u"; then
     echo "  已有任务：$id"
   else
     echo "  ▶ 自动开办：$id"
@@ -88,7 +96,7 @@ while IFS= read -r u; do
     if [ "$rc" -eq 0 ]; then
       provisioned=$((provisioned+1))
     else
-      echo "  ✗ 开办失败：$id（exit=$rc）"
+      echo "  ✗ 开办失败：${id}（exit=${rc}）"
       failed=$((failed+1))
     fi
   fi

@@ -45,7 +45,7 @@ case "$MODE" in
   "") ;;
   --dry-run) DRY_RUN="--dry-run" ;;
   *)
-    echo "✗ 第二个参数只能是 --dry-run（收到：$MODE）——已中止，未写任何文件" >&2
+    echo "✗ 第二个参数只能是 --dry-run（收到：${MODE}）——已中止，未写任何文件" >&2
     usage
     exit 2
     ;;
