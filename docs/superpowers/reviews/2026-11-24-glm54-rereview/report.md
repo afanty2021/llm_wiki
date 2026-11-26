@@ -383,7 +383,7 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
    - 给 `wiki.ltutor-weekly-audit` 加监控（I-2）：`pg-watchdog` 里加「最近一次退出码 / 最近 30 小时内有无『巡检完成』/ 停发名单告警 / 新开办数」四查。
    - 脚本收尾：`provision-teacher-weekly.sh:42` 注释「与网关 cwd=检出 同语义」不对（网关 cwd 是 `~/.hermes`，靠 `hermes_cli/main.py:44-46` 把检出根插到 `sys.path[0]`）；检出路径由 `hermes_cli.__file__` 推导或断言存在（M-2）；import 提到两次写之前（M-3）；`--dry-run` 做到零写入（M-4）；校验第二个参数（M-5）；主 config 原子写（M-6）；成文验收判据与 `m3-gray-runbook.md:32` 的陈旧排程（M-7）；单个教师失败不拖垮整轮（M-8）。
 4. **账目与成文收口**（R4）。11.4 列的行内勘误协调者已在本文件与 `n3-stale-docs.txt` 落实（未提交）。仍待办：
-   - 补 11-25 处置轮的访问账目（I-4）：05:31 live `mcp-server/dist` 重建、05:31 `kickstart -k`、08:48 `build:web` 重写 live `dist/`、10:04–10:11 `tauri build`。那一轮不是评审会话做的，协调者只能记下时刻与产物，发起方与当时的前后快照须由当事会话补。
+   - 补 11-25 处置轮的访问账目（I-4）：05:31 live `mcp-server/dist` 重建、05:31 `kickstart -k`、08:48 `build:web` 重写 live `dist/`、10:04–10:11 `tauri build`。那一轮不是评审会话做的，协调者只能记下时刻与产物，发起方与当时的前后快照须由当事会话补。**【11-26 裁定收口】用户裁定按「如实留洞」处理**：当事会话不再补，上列时刻与产物（协调者侧客观证据）即本四操作的最终账目；本项由「待办」降格为**已接受的残留**。
    - 旧世界残留（M-8）：`src-server/src/routes/mod.rs:57` 注释、`CLAUDE.md:33` 用例数 330 → 344、`.github/workflows/ci.yml:132/158/167` 注释里的 2239 / 164 / 65、两份 06 月 spec / plan 的「同一份 `dist/`」说法（历史稿，加一句现状指引即可）。
    - `.dockerignore` 补 `dist-desktop/`（R1-M4）；CI 加一条 `npm run build:web`，顺带对 api-client chunk 的调用处实参做形态断言（R1 建议 3）。
    - 「实锤」若非有意用字，应为「实锤」（`CLAUDE.md:43`、`development.md`、`launchd-notes.md:108`、`build-form.test.ts:14`）——由所有者定。
@@ -486,7 +486,7 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
 | 2 web-clip 小修批 | 已做（11-26） | 见下「11.3-2 明细」 |
 | 3 巡检 | 已做（11-25） | 见下「11.3-3 明细」 |
 | 3c 成文 | 已做（11-26） | `docs/development.md` 新增「定时任务」节（import Hermes 模块先补检出根；巡检存活判据）；`tools/pg-backup/README.md` 改六个信号并补第 6 查说明；`m3-gray-runbook.md` 两处陈旧排程改为现行 6 个任务、分钟 0–5（`:32` 那句顺带去掉了句中的教师 id） |
-| 4 账目与成文 | 除一条外已做（11-26） | `.dockerignore` 加 `dist-desktop/`；`src-server/src/routes/mod.rs:57` 注释；`ci.yml` 三处用例数注释；三份六月文档各加一行现状指引（06-13 架构 spec、06-13 实施 plan、06-23 layer5 spec，正文未改）；CI `check` job 加 `npm run build:web` + `scripts/check-web-bundle.mjs`（新文件）；`CLAUDE.md` 用例数改为 2598 / 182 与 353。**未办**：11-25 处置轮的访问账目（须由当事会话补） |
+| 4 账目与成文 | 除一条外已做（11-26） | `.dockerignore` 加 `dist-desktop/`；`src-server/src/routes/mod.rs:57` 注释；`ci.yml` 三处用例数注释；三份六月文档各加一行现状指引（06-13 架构 spec、06-13 实施 plan、06-23 layer5 spec，正文未改）；CI `check` job 加 `npm run build:web` + `scripts/check-web-bundle.mjs`（新文件）；`CLAUDE.md` 用例数改为 2598 / 182 与 353。**未办→已裁定收口（11-26「如实留洞」）**：11-25 处置轮的访问账目——当事会话不再补，协调者侧时刻+产物为最终账目（见 11.3-4 裁定注） |
 | 5 10.7「一处取舍」 | 已做（11-26） | 10.7 已改成三条事实 |
 
 **11.3-2 明细。**
@@ -541,3 +541,5 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
 **仍待裁定。** 提交与推送（本地 5 笔加上本轮工作树）；`mcp:build` 与 MCP 子进程重拉；修 `ffmpeg`；「实锤」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；上面相邻发现 2–5。
 
 > **【11-26 第三轮补记——上段四项已被事件关闭】** 用户口令后：13 笔已提交并推送 origin（至 `a421c75a`）；`mcp:build` 已完成（08:02，dist 与测试副本逐字节同）、旧 MCP 子进程已杀——**按需重拉待下一次教师工具调用**（截至 11-26 09:35 未发生，`mcp-stderr.log` 尾条 start 仍为 11-25 05:31:42）；`ffmpeg` 已修（`ffmpeg-full` 9.1）；第三轮复审（「max 复查评审修复」）对全批做了独立闭环复查，权威账目见 `docs/superpowers/reviews/2026-11-26-glm54-fix-rereview/report.md`（该评审目录按所有者裁定不入库，账目在本机工作树）。仍开着的裁定项：「实锤」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；存量教师 id（收窄为 worksheet ×1 + admin ×2，见相邻发现 2 的勘误）；CI src-server job 的 rust 钉版（第三轮 R1-I2 新增）。
+>
+> **【11-26 收口补记——上段「仍开着」全部落定】** 「实锤」措辞已归一（实锺→实锤，`0e595cc0`，仓内 30 文件 55 处 + 记忆；migration 019 注释 1 处按 sqlx 校验和记账不动作）；11-22 周报处置已裁定**不补发**、等 11-29 19:00–19:05 自然触发；全局技能已收编入仓（`eb02e5be`，仓源 `docs/superpowers/hermes/lt-teacher-tutor/` 与 live 逐字节同，约束 5 补双源纪律）；rust 钉版四笔收官（`3c34b1c4`/`3a71300c`/`17ba61d8`/`a061c737`），run 45814118820 五 job 全绿=CI main 自 ≤2026-09-16 首次全绿（roster 取样测试系被编译红遮蔽数月的存量露脸，已按双闸修复）；11-25 处置轮访问账目按用户裁定**「如实留洞」收口**（见 11.3-4 裁定注）。仍开：存量教师 id 两处（worksheet ×1 + admin ×2）；`mcp:build` 待下次口令顺带归一 0e595cc0 的注释级滞后。
