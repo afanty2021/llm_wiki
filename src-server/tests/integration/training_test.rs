@@ -1597,17 +1597,24 @@ async fn roster_auth_and_param_validation() {
 async fn roster_hits_display_name_and_wecom_userid_with_exact_keys() {
     let (server, _state, _admin, _member) = training_fixture_with_config_project("rhit").await;
 
-    // 动态取一名 display_name 非空且 ≠ wecom_userid 的既有教师（生产 51 行满足）。
-    // 必须排除测试前缀族（t[0-9]_ / t6gate_ / wecom_t[0-9]_，与 mod.rs SWEEPS 同口径）：
-    // 并行 bind 造数测试的教师会在其测试末尾被精确 email 本轮内自清（不受 cutoff
-    // 约束，mod.rs 三层防线②），取样撞上即下方 find 扑空——2026-11-26 CI run
-    // 45757779094 首次露脸（全新库无生产名册，捞到 t7_/王老师 瞬态行）。
-    // 排除后无合格行（= CI 全新库）则显式跳过：「生产库只读」断言在无生产数据处
+    // 动态取一名 display_name 非空且 ≠ wecom_userid 的**既有**教师（生产 51 行满足）。
+    // 两道排除闸，防取样撞上并行测试的瞬态教师（其末尾按精确 email 本轮内自清、
+    // 不受 cutoff 约束——mod.rs 三层防线②；撞上即下方 find 扑空，2026-11-26 CI
+    // run 45757779094 首次露脸：全新库捞到 t7_/王老师 瞬态行）：
+    // ① 形态闸：测试前缀族（t[0-9]_ / t6gate_ / wecom_t[0-9]_，与 mod.rs SWEEPS 同
+    //    口径）不锚定 ^、大小写不敏感（!~*）——CJK 混排造数的 t7_ 锚在尾部
+    //    （bind_truncates_long_wecom_userid_by_chars 的「王a」×20 + unique），锚定
+    //    正则漏之；本仓真实教师 wecom_userid 为字母名（SWEEPS 同款非锚定先例）。
+    // ② 年龄闸：created_at < now()-5min——CI 全新库的行全部生于本 run（秒级新），
+    //    与 wid 形态无关地确定性排除；本地真实教师月级老照常取样。排除过宽的代价
+    //    仅是 skip（本地会打出可 Notice 的提示），过窄才是竞态红。
+    // 两闸后无合格行（= CI 全新库）则显式跳过：「生产库只读」断言在无生产数据处
     // 无从做起，拿瞬态测试数据跑正是红源；本地（生产库取样）语义不变。
     let (wid, dn): (String, String) = match sqlx::query_as(
         "SELECT wecom_userid, display_name FROM teacher_profiles \
          WHERE COALESCE(display_name, '') <> '' AND display_name IS DISTINCT FROM wecom_userid \
-           AND wecom_userid !~ '^(wecom_)?(t[0-9]+_|t6gate_)' \
+           AND wecom_userid !~* '(wecom_)?(t[0-9]+_|t6gate_)' \
+           AND created_at < now() - interval '5 minutes' \
          ORDER BY id LIMIT 1",
     )
     .fetch_optional(&_state.db)
@@ -1617,7 +1624,7 @@ async fn roster_hits_display_name_and_wecom_userid_with_exact_keys() {
         Some(pair) => pair,
         None => {
             eprintln!(
-                "skip: 无非测试前缀的既有教师可取样（CI 全新库无生产名册）——生产库只读断言跳过"
+                "skip: 无非测试前缀且 5 分钟前已存在的教师可取样（CI 全新库无生产名册）——生产库只读断言跳过"
             );
             return;
         }
