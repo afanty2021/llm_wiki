@@ -478,7 +478,7 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
 
 > 用户 2026-11-25 口令「修复清单（11.3）开工」，当晚约 21:40 叫停并指定 11-26 05:10 定时续做（无人值守）。两轮都只在临时副本里构建与测试，没有提交、推送、重启，也没有碰生产库。证据在 `fix/`。
 
-**03:17 巡检首跑（11-26，带修复的第一次真实运行）。** 日志最后一趟 03:17:05 开始，候选 6 人全部「已有任务」——包括任务名大小写不一致的那位（按候选顺序记 T6；11-25 03:17 那趟对同一人是「▶ 自动开办」后 `ModuleNotFoundError`）。收尾两行齐全：「巡检完成：新开办 0 个、失败 0 个」与「巡检结束 exit=0」；`launchctl print` 记 `last exit code = 0`。日志自 11-06 生成以来共 21 趟，这是第 1 趟走到「巡检完成」。这一趟没有触发开办，所以重写后的 `provision-teacher-weekly.sh` 的真实写入路径仍未在生产上走过（只有沙箱 36 项与受护 dry-run）。看门第 6 查的首次排程运行在 11-26 09:00，本轮看不到。
+**03:17 巡检首跑（11-26，带修复的第一次真实运行）。** 日志最后一趟 03:17:05 开始，候选 6 人全部「已有任务」——包括任务名大小写不一致的那位（按候选顺序记 T6；11-25 03:17 那趟对同一人是「▶ 自动开办」后 `ModuleNotFoundError`）。收尾两行齐全：「巡检完成：新开办 0 个、失败 0 个」与「巡检结束 exit=0」；`launchctl print` 记 `last exit code = 0`。日志自 11-06 生成以来共 21 趟，这是第 1 趟走到「巡检完成」。这一趟没有触发开办，所以重写后的 `provision-teacher-weekly.sh` 的真实写入路径仍未在生产上走过（只有沙箱 36 项与受护 dry-run）。看门第 6 查的首次排程运行在 11-26 09:00，本轮看不到。（**11-26 第三轮补记**：该趟已实证——R2 席 09:00 后读 `watchdog.log`，六查全过、exit=0。）
 
 | 11.3 条目 | 状态 | 落点与验证 |
 |---|---|---|
@@ -522,7 +522,7 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
 **相邻发现（本轮新增，均未处置）。**
 
 1. **本机 `ffmpeg` / `ffprobe` 自 2026-11-26 01:13 起起不来。** `/opt/homebrew/opt/ggml` 在 01:12:46 被指到 `ggml 1.0.0`（只提供 `libggml.1.dylib`），而 `ffmpeg-full 9.0.2` 链接的是 `libggml.0.dylib` 与 `libggml-base.0.dylib`，dyld 报 Library not loaded。同一分钟里 Homebrew 升了约 30 个包（`node`、`docker`、`nginx`、`cloudflared`、`gh`、`whisper.cpp`、`llama.cpp`、`rustup` 等；`~/Library/Logs/Homebrew` 下 `multica`、`nginx`、`rustup` 的日志目录时间戳是 01:12–01:13）。交互式 shell 历史里那一小时没有 brew 命令，触发方未查明。`whisper-cli` 本身能启动。按读码推断，受影响的是走 PATH 找 `ffmpeg` 的教师工具：`media-extract.ts` 的视频抽帧与抽音、`listening-audio.ts` 的听力音频合成（两份 Hermes config 里都没有 `LTUTOR_MEDIA__FFMPEG` 覆盖）——教师现在发视频或要听力音频会失败；未做真调用验证。修法大概是 `brew reinstall ffmpeg-full`，属系统级改动，留给所有者。它也是本轮 `test:mocks` 唯一那条红。
-2. **公开仓的入库文件里有真实教师企微 id（存量）**：`mcp-server/test/worksheet.test.ts` 的一条测试标题、`mcp-server/test/admin.test.ts` 两处带 `wecom_` 前缀的夹具、`docs/superpowers/deploy/m3-gray-runbook.md` 一处。本轮没动。
+2. **公开仓的入库文件里有真实教师企微 id（存量）**：`mcp-server/test/worksheet.test.ts` 的一条测试标题、`mcp-server/test/admin.test.ts` 两处带 `wecom_` 前缀的夹具、`docs/superpowers/deploy/m3-gray-runbook.md` 一处。本轮没动。**【11-26 第三轮勘误（R2-M4）】**「runbook 一处」指 :32，已在同轮 3c 清掉；复查另发现 **:19 还有两个真实用户名**（当时清点漏计，其一与 live 名册、`admin.test.ts` 夹具三方同指一位在册教师）。11-26 第三轮处置中，:19 两个用户名已随 M-3 措辞更新从**现行文本**移除（git 历史仍在）；现行存量 = worksheet.test.ts ×1 + admin.test.ts ×2，是否清掉仍待所有者裁定。
 3. **检索片段提示只覆盖 `clips/` 路径**：收藏的源文件在 `sources/clips/`，search 若回显它的片段，同样不带围栏行。按清单字面只做了 `clips/`。
 4. **`teacher_tutor_web_clip` 的结构化回包仍带原始 `title` 与 `prevClipped*` 字段**：本轮只收口了 `reply` 文案（清单范围）。
 5. 「请老师拖一次验证解锁」那句见上，无观测支撑。
@@ -539,3 +539,5 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
 - 证据：`evidence/verify/recheck2/fix/`（41 个文件）。归档副本有两类脱敏：`audit-sandbox.py` 一行 docstring 的 3 处 id，四份测试输出里一条测试标题的 id；`/tmp` 原件未动。落盘后复扫：新增行与未跟踪文件 0 命中，0 个被 ignore。
 
 **仍待裁定。** 提交与推送（本地 5 笔加上本轮工作树）；`mcp:build` 与 MCP 子进程重拉；修 `ffmpeg`；「实锺」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；上面相邻发现 2–5。
+
+> **【11-26 第三轮补记——上段四项已被事件关闭】** 用户口令后：13 笔已提交并推送 origin（至 `a421c75a`）；`mcp:build` 已完成（08:02，dist 与测试副本逐字节同）、旧 MCP 子进程已杀——**按需重拉待下一次教师工具调用**（截至 11-26 09:35 未发生，`mcp-stderr.log` 尾条 start 仍为 11-25 05:31:42）；`ffmpeg` 已修（`ffmpeg-full` 9.1）；第三轮复审（「max 复查评审修复」）对全批做了独立闭环复查，权威账目见 `docs/superpowers/reviews/2026-11-26-glm54-fix-rereview/report.md`（该评审目录按所有者裁定不入库，账目在本机工作树）。仍开着的裁定项：「实锺」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；存量教师 id（收窄为 worksheet ×1 + admin ×2，见相邻发现 2 的勘误）；CI src-server job 的 rust 钉版（第三轮 R1-I2 新增）。

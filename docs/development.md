@@ -76,6 +76,7 @@ npm run tauri build
 - **分两类**:
   - **mock 测试**（默认）: 纯逻辑，不调真实 LLM —— `*.test.ts`
   - **real-llm 测试**: 调真实 LLM provider，串行运行 —— `*.real-llm.test.ts`
+- **目录约定**: `test:mocks` 排除了 `**/evidence/**`（评审归档里的测试原文件不得被套件收进，2026-11-26 起）——**合法测试不要放在任何 `evidence/` 目录下**，否则会被这条 exclude 静默跳过
 - **主要覆盖域**: 摄取 (`ingest*`)、搜索 (`search*`、`graph-search`)、embedding、`sweep-reviews`、`deep-research`、`lint`、`wiki-*`、`okf-export`、`i18n-parity` 等
 
 ```bash
