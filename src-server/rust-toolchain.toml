@@ -4,8 +4,10 @@
 # src-server job 自 2026-09 起常红。本机 1.92.0 实测全树编译过
 # （cargo check --lib --tests）。
 # 解钉条件：升级 sqlx（0.8+ 或含修复的 0.7.x）或确认新 rustc 可编译，
-# 届时连同 .github/workflows/ci.yml src-server job 的 action tag 一起改
-# （两个落点保持同版本）。注意：直接调工具链二进制（不走 rustup 代理）
+# 届时连同 .github/workflows/ci.yml src-server job 的 action tag 与 sqlx-cli
+# --version 一起改（三个落点联动：toml、action tag、sqlx-cli 版本——后者
+# 的 MSRV 不得高于钉住的 rustc，2026-11-26 sqlx-cli 0.9.1 MSRV=1.94 秒败实证）。
+# 注意：直接调工具链二进制（不走 rustup 代理）
 # 会绕过本文件——本机 1.92.0 = 本钉版，暂无分叉；换版本时须同步。
 [toolchain]
 channel = "1.92.0"

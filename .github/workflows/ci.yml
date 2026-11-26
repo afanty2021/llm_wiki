@@ -128,8 +128,11 @@ jobs:
         with:
           workspaces: src-server
 
-      - name: Install sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features postgres,rustls --locked
+      # 不带版本号会装最新 sqlx-cli（2026-11-26 实证：0.9.1 MSRV=1.94 > 钉住的 1.92.0，
+      # 秒败 cannot install package）。钉 0.7.4 与 src-server/Cargo.lock 的 sqlx 0.7.4 同线；
+      # 升 sqlx/rustc 解钉时与 src-server/rust-toolchain.toml、上方 action tag 三处一起动。
+      - name: Install sqlx-cli (pinned 0.7.4, MSRV must stay <= pinned toolchain)
+        run: cargo install sqlx-cli --version 0.7.4 --no-default-features --features postgres,rustls --locked
 
       # create_app 不自动建表,必须显式 migrate（含 CREATE EXTENSION vector）
       - name: Run migrations
