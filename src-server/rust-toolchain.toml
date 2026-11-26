@@ -1,0 +1,11 @@
+# 钉版理由（2026-11-26，第三轮评审 R1-I2 裁定）：GitHub Actions 的
+# dtolnay/rust-toolchain@stable 随上游漂移，漂过 1.92 后 sqlx 0.7 编译炸
+# error[E0277]: the trait bound `!: sqlx_core::io::Decode<'_>` —— CI 的
+# src-server job 自 2026-09 起常红。本机 1.92.0 实测全树编译过
+# （cargo check --lib --tests）。
+# 解钉条件：升级 sqlx（0.8+ 或含修复的 0.7.x）或确认新 rustc 可编译，
+# 届时连同 .github/workflows/ci.yml src-server job 的 action tag 一起改
+# （两个落点保持同版本）。注意：直接调工具链二进制（不走 rustup 代理）
+# 会绕过本文件——本机 1.92.0 = 本钉版，暂无分叉；换版本时须同步。
+[toolchain]
+channel = "1.92.0"

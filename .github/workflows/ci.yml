@@ -113,8 +113,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # 钉 1.92.0：@stable 漂过 1.92 后 sqlx 0.7 编译炸 E0277（!： sqlx_core::io::Decode），
+      # 本 job 自 2026-09 起常红。本机 1.92.0 实测全树编译过；升 sqlx/rustc 时连同
+      # src-server/rust-toolchain.toml 一起解钉（两个落点保持同版本）。
+      - name: Install Rust 1.92.0 (pinned)
+        uses: dtolnay/rust-toolchain@1.92.0
 
       # reqwest 默认 native-tls → 需 libssl;sqlx 已用 rustls 不受影响
       - name: Install system deps
