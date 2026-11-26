@@ -599,7 +599,7 @@ export async function renderWorksheet(
       }
     } finally {
       // best-effort（§九同源加固）：ENOTEMPTY 竞态不外抛——renderWorksheet 的
-      // catch 会把清理失败误报为渲染失败（2026-09-11 ggtms 回合实锺）。
+      // catch 会把清理失败误报为渲染失败（2026-09-11 ggtms 回合实锤）。
       rmRfBestEffort(tmp)
     }
   } catch (err) {

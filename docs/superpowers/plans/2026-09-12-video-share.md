@@ -3,7 +3,7 @@
 > 用户拍板（2026-09-12）：①视频=媒体库已有视频；②教学校长=提升某企微用户为 admin，走企微对话式分享；③要求回执且进周报考核；④老师看完可与 lt-tutor 讨论内容；⑤手机/平板看 HEVC 即可，无需 h264 副本。
 > 修订（2026-09-15）：按 max 评审（[2026-09-15-video-share-plan-max-review.md](2026-09-15-video-share-plan-max-review.md)，verdict REVISE）修订——§2.1 period_key 作废+端点定形+安全三决策（C1/I2/I3）、§2.3 名册工具+查重步骤（I1/C1）、§2.5 案 B 改真零依赖形态（I5）、§5 Q3b 扩权清单（I4），并折叠 M1-M6 口径。评审断言已在本会话对源码逐条复核属实。快速复审（同日，独立评审 subagent，[2026-09-15-video-share-plan-quick-rereview.md](2026-09-15-video-share-plan-quick-rereview.md)）：13/14 核销通过、零 Critical；唯一 Important=roster_search 后端落实断层（I1 残留），已按复审处方补 §2.2 端点设计+限 admin 拍板，并折叠 Minor 三处（plan_list 描述更新、member-role 404 视同非 admin、media/search 无 project 过滤措辞）——按复审口径可进 T1。
 
-## 0. 现状调查结论（本计划的地基，全部已实锺）
+## 0. 现状调查结论（本计划的地基，全部已实锤）
 
 | 现成件 | 事实 |
 |---|---|

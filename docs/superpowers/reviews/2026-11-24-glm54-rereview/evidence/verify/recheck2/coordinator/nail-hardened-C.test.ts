@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest"
  *
  * 本仓检出同时是 live 运行目录：`dist/` 是 src-server :8080 运行时读盘的静态根，
  * `mcp-server/{dist,node_modules}` 是 Hermes 网关 live 加载的进程入口。桌面构建若写进
- * 这两处，一次 `tauri build` 就把线上换掉（2026-11-24 实锺：10-25 本地打包后 :8080
+ * 这两处，一次 `tauri build` 就把线上换掉（2026-11-24 实锤：10-25 本地打包后 :8080
  * 静默回桌面形态近一月才被发现）。上游合并容易吞掉这类 fork 分流，故钉进 CI 门。
  */
 

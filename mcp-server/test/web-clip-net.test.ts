@@ -212,7 +212,7 @@ test("真网络·destroy 闭包：销毁在飞未完成的 302 body 不以未捕
   // 生产形态：微信 __biz 老链 → 302，fetchWithGuards 重定向分支 res.destroy() 销毁未读的
   // BodyReadable——undici 的 BodyReadable.destroy 对未完成流会带 UND_ERR_ABORTED 销毁，
   // 无 error 监听器时该抛点无人接住：生产裸异步链里即 uncaught 'error' 击杀整个 MCP
-  // 进程（11-24 四次实锺，栈 orchestrateClip；node:test 捕获为用例失败）。修复=
+  // 进程（11-24 四次实锤，栈 orchestrateClip；node:test 捕获为用例失败）。修复=
   // undiciRequestOnce 返回响应前挂常驻 noop 监听器。SSRF 门不放环回进 fetchWithGuards 的
   // 默认接线（负向钉 1 钉的正是该语义），所以生产路径另有一枚全路径钉（见下，评审
   // R2b-I1）；本钉直呼 undiciRequestOnce，钉的是同一个 destroy 闭包。

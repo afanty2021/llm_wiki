@@ -25,7 +25,7 @@
 - 📄 CHANGELOG 补齐 2026-08-23→09-14 缺口（本笔，13 笔战役）
 
 ### 2026-09-14 - 降噪+去重防线（PR #8）+ CI 存量红修复（PR #9）+ LT 全库质检收官
-- ✅ **降噪+去重防线**：merge inflation watch 搬 merge_stats+阈值收紧 100%/20KB（51a8d06b）+ dedup-skip/零页源结构化计账+全跳过告警（67ba179b）+ 修复性重投 SOP（f32792d6/f6e91717/0fb49a06）+ succeeded_with_warnings 认终态三处齐改（1dff0b4b）——立项源自 1829 条虚增实锺分解（去重仅 999 页/45% 跨批重复）；计划评审三轮（2bfe8b7e/c69ad6cb/d6418bad）后 SDD 实施，PR #8 并 15dfdedc、双半边部署验证生效
+- ✅ **降噪+去重防线**：merge inflation watch 搬 merge_stats+阈值收紧 100%/20KB（51a8d06b）+ dedup-skip/零页源结构化计账+全跳过告警（67ba179b）+ 修复性重投 SOP（f32792d6/f6e91717/0fb49a06）+ succeeded_with_warnings 认终态三处齐改（1dff0b4b）——立项源自 1829 条虚增实锤分解（去重仅 999 页/45% 跨批重复）；计划评审三轮（2bfe8b7e/c69ad6cb/d6418bad）后 SDD 实施，PR #8 并 15dfdedc、双半边部署验证生效
 - ✅ **CI 存量红两簇修复（PR #9）**：safe_resolve 祖先上溯——缺失中间目录不再 500（85c620ae，base 自 ecb675a0 随项目创建落盘）+ transcriber 标点测试注入 deps.apiKey 破 CI key 门短路；跟进 8e1d7fd8 函数文档对齐两分支实现、ada7bd4e `..`叠缺失段 500→400 BadRequest + 穿越单测真踩上溯分支硬断言
 - 🔧 **三轮 launchd 重载均 live 冒烟实证**（手签 JWT 差分探针：list 缺失 /wiki 500→200+[]、DELETE wiki/none.md 500→404、sub/../../x 重载前后 500→400）；CI 含 PG+Redis job 全绿
 - ✅ **LT 全库质检+七项修复收官**（live 数据运维）：测试残渣 2123→1397、12 孤儿章闭合（重投先删 ingested_files 行），库终态 16,004 页

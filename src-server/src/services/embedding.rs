@@ -246,7 +246,7 @@ async fn embed_page_pieces(
     pieces: &[String],
 ) -> Result<(), AppError> {
     // 子批 ≤EMBED_REQ_MAX_CHUNKS：单页超帽（如 wiki/index.md ~2.8k chunk）一杆子单请求
-    // 必超 embed_batch 的 timeout_secs 帽——2026-10-12 实锺：PUT 重嵌静默失败、页写成功
+    // 必超 embed_batch 的 timeout_secs 帽——2026-10-12 实锤：PUT 重嵌静默失败、页写成功
     // 而向量零更新。页原子性在 store 层（upsert 事务内删后插）保持，子批只切请求。
     let mut all_vecs = Vec::with_capacity(pieces.len());
     for sub in pieces.chunks(EMBED_REQ_MAX_CHUNKS) {

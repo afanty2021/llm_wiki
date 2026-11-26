@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # tools/adjudicate-merge.py — 概念合并清理专项：LLM 逐对语义甄别（charter r2.1 工具面三修版，2026-09-12）
 # S1 候选网：entities/concepts 双命名空间内同 title（lower+trim）分组、类型无关——
-#   旧版按 page_type=='entity' 过筛只过 19/26 组（评审 §三.1 实锺），废弃。
+#   旧版按 page_type=='entity' 过筛只过 19/26 组（评审 §三.1 实锤），废弃。
 # prompt 双面（§三.2）：entities 组沿用「同一现实世界实体」判据；concepts 组用「同一知识主题」。
 # 产物落 .superpowers/concept-merge-cleanup/（§三.3 禁 /tmp；psql 导出 CSV 仅为可再生缓存）：
 #   s1-census.json / s1-results.json / s1-run-meta.json / s1-judgment-table.md /

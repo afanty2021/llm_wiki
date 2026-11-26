@@ -9,7 +9,7 @@
 - **证据**：6 条知识库里被引用过的 `mp.weixin.qq.com/s/…` 真实链接，经生产同款 `fetchWithGuards`+`extractArticle`（/tmp 拷贝内）：
   - 取回全部成功（每页约 3.8MB HTML，`js_content`/`rich_media_title` 标记齐全）；1 条「参数错误」系正则截断的畸形链接，属预期。
   - `#js_content` 真实正文 8,135 / 3,796 / 8,487 字符（三篇抽样），而提取结果只有 **49 / 54 / 25 字符**（只剩「原创 ××× 不喜欢」署名行）。
-- **根因（实锺）**：微信以行内样式 `visibility: hidden; opacity: 0;` 下发正文，Readability 0.6.0 丢弃不可见节点后挑中页头。把 `#js_content` 的 `visibility` 改为 `visible` 后 Readability 立即提取出 **8,135 / 3,796** 字符（与页面正文逐数相等）；直接对 `#js_content` 做 turndown 得 **9,180 / 4,269 / 9,301** 字符。
+- **根因（实锤）**：微信以行内样式 `visibility: hidden; opacity: 0;` 下发正文，Readability 0.6.0 丢弃不可见节点后挑中页头。把 `#js_content` 的 `visibility` 改为 `visible` 后 Readability 立即提取出 **8,135 / 3,796** 字符（与页面正文逐数相等）；直接对 `#js_content` 做 turndown 得 **9,180 / 4,269 / 9,301** 字符。
 - **为何测试全绿**：`mcp-server/test/web-clip-fetch.test.ts:489` 的夹具是 `<div id="js_content" style="opacity: 0;">`，缺 `visibility: hidden`。
 - **为何线上没炸**：25–54 字符高于「空内容」判定线（`markdown.trim() === ""`），线上会正常建档并回复「已收藏」，库里只存一行标题（回执文案见 ltutor-text-verification.md 的实测）。目前 `clips/` 页为 0——功能上线至今无人用过，尚无实际损害。
 - **更正**：核验过程中曾提出「class `rich_media_content` 撞 Readability 黑名单」的假设，实测去掉/改名 class 结果不变，**该假设已证伪**。

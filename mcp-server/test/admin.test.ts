@@ -88,7 +88,7 @@ test("handler：GET /training/overview 带 admin 头、无 Bearer；渲染真实
   assert.match(text, /真实档案 3 个（surveyed 1、其余 2），有学习活动记录 1 位；测试\/过滤形态档案 6 个未逐行列出/)
   assert.match(text, /快照：2026-09-06 14:40（UTC\+8）/)
   // 真实教师逐行：display_name 优先（注入清洗：无换行、全角竖线转半角），空回落 uid；
-  // 时间戳转上海本地（06:31Z=14:31），不再原样透传 UTC 串（2026-09-07 时区实锺）
+  // 时间戳转上海本地（06:31Z=14:31），不再原样透传 UTC 串（2026-09-07 时区实锤）
   assert.match(text, /- ggtms\(TuoMaSiLong\) \[surveyed\] 计划 5｜条目 32\(看12\/完8\)｜近7d计划条目 6\(看3\/完1\)｜最近活跃 2026-09-06 14:31｜最近提问 2026-09-06 14:28/)
   assert.match(text, /- 好老师 - 假行\|注入\(wendy\) \[pending\]/)
   assert.ok(!text.includes("\n- 假行"), "display_name 换行注入必须被折叠")
@@ -127,7 +127,7 @@ test("renderOverview：管理员（非测试形态）档案保留逐行——不
   assert.match(text, /- HuangZhengBo\(HuangZhengBo\) \[pending\] 计划 1/)
 })
 
-// ── 时间戳本地化（2026-09-07：00:35 管理问答实锺——UTC 串被模型当本地时间渲染）──
+// ── 时间戳本地化（2026-09-07：00:35 管理问答实锤——UTC 串被模型当本地时间渲染）──
 
 test("renderOverview：时间戳统一转 Asia/Shanghai；null/畸形回落安全", () => {
   const text = renderOverview({

@@ -103,7 +103,7 @@
   - `title`：文件名用；**清洗：白名单 `[A-Za-z0-9\u4e00-\u9fa5_-]`、剥分隔符、≤80 字符（I2②）**
 - **管线**（node child_process）：
   1. 校验：≤60 行、总文本 ≤3000 字符、行 text 非空；超限返回可读错误
-  2. 逐行合成：`edge-tts --voice <voice> --rate=<rate> --text <line> --write-media <tmp>`；voice：A=`en-US-AriaNeural` / B=`en-US-GuyNeural` / null=Aria；**rate 格式必须是带符号整数百分比（speed 1.0→`+0%`、0.85→`-15%`）——包内校验正则 `^[+-]\d+%$`（edge_tts/data_classes.py:74 实锺），照字面传 0.85 直接被拒（I2③）**
+  2. 逐行合成：`edge-tts --voice <voice> --rate=<rate> --text <line> --write-media <tmp>`；voice：A=`en-US-AriaNeural` / B=`en-US-GuyNeural` / null=Aria；**rate 格式必须是带符号整数百分比（speed 1.0→`+0%`、0.85→`-15%`）——包内校验正则 `^[+-]\d+%$`（edge_tts/data_classes.py:74 实锤），照字面传 0.85 直接被拒（I2③）**
   3. **`--text` 一律 execFile 数组参数、不经 shell（I2④）**
   4. 拼接：ffmpeg concat + 行间 0.7s 静音——**静音段必须 `anullsrc=r=24000:cl=mono`（与 edge-tts 原生 24kHz mono 对齐；anullsrc 默认 44.1kHz 立体声，concat demuxer 默认参数必翻车）**；或全段先归一 24kHz mono wav 再拼、末次 mp3 编码（I2③）
   5. **保留 edge-tts 原生 48kbps mono 24kHz 编码，不升 128k（升码零增益、体积 2.7×）**；输出 `~/.hermes/cache/ltutor-tts/<yyyyMMdd-HHmmss>_<title>.mp3`

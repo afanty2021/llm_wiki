@@ -36,7 +36,7 @@
 - **embeddings.wiki_page_id（存 path）无 FK**：005 注释 CASCADE 指 project_id；loser 向量删除为 best-effort（`let _ = delete_embedding`，失败静默）→ S5 必须做**按 path 孤儿向量对账**（现库孤儿=0，执行后须仍为 0）。
 - **API PUT 无 sources 净化**：sanitize_sources 只在 ingest 管线（pages.rs 计数=0）→ 工具侧并集前**自净化占位符**（09-11 陷阱同款）+ **并集落库后验**（merge 后校验 keep 页 sources 确含并集——f6bbb59a I1 教训）。
 - **keep 页 PUT 自动重嵌 ✓**（pages.rs:239），但失败静默吞、行覆盖判据看不出 stale：覆盖率判据改为「row 覆盖 + 抽样 chunk_text 与现内容一致」；存量 69 页 stale 噪声地板（直写 SQL 回填所致）先处置或明示容忍。
-- **④ 本批实证新陷阱（已根治入册）**：wiki-cleanup `put_page(fm=None/{})` 触发服务端 denormalize（pages.rs:63-73）**空回落，把 title 连同 sources/images 一并冲掉**（skehan 页 01:40 实锺；恢复=**sources 自备份逐字恢复；title 为重定**——备份时 title 本为 NULL）。**空 `{}` 同样致死**。工具根治见 §三.4；残余脆弱性已由 E2 上提根治收口（§三.4：统一出口补全，覆盖 305 页暴露种群与缺 type 改型第三面）。
+- **④ 本批实证新陷阱（已根治入册）**：wiki-cleanup `put_page(fm=None/{})` 触发服务端 denormalize（pages.rs:63-73）**空回落，把 title 连同 sources/images 一并冲掉**（skehan 页 01:40 实锤；恢复=**sources 自备份逐字恢复；title 为重定**——备份时 title 本为 NULL）。**空 `{}` 同样致死**。工具根治见 §三.4；残余脆弱性已由 E2 上提根治收口（§三.4：统一出口补全，覆盖 305 页暴露种群与缺 type 改型第三面）。
 - graph.rs:276 stem first-wins 无 ORDER BY：156 共享 stem 裸链解析现状不可复现——执行前后红链审计不直接可比，判据按「执行后 server 面」单侧计。
 
 ## 五、P1 政策（已拍板：hybrid 精修版，锚定 title 同一性、不锚 basename）

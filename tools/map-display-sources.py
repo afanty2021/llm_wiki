@@ -107,7 +107,7 @@ def resolve_v3(entry, books, disk_by_book, transcripts):
     """v3 确定解（评审 §九 I-1 三修）：在 v2 门限语义上修三处——
 
       ① T1 stem 失配不再提前 return，落 T2/T3 兜底（v2 中 T2 贡献 0 的死代码根因，
-         实锺机制=v2 分隔符表漏 `/`，`Book/stem` 形态的 rest 带前导斜杠必然失配）；
+         实锤机制=v2 分隔符表漏 `/`，`Book/stem` 形态的 rest 带前导斜杠必然失配）；
       ② rest 尾部 .md 先剥再归一化（`Book_Ch16-x.md` 形态 x~30；在 rest 上施行而非
          _norm 内，保 _norm v2 语义不动）；
       ③ 书名前缀匹配大小写不敏感（`think-teachers-l0-…` 形态 x~30）。

@@ -597,7 +597,7 @@ test("集成·SUPERVISION_TOOLS 白名单钉桩（决策③：常量在分发层
 // ── schema：wecom_userid 可选声明（2026-09-05 修订 2026-08-24 加固）──
 // 旧设计（schema 完全隐藏 + prompt 指示 cron 回合传未声明参数）在 glm-5.3-flash
 // 上失效：模型严格遵循 schema，不 emit 未声明字段 → cron 系统回合全链 -32602
-// （周报任务 ca270c3a5a58 2026-09-05 实锺）。新契约：可选声明（系统/cron 通道
+// （周报任务 ca270c3a5a58 2026-09-05 实锤）。新契约：可选声明（系统/cron 通道
 // 显式化）；用户会话防冒名不变——identity 锁对不匹配参数照常硬拒。
 
 test("schema：18 个 src-server 工具——15 个可选声明 wecom_userid；两个 T2 检索工具与 web_clip（Task 3+4）不声明（检索工具无身份参数；web_clip 会话身份即收藏人、无 cron 流量）", () => {

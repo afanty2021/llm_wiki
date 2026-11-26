@@ -12,7 +12,7 @@
 ## 一、现状测量（2026-09-14 全库）
 
 - 发射点：`src-server/src/services/ingest_pipeline.rs:1740-1745` —— merge 输出长度 > (旧文+新文)×80% 即推入 `result.warnings`。
-- 1,829 条实锺分解：**去重后仅 999 个不同页**；830 条（45%）为同一页跨批次重复告警（每次批量重摄/教材批合并都重发）。
+- 1,829 条实锤分解：**去重后仅 999 个不同页**；830 条（45%）为同一页跨批次重复告警（每次批量重摄/教材批合并都重发）。
 - 999 页占全库 6.3%。09-10 质检已抽验定性：「实测零内部重复块，合并未压缩但无拼接劣化」——观察哨在当前阈值下基本恒噪。
 - 噪音机制：教材/词条类合并天然压缩率有限（小实体条目合并后 0.6-0.9 倍是常态），80% 阈值对这类形态系统性过敏。
 
@@ -29,7 +29,7 @@
 
 ## 三、实施注意（沿既有坑清单）
 
-- result jsonb 结构变更需兼容旧 job（读取处对 merge_stats 缺键容错；`IngestJobResult` 新字段一律 `#[serde(default)]`，先例=`merged_pages`，ingest_queue.rs:77-84；评审实锺：该结构在 src-server 内无反序列化点，透传全不透明，兼容零风险）。
+- result jsonb 结构变更需兼容旧 job（读取处对 merge_stats 缺键容错；`IngestJobResult` 新字段一律 `#[serde(default)]`，先例=`merged_pages`，ingest_queue.rs:77-84；评审实锤：该结构在 src-server 内无反序列化点，透传全不透明，兼容零风险）。
 - 消费方三形态普查结论（评审 I-3）：SSE job_events 不带 warnings、面板轮询只读 status/stage/error、warnings 唯一真消费方=QC 直查 SQL——**无 warnings 文案匹配类消费方**，无需补中文映射。
 - 回归测试：t8 模板 fixture 带 sources 参数（I-1 教训）；merge 路径单测加「>100% 告警仍在 warnings」「80-100% 只进 stats」两条断言。
 - 部署：src-server release build + launchd 重载（避开周日 19:00 周报窗）+ build:web 仅 Task 7 需要（评审 I-4 采入；Task 1-6 纯 server 侧，透传面已普查零风险）。

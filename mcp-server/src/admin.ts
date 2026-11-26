@@ -107,7 +107,7 @@ const LOCAL_TZ = "Asia/Shanghai"
 
 /** UTC/带偏移 ISO → 上海本地 `YYYY-MM-DD HH:mm`；空返回 null、无法解析返回 null
  * （调用方回落原文，防上游格式漂移把时间渲染成 null）。总览的消费方是管理问答，
- * 原样透传 UTC 串会被模型当本地时间拼进回复（2026-09-07 00:35 实锺：last_active
+ * 原样透传 UTC 串会被模型当本地时间拼进回复（2026-09-07 00:35 实锤：last_active
  * `…T16:23Z` 被渲染成"今天 16:23"，实为昨晚 00:23——差 8 小时且日期错）。 */
 function fmtLocalTime(raw: string | null | undefined): string | null {
   const iso = (raw ?? "").trim()

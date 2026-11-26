@@ -386,7 +386,7 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
    - 补 11-25 处置轮的访问账目（I-4）：05:31 live `mcp-server/dist` 重建、05:31 `kickstart -k`、08:48 `build:web` 重写 live `dist/`、10:04–10:11 `tauri build`。那一轮不是评审会话做的，协调者只能记下时刻与产物，发起方与当时的前后快照须由当事会话补。
    - 旧世界残留（M-8）：`src-server/src/routes/mod.rs:57` 注释、`CLAUDE.md:33` 用例数 330 → 344、`.github/workflows/ci.yml:132/158/167` 注释里的 2239 / 164 / 65、两份 06 月 spec / plan 的「同一份 `dist/`」说法（历史稿，加一句现状指引即可）。
    - `.dockerignore` 补 `dist-desktop/`（R1-M4）；CI 加一条 `npm run build:web`，顺带对 api-client chunk 的调用处实参做形态断言（R1 建议 3）。
-   - 「实锺」若非有意用字，应为「实锤」（`CLAUDE.md:43`、`development.md`、`launchd-notes.md:108`、`build-form.test.ts:14`）——由所有者定。
+   - 「实锤」若非有意用字，应为「实锤」（`CLAUDE.md:43`、`development.md`、`launchd-notes.md:108`、`build-form.test.ts:14`）——由所有者定。
 5. **10.7「一处取舍」的补全**（R4-M7）：把 10.7 那句补成三条事实：包内 `node_modules` 不再经 `npm ci` 按 lockfile 校验，拷的是检出里现成的那份；`mcp-server/dist` 的改动会随每次打包重新拷入（已实测，改动文件与新增文件都进了包）；`mcp-server/dist` 缺失时构建报错、不会静默出包（已实测），但失败后上一趟的 `.app` 仍在原处——发布脚本要看退出码。
 
 ### 11.4 记录勘误（协调者认定；行内改动已落入本文件与一份证据文件，均未提交）
@@ -538,6 +538,6 @@ N-2 结构性根治的核验：回归钉 6 个变异体全杀且死因对题；`
 - 外呼：零。生产库：零访问。
 - 证据：`evidence/verify/recheck2/fix/`（41 个文件）。归档副本有两类脱敏：`audit-sandbox.py` 一行 docstring 的 3 处 id，四份测试输出里一条测试标题的 id；`/tmp` 原件未动。落盘后复扫：新增行与未跟踪文件 0 命中，0 个被 ignore。
 
-**仍待裁定。** 提交与推送（本地 5 笔加上本轮工作树）；`mcp:build` 与 MCP 子进程重拉；修 `ffmpeg`；「实锺」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；上面相邻发现 2–5。
+**仍待裁定。** 提交与推送（本地 5 笔加上本轮工作树）；`mcp:build` 与 MCP 子进程重拉；修 `ffmpeg`；「实锤」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；上面相邻发现 2–5。
 
-> **【11-26 第三轮补记——上段四项已被事件关闭】** 用户口令后：13 笔已提交并推送 origin（至 `a421c75a`）；`mcp:build` 已完成（08:02，dist 与测试副本逐字节同）、旧 MCP 子进程已杀——**按需重拉待下一次教师工具调用**（截至 11-26 09:35 未发生，`mcp-stderr.log` 尾条 start 仍为 11-25 05:31:42）；`ffmpeg` 已修（`ffmpeg-full` 9.1）；第三轮复审（「max 复查评审修复」）对全批做了独立闭环复查，权威账目见 `docs/superpowers/reviews/2026-11-26-glm54-fix-rereview/report.md`（该评审目录按所有者裁定不入库，账目在本机工作树）。仍开着的裁定项：「实锺」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；存量教师 id（收窄为 worksheet ×1 + admin ×2，见相邻发现 2 的勘误）；CI src-server job 的 rust 钉版（第三轮 R1-I2 新增）。
+> **【11-26 第三轮补记——上段四项已被事件关闭】** 用户口令后：13 笔已提交并推送 origin（至 `a421c75a`）；`mcp:build` 已完成（08:02，dist 与测试副本逐字节同）、旧 MCP 子进程已杀——**按需重拉待下一次教师工具调用**（截至 11-26 09:35 未发生，`mcp-stderr.log` 尾条 start 仍为 11-25 05:31:42）；`ffmpeg` 已修（`ffmpeg-full` 9.1）；第三轮复审（「max 复查评审修复」）对全批做了独立闭环复查，权威账目见 `docs/superpowers/reviews/2026-11-26-glm54-fix-rereview/report.md`（该评审目录按所有者裁定不入库，账目在本机工作树）。仍开着的裁定项：「实锤」措辞；11-22 周报全败的处置；全局技能收编；11-25 处置轮的访问账目；存量教师 id（收窄为 worksheet ×1 + admin ×2，见相邻发现 2 的勘误）；CI src-server job 的 rust 钉版（第三轮 R1-I2 新增）。

@@ -64,7 +64,7 @@ def api(token, method, path, body=None, if_match=None):
         data=json.dumps(body).encode() if body is not None else None,
         headers=hdrs, method=method)
     # 大页（如 wiki/index.md ~2.8k chunk）PUT 内联重嵌远超 60s；客户端超时断连会
-    # 取消 axum handler 连带 embed 中途蒸发（10-12 实锺：页写成功、向量零更新）。
+    # 取消 axum handler 连带 embed 中途蒸发（10-12 实锤：页写成功、向量零更新）。
     # 走环境变量放宽，与 WIKI_TOKEN 同款约定；默认 300s——旗舰操作（trim-index 重嵌
     # index 实测 72s+）在旧默认 60s 下不设 env 即静默重现原 bug（commits-review-20261012）。
     timeout = float(os.environ.get("WIKI_API_TIMEOUT", "300"))
@@ -80,7 +80,7 @@ def put_page(token, path, content, frontmatter, skip_if_same=True):
     """乐观锁 PUT：GET→sha 同跳过→PUT if-match；409 重试一轮。
     skip_if_same=False 时内容即使未变也写（用于 sources 并集等纯 frontmatter 变更
     ——复验 Minor：内容 sha 相同而只并 sources 时，整页 skip 会漏掉元数据）。
-    I1（复验 #2 实锺）：body 的 frontmatter 必须用形参（合并后含并集 sources），
+    I1（复验 #2 实锤）：body 的 frontmatter 必须用形参（合并后含并集 sources），
     形参 None 才回落服务端现值——此前写死 cur.get() 使并集从未落库。
     E2 补全上提（S1 评审 §3.4）：fm 键缺失/None 一律以 GET 现值补全（title/type/
     sources/images，单页 GET 已含全四字段）。denormalize（pages.rs:59）对缺键的
@@ -131,7 +131,7 @@ RE_INDEX_LINE = re.compile(r"^\s*-\s*\[[^\]]*\]\(([^)]+\.md)\)\s*$")
 def trim_index_lines(content, live_paths):
     """裁掉首页索引中指向已不存在页的列表行（index 为单 H1+扁平列表、每行恰一 .md 链接）。
     2026-10-12 QC ①根修：API 删页不触发管线侧的 index 再生，删 loser 后须同步裁剪，
-    否则首页挂死链（当日实锺 197 条=合并 loser 全集）。"""
+    否则首页挂死链（当日实锤 197 条=合并 loser 全集）。"""
     out, dropped = [], []
     for ln in content.split("\n"):
         m = RE_INDEX_LINE.match(ln)
@@ -422,7 +422,7 @@ def cmd_merge(args):
     rewrites_map = {p["path"]: nw for p, nw, _ in rewrites}
     # loser 正文改写闭包：canonical 追加 loser 正文前同样要过一遍 loser_forms——
     # 否则 loser 正文里指向本批其他 loser 的链接原样进 keep 页（2026-09-09
-    # concepts 同 title 批实锺：刻意练习组 loser 被追加后留 1 条悬空链）
+    # concepts 同 title 批实锤：刻意练习组 loser 被追加后留 1 条悬空链）
     def rewrite_loser_body(text):
         return RE_LINK.sub(repl, text)
     # 2) canonical 合并：内容追加 + sources 并集

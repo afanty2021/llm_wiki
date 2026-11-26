@@ -107,7 +107,7 @@ export function isCompletePng(path: string): boolean {
 /**
  * outline → markmap markdown。控制字符压空格；`&`/`<` 转 HTML 实体——
  * markdown 渲染层会把 `<...>` 当内联 HTML 吃掉（HTML 教学导图内容静默缺失，
- * 2026-09-10 v2 目检实锺），实体形态在标签里还原为字面文本。
+ * 2026-09-10 v2 目检实锤），实体形态在标签里还原为字面文本。
  */
 export function outlineToMarkdown(outline: MindmapOutline): string {
   const escapeLabel = (s: string) => s
@@ -204,7 +204,7 @@ export async function chromeScreenshotRunner(
     `file://${htmlPath}`,
   ], { stdio: "ignore", detached: true })
   // detached 独立进程组：SIGKILL 发组信号把 crashpad 助手一并带走
-  // （2026-09-11 ggtms 回合实锺：只杀主进程时 crashpad 残写 profile 目录，
+  // （2026-09-11 ggtms 回合实锤：只杀主进程时 crashpad 残写 profile 目录，
   // finally rmSync ENOTEMPTY，渲染被误报失败）。
   const kill = () => {
     try {

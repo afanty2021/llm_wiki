@@ -633,7 +633,7 @@ export async function undiciRequestOnce(
   }
   // 常驻 noop 监听器（2026-11-24 微信 __biz 老链崩溃修复 + 复审 R2b-M1）：undici BodyReadable
   // 无人消费时出错会 emit 'error'，无监听器即 uncaught 'error' 击杀整个 MCP 进程（11-24
-  // 四次实锺，栈 orchestrateClip）。两种触发形态都归这一处接住：① destroy 闭包销毁在飞流
+  // 四次实锤，栈 orchestrateClip）。两种触发形态都归这一处接住：① destroy 闭包销毁在飞流
   // （UND_ERR_ABORTED——重定向分支 res.destroy() 就是生产崩溃点）；② 调用方既不消费也
   // 不 destroy、头到了之后 socket 断裂（FIN / RST / chunked 提前关闭 → UND_ERR_SOCKET /
   // ECONNRESET）。多一个监听器不影响消费方收错：for await 自带 error 监听，流错误照常出。
