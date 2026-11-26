@@ -1597,15 +1597,31 @@ async fn roster_auth_and_param_validation() {
 async fn roster_hits_display_name_and_wecom_userid_with_exact_keys() {
     let (server, _state, _admin, _member) = training_fixture_with_config_project("rhit").await;
 
-    // 动态取一名 display_name 非空且 ≠ wecom_userid 的既有教师（生产 51 行满足）
-    let (wid, dn): (String, String) = sqlx::query_as(
+    // 动态取一名 display_name 非空且 ≠ wecom_userid 的既有教师（生产 51 行满足）。
+    // 必须排除测试前缀族（t[0-9]_ / t6gate_ / wecom_t[0-9]_，与 mod.rs SWEEPS 同口径）：
+    // 并行 bind 造数测试的教师会在其测试末尾被精确 email 本轮内自清（不受 cutoff
+    // 约束，mod.rs 三层防线②），取样撞上即下方 find 扑空——2026-11-26 CI run
+    // 45757779094 首次露脸（全新库无生产名册，捞到 t7_/王老师 瞬态行）。
+    // 排除后无合格行（= CI 全新库）则显式跳过：「生产库只读」断言在无生产数据处
+    // 无从做起，拿瞬态测试数据跑正是红源；本地（生产库取样）语义不变。
+    let (wid, dn): (String, String) = match sqlx::query_as(
         "SELECT wecom_userid, display_name FROM teacher_profiles \
          WHERE COALESCE(display_name, '') <> '' AND display_name IS DISTINCT FROM wecom_userid \
+           AND wecom_userid !~ '^(wecom_)?(t[0-9]+_|t6gate_)' \
          ORDER BY id LIMIT 1",
     )
-    .fetch_one(&_state.db)
+    .fetch_optional(&_state.db)
     .await
-    .unwrap();
+    .unwrap()
+    {
+        Some(pair) => pair,
+        None => {
+            eprintln!(
+                "skip: 无非测试前缀的既有教师可取样（CI 全新库无生产名册）——生产库只读断言跳过"
+            );
+            return;
+        }
+    };
 
     // 1) display_name 命中：q = 完整 display_name（add_query_param 中文安全编码）
     let r = server
